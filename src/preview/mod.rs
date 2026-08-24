@@ -1,13 +1,14 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
 use gpui::{
     App, Context, FontStyle, FontWeight, HighlightStyle, IntoElement, ListAlignment, ListState,
-    PathPromptOptions, Render, StyledText, Task, Window, actions, div, list, prelude::*, px, rgb,
+    PathPromptOptions, Render, StyledText, Task, Window, actions, div, img, list, prelude::*, px,
+    rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -75,6 +76,7 @@ pub struct PreviewDocument {
     pub blocks: Arc<BlockArena>,
     rows: Arc<Vec<PreviewRow>>,
     tables: Arc<HashMap<BlockId, TableRowStyle>>,
+    image_sizes: Arc<HashMap<BlockId, (u32, u32)>>,
     inline_cache: Mutex<InlineCache>,
     highlight_cache: Mutex<HighlightCache>,
     pub metrics: LoadMetrics,
@@ -882,6 +884,42 @@ impl Render for PreviewApp {
     }
 }
 
+fn resolve_image_path(document_path: &Path, source: &str) -> PathBuf {
+    let source = PathBuf::from(source);
+    if source.is_absolute() {
+        source
+    } else {
+        document_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join(source)
+    }
+}
+
+fn build_image_sizes(document_path: &Path, blocks: &BlockArena) -> HashMap<BlockId, (u32, u32)> {
+    blocks
+        .nodes()
+        .iter()
+        .enumerate()
+        .filter_map(|(block_id, block)| {
+            let BlockKind::Image { path } = &block.kind else {
+                return None;
+            };
+            image::image_dimensions(resolve_image_path(document_path, path))
+                .ok()
+                .filter(|&(width, height)| width > 0 && height > 0)
+                .map(|size| (block_id as BlockId, size))
+        })
+        .collect()
+}
+
+fn fitted_image_size(source_width: u32, source_height: u32, available_width: f32) -> (f32, f32) {
+    let scale = (available_width.min(960.0) / source_width as f32)
+        .min(480.0 / source_height as f32)
+        .min(1.0);
+    (source_width as f32 * scale, source_height as f32 * scale)
+}
+
 pub fn load_document(path: PathBuf) -> Result<PreviewDocument, (PathBuf, String)> {
     load_document_profiled(path)
 }
@@ -902,6 +940,7 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
     let parse = parse_started.elapsed();
     let rows = Arc::new(build_preview_rows(text.as_ref(), &blocks));
     let tables = Arc::new(build_table_styles(text.as_ref(), &blocks));
+    let image_sizes = Arc::new(build_image_sizes(&path, &blocks));
 
     Ok(PreviewDocument {
         path,
@@ -909,6 +948,7 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
         blocks,
         rows,
         tables,
+        image_sizes,
         inline_cache: Mutex::new(InlineCache::new(
             INLINE_CACHE_CAPACITY,
             INLINE_CACHE_MAX_BYTES,
@@ -985,7 +1025,7 @@ fn render_document(
             let document = document.clone();
             let visible_rows = visible_rows.clone();
             let folded = folded.clone();
-            list(list_state, move |index, _, cx| {
+            list(list_state, move |index, window, cx| {
                 let actual_index = visible_rows[index];
                 let row = document.rows[actual_index];
                 let block = &document.blocks.nodes()[row.block_id as usize];
@@ -1050,6 +1090,7 @@ fn render_document(
                                         row,
                                         block,
                                         is_folded,
+                                        (f32::from(window.viewport_size().width) - 110.0).max(120.0),
                                         cx,
                                     )),
                             ),
@@ -1067,6 +1108,7 @@ fn render_block(
     row: PreviewRow,
     block: &BlockNode,
     is_folded: bool,
+    available_width: f32,
     cx: &mut App,
 ) -> gpui::Div {
     let theme = current_theme();
@@ -1142,6 +1184,23 @@ fn render_block(
             } else {
                 paragraph
             }
+        }
+        BlockKind::Image { path } => {
+            let source = resolve_image_path(&document.path, path);
+            let (width, height) = document
+                .image_sizes
+                .get(&block_id)
+                .map(|&(source_width, source_height)| {
+                    fitted_image_size(source_width, source_height, available_width)
+                })
+                .unwrap_or_else(|| (available_width.min(640.0), 240.0));
+            div()
+                .w_full()
+                .py_2()
+                .flex()
+                .items_start()
+                .justify_start()
+                .child(img(source).w(px(width)).h(px(height)))
         }
         BlockKind::Planning => div()
             .font_family("Menlo")

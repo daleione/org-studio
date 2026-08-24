@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 gpui = "0.2.2"
+image = "0.25.10"
 profiling = { version = "1", features = ["profile-with-tracing"] }
 ropey = "1.6.1"
 tracing = "0.1"

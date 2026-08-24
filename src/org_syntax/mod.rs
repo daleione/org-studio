@@ -9,6 +9,7 @@ pub enum BlockKind {
     BlankLine,
     Heading { level: u16 },
     Paragraph,
+    Image { path: String },
     Planning,
     ListItem,
     TableRow,
@@ -256,7 +257,9 @@ fn drawer_start(line: &str, content_start: u64) -> Option<(String, u64)> {
 }
 
 fn classify_line(line: &str) -> BlockKind {
-    if line.starts_with("SCHEDULED:")
+    if let Some(path) = standalone_image_path(line) {
+        BlockKind::Image { path: path.to_owned() }
+    } else if line.starts_with("SCHEDULED:")
         || line.starts_with("DEADLINE:")
         || line.starts_with("CLOSED:")
     {
@@ -282,6 +285,40 @@ fn classify_line(line: &str) -> BlockKind {
     } else {
         BlockKind::Paragraph
     }
+}
+
+fn standalone_image_path(line: &str) -> Option<&str> {
+    let target = line.strip_prefix("[[file:")?.strip_suffix("]]" )?;
+    if target.contains("][") || target.is_empty() {
+        return None;
+    }
+    let extension = target.rsplit_once('.')?.1;
+    matches!(
+        extension.to_ascii_lowercase().as_str(),
+        "avif"
+            | "jpg"
+            | "jpeg"
+            | "png"
+            | "gif"
+            | "webp"
+            | "tif"
+            | "tiff"
+            | "tga"
+            | "dds"
+            | "bmp"
+            | "ico"
+            | "hdr"
+            | "exr"
+            | "pbm"
+            | "pam"
+            | "ppm"
+            | "pgm"
+            | "ff"
+            | "farbfeld"
+            | "qoi"
+            | "svg"
+    )
+    .then_some(target)
 }
 
 fn is_list_item(line: &str) -> bool {
@@ -334,6 +371,19 @@ mod tests {
         assert_eq!(nodes[2].parent, Some(0));
         assert!(matches!(nodes[3].kind, BlockKind::ListItem));
         assert!(matches!(nodes[4].kind, BlockKind::SourceBlock { .. }));
+    }
+
+    #[test]
+    fn recognizes_only_standalone_file_images() {
+        let text = snapshot(
+            "[[file:images/diagram.png]]\n[[file:images/diagram.png][diagram]]\n[[https://example.com/photo.png]]\n",
+        );
+        let arena = parse(text.as_ref());
+        assert!(matches!(
+            &arena.nodes()[0].kind,
+            BlockKind::Image { path } if path == "images/diagram.png"
+        ));
+        assert!(matches!(arena.nodes()[1].kind, BlockKind::Paragraph));
     }
 
     #[test]
