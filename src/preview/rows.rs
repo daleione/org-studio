@@ -5,8 +5,6 @@ use crate::{
 
 use super::PreviewRow;
 
-const MAX_PARAGRAPH_ROW_BYTES: usize = 256;
-
 pub(super) fn build_preview_rows(
     text: &dyn TextSnapshot,
     blocks: &BlockArena,
@@ -15,7 +13,22 @@ pub(super) fn build_preview_rows(
     for (block_id, block) in blocks.nodes().iter().enumerate() {
         let block_id = block_id as BlockId;
 
-        if matches!(block.kind, BlockKind::SourceBlock { .. }) {
+        if matches!(block.kind, BlockKind::Comment | BlockKind::CommentBlock) {
+            continue;
+        }
+
+        if matches!(
+            block.kind,
+            BlockKind::SourceBlock { .. }
+                | BlockKind::Drawer { .. }
+                | BlockKind::ExampleBlock
+                | BlockKind::QuoteBlock
+                | BlockKind::VerseBlock
+                | BlockKind::CenterBlock
+                | BlockKind::ExportBlock { .. }
+                | BlockKind::SpecialBlock { .. }
+                | BlockKind::Raw
+        ) {
             push_physical_rows(text, block_id, block.source, false, &mut rows);
             continue;
         }
@@ -44,7 +57,7 @@ pub(super) fn build_preview_rows(
             continue;
         }
 
-        push_paragraph_rows(text, block_id, block.content, &mut rows);
+        push_physical_rows(text, block_id, block.content, false, &mut rows);
     }
     rows
 }
@@ -82,69 +95,6 @@ fn push_physical_rows(
     }
 }
 
-fn push_paragraph_rows(
-    text: &dyn TextSnapshot,
-    block_id: BlockId,
-    range: ByteRange,
-    rows: &mut Vec<PreviewRow>,
-) {
-    let source = text.copy_range(range);
-    let mut physical_start = 0;
-    let mut block_continuation = false;
-    while physical_start < source.len() {
-        let physical_next = source[physical_start..]
-            .find('\n')
-            .map(|newline| physical_start + newline + 1)
-            .unwrap_or(source.len());
-        let mut physical_end = physical_next;
-        while physical_end > physical_start
-            && matches!(source.as_bytes()[physical_end - 1], b'\n' | b'\r')
-        {
-            physical_end -= 1;
-        }
-
-        let mut visual_start = physical_start;
-        let mut first_visual_row = true;
-        while visual_start < physical_end {
-            let mut visual_end = (visual_start + MAX_PARAGRAPH_ROW_BYTES).min(physical_end);
-            while !source.is_char_boundary(visual_end) {
-                visual_end -= 1;
-            }
-            if visual_end < physical_end {
-                let mut search_start = visual_start + MAX_PARAGRAPH_ROW_BYTES / 2;
-                while search_start < visual_end && !source.is_char_boundary(search_start) {
-                    search_start += 1;
-                }
-                if search_start < visual_end
-                    && let Some(boundary) = source[search_start..visual_end]
-                        .rfind(|character: char| character == ' ' || character == '\t')
-                {
-                    visual_end = search_start
-                        + boundary
-                        + source[search_start + boundary..]
-                            .chars()
-                            .next()
-                            .unwrap()
-                            .len_utf8();
-                }
-            }
-            let global_start = range.start.0 + visual_start as u64;
-            rows.push(PreviewRow {
-                block_id,
-                content: ByteRange::new(global_start, range.start.0 + visual_end as u64),
-                continuation: block_continuation,
-                source_line: text.line_of_byte(ByteOffset(global_start)) + 1,
-                show_line_number: first_visual_row,
-                blank: false,
-            });
-            block_continuation = true;
-            first_visual_row = false;
-            visual_start = visual_end;
-        }
-        physical_start = physical_next;
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::{
@@ -177,15 +127,13 @@ mod tests {
     }
 
     #[test]
-    fn wraps_long_cjk_paragraphs_only_at_utf8_boundaries() {
+    fn keeps_long_cjk_physical_lines_intact_for_gpui_wrapping() {
         let source = format!("{}\n", "返回当前分区中的窗口函数计算结果".repeat(32));
-        let text = RopeSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let text = RopeSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
         let blocks = parse(&text);
         let rows = build_preview_rows(&text, &blocks);
 
-        assert!(rows.len() > 1);
-        for row in rows {
-            let _ = text.copy_range(row.content);
-        }
+        assert_eq!(rows.len(), 1);
+        assert_eq!(text.copy_range(rows[0].content), source.trim_end());
     }
 }

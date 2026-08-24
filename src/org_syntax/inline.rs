@@ -9,6 +9,9 @@ pub enum InlineKind {
     Code,
     Verbatim,
     Link,
+    Target,
+    RadioTarget,
+    FootnoteReference,
     Timestamp,
     Entity,
     Latex,
@@ -31,6 +34,16 @@ pub fn parse(source: &str) -> InlineText {
     let mut output = InlineText::default();
     let mut cursor = 0;
     while cursor < source.len() {
+        if let Some(end) = footnote_end(source, cursor) {
+            push_span(&mut output, InlineKind::FootnoteReference, cursor..end, &source[cursor..end]);
+            cursor = end;
+            continue;
+        }
+        if let Some((end, display, kind)) = target_at(source, cursor) {
+            push_span(&mut output, kind, cursor..end, display);
+            cursor = end;
+            continue;
+        }
         if source[cursor..].starts_with("[[")
             && let Some(close) = source[cursor + 2..].find("]]")
         {
@@ -62,7 +75,8 @@ pub fn parse(source: &str) -> InlineText {
             continue;
         }
         if let Some(end) = entity_end(source, cursor) {
-            let display = &source[cursor..end];
+            let raw = &source[cursor..end];
+            let display = entity_display(raw).unwrap_or(raw);
             push_span(&mut output, InlineKind::Entity, cursor..end, display);
             cursor = end;
             continue;
@@ -74,7 +88,11 @@ pub fn parse(source: &str) -> InlineText {
         {
             let content = &source[cursor + 1..close];
             if !content.is_empty() {
-                push_span(&mut output, kind, cursor..close + 1, content);
+                if matches!(kind, InlineKind::Code | InlineKind::Verbatim) {
+                    push_span(&mut output, kind, cursor..close + 1, content);
+                } else {
+                    push_nested_span(&mut output, kind, cursor..close + 1, content, cursor + 1);
+                }
                 cursor = close + 1;
                 continue;
             }
@@ -87,6 +105,59 @@ pub fn parse(source: &str) -> InlineText {
         cursor += character.len_utf8();
     }
     output
+}
+
+fn push_nested_span(
+    output: &mut InlineText,
+    kind: InlineKind,
+    source: Range<usize>,
+    content: &str,
+    source_offset: usize,
+) {
+    let parsed = parse(content);
+    let start = output.text.len();
+    output.text.push_str(&parsed.text);
+    let end = output.text.len();
+    output.spans.push(InlineSpan { kind, source, range: start..end });
+    output.spans.extend(parsed.spans.into_iter().map(|span| InlineSpan {
+        kind: span.kind,
+        source: span.source.start + source_offset..span.source.end + source_offset,
+        range: span.range.start + start..span.range.end + start,
+    }));
+}
+
+fn footnote_end(source: &str, start: usize) -> Option<usize> {
+    if !source[start..].starts_with("[fn:") { return None; }
+    let bytes = source.as_bytes();
+    let mut index = start + 4;
+    let mut link_depth = 0_u32;
+    while index < bytes.len() {
+        if bytes[index..].starts_with(b"[[") {
+            link_depth += 1;
+            index += 2;
+        } else if bytes[index..].starts_with(b"]]") && link_depth > 0 {
+            link_depth -= 1;
+            index += 2;
+        } else if bytes[index] == b']' && link_depth == 0 {
+            return Some(index + 1);
+        } else {
+            index += 1;
+        }
+    }
+    None
+}
+
+fn target_at(source: &str, start: usize) -> Option<(usize, &str, InlineKind)> {
+    let (open, close, kind) = if source[start..].starts_with("<<<") {
+        (3, ">>>", InlineKind::RadioTarget)
+    } else if source[start..].starts_with("<<") {
+        (2, ">>", InlineKind::Target)
+    } else {
+        return None;
+    };
+    let relative = source[start + open..].find(close)?;
+    let content_end = start + open + relative;
+    Some((content_end + close.len(), &source[start + open..content_end], kind))
 }
 
 fn push_span(output: &mut InlineText, kind: InlineKind, source: Range<usize>, display: &str) {
@@ -136,6 +207,25 @@ fn entity_end(source: &str, start: usize) -> Option<usize> {
         end += 2;
     }
     Some(end)
+}
+
+fn entity_display(entity: &str) -> Option<&'static str> {
+    match entity.trim_end_matches("{}") {
+        "\\alpha" => Some("α"),
+        "\\beta" => Some("β"),
+        "\\gamma" => Some("γ"),
+        "\\delta" => Some("δ"),
+        "\\lambda" => Some("λ"),
+        "\\pi" => Some("π"),
+        "\\sigma" => Some("σ"),
+        "\\rightarrow" | "\\to" => Some("→"),
+        "\\leftarrow" => Some("←"),
+        "\\le" => Some("≤"),
+        "\\ge" => Some("≥"),
+        "\\neq" => Some("≠"),
+        "\\nbsp" => Some(" "),
+        _ => None,
+    }
 }
 
 fn marker_kind(marker: u8) -> Option<InlineKind> {
@@ -242,5 +332,31 @@ mod tests {
     fn leaves_unclosed_markup_unchanged() {
         let parsed = parse("This is *unfinished [[link");
         assert_eq!(parsed.text, "This is *unfinished [[link");
+    }
+
+    #[test]
+    fn parses_nested_emphasis_and_preserves_source_ranges() {
+        let parsed = parse("*bold /and italic/*");
+        assert_eq!(parsed.text, "bold and italic");
+        assert_eq!(parsed.spans.len(), 2);
+        assert_eq!(parsed.spans[0].kind, InlineKind::Bold);
+        assert_eq!(parsed.spans[1].kind, InlineKind::Italic);
+        assert_eq!(&parsed.text[parsed.spans[1].range.clone()], "and italic");
+    }
+
+    #[test]
+    fn converts_safe_entities_and_recognizes_native_targets() {
+        let parsed = parse(r"\alpha \rightarrow <<chapter>> [fn:note]");
+        assert_eq!(parsed.text, "α → chapter [fn:note]");
+        assert_eq!(parsed.spans.iter().filter(|span| span.kind == InlineKind::Target).count(), 1);
+        assert_eq!(parsed.spans.iter().filter(|span| span.kind == InlineKind::FootnoteReference).count(), 1);
+    }
+
+    #[test]
+    fn footnote_scanner_does_not_stop_inside_org_link() {
+        let parsed = parse("[fn::See [[file:guide.org][guide]] for details]");
+        assert_eq!(parsed.text, "[fn::See [[file:guide.org][guide]] for details]");
+        assert_eq!(parsed.spans.len(), 1);
+        assert_eq!(parsed.spans[0].kind, InlineKind::FootnoteReference);
     }
 }

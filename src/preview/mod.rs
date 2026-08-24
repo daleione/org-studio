@@ -13,6 +13,8 @@ use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter}
 
 mod rows;
 mod folding;
+#[cfg(test)]
+mod org_line;
 mod table;
 
 use folding::{changed_range, visible_row_indices};
@@ -1141,12 +1143,30 @@ fn render_block(
                 paragraph
             }
         }
+        BlockKind::Planning => div()
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .line_height(px(22.0))
+            .text_color(rgb(theme.date))
+            .child(text),
         BlockKind::ListItem => div()
             .pl_1()
             .text_size(px(14.0))
             .line_height(px(22.0))
             .text_color(rgb(theme.foreground))
             .child(styled_inline(document.inline(block_id, &text, cx))),
+        BlockKind::FixedWidth => div()
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .line_height(px(22.0))
+            .text_color(rgb(theme.code_foreground))
+            .child(text),
+        BlockKind::FootnoteDefinition => div()
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .line_height(px(22.0))
+            .text_color(rgb(theme.link))
+            .child(text),
         BlockKind::TableRow => render_table_row(
             &text,
             document
@@ -1191,10 +1211,10 @@ fn render_block(
                 .line_height(px(19.0))
                 .child(content)
         }
-        BlockKind::ExampleBlock | BlockKind::Raw => div()
-            .my_4()
-            .p_5()
-            .rounded_lg()
+        BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
+            .min_h(px(24.0))
+            .px_4()
+            .py(px(2.0))
             .bg(rgb(theme.code_background))
             .font_family("Menlo")
             .text_size(px(13.0))
@@ -1202,7 +1222,6 @@ fn render_block(
             .text_color(rgb(theme.code_foreground))
             .child(text),
         BlockKind::QuoteBlock => div()
-            .my_4()
             .pl_4()
             .pr_2()
             .py_2()
@@ -1212,24 +1231,46 @@ fn render_block(
             .text_size(px(16.0))
             .line_height(px(25.0))
             .child(text),
-        BlockKind::Drawer { name } => div()
-            .my_2()
+        BlockKind::VerseBlock => div()
+            .pl_4()
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .line_height(px(22.0))
+            .text_color(rgb(theme.quote))
+            .child(text),
+        BlockKind::CenterBlock => div()
+            .w_full()
+            .text_center()
+            .text_size(px(14.0))
+            .line_height(px(22.0))
+            .text_color(rgb(theme.foreground))
+            .child(text),
+        BlockKind::SpecialBlock { name } => div()
+            .min_h(px(24.0))
+            .px_4()
+            .py(px(2.0))
+            .bg(rgb(theme.code_background))
+            .text_color(rgb(theme.attribute))
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .child(format!("{name}: {text}")),
+        BlockKind::Drawer { .. } => div()
             .px_3()
-            .py_2()
-            .rounded_md()
+            .py(px(2.0))
             .bg(rgb(theme.background_alt))
             .font_family("Menlo")
             .text_size(px(12.0))
             .line_height(px(19.0))
             .text_color(rgb(theme.meta))
-            .child(format!("{name}: {text}")),
-        BlockKind::Keyword | BlockKind::Comment => div()
+            .child(text),
+        BlockKind::Keyword => div()
             .py(px(3.0))
             .font_family("Menlo")
             .text_size(px(12.0))
             .line_height(px(18.0))
             .text_color(rgb(theme.meta))
             .child(text),
+        BlockKind::Comment | BlockKind::CommentBlock => div(),
         BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
     };
     element
@@ -1300,8 +1341,13 @@ fn styled_inline(parsed: InlineText) -> StyledText {
                 background_color: Some(rgb(theme.inline_code_background).into()),
                 ..Default::default()
             },
-            InlineKind::Link => HighlightStyle {
+            InlineKind::Link | InlineKind::FootnoteReference => HighlightStyle {
                 color: Some(rgb(theme.link).into()),
+                font_weight: Some(FontWeight::MEDIUM),
+                ..Default::default()
+            },
+            InlineKind::Target | InlineKind::RadioTarget => HighlightStyle {
+                color: Some(rgb(theme.attribute).into()),
                 font_weight: Some(FontWeight::MEDIUM),
                 ..Default::default()
             },

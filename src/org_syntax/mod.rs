@@ -9,12 +9,20 @@ pub enum BlockKind {
     BlankLine,
     Heading { level: u16 },
     Paragraph,
+    Planning,
     ListItem,
     TableRow,
+    FixedWidth,
+    FootnoteDefinition,
     Drawer { name: String },
     SourceBlock { language: Option<String> },
     ExampleBlock,
     QuoteBlock,
+    VerseBlock,
+    CenterBlock,
+    CommentBlock,
+    ExportBlock { backend: Option<String> },
+    SpecialBlock { name: String },
     Keyword,
     Comment,
     HorizontalRule,
@@ -222,7 +230,15 @@ fn block_start(line: &str, content_start: u64) -> Option<(BlockKind, String, u64
         }
         "example" => BlockKind::ExampleBlock,
         "quote" => BlockKind::QuoteBlock,
-        _ => BlockKind::Raw,
+        "verse" => BlockKind::VerseBlock,
+        "center" => BlockKind::CenterBlock,
+        "comment" => BlockKind::CommentBlock,
+        "export" => BlockKind::ExportBlock {
+            backend: line.split_whitespace().nth(1).map(ToOwned::to_owned),
+        },
+        _ => BlockKind::SpecialBlock {
+            name: name.to_owned(),
+        },
     };
 
     Some((kind, format!("#+end_{name}"), content_start))
@@ -233,21 +249,26 @@ fn drawer_start(line: &str, content_start: u64) -> Option<(String, u64)> {
         return None;
     }
     let name = line.trim_matches(':');
-    if name.eq_ignore_ascii_case("END") || name.contains(':') {
+    if !matches!(name.to_ascii_uppercase().as_str(), "PROPERTIES" | "LOGBOOK") {
         return None;
     }
     Some((name.to_owned(), content_start))
 }
 
 fn classify_line(line: &str) -> BlockKind {
-    if line.starts_with('|') {
+    if line.starts_with("SCHEDULED:")
+        || line.starts_with("DEADLINE:")
+        || line.starts_with("CLOSED:")
+    {
+        BlockKind::Planning
+    } else if line.starts_with('|') {
         BlockKind::TableRow
+    } else if line.starts_with(": ") || line == ":" {
+        BlockKind::FixedWidth
+    } else if line.starts_with("[fn:") && line.contains(']') {
+        BlockKind::FootnoteDefinition
     } else if is_list_item(line) {
         BlockKind::ListItem
-    } else if line.starts_with(':') && line.ends_with(':') && line.len() > 2 {
-        BlockKind::Drawer {
-            name: line.trim_matches(':').to_owned(),
-        }
     } else if line.starts_with("#+") {
         BlockKind::Keyword
     } else if line.starts_with('#') {
@@ -276,6 +297,9 @@ fn is_list_item(line: &str) -> bool {
     digits > 0
         && matches!(bytes.get(digits), Some(b'.' | b')'))
         && bytes.get(digits + 1).is_some_and(u8::is_ascii_whitespace)
+        || bytes.first().is_some_and(u8::is_ascii_alphabetic)
+            && matches!(bytes.get(1), Some(b'.' | b')'))
+            && bytes.get(2).is_some_and(u8::is_ascii_whitespace)
 }
 
 fn content_end(line: &crate::document::TextLine<'_>) -> u64 {
