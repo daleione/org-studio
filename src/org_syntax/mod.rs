@@ -6,6 +6,7 @@ pub type BlockId = u32;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum BlockKind {
+    BlankLine,
     Heading { level: u16 },
     Paragraph,
     ListItem,
@@ -86,6 +87,15 @@ pub fn parse(snapshot: &dyn TextSnapshot) -> BlockArena {
 
         if logical.trim().is_empty() {
             paragraph = None;
+            let parent = heading_stack.last().map(|(_, id)| *id);
+            arena.push(BlockNode {
+                kind: BlockKind::BlankLine,
+                source: line.range,
+                content: ByteRange::new(line.range.start.0, content_end(&line)),
+                parent,
+                first_child: None,
+                next_sibling: None,
+            });
             continue;
         }
 

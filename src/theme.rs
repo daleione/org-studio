@@ -1,0 +1,66 @@
+#[derive(Clone, Copy)]
+pub struct Theme {
+    pub background: u32,
+    pub background_alt: u32,
+    pub foreground: u32,
+    pub foreground_dim: u32,
+    pub border: u32,
+    pub heading: [u32; 4],
+    pub heading_bullets: [&'static str; 4],
+    pub code_background: u32,
+    pub code_boundary_background: u32,
+    pub code_foreground: u32,
+    pub code_boundary: u32,
+    pub quote: u32,
+    pub link: u32,
+    pub meta: u32,
+    pub inline_code: u32,
+    pub inline_code_background: u32,
+    pub date: u32,
+    pub keyword: u32,
+    pub string: u32,
+    pub comment: u32,
+    pub type_name: u32,
+    pub function: u32,
+    pub constant: u32,
+    pub number: u32,
+    pub variable: u32,
+    pub operator: u32,
+    pub attribute: u32,
+}
+
+// A native light theme inspired by Spacemacs Org's semantic color hierarchy.
+// It is project-owned data and has no dependency on Emacs or Lisp themes.
+pub static ORG_STUDIO_LIGHT: Theme = Theme {
+    background: 0xffffff,
+    background_alt: 0xf5f5f7,
+    foreground: 0x3a3a3c,
+    foreground_dim: 0x9a9aa0,
+    border: 0xd8d8dc,
+    heading: [0x3a81c3, 0x2d9574, 0x67a817, 0xa88412],
+    heading_bullets: ["◉", "○", "✸", "✿"],
+    code_background: 0xf5f2f7,
+    code_boundary_background: 0xece8ef,
+    code_foreground: 0x4a4352,
+    code_boundary: 0x827591,
+    quote: 0x655370,
+    link: 0x3a81c3,
+    meta: 0x9f8766,
+    inline_code: 0x087e8b,
+    inline_code_background: 0xf1eef3,
+    date: 0x715ab1,
+    keyword: 0x3a81c3,
+    string: 0x2d9574,
+    comment: 0x258c96,
+    type_name: 0xb23a63,
+    function: 0x6c3163,
+    constant: 0x4e3163,
+    number: 0x9a7b10,
+    variable: 0x715ab1,
+    operator: 0x655370,
+    attribute: 0xdc752f,
+};
+
+pub fn current_theme() -> &'static Theme {
+    &ORG_STUDIO_LIGHT
+}

@@ -11,19 +11,23 @@ use gpui::{
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
+mod rows;
+
+use rows::build_preview_rows;
+
 use crate::{
-    document::{ByteOffset, ByteRange, RopeSnapshot, SharedTextSnapshot},
+    document::{ByteRange, RopeSnapshot, SharedTextSnapshot},
     org_syntax::{
         BlockArena, BlockId, BlockKind, BlockNode,
         inline::{InlineKind, InlineText, parse as parse_inline},
         parse,
     },
+    theme::current_theme,
 };
 
 const INLINE_CACHE_CAPACITY: usize = 2048;
 const INLINE_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SYNC_INLINE_BYTES: usize = 64 * 1024;
-const MAX_PARAGRAPH_ROW_BYTES: usize = 256;
 const HIGHLIGHT_CACHE_CAPACITY: usize = 512;
 const HIGHLIGHT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 
@@ -70,12 +74,13 @@ pub struct PreviewDocument {
 }
 
 #[derive(Clone, Copy)]
-struct PreviewRow {
-    block_id: BlockId,
-    content: ByteRange,
-    continuation: bool,
-    source_line: u64,
-    show_line_number: bool,
+pub(super) struct PreviewRow {
+    pub(super) block_id: BlockId,
+    pub(super) content: ByteRange,
+    pub(super) continuation: bool,
+    pub(super) source_line: u64,
+    pub(super) show_line_number: bool,
+    pub(super) blank: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -629,6 +634,7 @@ impl PreviewApp {
     }
 
     fn body(&self) -> gpui::Div {
+        let theme = current_theme();
         match &self.state {
             PreviewLoadState::Empty => centered_message(
                 "ORG STUDIO",
@@ -647,7 +653,7 @@ impl PreviewApp {
                         .size_full()
                         .flex()
                         .flex_col()
-                        .bg(rgb(0xffffff))
+                        .bg(rgb(theme.background))
                         .child(
                             div()
                                 .flex_none()
@@ -815,8 +821,8 @@ impl Render for PreviewApp {
         }
         div()
             .size_full()
-            .bg(rgb(0xffffff))
-            .text_color(rgb(0x1d1d1f))
+            .bg(rgb(current_theme().background))
+            .text_color(rgb(current_theme().foreground))
             .font_family("Menlo")
             .text_size(px(14.0))
             .on_action(cx.listener(|this, _: &OpenDocument, _, cx| this.choose_file(cx)))
@@ -868,118 +874,13 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
     })
 }
 
-fn build_preview_rows(
-    text: &dyn crate::document::TextSnapshot,
-    blocks: &BlockArena,
-) -> Vec<PreviewRow> {
-    let mut rows = Vec::with_capacity(blocks.nodes().len());
-    for (block_id, block) in blocks.nodes().iter().enumerate() {
-        if matches!(block.kind, BlockKind::SourceBlock { .. }) {
-            let source = text.copy_range(block.source);
-            let mut physical_start = 0;
-            let mut continuation = false;
-            while physical_start < source.len() {
-                let physical_next = source[physical_start..]
-                    .find('\n')
-                    .map(|newline| physical_start + newline + 1)
-                    .unwrap_or(source.len());
-                let mut physical_end = physical_next;
-                while physical_end > physical_start
-                    && matches!(source.as_bytes()[physical_end - 1], b'\n' | b'\r')
-                {
-                    physical_end -= 1;
-                }
-                let global_start = block.source.start.0 + physical_start as u64;
-                rows.push(PreviewRow {
-                    block_id: block_id as BlockId,
-                    content: ByteRange::new(
-                        global_start,
-                        block.source.start.0 + physical_end as u64,
-                    ),
-                    continuation,
-                    source_line: text.line_of_byte(ByteOffset(global_start)) + 1,
-                    show_line_number: true,
-                });
-                continuation = true;
-                physical_start = physical_next;
-            }
-            continue;
-        }
-
-        if !matches!(block.kind, BlockKind::Paragraph) {
-            rows.push(PreviewRow {
-                block_id: block_id as BlockId,
-                content: block.content,
-                continuation: false,
-                source_line: text.line_of_byte(block.content.start) + 1,
-                show_line_number: true,
-            });
-            continue;
-        }
-
-        let source = text.copy_range(block.content);
-        let mut physical_start = 0;
-        let mut block_continuation = false;
-        while physical_start < source.len() {
-            let physical_next = source[physical_start..]
-                .find('\n')
-                .map(|newline| physical_start + newline + 1)
-                .unwrap_or(source.len());
-            let mut physical_end = physical_next;
-            while physical_end > physical_start
-                && matches!(source.as_bytes()[physical_end - 1], b'\n' | b'\r')
-            {
-                physical_end -= 1;
-            }
-
-            let mut visual_start = physical_start;
-            let mut first_visual_row = true;
-            while visual_start < physical_end {
-                let mut visual_end = (visual_start + MAX_PARAGRAPH_ROW_BYTES).min(physical_end);
-                while !source.is_char_boundary(visual_end) {
-                    visual_end -= 1;
-                }
-                if visual_end < physical_end {
-                    let search_start = visual_start + MAX_PARAGRAPH_ROW_BYTES / 2;
-                    if let Some(boundary) = source[search_start..visual_end]
-                        .rfind(|character: char| character == ' ' || character == '\t')
-                    {
-                        visual_end = search_start
-                            + boundary
-                            + source[search_start + boundary..]
-                                .chars()
-                                .next()
-                                .unwrap()
-                                .len_utf8();
-                    }
-                }
-                let global_start = block.content.start.0 + visual_start as u64;
-                rows.push(PreviewRow {
-                    block_id: block_id as BlockId,
-                    content: ByteRange::new(
-                        global_start,
-                        block.content.start.0 + visual_end as u64,
-                    ),
-                    continuation: block_continuation,
-                    source_line: text.line_of_byte(ByteOffset(global_start)) + 1,
-                    show_line_number: first_visual_row,
-                });
-                block_continuation = true;
-                first_visual_row = false;
-                visual_start = visual_end;
-            }
-            physical_start = physical_next;
-        }
-    }
-    rows
-}
-
 fn centered_message(title: &str, detail: &str) -> gpui::Div {
+    let theme = current_theme();
     div()
         .size_full()
         .flex()
         .flex_col()
-        .bg(rgb(0xffffff))
+        .bg(rgb(theme.background))
         .flex()
         .flex_col()
         .items_center()
@@ -989,7 +890,7 @@ fn centered_message(title: &str, detail: &str) -> gpui::Div {
             div()
                 .text_size(px(20.0))
                 .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(0x1d1d1f))
+                .text_color(rgb(theme.heading[0]))
                 .child(title.to_owned()),
         )
         .child(
@@ -997,7 +898,7 @@ fn centered_message(title: &str, detail: &str) -> gpui::Div {
                 .max_w(px(520.0))
                 .text_size(px(14.0))
                 .line_height(px(21.0))
-                .text_color(rgb(0x6e6e73))
+                .text_color(rgb(theme.foreground_dim))
                 .child(detail.to_owned()),
         )
 }
@@ -1006,12 +907,13 @@ fn render_document(
     document: Arc<PreviewDocument>,
     list_state: ListState,
 ) -> gpui::Div {
+    let theme = current_theme();
     div()
         .size_full()
         .flex()
         .flex_col()
         .relative()
-        .bg(rgb(0xffffff))
+        .bg(rgb(theme.background))
         .child(
             div()
                 .absolute()
@@ -1019,9 +921,9 @@ fn render_document(
                 .bottom_0()
                 .left_0()
                 .w(px(50.0))
-                .bg(rgb(0xf5f5f7))
+                .bg(rgb(theme.background_alt))
                 .border_r_1()
-                .border_color(rgb(0xe5e5e7)),
+                .border_color(rgb(theme.border)),
         )
         .child({
             let document = document.clone();
@@ -1047,7 +949,7 @@ fn render_document(
                             .text_right()
                             .font_family("Menlo")
                             .text_size(px(10.0))
-                            .text_color(rgb(0xb6b6ba))
+                            .text_color(rgb(theme.foreground_dim))
                             .child(if row.show_line_number {
                                 row.source_line.to_string()
                             } else {
@@ -1089,6 +991,10 @@ fn render_block(
     block: &BlockNode,
     cx: &mut App,
 ) -> gpui::Div {
+    let theme = current_theme();
+    if row.blank {
+        return div().h(px(24.0));
+    }
     let text = document
         .text
         .copy_range(row.content)
@@ -1096,11 +1002,13 @@ fn render_block(
         .to_owned();
 
     let element = match &block.kind {
+        BlockKind::BlankLine => div().h(px(24.0)),
         BlockKind::Heading { level } => {
-            let marker = document.text.copy_range(ByteRange::new(
-                block.source.start.0,
-                block.content.start.0,
-            ));
+            let heading_index = (*level as usize).saturating_sub(1);
+            let marker = format!(
+                "{} ",
+                theme.heading_bullets[heading_index % theme.heading_bullets.len()]
+            );
             let size = match level {
                 1 => 22.0,
                 2 => 18.0,
@@ -1118,14 +1026,14 @@ fn render_block(
                 } else {
                     FontWeight::MEDIUM
                 })
-                .text_color(rgb(0x1d1d1f))
+                .text_color(rgb(theme.heading[heading_index.min(3)]))
                 .child(
                     div()
                         .flex_none()
                         .font_family("Menlo")
                         .text_size(px(13.0))
                         .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(0x8e8e93))
+                        .text_color(rgb(theme.heading[heading_index.min(3)]))
                         .child(marker),
                 )
                 .child(
@@ -1139,7 +1047,7 @@ fn render_block(
             let paragraph = div()
                 .text_size(px(14.0))
                 .line_height(px(22.0))
-                .text_color(rgb(0x2c2c2e))
+                .text_color(rgb(theme.foreground))
                 .child(styled_inline(document.inline(block_id, &text, cx)));
             if row.continuation {
                 paragraph
@@ -1151,18 +1059,18 @@ fn render_block(
             .pl_1()
             .text_size(px(14.0))
             .line_height(px(22.0))
-            .text_color(rgb(0x2c2c2e))
+            .text_color(rgb(theme.foreground))
             .child(styled_inline(document.inline(block_id, &text, cx))),
         BlockKind::TableRow => div()
             .px_3()
             .py(px(5.0))
-            .bg(rgb(0xf6f6f7))
+            .bg(rgb(theme.background_alt))
             .border_b_1()
-            .border_color(rgb(0xe5e5e7))
+            .border_color(rgb(theme.border))
             .font_family("Menlo")
             .text_size(px(13.0))
             .line_height(px(20.0))
-            .text_color(rgb(0x3a3a3c))
+            .text_color(rgb(theme.foreground))
             .child(text),
         BlockKind::SourceBlock { language } => {
             let marker = text.trim_start().to_ascii_lowercase();
@@ -1186,11 +1094,15 @@ fn render_block(
                 .min_h(px(24.0))
                 .px_4()
                 .py(px(2.0))
-                .bg(rgb(0xf7f7f8))
-                .text_color(if is_boundary {
-                    rgb(0x8e8e93)
+                .bg(rgb(if is_boundary {
+                    theme.code_boundary_background
                 } else {
-                    rgb(0x2c2c2e)
+                    theme.code_background
+                }))
+                .text_color(if is_boundary {
+                    rgb(theme.code_boundary)
+                } else {
+                    rgb(theme.code_foreground)
                 })
                 .font_family("Menlo")
                 .text_size(px(13.0))
@@ -1201,11 +1113,11 @@ fn render_block(
             .my_4()
             .p_5()
             .rounded_lg()
-            .bg(rgb(0xf6f6f7))
+            .bg(rgb(theme.code_background))
             .font_family("Menlo")
             .text_size(px(13.0))
             .line_height(px(21.0))
-            .text_color(rgb(0x3a3a3c))
+            .text_color(rgb(theme.code_foreground))
             .child(text),
         BlockKind::QuoteBlock => div()
             .my_4()
@@ -1213,8 +1125,8 @@ fn render_block(
             .pr_2()
             .py_2()
             .border_l_2()
-            .border_color(rgb(0x8e8e93))
-            .text_color(rgb(0x636366))
+            .border_color(rgb(theme.heading[1]))
+            .text_color(rgb(theme.quote))
             .text_size(px(16.0))
             .line_height(px(25.0))
             .child(text),
@@ -1223,20 +1135,20 @@ fn render_block(
             .px_3()
             .py_2()
             .rounded_md()
-            .bg(rgb(0xf7f7f8))
+            .bg(rgb(theme.background_alt))
             .font_family("Menlo")
             .text_size(px(12.0))
             .line_height(px(19.0))
-            .text_color(rgb(0x6e6e73))
+            .text_color(rgb(theme.meta))
             .child(format!("{name}: {text}")),
         BlockKind::Keyword | BlockKind::Comment => div()
             .py(px(3.0))
             .font_family("Menlo")
             .text_size(px(12.0))
             .line_height(px(18.0))
-            .text_color(rgb(0x8e8e93))
+            .text_color(rgb(theme.meta))
             .child(text),
-        BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(0xd1d1d6)),
+        BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
     };
     element
 }
@@ -1261,17 +1173,18 @@ fn styled_code_row(
 }
 
 fn code_highlight_style(kind: CodeHighlightKind) -> HighlightStyle {
+    let theme = current_theme();
     let color = match kind {
-        CodeHighlightKind::Attribute => 0x9a5d00,
-        CodeHighlightKind::Boolean | CodeHighlightKind::Constant => 0x9b2393,
-        CodeHighlightKind::Comment => 0x6e7781,
-        CodeHighlightKind::Function => 0x8250df,
-        CodeHighlightKind::Keyword => 0xcf222e,
-        CodeHighlightKind::Number => 0x0550ae,
-        CodeHighlightKind::Operator | CodeHighlightKind::Punctuation => 0x57606a,
-        CodeHighlightKind::Property | CodeHighlightKind::Variable => 0x1f2328,
-        CodeHighlightKind::String => 0x0a7b3e,
-        CodeHighlightKind::Type => 0x953800,
+        CodeHighlightKind::Attribute => theme.attribute,
+        CodeHighlightKind::Boolean | CodeHighlightKind::Constant => theme.constant,
+        CodeHighlightKind::Comment => theme.comment,
+        CodeHighlightKind::Function => theme.function,
+        CodeHighlightKind::Keyword => theme.keyword,
+        CodeHighlightKind::Number => theme.number,
+        CodeHighlightKind::Operator | CodeHighlightKind::Punctuation => theme.operator,
+        CodeHighlightKind::Property | CodeHighlightKind::Variable => theme.variable,
+        CodeHighlightKind::String => theme.string,
+        CodeHighlightKind::Type => theme.type_name,
     };
     HighlightStyle {
         color: Some(rgb(color).into()),
@@ -1281,6 +1194,7 @@ fn code_highlight_style(kind: CodeHighlightKind) -> HighlightStyle {
 }
 
 fn styled_inline(parsed: InlineText) -> StyledText {
+    let theme = current_theme();
     let highlights = parsed.spans.into_iter().map(|span| {
         let style = match span.kind {
             InlineKind::Bold => HighlightStyle {
@@ -1292,7 +1206,7 @@ fn styled_inline(parsed: InlineText) -> StyledText {
                 ..Default::default()
             },
             InlineKind::Underline => HighlightStyle {
-                color: Some(rgb(0x0066cc).into()),
+                color: Some(rgb(theme.link).into()),
                 ..Default::default()
             },
             InlineKind::Strike => HighlightStyle {
@@ -1300,21 +1214,21 @@ fn styled_inline(parsed: InlineText) -> StyledText {
                 ..Default::default()
             },
             InlineKind::Code | InlineKind::Verbatim => HighlightStyle {
-                color: Some(rgb(0x9a3412).into()),
-                background_color: Some(rgb(0xf2f2f4).into()),
+                color: Some(rgb(theme.inline_code).into()),
+                background_color: Some(rgb(theme.inline_code_background).into()),
                 ..Default::default()
             },
             InlineKind::Link => HighlightStyle {
-                color: Some(rgb(0x0066cc).into()),
+                color: Some(rgb(theme.link).into()),
                 font_weight: Some(FontWeight::MEDIUM),
                 ..Default::default()
             },
             InlineKind::Timestamp => HighlightStyle {
-                color: Some(rgb(0x8a5a00).into()),
+                color: Some(rgb(theme.date).into()),
                 ..Default::default()
             },
             InlineKind::Entity | InlineKind::Latex => HighlightStyle {
-                color: Some(rgb(0x7356a8).into()),
+                color: Some(rgb(theme.function).into()),
                 ..Default::default()
             },
         };
