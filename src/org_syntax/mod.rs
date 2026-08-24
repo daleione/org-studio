@@ -75,7 +75,7 @@ pub fn parse(snapshot: &dyn TextSnapshot) -> BlockArena {
         if let Some((block_id, end_marker)) = open_block.as_ref() {
             let node = &mut arena.nodes[*block_id as usize];
             node.source.end = line.range.end;
-            if logical.eq_ignore_ascii_case(end_marker) {
+            if logical.trim().eq_ignore_ascii_case(end_marker) {
                 node.content.end = line.range.start;
                 open_block = None;
             } else {
@@ -327,6 +327,22 @@ mod tests {
         assert!(matches!(nodes[1].kind, BlockKind::QuoteBlock));
         assert_eq!(text.copy_range(nodes[0].content), ":ID: example\n");
         assert_eq!(text.copy_range(nodes[1].content), "unclosed\n");
+    }
+
+    #[test]
+    fn closes_indented_blocks_with_indented_or_trailing_space_end_markers() {
+        let text = snapshot(
+            "* SQL\n  #+BEGIN_SRC sql\n  select 1;\n  #+END_SRC  \nAfter block.\n",
+        );
+        let arena = parse(text.as_ref());
+        let nodes = arena.nodes();
+
+        assert_eq!(nodes.len(), 3);
+        assert!(matches!(nodes[0].kind, BlockKind::Heading { level: 1 }));
+        assert!(matches!(nodes[1].kind, BlockKind::SourceBlock { .. }));
+        assert_eq!(text.copy_range(nodes[1].content), "  select 1;\n");
+        assert!(matches!(nodes[2].kind, BlockKind::Paragraph));
+        assert_eq!(text.copy_range(nodes[2].content), "After block.");
     }
 
     #[test]

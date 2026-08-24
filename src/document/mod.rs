@@ -31,6 +31,7 @@ pub struct TextChunk<'a> {
 
 pub trait TextSnapshot: Send + Sync {
     fn len_bytes(&self) -> u64;
+    fn line_of_byte(&self, offset: ByteOffset) -> u64;
     fn chunk_at(&self, offset: ByteOffset) -> Option<TextChunk<'_>>;
     fn copy_range(&self, range: ByteRange) -> String;
 }
@@ -60,6 +61,10 @@ impl RopeSnapshot {
 impl TextSnapshot for RopeSnapshot {
     fn len_bytes(&self) -> u64 {
         self.rope.len_bytes() as u64
+    }
+
+    fn line_of_byte(&self, offset: ByteOffset) -> u64 {
+        self.rope.byte_to_line(offset.0 as usize) as u64
     }
 
     fn chunk_at(&self, offset: ByteOffset) -> Option<TextChunk<'_>> {

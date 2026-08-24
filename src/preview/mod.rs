@@ -7,11 +7,11 @@ use std::{
 
 use gpui::{
     App, Context, FontStyle, FontWeight, HighlightStyle, IntoElement, ListAlignment, ListState,
-    PathPromptOptions, Render, StyledText, Task, Window, div, list, prelude::*, px, rgb,
+    PathPromptOptions, Render, StyledText, Task, Window, actions, div, list, prelude::*, px, rgb,
 };
 
 use crate::{
-    document::{ByteRange, RopeSnapshot, SharedTextSnapshot},
+    document::{ByteOffset, ByteRange, RopeSnapshot, SharedTextSnapshot},
     org_syntax::{
         BlockArena, BlockId, BlockKind, BlockNode,
         inline::{InlineKind, InlineText, parse as parse_inline},
@@ -23,6 +23,8 @@ const INLINE_CACHE_CAPACITY: usize = 2048;
 const INLINE_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SYNC_INLINE_BYTES: usize = 64 * 1024;
 const MAX_PARAGRAPH_ROW_BYTES: usize = 256;
+
+actions!(org_preview, [OpenDocument, ReloadDocument]);
 
 pub struct PreviewDocument {
     pub path: PathBuf,
@@ -38,6 +40,8 @@ struct PreviewRow {
     block_id: BlockId,
     content: ByteRange,
     continuation: bool,
+    source_line: u64,
+    show_line_number: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -144,7 +148,6 @@ enum PreviewLoadState {
     Empty,
     Loading {
         path: PathBuf,
-        generation: u64,
     },
     Ready {
         generation: u64,
@@ -152,7 +155,6 @@ enum PreviewLoadState {
     },
     Failed {
         path: PathBuf,
-        generation: u64,
         message: String,
     },
 }
@@ -219,10 +221,7 @@ impl PreviewApp {
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
         let generation = self.generation;
-        self.state = PreviewLoadState::Loading {
-            path: path.clone(),
-            generation,
-        };
+        self.state = PreviewLoadState::Loading { path: path.clone() };
 
         let background = cx.background_spawn(async move { load_document(path) });
         self.load_task = Some(cx.spawn(async move |this, cx| {
@@ -242,11 +241,7 @@ impl PreviewApp {
                             document,
                         }
                     }
-                    Err((path, message)) => PreviewLoadState::Failed {
-                        path,
-                        generation,
-                        message,
-                    },
+                    Err((path, message)) => PreviewLoadState::Failed { path, message },
                 };
                 cx.notify();
             });
@@ -275,7 +270,7 @@ impl PreviewApp {
 
     fn reload(&mut self, cx: &mut Context<Self>) {
         let path = match &self.state {
-            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
+            PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
                 Some(path.clone())
             }
             PreviewLoadState::Ready { document, .. } => Some(document.path.clone()),
@@ -286,67 +281,61 @@ impl PreviewApp {
         }
     }
 
-    fn body(&self, cx: &mut Context<Self>) -> gpui::Div {
+    fn body(&self) -> gpui::Div {
         match &self.state {
             PreviewLoadState::Empty => centered_message(
                 "ORG STUDIO",
-                "Open a local .org document or run:\ncargo run -- notes.org",
-            )
-            .child(toolbar_button(
-                "OPEN",
-                cx.listener(|this, _, _, cx| this.choose_file(cx)),
-            )),
-            PreviewLoadState::Loading { path, generation } => centered_message(
-                "LOADING",
-                &format!("{}\nrequest #{generation}", path.display()),
+                "Open an Org document from the File menu or press Command-O.",
             ),
+            PreviewLoadState::Loading { path } => {
+                centered_message("OPENING DOCUMENT", &path.display().to_string())
+            }
             PreviewLoadState::Failed {
                 path,
-                generation,
                 message,
             } => {
-                let error = format!("{}: {message} · request #{generation}", path.display());
-                if let Some((ready_generation, document)) = &self.last_ready {
+                let error = format!("{}: {message}", path.display());
+                if let Some((_, document)) = &self.last_ready {
                     div()
                         .size_full()
                         .flex()
                         .flex_col()
+                        .bg(rgb(0xffffff))
                         .child(
                             div()
                                 .flex_none()
-                                .px_8()
-                                .py_2()
-                                .bg(rgb(0xf1d8cf))
-                                .text_color(rgb(0x8f321f))
-                                .child(format!(
-                                    "OPEN FAILED · showing previous document · {error}"
-                                )),
+                                .px_6()
+                                .py_3()
+                                .bg(rgb(0xfff2f0))
+                                .border_b_1()
+                                .border_color(rgb(0xf2c8c2))
+                                .text_size(px(13.0))
+                                .text_color(rgb(0xa12b1f))
+                                .child(format!("Could not open document. Showing the previous file. {error}")),
                         )
-                        .child(render_document(
-                            document.clone(),
-                            *ready_generation,
-                            self.list_state.clone(),
-                            toolbar_button(
-                                "OPEN",
-                                cx.listener(|this, _, _, cx| this.choose_file(cx)),
-                            ),
-                            toolbar_button("RELOAD", cx.listener(|this, _, _, cx| this.reload(cx))),
-                        ))
+                        .child(render_document(document.clone(), self.list_state.clone()))
                 } else {
-                    centered_message("FAILED TO OPEN", &error)
+                    centered_message("COULD NOT OPEN DOCUMENT", &error)
                 }
             }
-            PreviewLoadState::Ready {
-                generation,
-                document,
-            } => render_document(
-                document.clone(),
-                *generation,
-                self.list_state.clone(),
-                toolbar_button("OPEN", cx.listener(|this, _, _, cx| this.choose_file(cx))),
-                toolbar_button("RELOAD", cx.listener(|this, _, _, cx| this.reload(cx))),
-            ),
+            PreviewLoadState::Ready { document, .. } => {
+                render_document(document.clone(), self.list_state.clone())
+            }
         }
+    }
+
+    fn window_title(&self) -> String {
+        let path = match &self.state {
+            PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
+                Some(path)
+            }
+            PreviewLoadState::Ready { document, .. } => Some(&document.path),
+            PreviewLoadState::Empty => None,
+        };
+        path.and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("Org Studio")
+            .to_owned()
     }
 
     fn schedule_scroll_sample(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -443,6 +432,7 @@ fn accept_generation(current: u64, completed: u64) -> bool {
 impl Render for PreviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::scope!("PreviewApp::render");
+        window.set_window_title(&self.window_title());
         if self.scroll_benchmark.is_some() {
             window.request_animation_frame();
         }
@@ -478,10 +468,13 @@ impl Render for PreviewApp {
         }
         div()
             .size_full()
-            .bg(rgb(0xf3efe4))
-            .text_color(rgb(0x24231f))
-            .font_family("Iowan Old Style")
-            .child(self.body(cx))
+            .bg(rgb(0xffffff))
+            .text_color(rgb(0x1d1d1f))
+            .font_family("Menlo")
+            .text_size(px(14.0))
+            .on_action(cx.listener(|this, _: &OpenDocument, _, cx| this.choose_file(cx)))
+            .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| this.reload(cx)))
+            .child(self.body())
     }
 }
 
@@ -530,55 +523,101 @@ fn build_preview_rows(
 ) -> Vec<PreviewRow> {
     let mut rows = Vec::with_capacity(blocks.nodes().len());
     for (block_id, block) in blocks.nodes().iter().enumerate() {
-        if !matches!(block.kind, BlockKind::Paragraph)
-            || block.content.end.0 - block.content.start.0 <= MAX_PARAGRAPH_ROW_BYTES as u64
-        {
+        if matches!(block.kind, BlockKind::SourceBlock { .. }) {
+            let source = text.copy_range(block.source);
+            let mut physical_start = 0;
+            let mut continuation = false;
+            while physical_start < source.len() {
+                let physical_next = source[physical_start..]
+                    .find('\n')
+                    .map(|newline| physical_start + newline + 1)
+                    .unwrap_or(source.len());
+                let mut physical_end = physical_next;
+                while physical_end > physical_start
+                    && matches!(source.as_bytes()[physical_end - 1], b'\n' | b'\r')
+                {
+                    physical_end -= 1;
+                }
+                let global_start = block.source.start.0 + physical_start as u64;
+                rows.push(PreviewRow {
+                    block_id: block_id as BlockId,
+                    content: ByteRange::new(
+                        global_start,
+                        block.source.start.0 + physical_end as u64,
+                    ),
+                    continuation,
+                    source_line: text.line_of_byte(ByteOffset(global_start)) + 1,
+                    show_line_number: true,
+                });
+                continuation = true;
+                physical_start = physical_next;
+            }
+            continue;
+        }
+
+        if !matches!(block.kind, BlockKind::Paragraph) {
             rows.push(PreviewRow {
                 block_id: block_id as BlockId,
                 content: block.content,
                 continuation: false,
+                source_line: text.line_of_byte(block.content.start) + 1,
+                show_line_number: true,
             });
             continue;
         }
 
         let source = text.copy_range(block.content);
-        let mut start = 0;
-        let mut continuation = false;
-        while source.len() - start > MAX_PARAGRAPH_ROW_BYTES {
-            let target = start + MAX_PARAGRAPH_ROW_BYTES;
-            let mut end = target;
-            while !source.is_char_boundary(end) {
-                end -= 1;
-            }
-            let search_start = start + MAX_PARAGRAPH_ROW_BYTES / 2;
-            if let Some(boundary) = source[search_start..end]
-                .rfind(|character: char| character == '\n' || character == ' ' || character == '\t')
+        let mut physical_start = 0;
+        let mut block_continuation = false;
+        while physical_start < source.len() {
+            let physical_next = source[physical_start..]
+                .find('\n')
+                .map(|newline| physical_start + newline + 1)
+                .unwrap_or(source.len());
+            let mut physical_end = physical_next;
+            while physical_end > physical_start
+                && matches!(source.as_bytes()[physical_end - 1], b'\n' | b'\r')
             {
-                end = search_start
-                    + boundary
-                    + source[search_start + boundary..]
-                        .chars()
-                        .next()
-                        .unwrap()
-                        .len_utf8();
+                physical_end -= 1;
             }
-            rows.push(PreviewRow {
-                block_id: block_id as BlockId,
-                content: ByteRange::new(
-                    block.content.start.0 + start as u64,
-                    block.content.start.0 + end as u64,
-                ),
-                continuation,
-            });
-            continuation = true;
-            start = end;
-        }
-        if start < source.len() {
-            rows.push(PreviewRow {
-                block_id: block_id as BlockId,
-                content: ByteRange::new(block.content.start.0 + start as u64, block.content.end.0),
-                continuation,
-            });
+
+            let mut visual_start = physical_start;
+            let mut first_visual_row = true;
+            while visual_start < physical_end {
+                let mut visual_end = (visual_start + MAX_PARAGRAPH_ROW_BYTES).min(physical_end);
+                while !source.is_char_boundary(visual_end) {
+                    visual_end -= 1;
+                }
+                if visual_end < physical_end {
+                    let search_start = visual_start + MAX_PARAGRAPH_ROW_BYTES / 2;
+                    if let Some(boundary) = source[search_start..visual_end]
+                        .rfind(|character: char| character == ' ' || character == '\t')
+                    {
+                        visual_end = search_start
+                            + boundary
+                            + source[search_start + boundary..]
+                                .chars()
+                                .next()
+                                .unwrap()
+                                .len_utf8();
+                    }
+                }
+                let global_start = block.content.start.0 + visual_start as u64;
+                rows.push(PreviewRow {
+                    block_id: block_id as BlockId,
+                    content: ByteRange::new(
+                        global_start,
+                        block.content.start.0 + visual_end as u64,
+                    ),
+                    continuation: block_continuation,
+                    source_line: text.line_of_byte(ByteOffset(global_start)) + 1,
+                    show_line_number: first_visual_row,
+                });
+                block_continuation = true;
+                first_visual_row = false;
+                visual_start = visual_end;
+            }
+            physical_start = physical_next;
         }
     }
     rows
@@ -589,97 +628,49 @@ fn centered_message(title: &str, detail: &str) -> gpui::Div {
         .size_full()
         .flex()
         .flex_col()
+        .bg(rgb(0xffffff))
+        .flex()
+        .flex_col()
         .items_center()
         .justify_center()
-        .gap_4()
+        .gap_3()
         .child(
             div()
-                .text_size(px(12.0))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0xb34a2f))
+                .text_size(px(20.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(0x1d1d1f))
                 .child(title.to_owned()),
         )
         .child(
             div()
-                .max_w(px(640.0))
-                .text_size(px(17.0))
-                .text_color(rgb(0x666157))
+                .max_w(px(520.0))
+                .text_size(px(14.0))
+                .line_height(px(21.0))
+                .text_color(rgb(0x6e6e73))
                 .child(detail.to_owned()),
         )
 }
 
-fn toolbar_button(
-    label: &'static str,
-    listener: impl Fn(&gpui::ClickEvent, &mut Window, &mut App) + 'static,
-) -> impl IntoElement {
-    div()
-        .id(label)
-        .px_3()
-        .py_1()
-        .border_1()
-        .border_color(rgb(0xb9af9d))
-        .rounded_sm()
-        .text_size(px(11.0))
-        .font_weight(FontWeight::BOLD)
-        .cursor_pointer()
-        .hover(|style| style.bg(rgb(0xe3dbc9)))
-        .on_click(listener)
-        .child(label.to_owned())
-}
-
 fn render_document(
     document: Arc<PreviewDocument>,
-    generation: u64,
     list_state: ListState,
-    open_button: impl IntoElement,
-    reload_button: impl IntoElement,
 ) -> gpui::Div {
-    let block_count = document.blocks.nodes().len();
-    let row_count = document.rows.len();
-    let title = document
-        .path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("Untitled.org")
-        .to_owned();
-
     div()
         .size_full()
         .flex()
         .flex_col()
+        .relative()
+        .bg(rgb(0xffffff))
         .child(
             div()
-                .flex_none()
-                .px_8()
-                .py_4()
-                .border_b_1()
-                .border_color(rgb(0xd8d0bd))
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_3()
-                        .child(open_button)
-                        .child(reload_button),
-                )
-                .child(
-                    div()
-                        .text_size(px(14.0))
-                        .font_weight(FontWeight::BOLD)
-                        .child(title),
-                )
-                .child(
-                    div()
-                        .text_size(px(12.0))
-                        .text_color(rgb(0x7b7468))
-                        .child(format!(
-                            "{block_count} blocks / {row_count} rows · {:.1} ms load · request #{generation} · read only",
-                            document.metrics.total.as_secs_f64() * 1000.0
-                        )),
-                ),
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .left_0()
+                .w(px(50.0))
+                .bg(rgb(0xf5f5f7))
+                .border_r_1()
+                .border_color(rgb(0xe5e5e7)),
         )
         .child({
             let document = document.clone();
@@ -688,13 +679,50 @@ fn render_document(
                 let block = &document.blocks.nodes()[row.block_id as usize];
                 div()
                     .w_full()
-                    .px_8()
+                    .min_h(px(24.0))
+                    .when(index == 0, |element| element.pt_1())
+                    .when(index + 1 == document.rows.len(), |element| element.pb_2())
+                    .flex()
+                    .items_start()
                     .child(
                         div()
-                            .w_full()
-                            .max_w(px(900.0))
-                            .mx_auto()
-                            .child(render_block(&document, index as BlockId, row, block, cx)),
+                            .flex_none()
+                            .w(px(50.0))
+                            .pr_3()
+                            .h(px(24.0))
+                            .flex()
+                            .items_center()
+                            .justify_end()
+                            .text_right()
+                            .font_family("Menlo")
+                            .text_size(px(10.0))
+                            .text_color(rgb(0xb6b6ba))
+                            .child(if row.show_line_number {
+                                row.source_line.to_string()
+                            } else {
+                                String::new()
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .min_h(px(24.0))
+                            .flex()
+                            .items_center()
+                            .pl_3()
+                            .pr_8()
+                            .child(
+                                div()
+                                    .w_full()
+                                    .child(render_block(
+                                        &document,
+                                        index as BlockId,
+                                        row,
+                                        block,
+                                        cx,
+                                    )),
+                            ),
                     )
                     .into_any()
             })
@@ -716,87 +744,135 @@ fn render_block(
         .trim_end_matches(['\r', '\n'])
         .to_owned();
 
-    match &block.kind {
+    let element = match &block.kind {
         BlockKind::Heading { level } => {
+            let marker = document.text.copy_range(ByteRange::new(
+                block.source.start.0,
+                block.content.start.0,
+            ));
             let size = match level {
-                1 => 34.0,
-                2 => 27.0,
-                3 => 22.0,
-                _ => 18.0,
+                1 => 22.0,
+                2 => 18.0,
+                3 => 15.0,
+                _ => 14.0,
             };
             div()
-                .mt(if *level == 1 { px(28.0) } else { px(20.0) })
-                .mb_2()
+                .flex()
+                .items_center()
+                .gap_1()
                 .text_size(px(size))
-                .font_weight(FontWeight::BOLD)
-                .text_color(rgb(0x1e3d36))
-                .child(styled_inline(document.inline(block_id, &text, cx)))
+                .line_height(px(24.0))
+                .font_weight(if *level <= 2 {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::MEDIUM
+                })
+                .text_color(rgb(0x1d1d1f))
+                .child(
+                    div()
+                        .flex_none()
+                        .font_family("Menlo")
+                        .text_size(px(13.0))
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(rgb(0x8e8e93))
+                        .child(marker),
+                )
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .child(styled_inline(document.inline(block_id, &text, cx))),
+                )
         }
         BlockKind::Paragraph => {
             let paragraph = div()
-                .text_size(px(17.0))
-                .line_height(px(28.0))
+                .text_size(px(14.0))
+                .line_height(px(22.0))
+                .text_color(rgb(0x2c2c2e))
                 .child(styled_inline(document.inline(block_id, &text, cx)));
             if row.continuation {
                 paragraph
             } else {
-                paragraph.py_2()
+                paragraph
             }
         }
         BlockKind::ListItem => div()
-            .pl_5()
-            .py_1()
-            .text_size(px(16.0))
+            .pl_1()
+            .text_size(px(14.0))
+            .line_height(px(22.0))
+            .text_color(rgb(0x2c2c2e))
             .child(styled_inline(document.inline(block_id, &text, cx))),
         BlockKind::TableRow => div()
-            .px_4()
-            .py_1()
-            .bg(rgb(0xe8e1d2))
-            .font_family("SFMono-Regular")
-            .text_size(px(14.0))
+            .px_3()
+            .py(px(5.0))
+            .bg(rgb(0xf6f6f7))
+            .border_b_1()
+            .border_color(rgb(0xe5e5e7))
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .line_height(px(20.0))
+            .text_color(rgb(0x3a3a3c))
             .child(text),
-        BlockKind::SourceBlock { language } => div()
-            .my_3()
-            .p_4()
-            .bg(rgb(0x252a27))
-            .text_color(rgb(0xe9e2d2))
-            .font_family("SFMono-Regular")
-            .text_size(px(14.0))
-            .child(
-                language
-                    .as_ref()
-                    .map(|language| format!("{language}\n{text}"))
-                    .unwrap_or(text),
-            ),
+        BlockKind::SourceBlock { .. } => {
+            let marker = text.trim_start().to_ascii_lowercase();
+            let is_boundary = marker.starts_with("#+begin_") || marker.starts_with("#+end_");
+            div()
+                .min_h(px(24.0))
+                .px_4()
+                .py(px(2.0))
+                .bg(rgb(0xf7f7f8))
+                .text_color(if is_boundary {
+                    rgb(0x8e8e93)
+                } else {
+                    rgb(0x2c2c2e)
+                })
+                .font_family("Menlo")
+                .text_size(px(13.0))
+                .line_height(px(19.0))
+                .child(text)
+        }
         BlockKind::ExampleBlock | BlockKind::Raw => div()
-            .my_3()
-            .p_4()
-            .bg(rgb(0xe8e1d2))
-            .font_family("SFMono-Regular")
-            .text_size(px(14.0))
+            .my_4()
+            .p_5()
+            .rounded_lg()
+            .bg(rgb(0xf6f6f7))
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .line_height(px(21.0))
+            .text_color(rgb(0x3a3a3c))
             .child(text),
         BlockKind::QuoteBlock => div()
-            .my_3()
-            .pl_5()
-            .py_3()
-            .border_l_4()
-            .border_color(rgb(0xb34a2f))
-            .text_color(rgb(0x555046))
-            .text_size(px(17.0))
+            .my_4()
+            .pl_4()
+            .pr_2()
+            .py_2()
+            .border_l_2()
+            .border_color(rgb(0x8e8e93))
+            .text_color(rgb(0x636366))
+            .text_size(px(16.0))
+            .line_height(px(25.0))
             .child(text),
         BlockKind::Drawer { name } => div()
-            .py_1()
-            .text_size(px(13.0))
-            .text_color(rgb(0x81796b))
+            .my_2()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(0xf7f7f8))
+            .font_family("Menlo")
+            .text_size(px(12.0))
+            .line_height(px(19.0))
+            .text_color(rgb(0x6e6e73))
             .child(format!("{name}: {text}")),
         BlockKind::Keyword | BlockKind::Comment => div()
-            .py_1()
-            .font_family("SFMono-Regular")
+            .py(px(3.0))
+            .font_family("Menlo")
             .text_size(px(12.0))
-            .text_color(rgb(0x918879))
+            .line_height(px(18.0))
+            .text_color(rgb(0x8e8e93))
             .child(text),
-        BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(0xcac1ae)),
-    }
+        BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(0xd1d1d6)),
+    };
+    element
 }
 
 fn styled_inline(parsed: InlineText) -> StyledText {
@@ -811,7 +887,7 @@ fn styled_inline(parsed: InlineText) -> StyledText {
                 ..Default::default()
             },
             InlineKind::Underline => HighlightStyle {
-                color: Some(rgb(0x315e53).into()),
+                color: Some(rgb(0x0066cc).into()),
                 ..Default::default()
             },
             InlineKind::Strike => HighlightStyle {
@@ -819,21 +895,21 @@ fn styled_inline(parsed: InlineText) -> StyledText {
                 ..Default::default()
             },
             InlineKind::Code | InlineKind::Verbatim => HighlightStyle {
-                color: Some(rgb(0x9a3f29).into()),
-                background_color: Some(rgb(0xe8e1d2).into()),
+                color: Some(rgb(0x9a3412).into()),
+                background_color: Some(rgb(0xf2f2f4).into()),
                 ..Default::default()
             },
             InlineKind::Link => HighlightStyle {
-                color: Some(rgb(0x226b73).into()),
+                color: Some(rgb(0x0066cc).into()),
                 font_weight: Some(FontWeight::MEDIUM),
                 ..Default::default()
             },
             InlineKind::Timestamp => HighlightStyle {
-                color: Some(rgb(0x8c5b24).into()),
+                color: Some(rgb(0x8a5a00).into()),
                 ..Default::default()
             },
             InlineKind::Entity | InlineKind::Latex => HighlightStyle {
-                color: Some(rgb(0x66558a).into()),
+                color: Some(rgb(0x7356a8).into()),
                 ..Default::default()
             },
         };
