@@ -13,9 +13,11 @@ use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter}
 
 mod rows;
 mod folding;
+mod table;
 
 use folding::{changed_range, visible_row_indices};
 use rows::build_preview_rows;
+use table::{TableRowStyle, build_table_styles, render_table_row};
 
 use crate::{
     document::{ByteRange, RopeSnapshot, SharedTextSnapshot},
@@ -70,6 +72,7 @@ pub struct PreviewDocument {
     pub text: SharedTextSnapshot,
     pub blocks: Arc<BlockArena>,
     rows: Arc<Vec<PreviewRow>>,
+    tables: Arc<HashMap<BlockId, TableRowStyle>>,
     inline_cache: Mutex<InlineCache>,
     highlight_cache: Mutex<HighlightCache>,
     pub metrics: LoadMetrics,
@@ -896,12 +899,14 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
     let blocks = Arc::new(parse(text.as_ref()));
     let parse = parse_started.elapsed();
     let rows = Arc::new(build_preview_rows(text.as_ref(), &blocks));
+    let tables = Arc::new(build_table_styles(text.as_ref(), &blocks));
 
     Ok(PreviewDocument {
         path,
         text,
         blocks,
         rows,
+        tables,
         inline_cache: Mutex::new(InlineCache::new(
             INLINE_CACHE_CAPACITY,
             INLINE_CACHE_MAX_BYTES,
@@ -983,6 +988,7 @@ fn render_document(
                 let row = document.rows[actual_index];
                 let block = &document.blocks.nodes()[row.block_id as usize];
                 let is_heading = matches!(block.kind, BlockKind::Heading { .. });
+                let is_table_row = matches!(block.kind, BlockKind::TableRow);
                 let is_folded = is_heading && folded.contains(&row.block_id);
                 let document_for_click = document.clone();
                 let entity_for_click = entity.clone();
@@ -1030,6 +1036,9 @@ fn render_document(
                             .items_center()
                             .pl_3()
                             .pr_8()
+                            .when(is_table_row, |element| {
+                                element.bg(rgb(current_theme().background_alt))
+                            })
                             .child(
                                 div()
                                     .w_full()
@@ -1138,17 +1147,13 @@ fn render_block(
             .line_height(px(22.0))
             .text_color(rgb(theme.foreground))
             .child(styled_inline(document.inline(block_id, &text, cx))),
-        BlockKind::TableRow => div()
-            .px_3()
-            .py(px(5.0))
-            .bg(rgb(theme.background_alt))
-            .border_b_1()
-            .border_color(rgb(theme.border))
-            .font_family("Menlo")
-            .text_size(px(13.0))
-            .line_height(px(20.0))
-            .text_color(rgb(theme.foreground))
-            .child(text),
+        BlockKind::TableRow => render_table_row(
+            &text,
+            document
+                .tables
+                .get(&block_id)
+                .expect("table row layout must exist"),
+        ),
         BlockKind::SourceBlock { language } => {
             let marker = text.trim_start().to_ascii_lowercase();
             let is_boundary = marker.starts_with("#+begin_") || marker.starts_with("#+end_");

@@ -111,9 +111,13 @@ fn push_paragraph_rows(
                 visual_end -= 1;
             }
             if visual_end < physical_end {
-                let search_start = visual_start + MAX_PARAGRAPH_ROW_BYTES / 2;
-                if let Some(boundary) = source[search_start..visual_end]
-                    .rfind(|character: char| character == ' ' || character == '\t')
+                let mut search_start = visual_start + MAX_PARAGRAPH_ROW_BYTES / 2;
+                while search_start < visual_end && !source.is_char_boundary(search_start) {
+                    search_start += 1;
+                }
+                if search_start < visual_end
+                    && let Some(boundary) = source[search_start..visual_end]
+                        .rfind(|character: char| character == ' ' || character == '\t')
                 {
                     visual_end = search_start
                         + boundary
@@ -144,7 +148,7 @@ fn push_paragraph_rows(
 #[cfg(test)]
 mod tests {
     use crate::{
-        document::RopeSnapshot,
+        document::{RopeSnapshot, TextSnapshot},
         org_syntax::{BlockKind, parse},
     };
 
@@ -170,5 +174,18 @@ mod tests {
             blocks.nodes()[rows[3].block_id as usize].kind,
             BlockKind::BlankLine
         ));
+    }
+
+    #[test]
+    fn wraps_long_cjk_paragraphs_only_at_utf8_boundaries() {
+        let source = format!("{}\n", "返回当前分区中的窗口函数计算结果".repeat(32));
+        let text = RopeSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let blocks = parse(&text);
+        let rows = build_preview_rows(&text, &blocks);
+
+        assert!(rows.len() > 1);
+        for row in rows {
+            let _ = text.copy_range(row.content);
+        }
     }
 }
