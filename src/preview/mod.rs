@@ -9,6 +9,7 @@ use gpui::{
     App, Context, FontStyle, FontWeight, HighlightStyle, IntoElement, ListAlignment, ListState,
     PathPromptOptions, Render, StyledText, Task, Window, actions, div, list, prelude::*, px, rgb,
 };
+use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 use crate::{
     document::{ByteOffset, ByteRange, RopeSnapshot, SharedTextSnapshot},
@@ -23,6 +24,38 @@ const INLINE_CACHE_CAPACITY: usize = 2048;
 const INLINE_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SYNC_INLINE_BYTES: usize = 64 * 1024;
 const MAX_PARAGRAPH_ROW_BYTES: usize = 256;
+const HIGHLIGHT_CACHE_CAPACITY: usize = 512;
+const HIGHLIGHT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+
+const HIGHLIGHT_NAMES: &[&str] = &[
+    "attribute",
+    "boolean",
+    "comment",
+    "conditional",
+    "constant",
+    "constructor",
+    "delimiter",
+    "embedded",
+    "escape",
+    "field",
+    "function",
+    "function.call",
+    "keyword",
+    "keyword.operator",
+    "label",
+    "number",
+    "operator",
+    "parameter",
+    "property",
+    "punctuation.bracket",
+    "punctuation.delimiter",
+    "string",
+    "storageclass",
+    "type",
+    "type.builtin",
+    "type.qualifier",
+    "variable",
+];
 
 actions!(org_preview, [OpenDocument, ReloadDocument]);
 
@@ -32,6 +65,7 @@ pub struct PreviewDocument {
     pub blocks: Arc<BlockArena>,
     rows: Arc<Vec<PreviewRow>>,
     inline_cache: Mutex<InlineCache>,
+    highlight_cache: Mutex<HighlightCache>,
     pub metrics: LoadMetrics,
 }
 
@@ -60,6 +94,73 @@ struct InlineCache {
     entries: HashMap<BlockId, InlineText>,
     order: VecDeque<BlockId>,
     pending: HashSet<BlockId>,
+}
+
+#[derive(Clone, Copy)]
+struct CodeHighlightSpan {
+    start: usize,
+    end: usize,
+    kind: CodeHighlightKind,
+}
+
+#[derive(Clone, Copy)]
+enum CodeHighlightKind {
+    Attribute,
+    Boolean,
+    Comment,
+    Constant,
+    Function,
+    Keyword,
+    Number,
+    Operator,
+    Property,
+    Punctuation,
+    String,
+    Type,
+    Variable,
+}
+
+struct HighlightCache {
+    capacity: usize,
+    max_bytes: usize,
+    bytes: usize,
+    entries: HashMap<BlockId, Arc<Vec<CodeHighlightSpan>>>,
+    order: VecDeque<BlockId>,
+    pending: HashSet<BlockId>,
+}
+
+impl HighlightCache {
+    fn new(capacity: usize, max_bytes: usize) -> Self {
+        Self {
+            capacity,
+            max_bytes,
+            bytes: 0,
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            pending: HashSet::new(),
+        }
+    }
+
+    fn insert(&mut self, id: BlockId, spans: Vec<CodeHighlightSpan>) {
+        self.pending.remove(&id);
+        let entry_bytes = spans.len() * std::mem::size_of::<CodeHighlightSpan>();
+        while !self.entries.is_empty()
+            && (self.entries.len() >= self.capacity || self.bytes + entry_bytes > self.max_bytes)
+        {
+            if let Some(oldest) = self.order.pop_front()
+                && let Some(removed) = self.entries.remove(&oldest)
+            {
+                self.bytes = self.bytes.saturating_sub(
+                    removed.len() * std::mem::size_of::<CodeHighlightSpan>(),
+                );
+            }
+        }
+        if entry_bytes <= self.max_bytes {
+            self.bytes += entry_bytes;
+            self.order.push_back(id);
+            self.entries.insert(id, Arc::new(spans));
+        }
+    }
 }
 
 impl InlineCache {
@@ -142,6 +243,252 @@ impl PreviewDocument {
             .expect("inline cache poisoned")
             .get_or_insert(id, source)
     }
+
+    fn code_highlights(
+        self: &Arc<Self>,
+        id: BlockId,
+        language: Option<&str>,
+        cx: &mut App,
+    ) -> Option<Arc<Vec<CodeHighlightSpan>>> {
+        let Some(language) = language.filter(|language| supports_code_language(language)) else {
+            return None;
+        };
+
+        let mut cache = self
+            .highlight_cache
+            .lock()
+            .expect("highlight cache poisoned");
+        if let Some(spans) = cache.entries.get(&id) {
+            return Some(spans.clone());
+        }
+        if cache.pending.insert(id) {
+            let document = self.clone();
+            let source = self
+                .text
+                .copy_range(self.blocks.nodes()[id as usize].source);
+            let language = language.to_owned();
+            cx.spawn(async move |cx| {
+                let spans = cx
+                    .background_spawn(async move {
+                        highlight_code(&language, &source).unwrap_or_default()
+                    })
+                    .await;
+                document
+                    .highlight_cache
+                    .lock()
+                    .expect("highlight cache poisoned")
+                    .insert(id, spans);
+                let _ = cx.refresh();
+            })
+            .detach();
+        }
+        None
+    }
+}
+
+fn supports_code_language(language: &str) -> bool {
+    matches!(
+        language.trim().to_ascii_lowercase().as_str(),
+        "sql"
+            | "postgres"
+            | "postgresql"
+            | "rust"
+            | "rs"
+            | "python"
+            | "py"
+            | "sh"
+            | "shell"
+            | "bash"
+            | "zsh"
+            | "javascript"
+            | "js"
+            | "jsx"
+            | "typescript"
+            | "ts"
+            | "tsx"
+            | "json"
+            | "go"
+            | "golang"
+            | "c"
+            | "h"
+            | "cpp"
+            | "c++"
+            | "cc"
+            | "cxx"
+            | "hpp"
+    )
+}
+
+fn highlight_code(language: &str, source: &str) -> Result<Vec<CodeHighlightSpan>, String> {
+    let normalized = language.trim().to_ascii_lowercase();
+    let combined_query: String;
+    let (language, name, highlights, injections, locals) = match normalized.as_str() {
+        "sql" | "postgres" | "postgresql" => (
+            tree_sitter_sequel::LANGUAGE.into(),
+            "sql",
+            tree_sitter_sequel::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        "rust" | "rs" => (
+            tree_sitter_rust::LANGUAGE.into(),
+            "rust",
+            tree_sitter_rust::HIGHLIGHTS_QUERY,
+            tree_sitter_rust::INJECTIONS_QUERY,
+            "",
+        ),
+        "python" | "py" => (
+            tree_sitter_python::LANGUAGE.into(),
+            "python",
+            tree_sitter_python::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        "sh" | "shell" | "bash" | "zsh" => (
+            tree_sitter_bash::LANGUAGE.into(),
+            "bash",
+            tree_sitter_bash::HIGHLIGHT_QUERY,
+            "",
+            "",
+        ),
+        "javascript" | "js" => (
+            tree_sitter_javascript::LANGUAGE.into(),
+            "javascript",
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+            tree_sitter_javascript::INJECTIONS_QUERY,
+            tree_sitter_javascript::LOCALS_QUERY,
+        ),
+        "jsx" => {
+            combined_query = format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY
+            );
+            (
+                tree_sitter_javascript::LANGUAGE.into(),
+                "jsx",
+                combined_query.as_str(),
+                tree_sitter_javascript::INJECTIONS_QUERY,
+                tree_sitter_javascript::LOCALS_QUERY,
+            )
+        }
+        "typescript" | "ts" => {
+            combined_query = format!(
+                "{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY
+            );
+            (
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+                "typescript",
+                combined_query.as_str(),
+                "",
+                tree_sitter_typescript::LOCALS_QUERY,
+            )
+        }
+        "tsx" => {
+            combined_query = format!(
+                "{}\n{}\n{}",
+                tree_sitter_javascript::HIGHLIGHT_QUERY,
+                tree_sitter_javascript::JSX_HIGHLIGHT_QUERY,
+                tree_sitter_typescript::HIGHLIGHTS_QUERY
+            );
+            (
+                tree_sitter_typescript::LANGUAGE_TSX.into(),
+                "tsx",
+                combined_query.as_str(),
+                "",
+                tree_sitter_typescript::LOCALS_QUERY,
+            )
+        }
+        "json" => (
+            tree_sitter_json::LANGUAGE.into(),
+            "json",
+            tree_sitter_json::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        "go" | "golang" => (
+            tree_sitter_go::LANGUAGE.into(),
+            "go",
+            tree_sitter_go::HIGHLIGHTS_QUERY,
+            "",
+            "",
+        ),
+        "c" | "h" => (
+            tree_sitter_c::LANGUAGE.into(),
+            "c",
+            tree_sitter_c::HIGHLIGHT_QUERY,
+            "",
+            "",
+        ),
+        "cpp" | "c++" | "cc" | "cxx" | "hpp" => {
+            combined_query = format!(
+                "{}\n{}",
+                tree_sitter_c::HIGHLIGHT_QUERY,
+                tree_sitter_cpp::HIGHLIGHT_QUERY
+            );
+            (
+                tree_sitter_cpp::LANGUAGE.into(),
+                "cpp",
+                combined_query.as_str(),
+                "",
+                "",
+            )
+        }
+        _ => return Ok(Vec::new()),
+    };
+    let mut configuration =
+        HighlightConfiguration::new(language, name, highlights, injections, locals)
+            .map_err(|error| error.to_string())?;
+    configuration.configure(HIGHLIGHT_NAMES);
+
+    let mut highlighter = Highlighter::new();
+    let events = highlighter
+        .highlight(&configuration, source.as_bytes(), None, |_| None)
+        .map_err(|error| error.to_string())?;
+    let mut active = Vec::new();
+    let mut spans = Vec::new();
+    for event in events {
+        match event.map_err(|error| error.to_string())? {
+            HighlightEvent::HighlightStart(highlight) => active.push(highlight.0),
+            HighlightEvent::HighlightEnd => {
+                active.pop();
+            }
+            HighlightEvent::Source { start, end } => {
+                if start < end
+                    && let Some(index) = active.last()
+                    && let Some(kind) = code_highlight_kind(HIGHLIGHT_NAMES[*index])
+                {
+                    spans.push(CodeHighlightSpan { start, end, kind });
+                }
+            }
+        }
+    }
+    Ok(spans)
+}
+
+fn code_highlight_kind(name: &str) -> Option<CodeHighlightKind> {
+    let root = name.split('.').next().unwrap_or(name);
+    Some(match root {
+        "attribute" => CodeHighlightKind::Attribute,
+        "boolean" => CodeHighlightKind::Boolean,
+        "comment" => CodeHighlightKind::Comment,
+        "constant" => CodeHighlightKind::Constant,
+        "constructor" => CodeHighlightKind::Type,
+        "embedded" | "escape" => CodeHighlightKind::String,
+        "delimiter" | "punctuation" => CodeHighlightKind::Punctuation,
+        "field" | "property" => CodeHighlightKind::Property,
+        "function" => CodeHighlightKind::Function,
+        "keyword" | "conditional" | "storageclass" => CodeHighlightKind::Keyword,
+        "number" => CodeHighlightKind::Number,
+        "operator" => CodeHighlightKind::Operator,
+        "label" => CodeHighlightKind::Attribute,
+        "string" => CodeHighlightKind::String,
+        "type" => CodeHighlightKind::Type,
+        "parameter" | "variable" => CodeHighlightKind::Variable,
+        _ => return None,
+    })
 }
 
 enum PreviewLoadState {
@@ -507,6 +854,10 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
             INLINE_CACHE_CAPACITY,
             INLINE_CACHE_MAX_BYTES,
         )),
+        highlight_cache: Mutex::new(HighlightCache::new(
+            HIGHLIGHT_CACHE_CAPACITY,
+            HIGHLIGHT_CACHE_MAX_BYTES,
+        )),
         metrics: LoadMetrics {
             bytes: byte_count,
             read,
@@ -717,7 +1068,7 @@ fn render_document(
                                     .w_full()
                                     .child(render_block(
                                         &document,
-                                        index as BlockId,
+                                        row.block_id,
                                         row,
                                         block,
                                         cx,
@@ -813,9 +1164,24 @@ fn render_block(
             .line_height(px(20.0))
             .text_color(rgb(0x3a3a3c))
             .child(text),
-        BlockKind::SourceBlock { .. } => {
+        BlockKind::SourceBlock { language } => {
             let marker = text.trim_start().to_ascii_lowercase();
             let is_boundary = marker.starts_with("#+begin_") || marker.starts_with("#+end_");
+            let content = if is_boundary {
+                StyledText::new(text.clone())
+            } else if let Some(spans) = document.code_highlights(
+                block_id,
+                language.as_deref(),
+                cx,
+            ) {
+                styled_code_row(
+                    text.clone(),
+                    row.content.start.0.saturating_sub(block.source.start.0) as usize,
+                    &spans,
+                )
+            } else {
+                StyledText::new(text.clone())
+            };
             div()
                 .min_h(px(24.0))
                 .px_4()
@@ -829,7 +1195,7 @@ fn render_block(
                 .font_family("Menlo")
                 .text_size(px(13.0))
                 .line_height(px(19.0))
-                .child(text)
+                .child(content)
         }
         BlockKind::ExampleBlock | BlockKind::Raw => div()
             .my_4()
@@ -873,6 +1239,45 @@ fn render_block(
         BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(0xd1d1d6)),
     };
     element
+}
+
+fn styled_code_row(
+    text: String,
+    row_start: usize,
+    spans: &[CodeHighlightSpan],
+) -> StyledText {
+    let row_end = row_start + text.len();
+    let highlights = spans.iter().filter_map(|span| {
+        let start = span.start.max(row_start);
+        let end = span.end.min(row_end);
+        (start < end).then(|| {
+            (
+                start - row_start..end - row_start,
+                code_highlight_style(span.kind),
+            )
+        })
+    });
+    StyledText::new(text).with_highlights(highlights)
+}
+
+fn code_highlight_style(kind: CodeHighlightKind) -> HighlightStyle {
+    let color = match kind {
+        CodeHighlightKind::Attribute => 0x9a5d00,
+        CodeHighlightKind::Boolean | CodeHighlightKind::Constant => 0x9b2393,
+        CodeHighlightKind::Comment => 0x6e7781,
+        CodeHighlightKind::Function => 0x8250df,
+        CodeHighlightKind::Keyword => 0xcf222e,
+        CodeHighlightKind::Number => 0x0550ae,
+        CodeHighlightKind::Operator | CodeHighlightKind::Punctuation => 0x57606a,
+        CodeHighlightKind::Property | CodeHighlightKind::Variable => 0x1f2328,
+        CodeHighlightKind::String => 0x0a7b3e,
+        CodeHighlightKind::Type => 0x953800,
+    };
+    HighlightStyle {
+        color: Some(rgb(color).into()),
+        font_style: matches!(kind, CodeHighlightKind::Comment).then_some(FontStyle::Italic),
+        ..Default::default()
+    }
 }
 
 fn styled_inline(parsed: InlineText) -> StyledText {
