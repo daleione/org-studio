@@ -60,6 +60,7 @@ pub enum BuiltinCommand {
     BeginningOfDocument,
     EndOfDocument,
     OpenFileManager,
+    OpenDefaultDired,
     ReturnToDocument,
     ToggleSidebar,
     DiredNext,

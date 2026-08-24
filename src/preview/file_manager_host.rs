@@ -34,6 +34,18 @@ impl PreviewApp {
         }));
     }
 
+    pub(super) fn open_default_dired(&mut self, cx: &mut Context<Self>) {
+        let directory = self
+            .dired
+            .as_ref()
+            .map(|session| session.directory().to_path_buf())
+            .or_else(|| self.document_path().and_then(|path| path.parent().map(PathBuf::from)))
+            .or_else(|| std::env::current_dir().ok());
+        if let Some(directory) = directory {
+            self.open_file_manager(directory, cx);
+        }
+    }
+
     pub(super) fn open_file_manager(&mut self, directory: PathBuf, cx: &mut Context<Self>) {
         let directory = absolute_directory(directory);
         self.content_route = ContentRoute::FileManager;

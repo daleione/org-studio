@@ -58,6 +58,7 @@ const SCROLL_BACKWARD_COMMAND: &str = "org-studio.preview.scroll-backward";
 const BEGINNING_COMMAND: &str = "org-studio.preview.beginning";
 const END_COMMAND: &str = "org-studio.preview.end";
 const OPEN_FILE_MANAGER_COMMAND: &str = "org-studio.file-manager.open";
+const OPEN_DEFAULT_DIRED_COMMAND: &str = "org-studio.dired.open-default";
 const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
 const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
@@ -713,9 +714,9 @@ impl PreviewApp {
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::OpenFileManager) => {
-                if self.content_route == ContentRoute::FileManager { self.reload_file_manager(cx); }
-                else { self.choose_directory(cx); }
+                self.choose_directory(cx);
             }
+            CommandImplementation::Builtin(BuiltinCommand::OpenDefaultDired) => self.open_default_dired(cx),
             CommandImplementation::Builtin(BuiltinCommand::ReturnToDocument) => self.return_to_document(cx),
             CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => self.toggle_sidebar(cx),
             CommandImplementation::Builtin(BuiltinCommand::DiredNext) => self.dired_move(command_count(prefix) as i64, cx),
@@ -1203,6 +1204,7 @@ fn dired_help_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32
             take("NAVIGATION", &["n / j", "p / k", "^", "g", "q"], 3),
             take("MARKS", &["m", "u", "U", "t", "d"], 3),
             take("FILES", &["RET", "x"], 2),
+            take("GLOBAL", &["C-x d", "C-x C-d"], 2),
         ],
     }
     .render(available_width)
@@ -1493,6 +1495,7 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     }
     for (name, title, command, argument_spec) in [
         (OPEN_FILE_MANAGER_COMMAND, "Open File Manager", BuiltinCommand::OpenFileManager, ArgumentSpec::None),
+        (OPEN_DEFAULT_DIRED_COMMAND, "Open Dired", BuiltinCommand::OpenDefaultDired, ArgumentSpec::None),
         (RETURN_DOCUMENT_COMMAND, "Return to Document", BuiltinCommand::ReturnToDocument, ArgumentSpec::None),
         (TOGGLE_SIDEBAR_COMMAND, "Toggle Sidebar", BuiltinCommand::ToggleSidebar, ArgumentSpec::None),
         (DIRED_NEXT_COMMAND, "Next Line", BuiltinCommand::DiredNext, ArgumentSpec::Count),
@@ -1522,17 +1525,7 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
         .expect("registered built-in contexts");
     let configuration = compile_input_profile(
         1,
-        &[
-            BindingSpec { keys: "C-x C-f", behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND) },
-            BindingSpec { keys: "C-x C-r", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
-            BindingSpec { keys: "g", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
-            BindingSpec { keys: "q", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
-            BindingSpec { keys: "C-x C-c", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
-            BindingSpec { keys: "SPC", behavior: BindingBehavior::Command(SCROLL_FORWARD_COMMAND) },
-            BindingSpec { keys: "backspace", behavior: BindingBehavior::Command(SCROLL_BACKWARD_COMMAND) },
-            BindingSpec { keys: "M-<", behavior: BindingBehavior::Command(BEGINNING_COMMAND) },
-            BindingSpec { keys: "M->", behavior: BindingBehavior::Command(END_COMMAND) },
-        ],
+        &preview_bindings(),
         &commands,
         &contexts,
         &["workspace", "preview"],
@@ -1566,6 +1559,8 @@ fn preview_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec { keys: "backspace", behavior: BindingBehavior::Command(SCROLL_BACKWARD_COMMAND) },
         BindingSpec { keys: "M-<", behavior: BindingBehavior::Command(BEGINNING_COMMAND) },
         BindingSpec { keys: "M->", behavior: BindingBehavior::Command(END_COMMAND) },
+        BindingSpec { keys: "C-x d", behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND) },
+        BindingSpec { keys: "C-x C-d", behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND) },
     ]
 }
 
@@ -1577,7 +1572,7 @@ fn dired_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec { keys: "k", behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND) },
         BindingSpec { keys: "RET", behavior: BindingBehavior::Command(DIRED_OPEN_COMMAND) },
         BindingSpec { keys: "S-6", behavior: BindingBehavior::Command(DIRED_UP_COMMAND) },
-        BindingSpec { keys: "g", behavior: BindingBehavior::Command(OPEN_FILE_MANAGER_COMMAND) },
+        BindingSpec { keys: "g", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
         BindingSpec { keys: "m", behavior: BindingBehavior::Command(DIRED_MARK_COMMAND) },
         BindingSpec { keys: "u", behavior: BindingBehavior::Command(DIRED_UNMARK_COMMAND) },
         BindingSpec { keys: "S-u", behavior: BindingBehavior::Command(DIRED_UNMARK_ALL_COMMAND) },
@@ -1586,6 +1581,8 @@ fn dired_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec { keys: "x", behavior: BindingBehavior::Command(DIRED_EXECUTE_COMMAND) },
         BindingSpec { keys: "q", behavior: BindingBehavior::Command(RETURN_DOCUMENT_COMMAND) },
         BindingSpec { keys: "S-/", behavior: BindingBehavior::Command(DIRED_HELP_COMMAND) },
+        BindingSpec { keys: "C-x d", behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND) },
+        BindingSpec { keys: "C-x C-d", behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND) },
     ]
 }
 
@@ -1606,7 +1603,7 @@ fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, Arc<str>)> 
         .filter_map(|(key, keys)| {
             let descriptor = commands.descriptor(key)?;
             let keys = keys.into_iter().map(display_dired_key).collect::<Vec<_>>().join(" / ");
-            let title = if descriptor.name.as_str() == OPEN_FILE_MANAGER_COMMAND {
+            let title = if descriptor.name.as_str() == RELOAD_DOCUMENT_COMMAND {
                 Arc::from("Refresh Directory")
             } else {
                 descriptor.title.clone()
@@ -2216,11 +2213,13 @@ mod tests {
             .map(|(keys, title)| (keys.as_ref(), title.as_ref()))
             .collect::<Vec<_>>();
 
-        assert_eq!(items.len(), 14);
+        assert_eq!(items.len(), 16);
         assert!(labels.contains(&("n / j", "Next Line")));
         assert!(labels.contains(&("p / k", "Previous Line")));
         assert!(labels.contains(&("^", "Up Directory")));
         assert!(labels.contains(&("g", "Refresh Directory")));
+        assert!(labels.contains(&("C-x d", "Open Dired")));
+        assert!(labels.contains(&("C-x C-d", "Toggle Sidebar")));
         assert!(labels.contains(&("?", "Dired Help")));
         assert!(labels.contains(&("C-g", "Close command list")));
     }
