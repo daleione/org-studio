@@ -1,0 +1,11 @@
+[package]
+name = "org-studio"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+gpui = "0.2.2"
+profiling = { version = "1", features = ["profile-with-tracing"] }
+ropey = "1.6.1"
+tracing = "0.1"

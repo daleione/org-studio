@@ -1,0 +1,14 @@
+# Rust build output, generated performance fixtures, and benchmark results.
+/target/
+
+# Default output of generate-org-fixture when no path is supplied.
+/preview-benchmark.org
+
+# Local profiling output.
+*.profraw
+*.profdata
+*.trace
+
+# macOS metadata.
+.DS_Store
+**/.DS_Store

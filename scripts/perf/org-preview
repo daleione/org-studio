@@ -1,0 +1,176 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+FIXTURE_DIR="${ORG_STUDIO_PERF_FIXTURE_DIR:-$ROOT_DIR/target/perf-fixtures}"
+RESULT_ROOT="${ORG_STUDIO_PERF_RESULT_DIR:-$ROOT_DIR/target/perf-results}"
+DEFAULT_MIB="${ORG_STUDIO_PERF_MIB:-50}"
+DEFAULT_FRAMES="${ORG_STUDIO_PERF_FRAMES:-5000}"
+DEFAULT_WARMUP="${ORG_STUDIO_PERF_WARMUP_FRAMES:-1200}"
+DEFAULT_PIXELS="${ORG_STUDIO_PERF_SCROLL_PIXELS:-16}"
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/perf/org-preview COMMAND [ARGS]
+
+Commands:
+  prepare [MIB ...]           Generate fixtures (default: 1 10 50).
+  build                       Build all release binaries.
+  cpu [MIB]                   Run the visible-block CPU benchmark.
+  first-frame [MIB]           Measure the first readable GPUI frame.
+  scroll [PIXELS] [MIB]       Run one GUI scroll sample.
+  profile [PIXELS] [MIB]      Run scroll plus GPUI profiling spans.
+  suite [MIB]                 Build, prepare, then run CPU and 0/16/80px GUI samples.
+  help                        Show this help.
+
+Configuration environment variables:
+  ORG_STUDIO_PERF_FIXTURE_DIR
+  ORG_STUDIO_PERF_RESULT_DIR
+  ORG_STUDIO_PERF_MIB                 default 50
+  ORG_STUDIO_PERF_FRAMES              default 5000
+  ORG_STUDIO_PERF_WARMUP_FRAMES       default 1200
+  ORG_STUDIO_PERF_SCROLL_PIXELS        default 16
+
+GUI runs stay still during warmup. Move the window to the Mac internal
+ProMotion display before the warmup counter reaches zero.
+EOF
+}
+
+die() {
+    printf 'org-preview-perf: %s\n' "$*" >&2
+    exit 2
+}
+
+require_positive_integer() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "$2 must be a positive integer: $1"
+}
+
+require_nonnegative_number() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "$2 must be a non-negative number: $1"
+}
+
+fixture_path() {
+    printf '%s/org-preview-%sm.org' "$FIXTURE_DIR" "$1"
+}
+
+new_run_dir() {
+    local label="$1"
+    local run_id
+    run_id="$(date '+%Y%m%d-%H%M%S')-$label"
+    RUN_DIR="$RESULT_ROOT/$run_id"
+    mkdir -p "$RUN_DIR"
+    {
+        printf 'run_id=%s\n' "$run_id"
+        printf 'started_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+        printf 'uname=%s\n' "$(uname -a)"
+        if command -v sw_vers >/dev/null 2>&1; then
+            sw_vers | tr '\n' ' '
+            printf '\n'
+        fi
+    } >"$RUN_DIR/metadata.txt"
+    printf 'org_preview_perf_results path=%s\n' "$RUN_DIR"
+}
+
+ensure_fixture() {
+    local mib="$1"
+    local fixture
+    fixture="$(fixture_path "$mib")"
+    if [[ ! -f "$fixture" ]]; then
+        prepare "$mib"
+    fi
+}
+
+ensure_release_binaries() {
+    [[ -x "$ROOT_DIR/target/release/org-studio" ]] || die "release binary missing; run: scripts/perf/org-preview build"
+    [[ -x "$ROOT_DIR/target/release/org-preview-cpu-bench" ]] || die "CPU benchmark missing; run: scripts/perf/org-preview build"
+}
+
+prepare() {
+    local sizes=("$@")
+    if [[ ${#sizes[@]} -eq 0 ]]; then
+        sizes=(1 10 50)
+    fi
+    mkdir -p "$FIXTURE_DIR"
+    for mib in "${sizes[@]}"; do
+        require_positive_integer "$mib" "fixture MiB"
+        cargo run --quiet --release --bin generate-org-fixture -- \
+            "$(fixture_path "$mib")" "$mib"
+    done
+}
+
+build_release() {
+    cargo build --release --bins
+}
+
+run_cpu() {
+    local mib="${1:-$DEFAULT_MIB}"
+    require_positive_integer "$mib" "fixture MiB"
+    ensure_fixture "$mib"
+    ensure_release_binaries
+    new_run_dir "cpu-${mib}m"
+    "$ROOT_DIR/target/release/org-preview-cpu-bench" "$(fixture_path "$mib")" \
+        2>&1 | tee "$RUN_DIR/cpu.log"
+}
+
+run_first_frame() {
+    local mib="${1:-$DEFAULT_MIB}"
+    require_positive_integer "$mib" "fixture MiB"
+    ensure_fixture "$mib"
+    ensure_release_binaries
+    new_run_dir "first-frame-${mib}m"
+    ORG_STUDIO_RELOAD_BENCH=1 \
+    ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
+        "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
+        2>&1 | tee "$RUN_DIR/first-frame.log"
+}
+
+run_scroll() {
+    local pixels="${1:-$DEFAULT_PIXELS}"
+    local mib="${2:-$DEFAULT_MIB}"
+    local profile="${3:-0}"
+    require_nonnegative_number "$pixels" "scroll pixels"
+    require_positive_integer "$mib" "fixture MiB"
+    [[ "$(uname -s)" == "Darwin" ]] || die "GUI scroll benchmark currently requires macOS"
+    ensure_fixture "$mib"
+    ensure_release_binaries
+    new_run_dir "scroll-${pixels}px-${mib}m"
+    printf 'Move the benchmark window to the Mac internal display during the %s-frame warmup.\n' \
+        "$DEFAULT_WARMUP"
+    local -a env_args=(
+        "ORG_STUDIO_SCROLL_BENCH_WARMUP_FRAMES=$DEFAULT_WARMUP"
+        "ORG_STUDIO_SCROLL_BENCH_FRAMES=$DEFAULT_FRAMES"
+        "ORG_STUDIO_SCROLL_BENCH_PIXELS=$pixels"
+    )
+    if [[ "$profile" == "1" ]]; then
+        env_args+=("ORG_STUDIO_PROFILE_FRAMES=1")
+    fi
+    env "${env_args[@]}" \
+        "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
+        2>&1 | tee "$RUN_DIR/scroll.log"
+}
+
+run_suite() {
+    local mib="${1:-$DEFAULT_MIB}"
+    require_positive_integer "$mib" "fixture MiB"
+    build_release
+    prepare 1 10 "$mib"
+    run_cpu "$mib"
+    run_scroll 0 "$mib" 0
+    run_scroll 16 "$mib" 0
+    run_scroll 80 "$mib" 0
+}
+
+cd "$ROOT_DIR"
+command="${1:-help}"
+shift || true
+case "$command" in
+    prepare) prepare "$@" ;;
+    build) build_release ;;
+    cpu) run_cpu "$@" ;;
+    first-frame) run_first_frame "$@" ;;
+    scroll) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 0 ;;
+    profile) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 1 ;;
+    suite) run_suite "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; die "unknown command: $command" ;;
+esac
