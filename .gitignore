@@ -1,7 +1,10 @@
-# Rust build output, generated performance fixtures, and benchmark results.
+# Rust build output.
 /target/
 
-# Default output of generate-org-fixture when no path is supplied.
+# Packaged application artifacts.
+/dist/
+
+# Generated performance fixtures and benchmark output.
 /preview-benchmark.org
 
 # Local profiling output.
@@ -9,6 +12,23 @@
 *.profdata
 *.trace
 
-# macOS metadata.
+# macOS metadata and Finder state.
 .DS_Store
-**/.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+
+# Editor and IDE-local state.
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local environment and temporary files.
+.env
+.env.*
+!.env.example
+*.log
+*.tmp

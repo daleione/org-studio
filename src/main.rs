@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gpui::{
     App, Application, Bounds, KeyBinding, Menu, MenuItem, SharedString, SystemMenuType,
@@ -14,8 +14,13 @@ actions!(org_studio, [Quit]);
 fn main() {
     let perf_trace = perf_tracing::PerfTrace::install();
     let initial_path = std::env::args_os().nth(1).map(PathBuf::from);
+    let (open_sender, open_receiver) = async_channel::unbounded::<Vec<String>>();
+    let application = Application::new();
+    application.on_open_urls(move |urls| {
+        let _ = open_sender.try_send(urls);
+    });
 
-    Application::new().run(move |cx: &mut App| {
+    application.run(move |cx: &mut App| {
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenDocument, None),
@@ -61,6 +66,8 @@ fn main() {
             .and_then(|index| displays.get(index).map(|display| display.id()));
         let bounds = Bounds::centered(requested_display, size(px(920.0), px(720.0)), cx);
         let path = initial_path.clone();
+        let active_preview = Rc::new(RefCell::new(None));
+        let preview_for_window = active_preview.clone();
 
         cx.open_window(
             WindowOptions {
@@ -73,16 +80,31 @@ fn main() {
                 ..Default::default()
             },
             move |_window, cx| {
-                cx.new(|cx| {
+                let preview = cx.new(|cx| {
                     let mut app = PreviewApp::new();
                     if let Some(path) = path {
                         app.open(path, cx);
                     }
                     app
-                })
+                });
+                *preview_for_window.borrow_mut() = Some(preview.clone());
+                preview
             },
         )
         .expect("failed to open Org Studio window");
+
+        cx.spawn(async move |cx| {
+            while let Ok(urls) = open_receiver.recv().await {
+                for url in urls {
+                    let Ok(url) = url::Url::parse(&url) else { continue };
+                    let Ok(path) = url.to_file_path() else { continue };
+                    let preview = active_preview.borrow().clone();
+                    if let Some(preview) = preview {
+                        let _ = preview.update(cx, |app, cx| app.open(path, cx));
+                    }
+                }
+            }
+        }).detach();
 
         cx.activate(true);
     });

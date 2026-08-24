@@ -3699,6 +3699,7 @@ dependencies = [
  "tree-sitter-sequel",
  "tree-sitter-typescript",
  "unicode-width",
+ "url",
 ]
 
 [[package]]
