@@ -8,12 +8,14 @@ use std::{
 use gpui::{
     App, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, ListAlignment,
     ListOffset, ListState, PathPromptOptions, Render, StyledText, Task, Window, actions, div, img, list,
-    prelude::*, px, rgb,
+    prelude::*, px, relative, rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 mod rows;
 mod folding;
+mod file_manager_host;
+mod command_window;
 #[cfg(test)]
 mod org_line;
 mod table;
@@ -55,6 +57,20 @@ const SCROLL_FORWARD_COMMAND: &str = "org-studio.preview.scroll-forward";
 const SCROLL_BACKWARD_COMMAND: &str = "org-studio.preview.scroll-backward";
 const BEGINNING_COMMAND: &str = "org-studio.preview.beginning";
 const END_COMMAND: &str = "org-studio.preview.end";
+const OPEN_FILE_MANAGER_COMMAND: &str = "org-studio.file-manager.open";
+const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
+const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
+const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
+const DIRED_PREVIOUS_COMMAND: &str = "org-studio.dired.previous-line";
+const DIRED_OPEN_COMMAND: &str = "org-studio.dired.find-file";
+const DIRED_UP_COMMAND: &str = "org-studio.dired.up-directory";
+const DIRED_MARK_COMMAND: &str = "org-studio.dired.mark";
+const DIRED_UNMARK_COMMAND: &str = "org-studio.dired.unmark";
+const DIRED_UNMARK_ALL_COMMAND: &str = "org-studio.dired.unmark-all";
+const DIRED_INVERT_COMMAND: &str = "org-studio.dired.invert-marks";
+const DIRED_DELETE_COMMAND: &str = "org-studio.dired.flag-delete";
+const DIRED_EXECUTE_COMMAND: &str = "org-studio.dired.execute";
+const DIRED_HELP_COMMAND: &str = "org-studio.dired.help";
 
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
@@ -86,7 +102,10 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "variable",
 ];
 
-actions!(org_preview, [OpenDocument, ReloadDocument]);
+actions!(org_preview, [OpenDocument, ReloadDocument, OpenFileManager, ReturnToDocument, ToggleSidebar]);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ContentRoute { Document, FileManager }
 
 pub struct PreviewDocument {
     pub path: PathBuf,
@@ -557,6 +576,14 @@ pub struct PreviewApp {
     which_key_task: Option<Task<()>>,
     which_key_request: u64,
     which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
+    dired_help_visible: bool,
+    content_route: ContentRoute,
+    sidebar_visible: bool,
+    dired: Option<crate::file_manager::DiredSession>,
+    dired_error: Option<Arc<str>>,
+    dired_task: Option<Task<()>>,
+    dired_list_state: ListState,
+    sidebar_list_state: ListState,
 }
 
 struct ScrollBenchmark {
@@ -611,6 +638,14 @@ impl PreviewApp {
             which_key_task: None,
             which_key_request: 0,
             which_key_items: Arc::new(Vec::new()),
+            dired_help_visible: false,
+            content_route: ContentRoute::Document,
+            sidebar_visible: false,
+            dired: None,
+            dired_error: None,
+            dired_task: None,
+            dired_list_state: ListState::new(0, ListAlignment::Top, px(80.0)),
+            sidebar_list_state: ListState::new(0, ListAlignment::Top, px(60.0)),
         }
     }
 
@@ -653,7 +688,10 @@ impl PreviewApp {
     ) {
         match implementation {
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
-            CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => self.reload(cx),
+            CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
+                if self.content_route == ContentRoute::FileManager { self.reload_file_manager(cx); }
+                else { self.reload(cx); }
+            }
             CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => cx.quit(),
             CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
                 self.list_state.scroll_by(px(640.0 * command_count(prefix)));
@@ -674,6 +712,23 @@ impl PreviewApp {
                 });
                 cx.notify();
             }
+            CommandImplementation::Builtin(BuiltinCommand::OpenFileManager) => {
+                if self.content_route == ContentRoute::FileManager { self.reload_file_manager(cx); }
+                else { self.choose_directory(cx); }
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ReturnToDocument) => self.return_to_document(cx),
+            CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => self.toggle_sidebar(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredNext) => self.dired_move(command_count(prefix) as i64, cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredPrevious) => self.dired_move(-(command_count(prefix) as i64), cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredOpen) => self.dired_open_selected(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredUp) => self.dired_up(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredMark) => self.dired_mark(crate::file_manager::Mark::Selected, cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredUnmark) => self.dired_unmark(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredUnmarkAll) => self.dired_unmark_all(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredInvertMarks) => self.dired_invert_marks(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredFlagDelete) => self.dired_mark(crate::file_manager::Mark::Delete, cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredExecute) => self.dired_prepare_execute(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredHelp) => self.show_dired_shortcuts(cx),
         }
     }
 
@@ -710,9 +765,35 @@ impl PreviewApp {
         }
     }
 
+    fn install_preview_keymap(&mut self) {
+        self.install_route_keymap(false);
+    }
+
+    fn install_dired_keymap(&mut self) {
+        self.install_route_keymap(true);
+    }
+
+    fn install_route_keymap(&mut self, dired: bool) {
+        let contexts = built_in_contexts();
+        let generation = self.keyboard.generation().wrapping_add(1);
+        let bindings = if dired { dired_bindings() } else { preview_bindings() };
+        let route_context = if dired { "dired" } else { "preview" };
+        let Ok(configuration) = compile_input_profile(
+            generation,
+            &bindings,
+            &self.commands,
+            &contexts,
+            &["workspace", route_context],
+            &["prompt"],
+        ) else { return; };
+        self.key_context = contexts.set(["workspace", route_context]).expect("registered route contexts");
+        self.keyboard.replace_configuration(configuration);
+    }
+
     fn schedule_which_key(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         let request = self.which_key_request;
+        self.dired_help_visible = false;
         self.which_key_items = Arc::new(Vec::new());
         let delay = cx.background_executor().timer(Duration::from_millis(400));
         self.which_key_task = Some(cx.spawn(async move |this, cx| {
@@ -748,8 +829,9 @@ impl PreviewApp {
     fn cancel_which_key(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         self.which_key_task = None;
-        if !self.which_key_items.is_empty() {
+        if !self.which_key_items.is_empty() || self.dired_help_visible {
             self.which_key_items = Arc::new(Vec::new());
+            self.dired_help_visible = false;
             cx.notify();
         }
     }
@@ -903,6 +985,11 @@ impl PreviewApp {
     }
 
     fn window_title(&self) -> String {
+        if self.content_route == ContentRoute::FileManager
+            && let Some(session) = self.dired.as_ref()
+        {
+            return format!("{} - Files", session.directory().file_name().unwrap_or_default().to_string_lossy());
+        }
         let path = match &self.state {
             PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
                 Some(path)
@@ -1052,6 +1139,8 @@ impl Render for PreviewApp {
         let entity = cx.entity();
         let key_status = self.keyboard.status().map(Arc::<str>::from);
         let which_key_items = self.which_key_items.clone();
+        let dired_help_visible = self.dired_help_visible;
+        let command_window_width = f32::from(window.viewport_size().width);
         div()
             .relative()
             .track_focus(&focus_handle)
@@ -1067,72 +1156,16 @@ impl Render for PreviewApp {
             .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| {
                 this.dispatch_command(RELOAD_DOCUMENT_COMMAND, cx)
             }))
-            .child(self.body(entity))
+            .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
+            .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
+            .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .child(self.workspace_body(entity))
             .when(!which_key_items.is_empty(), |view| {
-                view.child(
-                    div()
-                        .absolute()
-                        .left(px(0.0))
-                        .right(px(0.0))
-                        .bottom(px(0.0))
-                        .max_h(px(156.0))
-                        .py_2()
-                        .px_2()
-                        .bg(rgb(current_theme().background_alt))
-                        .border_t_1()
-                        .border_color(rgb(current_theme().border))
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .flex()
-                                .flex_wrap()
-                                .items_start()
-                                .gap_2()
-                                .children(which_key_items.iter().enumerate().map(|(index, (key, title))| {
-                                    let accent = current_theme().heading[index % current_theme().heading.len()];
-                                    let title_width = title.chars().map(|character| {
-                                        if character.is_ascii() { 6.8 } else { 12.0 }
-                                    }).sum::<f32>();
-                                    let card_width = (76.0 + title_width).clamp(122.0, 224.0);
-                                    div()
-                                        .w(px(card_width))
-                                        .h(px(30.0))
-                                        .flex()
-                                        .items_center()
-                                        .rounded_sm()
-                                        .border_1()
-                                        .border_color(rgb(current_theme().border))
-                                        .overflow_hidden()
-                                        .bg(rgb(current_theme().code_background))
-                                        .child(
-                                            div()
-                                                .w(px(50.0))
-                                                .h_full()
-                                                .flex()
-                                                .items_center()
-                                                .justify_center()
-                                                .bg(rgb(accent))
-                                                .text_color(rgb(0xffffff))
-                                                .font_weight(FontWeight::SEMIBOLD)
-                                                .text_size(px(14.0))
-                                                .child(key.to_string()),
-                                        )
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .h_full()
-                                                .px_2()
-                                                .flex()
-                                                .items_center()
-                                                .bg(rgb(current_theme().code_background))
-                                                .text_color(rgb(current_theme().foreground))
-                                                .text_size(px(11.5))
-                                                .child(title.to_string()),
-                                        )
-                                }))
-                        )
-                )
+                view.child(if dired_help_visible {
+                    dired_help_window(which_key_items.clone(), command_window_width)
+                } else {
+                    which_key_window(which_key_items.clone(), command_window_width)
+                })
             })
             .when_some(if which_key_items.is_empty() { key_status } else { None }, |view, status| {
                 view.child(
@@ -1150,6 +1183,253 @@ impl Render for PreviewApp {
                 )
             })
     }
+}
+
+fn dired_help_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32) -> gpui::Div {
+    use command_window::{CommandGroup, CommandWindow};
+
+    let take = |title: &str, keys: &[&str], columns| CommandGroup {
+        title: Arc::from(title),
+        max_columns: columns,
+        items: keys
+            .iter()
+            .filter_map(|key| items.iter().find(|(candidate, _)| candidate.as_ref() == *key).cloned())
+            .collect(),
+    };
+    CommandWindow {
+        title: Arc::from("Dired Commands"),
+        close: Some((Arc::from("C-g"), Arc::from("Close"))),
+        groups: vec![
+            take("NAVIGATION", &["n / j", "p / k", "^", "g", "q"], 3),
+            take("MARKS", &["m", "u", "U", "t", "d"], 3),
+            take("FILES", &["RET", "x"], 2),
+        ],
+    }
+    .render(available_width)
+}
+
+#[allow(dead_code)]
+fn legacy_dired_help_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>) -> gpui::Div {
+    let group = |title: &'static str, keys: &[&str], columns: usize| {
+        let rows = keys
+            .iter()
+            .filter_map(|key| {
+                items
+                    .iter()
+                    .find(|(candidate, _)| candidate.as_ref() == *key)
+                    .cloned()
+            })
+            .collect::<Vec<_>>();
+        command_group(title, rows, columns)
+    };
+
+    div()
+        .absolute()
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .h(px(128.0))
+        .bg(rgb(current_theme().background_alt))
+        .border_t_1()
+        .border_color(rgb(current_theme().border))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .w_full()
+                .h(px(38.0))
+                .px_5()
+                .flex()
+                .items_center()
+                .justify_between()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(4.0))
+                                .h(px(16.0))
+                                .rounded_sm()
+                                .bg(rgb(current_theme().heading[0])),
+                        )
+                        .child(
+                            div()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_size(px(13.0))
+                                .child("Dired Commands"),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .text_size(px(12.0))
+                        .text_color(rgb(current_theme().foreground_dim))
+                        .child(
+                            div()
+                                .h(px(22.0))
+                                .px_2()
+                                .flex()
+                                .items_center()
+                                .rounded_sm()
+                                .bg(rgb(current_theme().code_boundary_background))
+                                .text_color(rgb(current_theme().heading[0]))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child("C-g"),
+                        )
+                        .child("Close"),
+                ),
+        )
+        .child(
+            div()
+                .w_full()
+                .flex_1()
+                .min_h(px(0.0))
+                .px_5()
+                .pb_3()
+                .flex()
+                .gap_5()
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .flex()
+                        .gap_5()
+                        .child(group("NAVIGATION", &["n / j", "p / k", "^", "g", "q"], 3))
+                        .child(group("MARKS", &["m", "u", "U", "t", "d"], 3)),
+                )
+                .child(
+                    div()
+                        .w(relative(0.22))
+                        .h_full()
+                        .flex_none()
+                        .child(group("FILES", &["RET", "x"], 2)),
+                ),
+        )
+}
+
+#[allow(dead_code)]
+fn command_group(title: &'static str, rows: Vec<(Arc<str>, Arc<str>)>, columns: usize) -> gpui::Div {
+    let rows_per_column = rows.len().div_ceil(columns);
+    let column = |rows: Vec<(Arc<str>, Arc<str>)>| {
+        div()
+            .flex_1()
+            .min_w(px(0.0))
+            .flex()
+            .flex_col()
+            .children(rows.into_iter().map(command_row))
+    };
+
+    div()
+        .flex_1()
+        .min_w(px(0.0))
+        .pl_4()
+        .flex()
+        .flex_col()
+        .border_l_1()
+        .border_color(rgb(current_theme().border))
+        .child(
+            div()
+                .h(px(20.0))
+                .text_size(px(10.5))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(rgb(current_theme().foreground_dim))
+                .child(title),
+        )
+        .child(
+            div()
+                .flex_1()
+                .flex()
+                .gap_3()
+                .children(rows.chunks(rows_per_column).map(|rows| column(rows.to_vec()))),
+        )
+}
+
+#[allow(dead_code)]
+fn command_row((key, title): (Arc<str>, Arc<str>)) -> gpui::Div {
+    div()
+        .h(px(27.0))
+        .flex()
+        .items_center()
+        .gap_2()
+        .child(
+            div()
+                .w(px(54.0))
+                .h(px(22.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_sm()
+                .bg(rgb(current_theme().code_boundary_background))
+                .text_color(rgb(current_theme().heading[0]))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_size(px(12.0))
+                .child(key.to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w(px(0.0))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(12.5))
+                .text_color(rgb(current_theme().foreground))
+                .child(title.to_string()),
+        )
+}
+
+fn which_key_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32) -> gpui::Div {
+    use command_window::{CommandGroup, CommandWindow};
+
+    let columns = items.len().clamp(1, 6);
+    CommandWindow {
+        title: Arc::from("Available Commands"),
+        close: None,
+        groups: vec![CommandGroup {
+            title: Arc::from("COMMANDS"),
+            max_columns: columns,
+            items: items.as_ref().clone(),
+        }],
+    }
+    .render(available_width)
+}
+
+#[allow(dead_code)]
+fn legacy_which_key_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>) -> gpui::Div {
+    div()
+        .absolute()
+        .left(px(0.0))
+        .right(px(0.0))
+        .bottom(px(0.0))
+        .max_h(px(156.0))
+        .py_2()
+        .px_3()
+        .bg(rgb(current_theme().background_alt))
+        .border_t_1()
+        .border_color(rgb(current_theme().border))
+        .flex()
+        .flex_wrap()
+        .items_start()
+        .gap_2()
+        .children(items.iter().map(|(key, title)| {
+            div()
+                .w(px(190.0))
+                .h(px(28.0))
+                .flex()
+                .items_center()
+                .child(
+                    div()
+                        .w(px(54.0))
+                        .text_color(rgb(current_theme().heading[0]))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .child(key.to_string()),
+                )
+                .child(div().text_size(px(11.5)).child(title.to_string()))
+        }))
 }
 
 fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
@@ -1211,27 +1491,32 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
             redaction: RedactionPolicy::None,
         }).expect("valid built-in preview command");
     }
+    for (name, title, command, argument_spec) in [
+        (OPEN_FILE_MANAGER_COMMAND, "Open File Manager", BuiltinCommand::OpenFileManager, ArgumentSpec::None),
+        (RETURN_DOCUMENT_COMMAND, "Return to Document", BuiltinCommand::ReturnToDocument, ArgumentSpec::None),
+        (TOGGLE_SIDEBAR_COMMAND, "Toggle Sidebar", BuiltinCommand::ToggleSidebar, ArgumentSpec::None),
+        (DIRED_NEXT_COMMAND, "Next Line", BuiltinCommand::DiredNext, ArgumentSpec::Count),
+        (DIRED_PREVIOUS_COMMAND, "Previous Line", BuiltinCommand::DiredPrevious, ArgumentSpec::Count),
+        (DIRED_OPEN_COMMAND, "Open", BuiltinCommand::DiredOpen, ArgumentSpec::None),
+        (DIRED_UP_COMMAND, "Up Directory", BuiltinCommand::DiredUp, ArgumentSpec::None),
+        (DIRED_MARK_COMMAND, "Mark", BuiltinCommand::DiredMark, ArgumentSpec::None),
+        (DIRED_UNMARK_COMMAND, "Unmark", BuiltinCommand::DiredUnmark, ArgumentSpec::None),
+        (DIRED_UNMARK_ALL_COMMAND, "Unmark All", BuiltinCommand::DiredUnmarkAll, ArgumentSpec::None),
+        (DIRED_INVERT_COMMAND, "Invert Marks", BuiltinCommand::DiredInvertMarks, ArgumentSpec::None),
+        (DIRED_DELETE_COMMAND, "Flag Delete", BuiltinCommand::DiredFlagDelete, ArgumentSpec::None),
+        (DIRED_EXECUTE_COMMAND, "Execute", BuiltinCommand::DiredExecute, ArgumentSpec::None),
+        (DIRED_HELP_COMMAND, "Dired Help", BuiltinCommand::DiredHelp, ArgumentSpec::None),
+    ] {
+        builder.register_builtin(BuiltinCommandSpec {
+            name: name.into(), aliases: &[], title, description: title, command,
+            role: CommandRole::Action, argument_spec, repeat: RepeatPolicy::Repeatable,
+            undo: UndoPolicy::None, availability: Availability::FocusedView,
+            side_effect: SideEffectClass::None, required_capabilities: CapabilitySet::empty(),
+            redaction: RedactionPolicy::None,
+        }).expect("valid built-in file manager command");
+    }
     let commands = Arc::new(builder.build());
-    let mut context_builder = ContextRegistryBuilder::default();
-    context_builder
-        .register("workspace")
-        .expect("valid built-in context");
-    context_builder
-        .register("preview")
-        .expect("valid built-in context");
-    context_builder
-        .register("prompt")
-        .expect("valid built-in context");
-    context_builder
-        .register("sidebar")
-        .expect("valid built-in context");
-    context_builder
-        .register("dired")
-        .expect("valid built-in context");
-    context_builder
-        .register("editor")
-        .expect("valid built-in context");
-    let contexts = context_builder.build();
+    let contexts = built_in_contexts();
     let active_context = contexts
         .set(["workspace", "preview"])
         .expect("registered built-in contexts");
@@ -1260,6 +1545,86 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
         configuration.enabled_when,
     );
     (commands, keyboard, active_context)
+}
+
+fn built_in_contexts() -> crate::input::ContextRegistry {
+    let mut builder = ContextRegistryBuilder::default();
+    for name in ["workspace", "preview", "prompt", "sidebar", "dired", "editor"] {
+        builder.register(name).expect("valid unique built-in context");
+    }
+    builder.build()
+}
+
+fn preview_bindings() -> Vec<BindingSpec<'static>> {
+    vec![
+        BindingSpec { keys: "C-x C-f", behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND) },
+        BindingSpec { keys: "C-x C-r", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
+        BindingSpec { keys: "g", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
+        BindingSpec { keys: "q", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
+        BindingSpec { keys: "C-x C-c", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
+        BindingSpec { keys: "SPC", behavior: BindingBehavior::Command(SCROLL_FORWARD_COMMAND) },
+        BindingSpec { keys: "backspace", behavior: BindingBehavior::Command(SCROLL_BACKWARD_COMMAND) },
+        BindingSpec { keys: "M-<", behavior: BindingBehavior::Command(BEGINNING_COMMAND) },
+        BindingSpec { keys: "M->", behavior: BindingBehavior::Command(END_COMMAND) },
+    ]
+}
+
+fn dired_bindings() -> Vec<BindingSpec<'static>> {
+    vec![
+        BindingSpec { keys: "n", behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND) },
+        BindingSpec { keys: "j", behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND) },
+        BindingSpec { keys: "p", behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND) },
+        BindingSpec { keys: "k", behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND) },
+        BindingSpec { keys: "RET", behavior: BindingBehavior::Command(DIRED_OPEN_COMMAND) },
+        BindingSpec { keys: "S-6", behavior: BindingBehavior::Command(DIRED_UP_COMMAND) },
+        BindingSpec { keys: "g", behavior: BindingBehavior::Command(OPEN_FILE_MANAGER_COMMAND) },
+        BindingSpec { keys: "m", behavior: BindingBehavior::Command(DIRED_MARK_COMMAND) },
+        BindingSpec { keys: "u", behavior: BindingBehavior::Command(DIRED_UNMARK_COMMAND) },
+        BindingSpec { keys: "S-u", behavior: BindingBehavior::Command(DIRED_UNMARK_ALL_COMMAND) },
+        BindingSpec { keys: "t", behavior: BindingBehavior::Command(DIRED_INVERT_COMMAND) },
+        BindingSpec { keys: "d", behavior: BindingBehavior::Command(DIRED_DELETE_COMMAND) },
+        BindingSpec { keys: "x", behavior: BindingBehavior::Command(DIRED_EXECUTE_COMMAND) },
+        BindingSpec { keys: "q", behavior: BindingBehavior::Command(RETURN_DOCUMENT_COMMAND) },
+        BindingSpec { keys: "S-/", behavior: BindingBehavior::Command(DIRED_HELP_COMMAND) },
+    ]
+}
+
+fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, Arc<str>)> {
+    let mut items: Vec<(crate::command::CommandKey, Vec<&'static str>)> = Vec::new();
+    for binding in dired_bindings() {
+        let BindingBehavior::Command(name) = binding.behavior else { continue };
+        let Some(command) = commands.key(name) else { continue };
+        if let Some((_, keys)) = items.iter_mut().find(|(key, _)| *key == command) {
+            keys.push(binding.keys);
+        } else {
+            items.push((command, vec![binding.keys]));
+        }
+    }
+
+    let mut result = items
+        .into_iter()
+        .filter_map(|(key, keys)| {
+            let descriptor = commands.descriptor(key)?;
+            let keys = keys.into_iter().map(display_dired_key).collect::<Vec<_>>().join(" / ");
+            let title = if descriptor.name.as_str() == OPEN_FILE_MANAGER_COMMAND {
+                Arc::from("Refresh Directory")
+            } else {
+                descriptor.title.clone()
+            };
+            Some((Arc::from(keys), title))
+        })
+        .collect::<Vec<_>>();
+    result.push((Arc::from("C-g"), Arc::from("Close command list")));
+    result
+}
+
+fn display_dired_key(key: &str) -> &str {
+    match key {
+        "S-6" => "^",
+        "S-/" => "?",
+        "S-u" => "U",
+        key => key,
+    }
 }
 
 fn command_count(prefix: PrefixArgument) -> f32 {
@@ -1808,7 +2173,10 @@ fn styled_inline(parsed: InlineText) -> StyledText {
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineCache, InlineText, MAX_SYNC_INLINE_BYTES, accept_generation};
+    use super::{
+        InlineCache, InlineText, MAX_SYNC_INLINE_BYTES, accept_generation, dired_command_items,
+        preview_input,
+    };
 
     #[test]
     fn stale_generations_are_rejected() {
@@ -1837,5 +2205,23 @@ mod tests {
         );
         assert!(cache.entries.is_empty());
         assert_eq!(cache.bytes, 0);
+    }
+
+    #[test]
+    fn dired_help_lists_every_command_and_groups_alias_keys() {
+        let (commands, _, _) = preview_input();
+        let items = dired_command_items(&commands);
+        let labels = items
+            .iter()
+            .map(|(keys, title)| (keys.as_ref(), title.as_ref()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(items.len(), 14);
+        assert!(labels.contains(&("n / j", "Next Line")));
+        assert!(labels.contains(&("p / k", "Previous Line")));
+        assert!(labels.contains(&("^", "Up Directory")));
+        assert!(labels.contains(&("g", "Refresh Directory")));
+        assert!(labels.contains(&("?", "Dired Help")));
+        assert!(labels.contains(&("C-g", "Close command list")));
     }
 }

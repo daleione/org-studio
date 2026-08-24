@@ -6,7 +6,7 @@ use gpui::{
 };
 use org_studio::{
     perf_tracing,
-    preview::{OpenDocument, PreviewApp, ReloadDocument},
+    preview::{OpenDocument, OpenFileManager, PreviewApp, ReloadDocument, ReturnToDocument, ToggleSidebar},
 };
 
 actions!(org_studio, [Quit]);
@@ -35,8 +35,15 @@ fn main() {
                 name: "File".into(),
                 items: vec![
                     MenuItem::action("Open...", OpenDocument),
+                    MenuItem::action("Open File Manager...", OpenFileManager),
+                    MenuItem::action("Return to Document", ReturnToDocument),
+                    MenuItem::separator(),
                     MenuItem::action("Reload", ReloadDocument),
                 ],
+            },
+            Menu {
+                name: "View".into(),
+                items: vec![MenuItem::action("Show/Hide Sidebar", ToggleSidebar)],
             },
         ]);
         let displays = cx.displays();

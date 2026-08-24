@@ -1,5 +1,6 @@
 pub mod command;
 pub mod document;
+pub mod file_manager;
 pub mod input;
 pub mod keymap;
 pub mod org_syntax;

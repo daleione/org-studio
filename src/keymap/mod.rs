@@ -19,9 +19,17 @@ impl KeyStroke {
         key: impl Into<Arc<str>>,
         control: bool,
         meta: bool,
-        shift: bool,
+        mut shift: bool,
         command: bool,
     ) -> Self {
+        let key = key.into();
+        let key = match key.as_ref() {
+            "?" => { shift = true; "/" }
+            "^" => { shift = true; "6" }
+            "<" => { shift = true; "," }
+            ">" => { shift = true; "." }
+            _ => key.as_ref(),
+        };
         let mut modifiers = 0;
         if control {
             modifiers |= CONTROL;
@@ -36,7 +44,7 @@ impl KeyStroke {
             modifiers |= COMMAND;
         }
         Self {
-            key: normalize_key(&key.into()),
+            key: normalize_key(key),
             modifiers,
         }
     }
@@ -626,6 +634,14 @@ mod tests {
         assert!(emacs.control());
         assert_eq!(KeyStroke::parse("M-S-RET").unwrap().key(), "enter");
         assert!(KeyStroke::parse("cmd-o").unwrap().command());
+        assert_eq!(
+            KeyStroke::new("?", false, false, false, false),
+            KeyStroke::parse("S-/").unwrap()
+        );
+        assert_eq!(
+            KeyStroke::new("^", false, false, false, false),
+            KeyStroke::parse("S-6").unwrap()
+        );
     }
 
     #[test]

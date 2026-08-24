@@ -59,6 +59,20 @@ pub enum BuiltinCommand {
     ScrollBackward,
     BeginningOfDocument,
     EndOfDocument,
+    OpenFileManager,
+    ReturnToDocument,
+    ToggleSidebar,
+    DiredNext,
+    DiredPrevious,
+    DiredOpen,
+    DiredUp,
+    DiredMark,
+    DiredUnmark,
+    DiredUnmarkAll,
+    DiredInvertMarks,
+    DiredFlagDelete,
+    DiredExecute,
+    DiredHelp,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
