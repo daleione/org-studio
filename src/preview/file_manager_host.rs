@@ -113,7 +113,7 @@ impl PreviewApp {
         let selected = self.dired.as_ref().and_then(|session| session.selected()).map(|entry| (entry.path.to_path_buf(), entry.kind));
         match selected {
             Some((path, EntryKind::Parent | EntryKind::Directory)) => self.open_file_manager(path, cx),
-            Some((path, EntryKind::OrgFile)) => {
+            Some((path, EntryKind::OrgFile | EntryKind::Markdown)) => {
                 self.content_route = ContentRoute::Document;
                 self.install_preview_keymap();
                 self.open(path, cx);

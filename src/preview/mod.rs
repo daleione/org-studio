@@ -16,6 +16,7 @@ mod rows;
 mod folding;
 mod file_manager_host;
 mod command_window;
+mod markdown;
 #[cfg(test)]
 mod org_line;
 mod table;
@@ -111,7 +112,9 @@ enum ContentRoute { Document, FileManager }
 pub struct PreviewDocument {
     pub path: PathBuf,
     pub text: SharedTextSnapshot,
+    format: DocumentFormat,
     pub blocks: Arc<BlockArena>,
+    markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     rows: Arc<Vec<PreviewRow>>,
     tables: Arc<HashMap<BlockId, TableRowStyle>>,
     image_sizes: Arc<HashMap<BlockId, (u32, u32)>>,
@@ -119,6 +122,9 @@ pub struct PreviewDocument {
     highlight_cache: Mutex<HighlightCache>,
     pub metrics: LoadMetrics,
 }
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DocumentFormat { Org, Markdown }
 
 #[derive(Clone, Copy)]
 pub(super) struct PreviewRow {
@@ -227,11 +233,9 @@ impl InlineCache {
         }
     }
 
+    #[cfg(test)]
     fn get_or_insert(&mut self, id: BlockId, source: &str) -> InlineText {
-        if let Some(parsed) = self.entries.get(&id) {
-            return parsed.clone();
-        }
-
+        if let Some(parsed) = self.entries.get(&id) { return parsed.clone(); }
         let parsed = parse_inline(source);
         self.insert(id, parsed.clone());
         parsed
@@ -273,8 +277,9 @@ impl PreviewDocument {
                 let document = self.clone();
                 let source = source.to_owned();
                 cx.spawn(async move |cx| {
+                    let format = document.format;
                     let parsed = cx
-                        .background_spawn(async move { parse_inline(&source) })
+                        .background_spawn(async move { parse_document_inline(format, &source) })
                         .await;
                     document
                         .inline_cache
@@ -290,10 +295,11 @@ impl PreviewDocument {
                 spans: Vec::new(),
             };
         }
-        self.inline_cache
-            .lock()
-            .expect("inline cache poisoned")
-            .get_or_insert(id, source)
+        let mut cache = self.inline_cache.lock().expect("inline cache poisoned");
+        if let Some(parsed) = cache.entries.get(&id) { return parsed.clone(); }
+        let parsed = parse_document_inline(self.format, source);
+        cache.insert(id, parsed.clone());
+        parsed
     }
 
     fn code_highlights(
@@ -315,9 +321,12 @@ impl PreviewDocument {
         }
         if cache.pending.insert(id) {
             let document = self.clone();
-            let source = self
-                .text
-                .copy_range(self.blocks.nodes()[id as usize].source);
+            let range = if self.format == DocumentFormat::Markdown {
+                self.markdown_blocks[id as usize].source
+            } else {
+                self.blocks.nodes()[id as usize].source
+            };
+            let source = self.text.copy_range(range);
             let language = language.to_owned();
             cx.spawn(async move |cx| {
                 let spans = cx
@@ -856,11 +865,11 @@ impl PreviewApp {
                     Ok(document) => {
                         let document = Arc::new(document);
                         this.folded = Arc::new(HashSet::new());
-                        this.visible_rows = Arc::new(visible_row_indices(
-                            &document.rows,
-                            &document.blocks,
-                            &this.folded,
-                        ));
+                        this.visible_rows = if document.format == DocumentFormat::Markdown {
+                            Arc::new((0..document.rows.len()).collect())
+                        } else {
+                            Arc::new(visible_row_indices(&document.rows, &document.blocks, &this.folded))
+                        };
                         this.list_state.reset(this.visible_rows.len());
                         this.last_ready = Some((generation, document.clone()));
                         PreviewLoadState::Ready {
@@ -965,6 +974,7 @@ impl PreviewApp {
     }
 
     fn toggle_fold(&mut self, block_id: BlockId, document: &Arc<PreviewDocument>) {
+        if document.format == DocumentFormat::Markdown { return; }
         if !matches!(
             document.blocks.nodes()[block_id as usize].kind,
             BlockKind::Heading { .. }
@@ -1680,16 +1690,31 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
     let rope = rope_started.elapsed();
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let parse_started = Instant::now();
-    let blocks = Arc::new(parse(text.as_ref()));
+    let format = match path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase).as_deref() {
+        Some("md" | "markdown") => DocumentFormat::Markdown,
+        _ => DocumentFormat::Org,
+    };
+    let (blocks, markdown_blocks, rows) = match format {
+        DocumentFormat::Org => {
+            let blocks = Arc::new(parse(text.as_ref()));
+            let rows = Arc::new(build_preview_rows(text.as_ref(), &blocks));
+            (blocks, Arc::new(Vec::new()), rows)
+        }
+        DocumentFormat::Markdown => {
+            let (markdown_blocks, rows) = markdown::parse_markdown(text.as_ref());
+            (Arc::new(BlockArena::default()), Arc::new(markdown_blocks), Arc::new(rows))
+        }
+    };
     let parse = parse_started.elapsed();
-    let rows = Arc::new(build_preview_rows(text.as_ref(), &blocks));
-    let tables = Arc::new(build_table_styles(text.as_ref(), &blocks));
-    let image_sizes = Arc::new(build_image_sizes(&path, &blocks));
+    let tables = if format == DocumentFormat::Org { Arc::new(build_table_styles(text.as_ref(), &blocks)) } else { Arc::new(HashMap::new()) };
+    let image_sizes = if format == DocumentFormat::Org { Arc::new(build_image_sizes(&path, &blocks)) } else { Arc::new(HashMap::new()) };
 
     Ok(PreviewDocument {
         path,
         text,
+        format,
         blocks,
+        markdown_blocks,
         rows,
         tables,
         image_sizes,
@@ -1772,9 +1797,13 @@ fn render_document(
             list(list_state, move |index, window, cx| {
                 let actual_index = visible_rows[index];
                 let row = document.rows[actual_index];
-                let block = &document.blocks.nodes()[row.block_id as usize];
-                let is_heading = matches!(block.kind, BlockKind::Heading { .. });
-                let is_table_row = matches!(block.kind, BlockKind::TableRow);
+                let (is_heading, is_table_row) = if document.format == DocumentFormat::Markdown {
+                    let kind = &document.markdown_blocks[row.block_id as usize].kind;
+                    (matches!(kind, markdown::MarkdownKind::Heading { .. }), matches!(kind, markdown::MarkdownKind::TableRow))
+                } else {
+                    let kind = &document.blocks.nodes()[row.block_id as usize].kind;
+                    (matches!(kind, BlockKind::Heading { .. }), matches!(kind, BlockKind::TableRow))
+                };
                 let is_folded = is_heading && folded.contains(&row.block_id);
                 let document_for_click = document.clone();
                 let entity_for_click = entity.clone();
@@ -1825,19 +1854,25 @@ fn render_document(
                             .when(is_table_row, |element| {
                                 element.bg(rgb(current_theme().background_alt))
                             })
-                            .child(
-                                div()
-                                    .w_full()
-                                    .child(render_block(
-                                        &document,
-                                        row.block_id,
-                                        row,
-                                        block,
-                                        is_folded,
-                                        (f32::from(window.viewport_size().width) - 110.0).max(120.0),
-                                        cx,
-                                    )),
-                            ),
+                            .child(div().w_full().child(if document.format == DocumentFormat::Markdown {
+                                render_markdown_block(
+                                    &document,
+                                    row,
+                                    &document.markdown_blocks[row.block_id as usize],
+                                    (f32::from(window.viewport_size().width) - 110.0).max(120.0),
+                                    cx,
+                                )
+                            } else {
+                                render_block(
+                                    &document,
+                                    row.block_id,
+                                    row,
+                                    &document.blocks.nodes()[row.block_id as usize],
+                                    is_folded,
+                                    (f32::from(window.viewport_size().width) - 110.0).max(120.0),
+                                    cx,
+                                )
+                            })),
                     )
                     .into_any()
             })
@@ -2079,6 +2114,62 @@ fn render_block(
     element
 }
 
+fn parse_document_inline(format: DocumentFormat, source: &str) -> InlineText {
+    match format {
+        DocumentFormat::Org => parse_inline(source),
+        DocumentFormat::Markdown => markdown::parse_markdown_inline(source),
+    }
+}
+
+fn render_markdown_block(
+    document: &Arc<PreviewDocument>,
+    row: PreviewRow,
+    block: &markdown::MarkdownBlock,
+    available_width: f32,
+    cx: &mut App,
+) -> gpui::Div {
+    use markdown::MarkdownKind;
+    let theme = current_theme();
+    let text = document.text.copy_range(row.content).trim_end_matches(['\r', '\n']).to_owned();
+    match &block.kind {
+        MarkdownKind::Blank => div().h(px(24.0)),
+        MarkdownKind::Heading { level } => {
+            let index = (*level as usize).saturating_sub(1).min(3);
+            let size = match level { 1 => 22.0, 2 => 18.0, 3 => 15.0, _ => 14.0 };
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .text_size(px(size))
+                .line_height(px(24.0))
+                .font_weight(if *level <= 2 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                .text_color(rgb(theme.heading[index]))
+                .child(div().flex_none().text_size(px(13.0)).child(format!("{} ", theme.heading_bullets[index])))
+                .child(styled_inline(document.inline(row.block_id, &text, cx)))
+        }
+        MarkdownKind::Paragraph => div().text_size(px(14.0)).line_height(px(22.0)).child(styled_inline(document.inline(row.block_id, &text, cx))),
+        MarkdownKind::ListItem => div().pl_1().text_size(px(14.0)).line_height(px(22.0)).child(styled_inline(document.inline(row.block_id, &text, cx))),
+        MarkdownKind::Quote => div().pl_4().pr_2().py_1().border_l_2().border_color(rgb(theme.heading[1])).text_color(rgb(theme.quote)).text_size(px(15.0)).line_height(px(23.0)).child(styled_inline(document.inline(row.block_id, &text, cx))),
+        MarkdownKind::Code { language, boundary } => {
+            let content = if *boundary {
+                StyledText::new(text.clone())
+            } else if let Some(spans) = document.code_highlights(row.block_id, language.as_deref(), cx) {
+                styled_code_row(text.clone(), row.content.start.0.saturating_sub(block.source.start.0) as usize, &spans)
+            } else { StyledText::new(text.clone()) };
+            div().min_h(px(24.0)).px_4().py(px(2.0))
+                .bg(rgb(if *boundary { theme.code_boundary_background } else { theme.code_background }))
+                .text_color(rgb(if *boundary { theme.code_boundary } else { theme.code_foreground }))
+                .font_family("Menlo").text_size(px(13.0)).line_height(px(19.0)).child(content)
+        }
+        MarkdownKind::TableRow => div().px_2().py_1().bg(rgb(theme.background_alt)).font_family("Menlo").text_size(px(13.0)).text_color(rgb(theme.code_foreground)).child(text),
+        MarkdownKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
+        MarkdownKind::Image { path } => {
+            let source = resolve_image_path(&document.path, path);
+            div().w_full().py_2().flex().items_start().child(img(source).max_w(px(available_width.min(960.0))))
+        }
+    }
+}
+
 fn styled_code_row(
     text: String,
     row_start: usize,
@@ -2222,5 +2313,18 @@ mod tests {
         assert!(labels.contains(&("C-x C-d", "Toggle Sidebar")));
         assert!(labels.contains(&("?", "Dired Help")));
         assert!(labels.contains(&("C-g", "Close command list")));
+    }
+
+    #[test]
+    fn loads_markdown_without_sending_it_through_the_org_parser() {
+        let path = std::env::temp_dir().join(format!("org-studio-markdown-{}.md", std::process::id()));
+        std::fs::write(&path, "# Markdown\n\n- **native** preview\n").unwrap();
+        let document = super::load_document(path.clone()).unwrap();
+        let _ = std::fs::remove_file(path);
+
+        assert_eq!(document.format, super::DocumentFormat::Markdown);
+        assert!(document.blocks.nodes().is_empty());
+        assert!(!document.markdown_blocks.is_empty());
+        assert_eq!(document.rows.len(), 3);
     }
 }
