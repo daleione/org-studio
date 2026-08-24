@@ -6,9 +6,9 @@ use std::{
 };
 
 use gpui::{
-    App, Context, FontStyle, FontWeight, HighlightStyle, IntoElement, ListAlignment, ListState,
-    PathPromptOptions, Render, StyledText, Task, Window, actions, div, img, list, prelude::*, px,
-    rgb,
+    App, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, ListAlignment,
+    ListOffset, ListState, PathPromptOptions, Render, StyledText, Task, Window, actions, div, img, list,
+    prelude::*, px, rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -23,7 +23,18 @@ use rows::build_preview_rows;
 use table::{TableRowStyle, build_table_styles, render_table_row};
 
 use crate::{
+    command::{
+        ArgumentSpec, Availability, BuiltinCommand, BuiltinCommandSpec, CapabilitySet,
+        CommandDispatcher, CommandImplementation, CommandKey, CommandRegistry,
+        CommandRegistryBuilder, CommandRole, InvocationOrigin, PrefixArgument, RedactionPolicy,
+        RepeatPolicy, SideEffectClass, UndoPolicy,
+    },
     document::{ByteRange, RopeSnapshot, SharedTextSnapshot},
+    input::{
+        BindingBehavior, BindingSpec, ContextRegistryBuilder, ContextSet, EmacsOutcome,
+        KeyboardRouter, compile_input_profile,
+    },
+    keymap::KeyStroke,
     org_syntax::{
         BlockArena, BlockId, BlockKind, BlockNode,
         inline::{InlineKind, InlineText, parse as parse_inline},
@@ -37,6 +48,13 @@ const INLINE_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const MAX_SYNC_INLINE_BYTES: usize = 64 * 1024;
 const HIGHLIGHT_CACHE_CAPACITY: usize = 512;
 const HIGHLIGHT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
+const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
+const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
+const QUIT_APPLICATION_COMMAND: &str = "org-studio.application.quit";
+const SCROLL_FORWARD_COMMAND: &str = "org-studio.preview.scroll-forward";
+const SCROLL_BACKWARD_COMMAND: &str = "org-studio.preview.scroll-backward";
+const BEGINNING_COMMAND: &str = "org-studio.preview.beginning";
+const END_COMMAND: &str = "org-studio.preview.end";
 
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
@@ -521,6 +539,10 @@ enum PreviewLoadState {
 }
 
 pub struct PreviewApp {
+    focus_handle: Option<FocusHandle>,
+    commands: Arc<CommandRegistry>,
+    keyboard: KeyboardRouter,
+    key_context: ContextSet,
     state: PreviewLoadState,
     generation: u64,
     load_task: Option<Task<()>>,
@@ -532,6 +554,9 @@ pub struct PreviewApp {
     opened_at: Option<Instant>,
     first_frame_scheduled: Option<u64>,
     scroll_benchmark: Option<ScrollBenchmark>,
+    which_key_task: Option<Task<()>>,
+    which_key_request: u64,
+    which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
 }
 
 struct ScrollBenchmark {
@@ -549,7 +574,12 @@ impl PreviewApp {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(80.0);
+        let (commands, keyboard, key_context) = preview_input();
         Self {
+            focus_handle: None,
+            commands,
+            keyboard,
+            key_context,
             state: PreviewLoadState::Empty,
             generation: 0,
             load_task: None,
@@ -578,6 +608,149 @@ impl PreviewApp {
                     samples: Vec::with_capacity(target_frames),
                     last_frame: Instant::now(),
                 }),
+            which_key_task: None,
+            which_key_request: 0,
+            which_key_items: Arc::new(Vec::new()),
+        }
+    }
+
+    fn dispatch_command(&mut self, name: &str, cx: &mut Context<Self>) {
+        let prepared = CommandDispatcher::prepare(
+            &self.commands,
+            name,
+            InvocationOrigin::PlatformAction,
+            CapabilitySet::READ_FILE_SYSTEM,
+        );
+        let Ok(prepared) = prepared else {
+            return;
+        };
+        self.execute_command(prepared.implementation, prepared.invocation.prefix, cx);
+    }
+
+    fn dispatch_command_key(
+        &mut self,
+        command: CommandKey,
+        prefix: PrefixArgument,
+        cx: &mut Context<Self>,
+    ) {
+        let Ok(prepared) = CommandDispatcher::prepare_key(
+            &self.commands,
+            command,
+            InvocationOrigin::Keyboard,
+            CapabilitySet::READ_FILE_SYSTEM,
+            prefix,
+        ) else {
+            return;
+        };
+        self.execute_command(prepared.implementation, prepared.invocation.prefix, cx);
+    }
+
+    fn execute_command(
+        &mut self,
+        implementation: CommandImplementation,
+        prefix: PrefixArgument,
+        cx: &mut Context<Self>,
+    ) {
+        match implementation {
+            CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
+            CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => self.reload(cx),
+            CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => cx.quit(),
+            CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
+                self.list_state.scroll_by(px(640.0 * command_count(prefix)));
+                cx.notify();
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ScrollBackward) => {
+                self.list_state.scroll_by(px(-640.0 * command_count(prefix)));
+                cx.notify();
+            }
+            CommandImplementation::Builtin(BuiltinCommand::BeginningOfDocument) => {
+                self.list_state.scroll_to(ListOffset::default());
+                cx.notify();
+            }
+            CommandImplementation::Builtin(BuiltinCommand::EndOfDocument) => {
+                self.list_state.scroll_to(ListOffset {
+                    item_ix: self.list_state.item_count(),
+                    offset_in_item: px(0.0),
+                });
+                cx.notify();
+            }
+        }
+    }
+
+    fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        let modifiers = event.keystroke.modifiers;
+        let stroke = KeyStroke::new(
+            event.keystroke.key.as_str(),
+            modifiers.control,
+            modifiers.alt,
+            modifiers.shift,
+            modifiers.platform,
+        );
+        let previous_status = self.keyboard.status().map(str::to_owned);
+        let outcome = self.keyboard.route(stroke, self.key_context);
+        let has_feedback = self.keyboard.status().is_some();
+        if previous_status.as_deref() != self.keyboard.status() {
+            cx.notify();
+        }
+        if matches!(outcome, EmacsOutcome::Pending) {
+            self.schedule_which_key(cx);
+        } else {
+            self.cancel_which_key(cx);
+        }
+        match outcome {
+            EmacsOutcome::Command { command, prefix } => {
+                cx.stop_propagation();
+                self.dispatch_command_key(command, prefix, cx);
+            }
+            EmacsOutcome::Pending | EmacsOutcome::Disabled | EmacsOutcome::Cancelled => {
+                cx.stop_propagation();
+            }
+            EmacsOutcome::Undefined if has_feedback => cx.stop_propagation(),
+            EmacsOutcome::PassThrough | EmacsOutcome::Undefined => {}
+        }
+    }
+
+    fn schedule_which_key(&mut self, cx: &mut Context<Self>) {
+        self.which_key_request = self.which_key_request.wrapping_add(1);
+        let request = self.which_key_request;
+        self.which_key_items = Arc::new(Vec::new());
+        let delay = cx.background_executor().timer(Duration::from_millis(400));
+        self.which_key_task = Some(cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.which_key_request != request || this.keyboard.status().is_none() {
+                    return;
+                }
+                let items = this.keyboard.which_key_candidates()
+                    .into_iter()
+                    .take(24)
+                    .map(|candidate| {
+                        let title: Arc<str> = if candidate.disabled {
+                            Arc::from("Disabled")
+                        } else if let Some(command) = candidate.command {
+                            this.commands.descriptor(command)
+                                .map(|descriptor| descriptor.title.clone())
+                                .unwrap_or_else(|| Arc::from("Unknown command"))
+                        } else if candidate.is_prefix {
+                            Arc::from("Prefix")
+                        } else {
+                            Arc::from("Pass through")
+                        };
+                        (candidate.key, title)
+                    })
+                    .collect();
+                this.which_key_items = Arc::new(items);
+                cx.notify();
+            });
+        }));
+    }
+
+    fn cancel_which_key(&mut self, cx: &mut Context<Self>) {
+        self.which_key_request = self.which_key_request.wrapping_add(1);
+        self.which_key_task = None;
+        if !self.which_key_items.is_empty() {
+            self.which_key_items = Arc::new(Vec::new());
+            cx.notify();
         }
     }
 
@@ -837,6 +1010,11 @@ fn accept_generation(current: u64, completed: u64) -> bool {
 impl Render for PreviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::scope!("PreviewApp::render");
+        let focus_handle = self.focus_handle.get_or_insert_with(|| {
+            let handle = cx.focus_handle();
+            window.focus(&handle);
+            handle
+        }).clone();
         window.set_window_title(&self.window_title());
         if self.scroll_benchmark.is_some() {
             window.request_animation_frame();
@@ -872,16 +1050,220 @@ impl Render for PreviewApp {
             });
         }
         let entity = cx.entity();
+        let key_status = self.keyboard.status().map(Arc::<str>::from);
+        let which_key_items = self.which_key_items.clone();
         div()
+            .relative()
+            .track_focus(&focus_handle)
             .size_full()
             .bg(rgb(current_theme().background))
             .text_color(rgb(current_theme().foreground))
             .font_family("Menlo")
             .text_size(px(14.0))
-            .on_action(cx.listener(|this, _: &OpenDocument, _, cx| this.choose_file(cx)))
-            .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| this.reload(cx)))
+            .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
+            .on_action(cx.listener(|this, _: &OpenDocument, _, cx| {
+                this.dispatch_command(OPEN_DOCUMENT_COMMAND, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| {
+                this.dispatch_command(RELOAD_DOCUMENT_COMMAND, cx)
+            }))
             .child(self.body(entity))
+            .when(!which_key_items.is_empty(), |view| {
+                view.child(
+                    div()
+                        .absolute()
+                        .left(px(0.0))
+                        .right(px(0.0))
+                        .bottom(px(0.0))
+                        .max_h(px(156.0))
+                        .py_2()
+                        .px_2()
+                        .bg(rgb(current_theme().background_alt))
+                        .border_t_1()
+                        .border_color(rgb(current_theme().border))
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .flex()
+                                .flex_wrap()
+                                .items_start()
+                                .gap_2()
+                                .children(which_key_items.iter().enumerate().map(|(index, (key, title))| {
+                                    let accent = current_theme().heading[index % current_theme().heading.len()];
+                                    let title_width = title.chars().map(|character| {
+                                        if character.is_ascii() { 6.8 } else { 12.0 }
+                                    }).sum::<f32>();
+                                    let card_width = (76.0 + title_width).clamp(122.0, 224.0);
+                                    div()
+                                        .w(px(card_width))
+                                        .h(px(30.0))
+                                        .flex()
+                                        .items_center()
+                                        .rounded_sm()
+                                        .border_1()
+                                        .border_color(rgb(current_theme().border))
+                                        .overflow_hidden()
+                                        .bg(rgb(current_theme().code_background))
+                                        .child(
+                                            div()
+                                                .w(px(50.0))
+                                                .h_full()
+                                                .flex()
+                                                .items_center()
+                                                .justify_center()
+                                                .bg(rgb(accent))
+                                                .text_color(rgb(0xffffff))
+                                                .font_weight(FontWeight::SEMIBOLD)
+                                                .text_size(px(14.0))
+                                                .child(key.to_string()),
+                                        )
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .h_full()
+                                                .px_2()
+                                                .flex()
+                                                .items_center()
+                                                .bg(rgb(current_theme().code_background))
+                                                .text_color(rgb(current_theme().foreground))
+                                                .text_size(px(11.5))
+                                                .child(title.to_string()),
+                                        )
+                                }))
+                        )
+                )
+            })
+            .when_some(if which_key_items.is_empty() { key_status } else { None }, |view, status| {
+                view.child(
+                    div()
+                        .absolute()
+                        .left(px(108.0))
+                        .bottom(px(10.0))
+                        .px_2()
+                        .py_1()
+                        .rounded_sm()
+                        .bg(rgb(current_theme().background))
+                        .text_color(rgb(current_theme().foreground))
+                        .text_size(px(12.0))
+                        .child(status.to_string()),
+                )
+            })
     }
+}
+
+fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
+    let mut builder = CommandRegistryBuilder::default();
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: OPEN_DOCUMENT_COMMAND.into(),
+            aliases: &["find-file"],
+            title: "Open File",
+            description: "Open a local Org document",
+            command: BuiltinCommand::OpenDocument,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::ReadFileSystem,
+            required_capabilities: CapabilitySet::READ_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in open command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: RELOAD_DOCUMENT_COMMAND.into(),
+            aliases: &["revert-buffer"],
+            title: "Reload Document",
+            description: "Reload the current document from disk",
+            command: BuiltinCommand::ReloadDocument,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::ReadFileSystem,
+            required_capabilities: CapabilitySet::READ_FILE_SYSTEM,
+            redaction: RedactionPolicy::None,
+        })
+        .expect("valid built-in reload command");
+    for (name, title, command, argument_spec) in [
+        (QUIT_APPLICATION_COMMAND, "Quit", BuiltinCommand::QuitApplication, ArgumentSpec::None),
+        (SCROLL_FORWARD_COMMAND, "Scroll Forward", BuiltinCommand::ScrollForward, ArgumentSpec::Count),
+        (SCROLL_BACKWARD_COMMAND, "Scroll Backward", BuiltinCommand::ScrollBackward, ArgumentSpec::Count),
+        (BEGINNING_COMMAND, "Beginning of Document", BuiltinCommand::BeginningOfDocument, ArgumentSpec::None),
+        (END_COMMAND, "End of Document", BuiltinCommand::EndOfDocument, ArgumentSpec::None),
+    ] {
+        builder.register_builtin(BuiltinCommandSpec {
+            name: name.into(),
+            aliases: &[],
+            title,
+            description: title,
+            command,
+            role: CommandRole::Action,
+            argument_spec,
+            repeat: RepeatPolicy::Repeatable,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::None,
+            required_capabilities: CapabilitySet::empty(),
+            redaction: RedactionPolicy::None,
+        }).expect("valid built-in preview command");
+    }
+    let commands = Arc::new(builder.build());
+    let mut context_builder = ContextRegistryBuilder::default();
+    context_builder
+        .register("workspace")
+        .expect("valid built-in context");
+    context_builder
+        .register("preview")
+        .expect("valid built-in context");
+    context_builder
+        .register("prompt")
+        .expect("valid built-in context");
+    context_builder
+        .register("sidebar")
+        .expect("valid built-in context");
+    context_builder
+        .register("dired")
+        .expect("valid built-in context");
+    context_builder
+        .register("editor")
+        .expect("valid built-in context");
+    let contexts = context_builder.build();
+    let active_context = contexts
+        .set(["workspace", "preview"])
+        .expect("registered built-in contexts");
+    let configuration = compile_input_profile(
+        1,
+        &[
+            BindingSpec { keys: "C-x C-f", behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND) },
+            BindingSpec { keys: "C-x C-r", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
+            BindingSpec { keys: "g", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
+            BindingSpec { keys: "q", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
+            BindingSpec { keys: "C-x C-c", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
+            BindingSpec { keys: "SPC", behavior: BindingBehavior::Command(SCROLL_FORWARD_COMMAND) },
+            BindingSpec { keys: "backspace", behavior: BindingBehavior::Command(SCROLL_BACKWARD_COMMAND) },
+            BindingSpec { keys: "M-<", behavior: BindingBehavior::Command(BEGINNING_COMMAND) },
+            BindingSpec { keys: "M->", behavior: BindingBehavior::Command(END_COMMAND) },
+        ],
+        &commands,
+        &contexts,
+        &["workspace", "preview"],
+        &["prompt"],
+    ).expect("built-in input profile is valid");
+    let keyboard = KeyboardRouter::new(
+        configuration.generation,
+        configuration.interner,
+        configuration.grammar,
+        configuration.enabled_when,
+    );
+    (commands, keyboard, active_context)
+}
+
+fn command_count(prefix: PrefixArgument) -> f32 {
+    prefix.effective_count().unwrap_or(1).clamp(-1_000, 1_000) as f32
 }
 
 fn resolve_image_path(document_path: &Path, source: &str) -> PathBuf {
