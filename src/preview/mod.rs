@@ -12,7 +12,9 @@ use gpui::{
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
 mod rows;
+mod folding;
 
+use folding::{changed_range, visible_row_indices};
 use rows::build_preview_rows;
 
 use crate::{
@@ -517,6 +519,8 @@ pub struct PreviewApp {
     load_task: Option<Task<()>>,
     picker_task: Option<Task<()>>,
     list_state: ListState,
+    folded: Arc<HashSet<BlockId>>,
+    visible_rows: Arc<Vec<usize>>,
     last_ready: Option<(u64, Arc<PreviewDocument>)>,
     opened_at: Option<Instant>,
     first_frame_scheduled: Option<u64>,
@@ -544,6 +548,8 @@ impl PreviewApp {
             load_task: None,
             picker_task: None,
             list_state: ListState::new(0, ListAlignment::Top, px(list_overdraw)),
+            folded: Arc::new(HashSet::new()),
+            visible_rows: Arc::new(Vec::new()),
             last_ready: None,
             opened_at: None,
             first_frame_scheduled: None,
@@ -585,8 +591,14 @@ impl PreviewApp {
 
                 this.state = match result {
                     Ok(document) => {
-                        this.list_state.reset(document.rows.len());
                         let document = Arc::new(document);
+                        this.folded = Arc::new(HashSet::new());
+                        this.visible_rows = Arc::new(visible_row_indices(
+                            &document.rows,
+                            &document.blocks,
+                            &this.folded,
+                        ));
+                        this.list_state.reset(this.visible_rows.len());
                         this.last_ready = Some((generation, document.clone()));
                         PreviewLoadState::Ready {
                             generation,
@@ -633,7 +645,7 @@ impl PreviewApp {
         }
     }
 
-    fn body(&self) -> gpui::Div {
+    fn body(&self, entity: gpui::Entity<Self>) -> gpui::Div {
         let theme = current_theme();
         match &self.state {
             PreviewLoadState::Empty => centered_message(
@@ -666,15 +678,48 @@ impl PreviewApp {
                                 .text_color(rgb(0xa12b1f))
                                 .child(format!("Could not open document. Showing the previous file. {error}")),
                         )
-                        .child(render_document(document.clone(), self.list_state.clone()))
+                        .child(render_document(
+                            document.clone(),
+                            self.list_state.clone(),
+                            self.visible_rows.clone(),
+                            self.folded.clone(),
+                            entity,
+                        ))
                 } else {
                     centered_message("COULD NOT OPEN DOCUMENT", &error)
                 }
             }
             PreviewLoadState::Ready { document, .. } => {
-                render_document(document.clone(), self.list_state.clone())
+                render_document(
+                    document.clone(),
+                    self.list_state.clone(),
+                    self.visible_rows.clone(),
+                    self.folded.clone(),
+                    entity,
+                )
             }
         }
+    }
+
+    fn toggle_fold(&mut self, block_id: BlockId, document: &Arc<PreviewDocument>) {
+        if !matches!(
+            document.blocks.nodes()[block_id as usize].kind,
+            BlockKind::Heading { .. }
+        ) {
+            return;
+        }
+        let folded = Arc::make_mut(&mut self.folded);
+        if !folded.remove(&block_id) {
+            folded.insert(block_id);
+        }
+        let new_visible = Arc::new(visible_row_indices(
+            &document.rows,
+            &document.blocks,
+            &self.folded,
+        ));
+        let (old_range, new_count) = changed_range(&self.visible_rows, &new_visible);
+        self.list_state.splice(old_range, new_count);
+        self.visible_rows = new_visible;
     }
 
     fn window_title(&self) -> String {
@@ -819,6 +864,7 @@ impl Render for PreviewApp {
                 }
             });
         }
+        let entity = cx.entity();
         div()
             .size_full()
             .bg(rgb(current_theme().background))
@@ -827,7 +873,7 @@ impl Render for PreviewApp {
             .text_size(px(14.0))
             .on_action(cx.listener(|this, _: &OpenDocument, _, cx| this.choose_file(cx)))
             .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| this.reload(cx)))
-            .child(self.body())
+            .child(self.body(entity))
     }
 }
 
@@ -906,6 +952,9 @@ fn centered_message(title: &str, detail: &str) -> gpui::Div {
 fn render_document(
     document: Arc<PreviewDocument>,
     list_state: ListState,
+    visible_rows: Arc<Vec<usize>>,
+    folded: Arc<HashSet<BlockId>>,
+    entity: gpui::Entity<PreviewApp>,
 ) -> gpui::Div {
     let theme = current_theme();
     div()
@@ -927,14 +976,30 @@ fn render_document(
         )
         .child({
             let document = document.clone();
+            let visible_rows = visible_rows.clone();
+            let folded = folded.clone();
             list(list_state, move |index, _, cx| {
-                let row = document.rows[index];
+                let actual_index = visible_rows[index];
+                let row = document.rows[actual_index];
                 let block = &document.blocks.nodes()[row.block_id as usize];
+                let is_heading = matches!(block.kind, BlockKind::Heading { .. });
+                let is_folded = is_heading && folded.contains(&row.block_id);
+                let document_for_click = document.clone();
+                let entity_for_click = entity.clone();
                 div()
+                    .id(("preview-row", actual_index))
                     .w_full()
                     .min_h(px(24.0))
                     .when(index == 0, |element| element.pt_1())
-                    .when(index + 1 == document.rows.len(), |element| element.pb_2())
+                    .when(index + 1 == visible_rows.len(), |element| element.pb_2())
+                    .when(is_heading, |element| {
+                        element.cursor_pointer().on_click(move |_, _, cx| {
+                            entity_for_click.update(cx, |this, cx| {
+                                this.toggle_fold(row.block_id, &document_for_click);
+                                cx.notify();
+                            });
+                        })
+                    })
                     .flex()
                     .items_start()
                     .child(
@@ -973,6 +1038,7 @@ fn render_document(
                                         row.block_id,
                                         row,
                                         block,
+                                        is_folded,
                                         cx,
                                     )),
                             ),
@@ -989,6 +1055,7 @@ fn render_block(
     block_id: BlockId,
     row: PreviewRow,
     block: &BlockNode,
+    is_folded: bool,
     cx: &mut App,
 ) -> gpui::Div {
     let theme = current_theme();
@@ -1040,7 +1107,17 @@ fn render_block(
                     div()
                         .flex_1()
                         .min_w_0()
-                        .child(styled_inline(document.inline(block_id, &text, cx))),
+                        .flex()
+                        .items_center()
+                        .child(styled_inline(document.inline(block_id, &text, cx)))
+                        .when(is_folded, |element| {
+                            element.child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(theme.keyword))
+                                    .child("..."),
+                            )
+                        }),
                 )
         }
         BlockKind::Paragraph => {

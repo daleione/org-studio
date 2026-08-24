@@ -1,0 +1,92 @@
+use std::collections::HashSet;
+
+use crate::org_syntax::{BlockArena, BlockId};
+
+use super::PreviewRow;
+
+pub(super) fn visible_row_indices(
+    rows: &[PreviewRow],
+    blocks: &BlockArena,
+    folded: &HashSet<BlockId>,
+) -> Vec<usize> {
+    rows.iter()
+        .enumerate()
+        .filter_map(|(index, row)| {
+            (!has_folded_ancestor(row.block_id, blocks, folded)).then_some(index)
+        })
+        .collect()
+}
+
+fn has_folded_ancestor(
+    block_id: BlockId,
+    blocks: &BlockArena,
+    folded: &HashSet<BlockId>,
+) -> bool {
+    let mut parent = blocks.nodes()[block_id as usize].parent;
+    while let Some(block_id) = parent {
+        if folded.contains(&block_id) {
+            return true;
+        }
+        parent = blocks.nodes()[block_id as usize].parent;
+    }
+    false
+}
+
+pub(super) fn changed_range(old: &[usize], new: &[usize]) -> (std::ops::Range<usize>, usize) {
+    let prefix = old
+        .iter()
+        .zip(new)
+        .take_while(|(old, new)| old == new)
+        .count();
+    let suffix = old[prefix..]
+        .iter()
+        .rev()
+        .zip(new[prefix..].iter().rev())
+        .take_while(|(old, new)| old == new)
+        .count();
+    (
+        prefix..old.len().saturating_sub(suffix),
+        new.len().saturating_sub(prefix + suffix),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use crate::{
+        document::RopeSnapshot,
+        org_syntax::{BlockKind, parse},
+        preview::rows::build_preview_rows,
+    };
+
+    use super::{changed_range, visible_row_indices};
+
+    #[test]
+    fn folding_hides_only_heading_descendants() {
+        let text = RopeSnapshot::from_utf8(
+            b"* One\nbody\n** Child\nchild body\n* Two\nvisible\n".to_vec(),
+        )
+        .unwrap();
+        let blocks = parse(&text);
+        let rows = build_preview_rows(&text, &blocks);
+        let heading = blocks
+            .nodes()
+            .iter()
+            .position(|block| matches!(block.kind, BlockKind::Heading { level: 1 }))
+            .unwrap() as u32;
+
+        let visible = visible_row_indices(&rows, &blocks, &HashSet::from([heading]));
+        let lines = visible
+            .into_iter()
+            .map(|index| rows[index].source_line)
+            .collect::<Vec<_>>();
+        assert_eq!(lines, vec![1, 5, 6]);
+    }
+
+    #[test]
+    fn computes_minimal_list_splice() {
+        assert_eq!(changed_range(&[0, 1, 2, 3, 4], &[0, 1, 4]), (2..4, 0));
+        assert_eq!(changed_range(&[0, 1, 4], &[0, 1, 2, 3, 4]), (2..2, 2));
+    }
+}
