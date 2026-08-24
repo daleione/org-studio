@@ -5,8 +5,10 @@ edition = "2024"
 publish = false
 
 [dependencies]
+async-channel = "2"
 gpui = "0.2.2"
 image = "0.25.10"
+notify = "8"
 profiling = { version = "1", features = ["profile-with-tracing"] }
 pulldown-cmark = "0.13"
 ropey = "1.6.1"

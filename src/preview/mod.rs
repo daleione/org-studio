@@ -8,7 +8,7 @@ use std::{
 use gpui::{
     App, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, ListAlignment,
     ListOffset, ListState, PathPromptOptions, Render, StyledText, Task, Window, actions, div, img, list,
-    prelude::*, px, relative, rgb,
+    prelude::*, px, rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -575,6 +575,8 @@ pub struct PreviewApp {
     state: PreviewLoadState,
     generation: u64,
     load_task: Option<Task<()>>,
+    file_watch_task: Option<Task<()>>,
+    file_watch_request: u64,
     picker_task: Option<Task<()>>,
     list_state: ListState,
     folded: Arc<HashSet<BlockId>>,
@@ -620,6 +622,8 @@ impl PreviewApp {
             state: PreviewLoadState::Empty,
             generation: 0,
             load_task: None,
+            file_watch_task: None,
+            file_watch_request: 0,
             picker_task: None,
             list_state: ListState::new(0, ListAlignment::Top, px(list_overdraw)),
             folded: Arc::new(HashSet::new()),
@@ -852,6 +856,7 @@ impl PreviewApp {
         self.first_frame_scheduled = None;
         let generation = self.generation;
         self.state = PreviewLoadState::Loading { path: path.clone() };
+        self.watch_document(path.clone(), cx);
 
         let background = cx.background_spawn(async move { load_document(path) });
         self.load_task = Some(cx.spawn(async move |this, cx| {
@@ -902,6 +907,24 @@ impl PreviewApp {
                 let _ = this.update(cx, |this, cx| this.open(path, cx));
             }
         }));
+    }
+
+    fn watch_document(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.file_watch_request = self.file_watch_request.wrapping_add(1);
+        let request = self.file_watch_request;
+        if let Ok(watch) = crate::file_watcher::FileWatch::new(path.clone()) {
+            self.file_watch_task = Some(cx.spawn(async move |this, cx| {
+                if !watch.changed().await { return; }
+                cx.background_executor().timer(Duration::from_millis(100)).await;
+                watch.drain();
+                let _ = this.update(cx, |this, cx| {
+                    if this.file_watch_request == request { this.open(path, cx); }
+                });
+            }));
+            return;
+        }
+
+        self.file_watch_task = None;
     }
 
     fn reload(&mut self, cx: &mut Context<Self>) {
@@ -1105,6 +1128,7 @@ fn accept_generation(current: u64, completed: u64) -> bool {
     current == completed
 }
 
+
 impl Render for PreviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::scope!("PreviewApp::render");
@@ -1220,180 +1244,6 @@ fn dired_help_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32
     .render(available_width)
 }
 
-#[allow(dead_code)]
-fn legacy_dired_help_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>) -> gpui::Div {
-    let group = |title: &'static str, keys: &[&str], columns: usize| {
-        let rows = keys
-            .iter()
-            .filter_map(|key| {
-                items
-                    .iter()
-                    .find(|(candidate, _)| candidate.as_ref() == *key)
-                    .cloned()
-            })
-            .collect::<Vec<_>>();
-        command_group(title, rows, columns)
-    };
-
-    div()
-        .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(px(0.0))
-        .h(px(128.0))
-        .bg(rgb(current_theme().background_alt))
-        .border_t_1()
-        .border_color(rgb(current_theme().border))
-        .flex()
-        .flex_col()
-        .child(
-            div()
-                .w_full()
-                .h(px(38.0))
-                .px_5()
-                .flex()
-                .items_center()
-                .justify_between()
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .child(
-                            div()
-                                .w(px(4.0))
-                                .h(px(16.0))
-                                .rounded_sm()
-                                .bg(rgb(current_theme().heading[0])),
-                        )
-                        .child(
-                            div()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .text_size(px(13.0))
-                                .child("Dired Commands"),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .items_center()
-                        .gap_2()
-                        .text_size(px(12.0))
-                        .text_color(rgb(current_theme().foreground_dim))
-                        .child(
-                            div()
-                                .h(px(22.0))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .rounded_sm()
-                                .bg(rgb(current_theme().code_boundary_background))
-                                .text_color(rgb(current_theme().heading[0]))
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("C-g"),
-                        )
-                        .child("Close"),
-                ),
-        )
-        .child(
-            div()
-                .w_full()
-                .flex_1()
-                .min_h(px(0.0))
-                .px_5()
-                .pb_3()
-                .flex()
-                .gap_5()
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w(px(0.0))
-                        .flex()
-                        .gap_5()
-                        .child(group("NAVIGATION", &["n / j", "p / k", "^", "g", "q"], 3))
-                        .child(group("MARKS", &["m", "u", "U", "t", "d"], 3)),
-                )
-                .child(
-                    div()
-                        .w(relative(0.22))
-                        .h_full()
-                        .flex_none()
-                        .child(group("FILES", &["RET", "x"], 2)),
-                ),
-        )
-}
-
-#[allow(dead_code)]
-fn command_group(title: &'static str, rows: Vec<(Arc<str>, Arc<str>)>, columns: usize) -> gpui::Div {
-    let rows_per_column = rows.len().div_ceil(columns);
-    let column = |rows: Vec<(Arc<str>, Arc<str>)>| {
-        div()
-            .flex_1()
-            .min_w(px(0.0))
-            .flex()
-            .flex_col()
-            .children(rows.into_iter().map(command_row))
-    };
-
-    div()
-        .flex_1()
-        .min_w(px(0.0))
-        .pl_4()
-        .flex()
-        .flex_col()
-        .border_l_1()
-        .border_color(rgb(current_theme().border))
-        .child(
-            div()
-                .h(px(20.0))
-                .text_size(px(10.5))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(rgb(current_theme().foreground_dim))
-                .child(title),
-        )
-        .child(
-            div()
-                .flex_1()
-                .flex()
-                .gap_3()
-                .children(rows.chunks(rows_per_column).map(|rows| column(rows.to_vec()))),
-        )
-}
-
-#[allow(dead_code)]
-fn command_row((key, title): (Arc<str>, Arc<str>)) -> gpui::Div {
-    div()
-        .h(px(27.0))
-        .flex()
-        .items_center()
-        .gap_2()
-        .child(
-            div()
-                .w(px(54.0))
-                .h(px(22.0))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded_sm()
-                .bg(rgb(current_theme().code_boundary_background))
-                .text_color(rgb(current_theme().heading[0]))
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_size(px(12.0))
-                .child(key.to_string()),
-        )
-        .child(
-            div()
-                .flex_1()
-                .min_w(px(0.0))
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .text_size(px(12.5))
-                .text_color(rgb(current_theme().foreground))
-                .child(title.to_string()),
-        )
-}
-
 fn which_key_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32) -> gpui::Div {
     use command_window::{CommandGroup, CommandWindow};
 
@@ -1408,40 +1258,6 @@ fn which_key_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32)
         }],
     }
     .render(available_width)
-}
-
-#[allow(dead_code)]
-fn legacy_which_key_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>) -> gpui::Div {
-    div()
-        .absolute()
-        .left(px(0.0))
-        .right(px(0.0))
-        .bottom(px(0.0))
-        .max_h(px(156.0))
-        .py_2()
-        .px_3()
-        .bg(rgb(current_theme().background_alt))
-        .border_t_1()
-        .border_color(rgb(current_theme().border))
-        .flex()
-        .flex_wrap()
-        .items_start()
-        .gap_2()
-        .children(items.iter().map(|(key, title)| {
-            div()
-                .w(px(190.0))
-                .h(px(28.0))
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .w(px(54.0))
-                        .text_color(rgb(current_theme().heading[0]))
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .child(key.to_string()),
-                )
-                .child(div().text_size(px(11.5)).child(title.to_string()))
-        }))
 }
 
 fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
@@ -2327,4 +2143,5 @@ mod tests {
         assert!(!document.markdown_blocks.is_empty());
         assert_eq!(document.rows.len(), 3);
     }
+
 }
