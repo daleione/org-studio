@@ -23,7 +23,7 @@ mod table;
 
 use folding::{changed_range, visible_row_indices};
 use rows::build_preview_rows;
-use table::{TableRowStyle, build_table_styles, render_table_row};
+use table::{TableRowStyle, build_markdown_table_styles, build_table_styles, render_table_row};
 
 use crate::{
     command::{
@@ -1961,10 +1961,11 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
         }
     };
     let parse = parse_started.elapsed();
-    let tables = if format == DocumentFormat::Org {
-        Arc::new(build_table_styles(text.as_ref(), &blocks))
-    } else {
-        Arc::new(HashMap::new())
+    let tables = match format {
+        DocumentFormat::Org => Arc::new(build_table_styles(text.as_ref(), &blocks)),
+        DocumentFormat::Markdown => {
+            Arc::new(build_markdown_table_styles(text.as_ref(), &markdown_blocks))
+        }
     };
     let image_sizes = if format == DocumentFormat::Org {
         Arc::new(build_image_sizes(&path, &blocks))
@@ -2487,14 +2488,13 @@ fn render_markdown_block(
                 .line_height(px(19.0))
                 .child(content)
         }
-        MarkdownKind::TableRow => div()
-            .px_2()
-            .py_1()
-            .bg(rgb(theme.background_alt))
-            .font_family("Menlo")
-            .text_size(px(13.0))
-            .text_color(rgb(theme.code_foreground))
-            .child(text),
+        MarkdownKind::TableRow => render_table_row(
+            &text,
+            document
+                .tables
+                .get(&row.block_id)
+                .expect("markdown table row layout must exist"),
+        ),
         MarkdownKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
         MarkdownKind::Image { path } => {
             let source = resolve_image_path(&document.path, path);
