@@ -4,6 +4,7 @@ pub mod file_manager;
 pub mod file_watcher;
 pub mod input;
 pub mod keymap;
+pub mod navigation;
 pub mod org_syntax;
 pub mod perf_tracing;
 pub mod preview;

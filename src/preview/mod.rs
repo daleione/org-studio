@@ -6,19 +6,19 @@ use std::{
 };
 
 use gpui::{
-    App, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, ListAlignment,
-    ListOffset, ListState, PathPromptOptions, Render, StyledText, Task, Window, actions, div, img, list,
-    prelude::*, px, rgb,
+    App, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent,
+    ListAlignment, ListOffset, ListState, PathPromptOptions, Render, StyledText, Task, Window,
+    actions, div, img, list, prelude::*, px, rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-mod rows;
-mod folding;
-mod file_manager_host;
 mod command_window;
+mod file_manager_host;
+mod folding;
 mod markdown;
 #[cfg(test)]
 mod org_line;
+mod rows;
 mod table;
 
 use folding::{changed_range, visible_row_indices};
@@ -66,6 +66,8 @@ const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
 const DIRED_PREVIOUS_COMMAND: &str = "org-studio.dired.previous-line";
 const DIRED_OPEN_COMMAND: &str = "org-studio.dired.find-file";
 const DIRED_UP_COMMAND: &str = "org-studio.dired.up-directory";
+const DIRED_BACK_COMMAND: &str = "org-studio.dired.history-back";
+const DIRED_FORWARD_COMMAND: &str = "org-studio.dired.history-forward";
 const DIRED_MARK_COMMAND: &str = "org-studio.dired.mark";
 const DIRED_UNMARK_COMMAND: &str = "org-studio.dired.unmark";
 const DIRED_UNMARK_ALL_COMMAND: &str = "org-studio.dired.unmark-all";
@@ -104,10 +106,22 @@ const HIGHLIGHT_NAMES: &[&str] = &[
     "variable",
 ];
 
-actions!(org_preview, [OpenDocument, ReloadDocument, OpenFileManager, ReturnToDocument, ToggleSidebar]);
+actions!(
+    org_preview,
+    [
+        OpenDocument,
+        ReloadDocument,
+        OpenFileManager,
+        ReturnToDocument,
+        ToggleSidebar
+    ]
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ContentRoute { Document, FileManager }
+enum ContentRoute {
+    Document,
+    FileManager,
+}
 
 pub struct PreviewDocument {
     pub path: PathBuf,
@@ -124,7 +138,10 @@ pub struct PreviewDocument {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DocumentFormat { Org, Markdown }
+enum DocumentFormat {
+    Org,
+    Markdown,
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct PreviewRow {
@@ -208,9 +225,9 @@ impl HighlightCache {
             if let Some(oldest) = self.order.pop_front()
                 && let Some(removed) = self.entries.remove(&oldest)
             {
-                self.bytes = self.bytes.saturating_sub(
-                    removed.len() * std::mem::size_of::<CodeHighlightSpan>(),
-                );
+                self.bytes = self
+                    .bytes
+                    .saturating_sub(removed.len() * std::mem::size_of::<CodeHighlightSpan>());
             }
         }
         if entry_bytes <= self.max_bytes {
@@ -235,7 +252,9 @@ impl InlineCache {
 
     #[cfg(test)]
     fn get_or_insert(&mut self, id: BlockId, source: &str) -> InlineText {
-        if let Some(parsed) = self.entries.get(&id) { return parsed.clone(); }
+        if let Some(parsed) = self.entries.get(&id) {
+            return parsed.clone();
+        }
         let parsed = parse_inline(source);
         self.insert(id, parsed.clone());
         parsed
@@ -296,7 +315,9 @@ impl PreviewDocument {
             };
         }
         let mut cache = self.inline_cache.lock().expect("inline cache poisoned");
-        if let Some(parsed) = cache.entries.get(&id) { return parsed.clone(); }
+        if let Some(parsed) = cache.entries.get(&id) {
+            return parsed.clone();
+        }
         let parsed = parse_document_inline(self.format, source);
         cache.insert(id, parsed.clone());
         parsed
@@ -596,6 +617,21 @@ pub struct PreviewApp {
     dired_task: Option<Task<()>>,
     dired_list_state: ListState,
     sidebar_list_state: ListState,
+    dired_pending_presentation: Option<(
+        crate::navigation::TransactionId,
+        crate::navigation::ViewRevision,
+        usize,
+        f32,
+    )>,
+    sidebar_pending_presentation: Option<(
+        crate::navigation::TransactionId,
+        crate::navigation::ViewRevision,
+        usize,
+        f32,
+    )>,
+    dired_presentation_scheduled: bool,
+    dired_viewport_memory: HashMap<PathBuf, (usize, f32)>,
+    sidebar_viewport_memory: HashMap<PathBuf, (usize, f32)>,
 }
 
 struct ScrollBenchmark {
@@ -660,6 +696,11 @@ impl PreviewApp {
             dired_task: None,
             dired_list_state: ListState::new(0, ListAlignment::Top, px(80.0)),
             sidebar_list_state: ListState::new(0, ListAlignment::Top, px(60.0)),
+            dired_pending_presentation: None,
+            sidebar_pending_presentation: None,
+            dired_presentation_scheduled: false,
+            dired_viewport_memory: HashMap::new(),
+            sidebar_viewport_memory: HashMap::new(),
         }
     }
 
@@ -703,8 +744,11 @@ impl PreviewApp {
         match implementation {
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
-                if self.content_route == ContentRoute::FileManager { self.reload_file_manager(cx); }
-                else { self.reload(cx); }
+                if self.content_route == ContentRoute::FileManager {
+                    self.reload_file_manager(cx);
+                } else {
+                    self.reload(cx);
+                }
             }
             CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => cx.quit(),
             CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
@@ -712,7 +756,8 @@ impl PreviewApp {
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::ScrollBackward) => {
-                self.list_state.scroll_by(px(-640.0 * command_count(prefix)));
+                self.list_state
+                    .scroll_by(px(-640.0 * command_count(prefix)));
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::BeginningOfDocument) => {
@@ -729,20 +774,50 @@ impl PreviewApp {
             CommandImplementation::Builtin(BuiltinCommand::OpenFileManager) => {
                 self.choose_directory(cx);
             }
-            CommandImplementation::Builtin(BuiltinCommand::OpenDefaultDired) => self.open_default_dired(cx),
-            CommandImplementation::Builtin(BuiltinCommand::ReturnToDocument) => self.return_to_document(cx),
-            CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => self.toggle_sidebar(cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredNext) => self.dired_move(command_count(prefix) as i64, cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredPrevious) => self.dired_move(-(command_count(prefix) as i64), cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredOpen) => self.dired_open_selected(cx),
+            CommandImplementation::Builtin(BuiltinCommand::OpenDefaultDired) => {
+                self.open_default_dired(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ReturnToDocument) => {
+                self.return_to_document(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => {
+                self.toggle_sidebar(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredNext) => {
+                self.dired_move(command_count(prefix) as i64, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredPrevious) => {
+                self.dired_move(-(command_count(prefix) as i64), cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredOpen) => {
+                self.dired_open_selected(cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::DiredUp) => self.dired_up(cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredMark) => self.dired_mark(crate::file_manager::Mark::Selected, cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredBack) => {
+                self.dired_history(false, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredForward) => {
+                self.dired_history(true, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredMark) => {
+                self.dired_mark(crate::file_manager::Mark::Selected, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::DiredUnmark) => self.dired_unmark(cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredUnmarkAll) => self.dired_unmark_all(cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredInvertMarks) => self.dired_invert_marks(cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredFlagDelete) => self.dired_mark(crate::file_manager::Mark::Delete, cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredExecute) => self.dired_prepare_execute(cx),
-            CommandImplementation::Builtin(BuiltinCommand::DiredHelp) => self.show_dired_shortcuts(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredUnmarkAll) => {
+                self.dired_unmark_all(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredInvertMarks) => {
+                self.dired_invert_marks(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredFlagDelete) => {
+                self.dired_mark(crate::file_manager::Mark::Delete, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredExecute) => {
+                self.dired_prepare_execute(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredHelp) => {
+                self.show_dired_shortcuts(cx)
+            }
         }
     }
 
@@ -790,7 +865,11 @@ impl PreviewApp {
     fn install_route_keymap(&mut self, dired: bool) {
         let contexts = built_in_contexts();
         let generation = self.keyboard.generation().wrapping_add(1);
-        let bindings = if dired { dired_bindings() } else { preview_bindings() };
+        let bindings = if dired {
+            dired_bindings()
+        } else {
+            preview_bindings()
+        };
         let route_context = if dired { "dired" } else { "preview" };
         let Ok(configuration) = compile_input_profile(
             generation,
@@ -799,8 +878,12 @@ impl PreviewApp {
             &contexts,
             &["workspace", route_context],
             &["prompt"],
-        ) else { return; };
-        self.key_context = contexts.set(["workspace", route_context]).expect("registered route contexts");
+        ) else {
+            return;
+        };
+        self.key_context = contexts
+            .set(["workspace", route_context])
+            .expect("registered route contexts");
         self.keyboard.replace_configuration(configuration);
     }
 
@@ -816,14 +899,17 @@ impl PreviewApp {
                 if this.which_key_request != request || this.keyboard.status().is_none() {
                     return;
                 }
-                let items = this.keyboard.which_key_candidates()
+                let items = this
+                    .keyboard
+                    .which_key_candidates()
                     .into_iter()
                     .take(24)
                     .map(|candidate| {
                         let title: Arc<str> = if candidate.disabled {
                             Arc::from("Disabled")
                         } else if let Some(command) = candidate.command {
-                            this.commands.descriptor(command)
+                            this.commands
+                                .descriptor(command)
                                 .map(|descriptor| descriptor.title.clone())
                                 .unwrap_or_else(|| Arc::from("Unknown command"))
                         } else if candidate.is_prefix {
@@ -873,7 +959,11 @@ impl PreviewApp {
                         this.visible_rows = if document.format == DocumentFormat::Markdown {
                             Arc::new((0..document.rows.len()).collect())
                         } else {
-                            Arc::new(visible_row_indices(&document.rows, &document.blocks, &this.folded))
+                            Arc::new(visible_row_indices(
+                                &document.rows,
+                                &document.blocks,
+                                &this.folded,
+                            ))
                         };
                         this.list_state.reset(this.visible_rows.len());
                         this.last_ready = Some((generation, document.clone()));
@@ -914,11 +1004,17 @@ impl PreviewApp {
         let request = self.file_watch_request;
         if let Ok(watch) = crate::file_watcher::FileWatch::new(path.clone()) {
             self.file_watch_task = Some(cx.spawn(async move |this, cx| {
-                if !watch.changed().await { return; }
-                cx.background_executor().timer(Duration::from_millis(100)).await;
+                if !watch.changed().await {
+                    return;
+                }
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
                 watch.drain();
                 let _ = this.update(cx, |this, cx| {
-                    if this.file_watch_request == request { this.open(path, cx); }
+                    if this.file_watch_request == request {
+                        this.open(path, cx);
+                    }
                 });
             }));
             return;
@@ -950,10 +1046,7 @@ impl PreviewApp {
             PreviewLoadState::Loading { path } => {
                 centered_message("OPENING DOCUMENT", &path.display().to_string())
             }
-            PreviewLoadState::Failed {
-                path,
-                message,
-            } => {
+            PreviewLoadState::Failed { path, message } => {
                 let error = format!("{}: {message}", path.display());
                 if let Some((_, document)) = &self.last_ready {
                     div()
@@ -971,7 +1064,9 @@ impl PreviewApp {
                                 .border_color(rgb(0xf2c8c2))
                                 .text_size(px(13.0))
                                 .text_color(rgb(0xa12b1f))
-                                .child(format!("Could not open document. Showing the previous file. {error}")),
+                                .child(format!(
+                                    "Could not open document. Showing the previous file. {error}"
+                                )),
                         )
                         .child(render_document(
                             document.clone(),
@@ -984,20 +1079,20 @@ impl PreviewApp {
                     centered_message("COULD NOT OPEN DOCUMENT", &error)
                 }
             }
-            PreviewLoadState::Ready { document, .. } => {
-                render_document(
-                    document.clone(),
-                    self.list_state.clone(),
-                    self.visible_rows.clone(),
-                    self.folded.clone(),
-                    entity,
-                )
-            }
+            PreviewLoadState::Ready { document, .. } => render_document(
+                document.clone(),
+                self.list_state.clone(),
+                self.visible_rows.clone(),
+                self.folded.clone(),
+                entity,
+            ),
         }
     }
 
     fn toggle_fold(&mut self, block_id: BlockId, document: &Arc<PreviewDocument>) {
-        if document.format == DocumentFormat::Markdown { return; }
+        if document.format == DocumentFormat::Markdown {
+            return;
+        }
         if !matches!(
             document.blocks.nodes()[block_id as usize].kind,
             BlockKind::Heading { .. }
@@ -1022,7 +1117,14 @@ impl PreviewApp {
         if self.content_route == ContentRoute::FileManager
             && let Some(session) = self.dired.as_ref()
         {
-            return format!("{} - Files", session.directory().file_name().unwrap_or_default().to_string_lossy());
+            return format!(
+                "{} - Files",
+                session
+                    .directory()
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_string_lossy()
+            );
         }
         let path = match &self.state {
             PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
@@ -1128,16 +1230,50 @@ fn accept_generation(current: u64, completed: u64) -> bool {
     current == completed
 }
 
-
 impl Render for PreviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::scope!("PreviewApp::render");
-        let focus_handle = self.focus_handle.get_or_insert_with(|| {
-            let handle = cx.focus_handle();
-            window.focus(&handle);
-            handle
-        }).clone();
+        let focus_handle = self
+            .focus_handle
+            .get_or_insert_with(|| {
+                let handle = cx.focus_handle();
+                window.focus(&handle);
+                handle
+            })
+            .clone();
         window.set_window_title(&self.window_title());
+        if (self.dired_pending_presentation.is_some()
+            || self.sidebar_pending_presentation.is_some())
+            && !self.dired_presentation_scheduled
+        {
+            self.dired_presentation_scheduled = true;
+            cx.on_next_frame(window, |this, _, cx| {
+                this.dired_presentation_scheduled = false;
+                if let Some((transaction, view_revision, rank, offset)) =
+                    this.dired_pending_presentation.take()
+                    && this.dired.as_ref().is_some_and(|session| {
+                        session.presentation_is_current(transaction, view_revision)
+                    })
+                {
+                    this.dired_list_state.scroll_to(ListOffset {
+                        item_ix: rank,
+                        offset_in_item: px(offset),
+                    });
+                }
+                if let Some((transaction, view_revision, rank, offset)) =
+                    this.sidebar_pending_presentation.take()
+                    && this.dired.as_ref().is_some_and(|session| {
+                        session.presentation_is_current(transaction, view_revision)
+                    })
+                {
+                    this.sidebar_list_state.scroll_to(ListOffset {
+                        item_ix: rank,
+                        offset_in_item: px(offset),
+                    });
+                }
+                cx.notify();
+            });
+        }
         if self.scroll_benchmark.is_some() {
             window.request_animation_frame();
         }
@@ -1202,21 +1338,28 @@ impl Render for PreviewApp {
                     which_key_window(which_key_items.clone(), command_window_width)
                 })
             })
-            .when_some(if which_key_items.is_empty() { key_status } else { None }, |view, status| {
-                view.child(
-                    div()
-                        .absolute()
-                        .left(px(108.0))
-                        .bottom(px(10.0))
-                        .px_2()
-                        .py_1()
-                        .rounded_sm()
-                        .bg(rgb(current_theme().background))
-                        .text_color(rgb(current_theme().foreground))
-                        .text_size(px(12.0))
-                        .child(status.to_string()),
-                )
-            })
+            .when_some(
+                if which_key_items.is_empty() {
+                    key_status
+                } else {
+                    None
+                },
+                |view, status| {
+                    view.child(
+                        div()
+                            .absolute()
+                            .left(px(108.0))
+                            .bottom(px(10.0))
+                            .px_2()
+                            .py_1()
+                            .rounded_sm()
+                            .bg(rgb(current_theme().background))
+                            .text_color(rgb(current_theme().foreground))
+                            .text_size(px(12.0))
+                            .child(status.to_string()),
+                    )
+                },
+            )
     }
 }
 
@@ -1228,16 +1371,25 @@ fn dired_help_window(items: Arc<Vec<(Arc<str>, Arc<str>)>>, available_width: f32
         max_columns: columns,
         items: keys
             .iter()
-            .filter_map(|key| items.iter().find(|(candidate, _)| candidate.as_ref() == *key).cloned())
+            .filter_map(|key| {
+                items
+                    .iter()
+                    .find(|(candidate, _)| candidate.as_ref() == *key)
+                    .cloned()
+            })
             .collect(),
     };
     CommandWindow {
         title: Arc::from("Dired Commands"),
         close: Some((Arc::from("C-g"), Arc::from("Close"))),
         groups: vec![
-            take("NAVIGATION", &["n / j", "p / k", "^", "g", "q"], 3),
+            take(
+                "NAVIGATION",
+                &["n / j", "p / k", "^ / h", "H", "L", "g", "q"],
+                3,
+            ),
             take("MARKS", &["m", "u", "U", "t", "d"], 3),
-            take("FILES", &["RET", "x"], 2),
+            take("FILES", &["RET / l", "x"], 2),
             take("GLOBAL", &["C-x d", "C-x C-d"], 2),
         ],
     }
@@ -1297,52 +1449,176 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
         })
         .expect("valid built-in reload command");
     for (name, title, command, argument_spec) in [
-        (QUIT_APPLICATION_COMMAND, "Quit", BuiltinCommand::QuitApplication, ArgumentSpec::None),
-        (SCROLL_FORWARD_COMMAND, "Scroll Forward", BuiltinCommand::ScrollForward, ArgumentSpec::Count),
-        (SCROLL_BACKWARD_COMMAND, "Scroll Backward", BuiltinCommand::ScrollBackward, ArgumentSpec::Count),
-        (BEGINNING_COMMAND, "Beginning of Document", BuiltinCommand::BeginningOfDocument, ArgumentSpec::None),
-        (END_COMMAND, "End of Document", BuiltinCommand::EndOfDocument, ArgumentSpec::None),
+        (
+            QUIT_APPLICATION_COMMAND,
+            "Quit",
+            BuiltinCommand::QuitApplication,
+            ArgumentSpec::None,
+        ),
+        (
+            SCROLL_FORWARD_COMMAND,
+            "Scroll Forward",
+            BuiltinCommand::ScrollForward,
+            ArgumentSpec::Count,
+        ),
+        (
+            SCROLL_BACKWARD_COMMAND,
+            "Scroll Backward",
+            BuiltinCommand::ScrollBackward,
+            ArgumentSpec::Count,
+        ),
+        (
+            BEGINNING_COMMAND,
+            "Beginning of Document",
+            BuiltinCommand::BeginningOfDocument,
+            ArgumentSpec::None,
+        ),
+        (
+            END_COMMAND,
+            "End of Document",
+            BuiltinCommand::EndOfDocument,
+            ArgumentSpec::None,
+        ),
     ] {
-        builder.register_builtin(BuiltinCommandSpec {
-            name: name.into(),
-            aliases: &[],
-            title,
-            description: title,
-            command,
-            role: CommandRole::Action,
-            argument_spec,
-            repeat: RepeatPolicy::Repeatable,
-            undo: UndoPolicy::None,
-            availability: Availability::FocusedView,
-            side_effect: SideEffectClass::None,
-            required_capabilities: CapabilitySet::empty(),
-            redaction: RedactionPolicy::None,
-        }).expect("valid built-in preview command");
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec,
+                repeat: RepeatPolicy::Repeatable,
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::None,
+            })
+            .expect("valid built-in preview command");
     }
     for (name, title, command, argument_spec) in [
-        (OPEN_FILE_MANAGER_COMMAND, "Open File Manager", BuiltinCommand::OpenFileManager, ArgumentSpec::None),
-        (OPEN_DEFAULT_DIRED_COMMAND, "Open Dired", BuiltinCommand::OpenDefaultDired, ArgumentSpec::None),
-        (RETURN_DOCUMENT_COMMAND, "Return to Document", BuiltinCommand::ReturnToDocument, ArgumentSpec::None),
-        (TOGGLE_SIDEBAR_COMMAND, "Toggle Sidebar", BuiltinCommand::ToggleSidebar, ArgumentSpec::None),
-        (DIRED_NEXT_COMMAND, "Next Line", BuiltinCommand::DiredNext, ArgumentSpec::Count),
-        (DIRED_PREVIOUS_COMMAND, "Previous Line", BuiltinCommand::DiredPrevious, ArgumentSpec::Count),
-        (DIRED_OPEN_COMMAND, "Open", BuiltinCommand::DiredOpen, ArgumentSpec::None),
-        (DIRED_UP_COMMAND, "Up Directory", BuiltinCommand::DiredUp, ArgumentSpec::None),
-        (DIRED_MARK_COMMAND, "Mark", BuiltinCommand::DiredMark, ArgumentSpec::None),
-        (DIRED_UNMARK_COMMAND, "Unmark", BuiltinCommand::DiredUnmark, ArgumentSpec::None),
-        (DIRED_UNMARK_ALL_COMMAND, "Unmark All", BuiltinCommand::DiredUnmarkAll, ArgumentSpec::None),
-        (DIRED_INVERT_COMMAND, "Invert Marks", BuiltinCommand::DiredInvertMarks, ArgumentSpec::None),
-        (DIRED_DELETE_COMMAND, "Flag Delete", BuiltinCommand::DiredFlagDelete, ArgumentSpec::None),
-        (DIRED_EXECUTE_COMMAND, "Execute", BuiltinCommand::DiredExecute, ArgumentSpec::None),
-        (DIRED_HELP_COMMAND, "Dired Help", BuiltinCommand::DiredHelp, ArgumentSpec::None),
+        (
+            OPEN_FILE_MANAGER_COMMAND,
+            "Open File Manager",
+            BuiltinCommand::OpenFileManager,
+            ArgumentSpec::None,
+        ),
+        (
+            OPEN_DEFAULT_DIRED_COMMAND,
+            "Open Dired",
+            BuiltinCommand::OpenDefaultDired,
+            ArgumentSpec::None,
+        ),
+        (
+            RETURN_DOCUMENT_COMMAND,
+            "Return to Document",
+            BuiltinCommand::ReturnToDocument,
+            ArgumentSpec::None,
+        ),
+        (
+            TOGGLE_SIDEBAR_COMMAND,
+            "Toggle Sidebar",
+            BuiltinCommand::ToggleSidebar,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_NEXT_COMMAND,
+            "Next Line",
+            BuiltinCommand::DiredNext,
+            ArgumentSpec::Count,
+        ),
+        (
+            DIRED_PREVIOUS_COMMAND,
+            "Previous Line",
+            BuiltinCommand::DiredPrevious,
+            ArgumentSpec::Count,
+        ),
+        (
+            DIRED_OPEN_COMMAND,
+            "Open",
+            BuiltinCommand::DiredOpen,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_UP_COMMAND,
+            "Up Directory",
+            BuiltinCommand::DiredUp,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_BACK_COMMAND,
+            "History Back",
+            BuiltinCommand::DiredBack,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_FORWARD_COMMAND,
+            "History Forward",
+            BuiltinCommand::DiredForward,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_MARK_COMMAND,
+            "Mark",
+            BuiltinCommand::DiredMark,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_UNMARK_COMMAND,
+            "Unmark",
+            BuiltinCommand::DiredUnmark,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_UNMARK_ALL_COMMAND,
+            "Unmark All",
+            BuiltinCommand::DiredUnmarkAll,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_INVERT_COMMAND,
+            "Invert Marks",
+            BuiltinCommand::DiredInvertMarks,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_DELETE_COMMAND,
+            "Flag Delete",
+            BuiltinCommand::DiredFlagDelete,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_EXECUTE_COMMAND,
+            "Execute",
+            BuiltinCommand::DiredExecute,
+            ArgumentSpec::None,
+        ),
+        (
+            DIRED_HELP_COMMAND,
+            "Dired Help",
+            BuiltinCommand::DiredHelp,
+            ArgumentSpec::None,
+        ),
     ] {
-        builder.register_builtin(BuiltinCommandSpec {
-            name: name.into(), aliases: &[], title, description: title, command,
-            role: CommandRole::Action, argument_spec, repeat: RepeatPolicy::Repeatable,
-            undo: UndoPolicy::None, availability: Availability::FocusedView,
-            side_effect: SideEffectClass::None, required_capabilities: CapabilitySet::empty(),
-            redaction: RedactionPolicy::None,
-        }).expect("valid built-in file manager command");
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec,
+                repeat: RepeatPolicy::Repeatable,
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::None,
+            })
+            .expect("valid built-in file manager command");
     }
     let commands = Arc::new(builder.build());
     let contexts = built_in_contexts();
@@ -1356,7 +1632,8 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
         &contexts,
         &["workspace", "preview"],
         &["prompt"],
-    ).expect("built-in input profile is valid");
+    )
+    .expect("built-in input profile is valid");
     let keyboard = KeyboardRouter::new(
         configuration.generation,
         configuration.interner,
@@ -1368,55 +1645,168 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
 
 fn built_in_contexts() -> crate::input::ContextRegistry {
     let mut builder = ContextRegistryBuilder::default();
-    for name in ["workspace", "preview", "prompt", "sidebar", "dired", "editor"] {
-        builder.register(name).expect("valid unique built-in context");
+    for name in [
+        "workspace",
+        "preview",
+        "prompt",
+        "sidebar",
+        "dired",
+        "editor",
+    ] {
+        builder
+            .register(name)
+            .expect("valid unique built-in context");
     }
     builder.build()
 }
 
 fn preview_bindings() -> Vec<BindingSpec<'static>> {
     vec![
-        BindingSpec { keys: "C-x C-f", behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND) },
-        BindingSpec { keys: "C-x C-r", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
-        BindingSpec { keys: "g", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
-        BindingSpec { keys: "q", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
-        BindingSpec { keys: "C-x C-c", behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND) },
-        BindingSpec { keys: "SPC", behavior: BindingBehavior::Command(SCROLL_FORWARD_COMMAND) },
-        BindingSpec { keys: "backspace", behavior: BindingBehavior::Command(SCROLL_BACKWARD_COMMAND) },
-        BindingSpec { keys: "M-<", behavior: BindingBehavior::Command(BEGINNING_COMMAND) },
-        BindingSpec { keys: "M->", behavior: BindingBehavior::Command(END_COMMAND) },
-        BindingSpec { keys: "C-x d", behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND) },
-        BindingSpec { keys: "C-x C-d", behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND) },
+        BindingSpec {
+            keys: "C-x C-f",
+            behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-r",
+            behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "g",
+            behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "q",
+            behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-c",
+            behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND),
+        },
+        BindingSpec {
+            keys: "SPC",
+            behavior: BindingBehavior::Command(SCROLL_FORWARD_COMMAND),
+        },
+        BindingSpec {
+            keys: "backspace",
+            behavior: BindingBehavior::Command(SCROLL_BACKWARD_COMMAND),
+        },
+        BindingSpec {
+            keys: "M-<",
+            behavior: BindingBehavior::Command(BEGINNING_COMMAND),
+        },
+        BindingSpec {
+            keys: "M->",
+            behavior: BindingBehavior::Command(END_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x d",
+            behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-d",
+            behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND),
+        },
     ]
 }
 
 fn dired_bindings() -> Vec<BindingSpec<'static>> {
     vec![
-        BindingSpec { keys: "n", behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND) },
-        BindingSpec { keys: "j", behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND) },
-        BindingSpec { keys: "p", behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND) },
-        BindingSpec { keys: "k", behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND) },
-        BindingSpec { keys: "RET", behavior: BindingBehavior::Command(DIRED_OPEN_COMMAND) },
-        BindingSpec { keys: "S-6", behavior: BindingBehavior::Command(DIRED_UP_COMMAND) },
-        BindingSpec { keys: "g", behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND) },
-        BindingSpec { keys: "m", behavior: BindingBehavior::Command(DIRED_MARK_COMMAND) },
-        BindingSpec { keys: "u", behavior: BindingBehavior::Command(DIRED_UNMARK_COMMAND) },
-        BindingSpec { keys: "S-u", behavior: BindingBehavior::Command(DIRED_UNMARK_ALL_COMMAND) },
-        BindingSpec { keys: "t", behavior: BindingBehavior::Command(DIRED_INVERT_COMMAND) },
-        BindingSpec { keys: "d", behavior: BindingBehavior::Command(DIRED_DELETE_COMMAND) },
-        BindingSpec { keys: "x", behavior: BindingBehavior::Command(DIRED_EXECUTE_COMMAND) },
-        BindingSpec { keys: "q", behavior: BindingBehavior::Command(RETURN_DOCUMENT_COMMAND) },
-        BindingSpec { keys: "S-/", behavior: BindingBehavior::Command(DIRED_HELP_COMMAND) },
-        BindingSpec { keys: "C-x d", behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND) },
-        BindingSpec { keys: "C-x C-d", behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND) },
+        BindingSpec {
+            keys: "n",
+            behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND),
+        },
+        BindingSpec {
+            keys: "j",
+            behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND),
+        },
+        BindingSpec {
+            keys: "p",
+            behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND),
+        },
+        BindingSpec {
+            keys: "k",
+            behavior: BindingBehavior::Command(DIRED_PREVIOUS_COMMAND),
+        },
+        BindingSpec {
+            keys: "RET",
+            behavior: BindingBehavior::Command(DIRED_OPEN_COMMAND),
+        },
+        BindingSpec {
+            keys: "l",
+            behavior: BindingBehavior::Command(DIRED_OPEN_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-6",
+            behavior: BindingBehavior::Command(DIRED_UP_COMMAND),
+        },
+        BindingSpec {
+            keys: "h",
+            behavior: BindingBehavior::Command(DIRED_UP_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-h",
+            behavior: BindingBehavior::Command(DIRED_BACK_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-l",
+            behavior: BindingBehavior::Command(DIRED_FORWARD_COMMAND),
+        },
+        BindingSpec {
+            keys: "g",
+            behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "m",
+            behavior: BindingBehavior::Command(DIRED_MARK_COMMAND),
+        },
+        BindingSpec {
+            keys: "u",
+            behavior: BindingBehavior::Command(DIRED_UNMARK_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-u",
+            behavior: BindingBehavior::Command(DIRED_UNMARK_ALL_COMMAND),
+        },
+        BindingSpec {
+            keys: "t",
+            behavior: BindingBehavior::Command(DIRED_INVERT_COMMAND),
+        },
+        BindingSpec {
+            keys: "d",
+            behavior: BindingBehavior::Command(DIRED_DELETE_COMMAND),
+        },
+        BindingSpec {
+            keys: "x",
+            behavior: BindingBehavior::Command(DIRED_EXECUTE_COMMAND),
+        },
+        BindingSpec {
+            keys: "q",
+            behavior: BindingBehavior::Command(RETURN_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-/",
+            behavior: BindingBehavior::Command(DIRED_HELP_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x d",
+            behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-d",
+            behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND),
+        },
     ]
 }
 
 fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, Arc<str>)> {
     let mut items: Vec<(crate::command::CommandKey, Vec<&'static str>)> = Vec::new();
     for binding in dired_bindings() {
-        let BindingBehavior::Command(name) = binding.behavior else { continue };
-        let Some(command) = commands.key(name) else { continue };
+        let BindingBehavior::Command(name) = binding.behavior else {
+            continue;
+        };
+        let Some(command) = commands.key(name) else {
+            continue;
+        };
         if let Some((_, keys)) = items.iter_mut().find(|(key, _)| *key == command) {
             keys.push(binding.keys);
         } else {
@@ -1428,7 +1818,11 @@ fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, Arc<str>)> 
         .into_iter()
         .filter_map(|(key, keys)| {
             let descriptor = commands.descriptor(key)?;
-            let keys = keys.into_iter().map(display_dired_key).collect::<Vec<_>>().join(" / ");
+            let keys = keys
+                .into_iter()
+                .map(display_dired_key)
+                .collect::<Vec<_>>()
+                .join(" / ");
             let title = if descriptor.name.as_str() == RELOAD_DOCUMENT_COMMAND {
                 Arc::from("Refresh Directory")
             } else {
@@ -1446,6 +1840,8 @@ fn display_dired_key(key: &str) -> &str {
         "S-6" => "^",
         "S-/" => "?",
         "S-u" => "U",
+        "S-h" => "H",
+        "S-l" => "L",
         key => key,
     }
 }
@@ -1506,7 +1902,12 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
     let rope = rope_started.elapsed();
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let parse_started = Instant::now();
-    let format = match path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase).as_deref() {
+    let format = match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("md" | "markdown") => DocumentFormat::Markdown,
         _ => DocumentFormat::Org,
     };
@@ -1518,12 +1919,24 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
         }
         DocumentFormat::Markdown => {
             let (markdown_blocks, rows) = markdown::parse_markdown(text.as_ref());
-            (Arc::new(BlockArena::default()), Arc::new(markdown_blocks), Arc::new(rows))
+            (
+                Arc::new(BlockArena::default()),
+                Arc::new(markdown_blocks),
+                Arc::new(rows),
+            )
         }
     };
     let parse = parse_started.elapsed();
-    let tables = if format == DocumentFormat::Org { Arc::new(build_table_styles(text.as_ref(), &blocks)) } else { Arc::new(HashMap::new()) };
-    let image_sizes = if format == DocumentFormat::Org { Arc::new(build_image_sizes(&path, &blocks)) } else { Arc::new(HashMap::new()) };
+    let tables = if format == DocumentFormat::Org {
+        Arc::new(build_table_styles(text.as_ref(), &blocks))
+    } else {
+        Arc::new(HashMap::new())
+    };
+    let image_sizes = if format == DocumentFormat::Org {
+        Arc::new(build_image_sizes(&path, &blocks))
+    } else {
+        Arc::new(HashMap::new())
+    };
 
     Ok(PreviewDocument {
         path,
@@ -1615,10 +2028,16 @@ fn render_document(
                 let row = document.rows[actual_index];
                 let (is_heading, is_table_row) = if document.format == DocumentFormat::Markdown {
                     let kind = &document.markdown_blocks[row.block_id as usize].kind;
-                    (matches!(kind, markdown::MarkdownKind::Heading { .. }), matches!(kind, markdown::MarkdownKind::TableRow))
+                    (
+                        matches!(kind, markdown::MarkdownKind::Heading { .. }),
+                        matches!(kind, markdown::MarkdownKind::TableRow),
+                    )
                 } else {
                     let kind = &document.blocks.nodes()[row.block_id as usize].kind;
-                    (matches!(kind, BlockKind::Heading { .. }), matches!(kind, BlockKind::TableRow))
+                    (
+                        matches!(kind, BlockKind::Heading { .. }),
+                        matches!(kind, BlockKind::TableRow),
+                    )
                 };
                 let is_folded = is_heading && folded.contains(&row.block_id);
                 let document_for_click = document.clone();
@@ -1670,25 +2089,29 @@ fn render_document(
                             .when(is_table_row, |element| {
                                 element.bg(rgb(current_theme().background_alt))
                             })
-                            .child(div().w_full().child(if document.format == DocumentFormat::Markdown {
-                                render_markdown_block(
-                                    &document,
-                                    row,
-                                    &document.markdown_blocks[row.block_id as usize],
-                                    (f32::from(window.viewport_size().width) - 110.0).max(120.0),
-                                    cx,
-                                )
-                            } else {
-                                render_block(
-                                    &document,
-                                    row.block_id,
-                                    row,
-                                    &document.blocks.nodes()[row.block_id as usize],
-                                    is_folded,
-                                    (f32::from(window.viewport_size().width) - 110.0).max(120.0),
-                                    cx,
-                                )
-                            })),
+                            .child(div().w_full().child(
+                                if document.format == DocumentFormat::Markdown {
+                                    render_markdown_block(
+                                        &document,
+                                        row,
+                                        &document.markdown_blocks[row.block_id as usize],
+                                        (f32::from(window.viewport_size().width) - 110.0)
+                                            .max(120.0),
+                                        cx,
+                                    )
+                                } else {
+                                    render_block(
+                                        &document,
+                                        row.block_id,
+                                        row,
+                                        &document.blocks.nodes()[row.block_id as usize],
+                                        is_folded,
+                                        (f32::from(window.viewport_size().width) - 110.0)
+                                            .max(120.0),
+                                        cx,
+                                    )
+                                },
+                            )),
                     )
                     .into_any()
             })
@@ -1833,11 +2256,8 @@ fn render_block(
             let is_boundary = marker.starts_with("#+begin_") || marker.starts_with("#+end_");
             let content = if is_boundary {
                 StyledText::new(text.clone())
-            } else if let Some(spans) = document.code_highlights(
-                block_id,
-                language.as_deref(),
-                cx,
-            ) {
+            } else if let Some(spans) = document.code_highlights(block_id, language.as_deref(), cx)
+            {
                 styled_code_row(
                     text.clone(),
                     row.content.start.0.saturating_sub(block.source.start.0) as usize,
@@ -1946,51 +2366,115 @@ fn render_markdown_block(
 ) -> gpui::Div {
     use markdown::MarkdownKind;
     let theme = current_theme();
-    let text = document.text.copy_range(row.content).trim_end_matches(['\r', '\n']).to_owned();
+    let text = document
+        .text
+        .copy_range(row.content)
+        .trim_end_matches(['\r', '\n'])
+        .to_owned();
     match &block.kind {
         MarkdownKind::Blank => div().h(px(24.0)),
         MarkdownKind::Heading { level } => {
             let index = (*level as usize).saturating_sub(1).min(3);
-            let size = match level { 1 => 22.0, 2 => 18.0, 3 => 15.0, _ => 14.0 };
+            let size = match level {
+                1 => 22.0,
+                2 => 18.0,
+                3 => 15.0,
+                _ => 14.0,
+            };
             div()
                 .flex()
                 .items_center()
                 .gap_1()
                 .text_size(px(size))
                 .line_height(px(24.0))
-                .font_weight(if *level <= 2 { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
+                .font_weight(if *level <= 2 {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::MEDIUM
+                })
                 .text_color(rgb(theme.heading[index]))
-                .child(div().flex_none().text_size(px(13.0)).child(format!("{} ", theme.heading_bullets[index])))
+                .child(
+                    div()
+                        .flex_none()
+                        .text_size(px(13.0))
+                        .child(format!("{} ", theme.heading_bullets[index])),
+                )
                 .child(styled_inline(document.inline(row.block_id, &text, cx)))
         }
-        MarkdownKind::Paragraph => div().text_size(px(14.0)).line_height(px(22.0)).child(styled_inline(document.inline(row.block_id, &text, cx))),
-        MarkdownKind::ListItem => div().pl_1().text_size(px(14.0)).line_height(px(22.0)).child(styled_inline(document.inline(row.block_id, &text, cx))),
-        MarkdownKind::Quote => div().pl_4().pr_2().py_1().border_l_2().border_color(rgb(theme.heading[1])).text_color(rgb(theme.quote)).text_size(px(15.0)).line_height(px(23.0)).child(styled_inline(document.inline(row.block_id, &text, cx))),
+        MarkdownKind::Paragraph => div()
+            .text_size(px(14.0))
+            .line_height(px(22.0))
+            .child(styled_inline(document.inline(row.block_id, &text, cx))),
+        MarkdownKind::ListItem => div()
+            .pl_1()
+            .text_size(px(14.0))
+            .line_height(px(22.0))
+            .child(styled_inline(document.inline(row.block_id, &text, cx))),
+        MarkdownKind::Quote => div()
+            .pl_4()
+            .pr_2()
+            .py_1()
+            .border_l_2()
+            .border_color(rgb(theme.heading[1]))
+            .text_color(rgb(theme.quote))
+            .text_size(px(15.0))
+            .line_height(px(23.0))
+            .child(styled_inline(document.inline(row.block_id, &text, cx))),
         MarkdownKind::Code { language, boundary } => {
             let content = if *boundary {
                 StyledText::new(text.clone())
-            } else if let Some(spans) = document.code_highlights(row.block_id, language.as_deref(), cx) {
-                styled_code_row(text.clone(), row.content.start.0.saturating_sub(block.source.start.0) as usize, &spans)
-            } else { StyledText::new(text.clone()) };
-            div().min_h(px(24.0)).px_4().py(px(2.0))
-                .bg(rgb(if *boundary { theme.code_boundary_background } else { theme.code_background }))
-                .text_color(rgb(if *boundary { theme.code_boundary } else { theme.code_foreground }))
-                .font_family("Menlo").text_size(px(13.0)).line_height(px(19.0)).child(content)
+            } else if let Some(spans) =
+                document.code_highlights(row.block_id, language.as_deref(), cx)
+            {
+                styled_code_row(
+                    text.clone(),
+                    row.content.start.0.saturating_sub(block.source.start.0) as usize,
+                    &spans,
+                )
+            } else {
+                StyledText::new(text.clone())
+            };
+            div()
+                .min_h(px(24.0))
+                .px_4()
+                .py(px(2.0))
+                .bg(rgb(if *boundary {
+                    theme.code_boundary_background
+                } else {
+                    theme.code_background
+                }))
+                .text_color(rgb(if *boundary {
+                    theme.code_boundary
+                } else {
+                    theme.code_foreground
+                }))
+                .font_family("Menlo")
+                .text_size(px(13.0))
+                .line_height(px(19.0))
+                .child(content)
         }
-        MarkdownKind::TableRow => div().px_2().py_1().bg(rgb(theme.background_alt)).font_family("Menlo").text_size(px(13.0)).text_color(rgb(theme.code_foreground)).child(text),
+        MarkdownKind::TableRow => div()
+            .px_2()
+            .py_1()
+            .bg(rgb(theme.background_alt))
+            .font_family("Menlo")
+            .text_size(px(13.0))
+            .text_color(rgb(theme.code_foreground))
+            .child(text),
         MarkdownKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
         MarkdownKind::Image { path } => {
             let source = resolve_image_path(&document.path, path);
-            div().w_full().py_2().flex().items_start().child(img(source).max_w(px(available_width.min(960.0))))
+            div()
+                .w_full()
+                .py_2()
+                .flex()
+                .items_start()
+                .child(img(source).max_w(px(available_width.min(960.0))))
         }
     }
 }
 
-fn styled_code_row(
-    text: String,
-    row_start: usize,
-    spans: &[CodeHighlightSpan],
-) -> StyledText {
+fn styled_code_row(text: String, row_start: usize, spans: &[CodeHighlightSpan]) -> StyledText {
     let row_end = row_start + text.len();
     let highlights = spans.iter().filter_map(|span| {
         let start = span.start.max(row_start);
@@ -2120,10 +2604,13 @@ mod tests {
             .map(|(keys, title)| (keys.as_ref(), title.as_ref()))
             .collect::<Vec<_>>();
 
-        assert_eq!(items.len(), 16);
+        assert_eq!(items.len(), 18);
         assert!(labels.contains(&("n / j", "Next Line")));
         assert!(labels.contains(&("p / k", "Previous Line")));
-        assert!(labels.contains(&("^", "Up Directory")));
+        assert!(labels.contains(&("^ / h", "Up Directory")));
+        assert!(labels.contains(&("RET / l", "Open")));
+        assert!(labels.contains(&("H", "History Back")));
+        assert!(labels.contains(&("L", "History Forward")));
         assert!(labels.contains(&("g", "Refresh Directory")));
         assert!(labels.contains(&("C-x d", "Open Dired")));
         assert!(labels.contains(&("C-x C-d", "Toggle Sidebar")));
@@ -2133,7 +2620,8 @@ mod tests {
 
     #[test]
     fn loads_markdown_without_sending_it_through_the_org_parser() {
-        let path = std::env::temp_dir().join(format!("org-studio-markdown-{}.md", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("org-studio-markdown-{}.md", std::process::id()));
         std::fs::write(&path, "# Markdown\n\n- **native** preview\n").unwrap();
         let document = super::load_document(path.clone()).unwrap();
         let _ = std::fs::remove_file(path);
@@ -2143,5 +2631,4 @@ mod tests {
         assert!(!document.markdown_blocks.is_empty());
         assert_eq!(document.rows.len(), 3);
     }
-
 }

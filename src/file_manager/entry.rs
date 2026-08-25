@@ -8,6 +8,9 @@ use std::{
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EntryId(pub u64);
 
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FileResourceId(pub u64);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EntryKind {
     Parent,
@@ -36,6 +39,7 @@ pub struct EntryMetadata {
 #[derive(Clone, Debug)]
 pub struct FileEntry {
     pub id: EntryId,
+    pub resource_id: Option<FileResourceId>,
     pub path: Arc<Path>,
     pub os_name: Arc<OsString>,
     pub display_name: Arc<str>,

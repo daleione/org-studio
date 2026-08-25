@@ -9,9 +9,9 @@ impl CommandName {
         let valid = !name.is_empty()
             && !name.starts_with('.')
             && !name.ends_with('.')
-            && name
-                .bytes()
-                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-'));
+            && name.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'.' | b'-')
+            });
         if valid {
             Ok(Self(name))
         } else {
@@ -67,6 +67,8 @@ pub enum BuiltinCommand {
     DiredPrevious,
     DiredOpen,
     DiredUp,
+    DiredBack,
+    DiredForward,
     DiredMark,
     DiredUnmark,
     DiredUnmarkAll,
@@ -179,9 +181,9 @@ impl PrefixArgument {
         match self {
             Self::None => None,
             Self::Numeric(value) => Some(value),
-            Self::Universal { repeats } => Some(
-                (0..repeats).fold(1_i64, |value, _| value.saturating_mul(4)),
-            ),
+            Self::Universal { repeats } => {
+                Some((0..repeats).fold(1_i64, |value, _| value.saturating_mul(4)))
+            }
         }
     }
 }
@@ -239,7 +241,9 @@ impl CommandRegistry {
     }
 
     pub fn descriptor(&self, key: CommandKey) -> Option<&CommandDescriptor> {
-        self.commands.get(key.index()).map(|command| command.descriptor.as_ref())
+        self.commands
+            .get(key.index())
+            .map(|command| command.descriptor.as_ref())
     }
 
     fn registered(&self, key: CommandKey) -> Option<&RegisteredCommand> {

@@ -8,7 +8,8 @@ use std::{
     sync::Arc,
 };
 
-use super::{EntryId, EntryKind, EntryMetadata, FileEntry};
+use super::{EntryId, EntryKind, EntryMetadata, FileEntry, FileResourceId};
+use crate::navigation::CancellationToken;
 
 pub struct ScanResult {
     pub directory: PathBuf,
@@ -22,6 +23,13 @@ pub struct ScanError {
 }
 
 pub fn scan_directory(directory: PathBuf) -> Result<ScanResult, ScanError> {
+    scan_directory_cancellable(directory, &CancellationToken::new())
+}
+
+pub fn scan_directory_cancellable(
+    directory: PathBuf,
+    cancellation: &CancellationToken,
+) -> Result<ScanResult, ScanError> {
     let read_dir = fs::read_dir(&directory).map_err(|source| ScanError {
         directory: directory.clone(),
         source,
@@ -31,6 +39,12 @@ pub fn scan_directory(directory: PathBuf) -> Result<ScanResult, ScanError> {
         entries.push(parent_entry(parent));
     }
     for item in read_dir {
+        if cancellation.is_cancelled() {
+            return Err(ScanError {
+                directory,
+                source: io::Error::new(io::ErrorKind::Interrupted, "directory scan cancelled"),
+            });
+        }
         let item = item.map_err(|source| ScanError {
             directory: directory.clone(),
             source,
@@ -41,15 +55,23 @@ pub fn scan_directory(directory: PathBuf) -> Result<ScanResult, ScanError> {
         let file_type = metadata.as_ref().map(|metadata| metadata.file_type());
         let kind = classify(&path, file_type);
         let hidden = os_name.to_string_lossy().starts_with('.');
-        let symlink_target = if matches!(kind, EntryKind::Symlink) { fs::read_link(&path).ok() } else { None };
+        let symlink_target = if matches!(kind, EntryKind::Symlink) {
+            fs::read_link(&path).ok()
+        } else {
+            None
+        };
         entries.push(FileEntry {
-            id: stable_id(&path, metadata.as_ref()),
+            id: entry_id(&path),
+            resource_id: resource_id(metadata.as_ref()),
             path: Arc::from(path),
             display_name: Arc::from(os_name.to_string_lossy().as_ref()),
             os_name: Arc::new(os_name),
             kind,
             metadata: EntryMetadata {
-                byte_len: metadata.as_ref().filter(|_| !matches!(kind, EntryKind::Directory)).map(|value| value.len()),
+                byte_len: metadata
+                    .as_ref()
+                    .filter(|_| !matches!(kind, EntryKind::Directory))
+                    .map(|value| value.len()),
                 modified: metadata.as_ref().and_then(|value| value.modified().ok()),
                 hidden,
                 symlink_target,
@@ -61,7 +83,11 @@ pub fn scan_directory(directory: PathBuf) -> Result<ScanResult, ScanError> {
 
 fn parent_entry(parent: &Path) -> FileEntry {
     FileEntry {
-        id: stable_id(parent, None),
+        id: entry_id(parent),
+        resource_id: fs::symlink_metadata(parent)
+            .ok()
+            .as_ref()
+            .and_then(|metadata| resource_id(Some(metadata))),
         path: Arc::from(parent),
         os_name: Arc::new(OsString::from("..")),
         display_name: Arc::from(".."),
@@ -82,7 +108,12 @@ fn classify(path: &Path, file_type: Option<fs::FileType>) -> EntryKind {
     if file_type.is_some_and(|kind| kind.is_dir()) {
         return EntryKind::Directory;
     }
-    match path.extension().and_then(|extension| extension.to_str()).map(str::to_ascii_lowercase).as_deref() {
+    match path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(str::to_ascii_lowercase)
+        .as_deref()
+    {
         Some("org") => EntryKind::OrgFile,
         Some("md" | "markdown") => EntryKind::Markdown,
         Some("png" | "jpg" | "jpeg" | "gif" | "webp") => EntryKind::Image,
@@ -90,14 +121,20 @@ fn classify(path: &Path, file_type: Option<fs::FileType>) -> EntryKind {
     }
 }
 
-fn stable_id(path: &Path, metadata: Option<&fs::Metadata>) -> EntryId {
+fn entry_id(path: &Path) -> EntryId {
     let mut hasher = DefaultHasher::new();
     path.hash(&mut hasher);
+    EntryId(hasher.finish())
+}
+
+fn resource_id(metadata: Option<&fs::Metadata>) -> Option<FileResourceId> {
     #[cfg(unix)]
     if let Some(metadata) = metadata {
+        let mut hasher = DefaultHasher::new();
         use std::os::unix::fs::MetadataExt;
         metadata.dev().hash(&mut hasher);
         metadata.ino().hash(&mut hasher);
+        return Some(FileResourceId(hasher.finish()));
     }
-    EntryId(hasher.finish())
+    None
 }
