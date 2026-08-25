@@ -2,7 +2,9 @@ use std::sync::Arc;
 
 use crate::{
     command::{CommandKey, PrefixArgument},
-    keymap::{ActiveKeymaps, KeyContinuation, KeyStroke, PendingSequence, ResolveOutcome, StrokeInterner},
+    keymap::{
+        ActiveKeymaps, KeyContinuation, KeyStroke, PendingSequence, ResolveOutcome, StrokeInterner,
+    },
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,7 +93,9 @@ impl EmacsGrammar {
         self.prefix
     }
 
-    pub fn keymaps(&self) -> Arc<ActiveKeymaps> { self.pending.keymaps() }
+    pub fn keymaps(&self) -> Arc<ActiveKeymaps> {
+        self.pending.keymaps()
+    }
 
     pub fn continuations(&self) -> Vec<KeyContinuation> {
         self.pending.keymaps().continuations(self.pending.strokes())
@@ -164,9 +168,8 @@ mod tests {
         let mut builder = KeymapBuilder::new();
         builder.bind(&sequence, command).unwrap();
         builder.bind(&meta, command).unwrap();
-        let maps = Arc::new(
-            ActiveKeymaps::new(1, None, vec![], Arc::new(builder.freeze(1))).unwrap(),
-        );
+        let maps =
+            Arc::new(ActiveKeymaps::new(1, None, vec![], Arc::new(builder.freeze(1))).unwrap());
         (EmacsGrammar::new(maps), interner, command)
     }
 
@@ -228,7 +231,10 @@ mod tests {
         grammar.feed(KeyStroke::parse("C-x").unwrap(), &interner);
         assert_eq!(
             grammar.feed(KeyStroke::parse("C-f").unwrap(), &interner),
-            EmacsOutcome::Command { command, prefix: PrefixArgument::Numeric(-3) }
+            EmacsOutcome::Command {
+                command,
+                prefix: PrefixArgument::Numeric(-3)
+            }
         );
     }
 }

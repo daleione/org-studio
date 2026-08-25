@@ -24,10 +24,22 @@ impl KeyStroke {
     ) -> Self {
         let key = key.into();
         let key = match key.as_ref() {
-            "?" => { shift = true; "/" }
-            "^" => { shift = true; "6" }
-            "<" => { shift = true; "," }
-            ">" => { shift = true; "." }
+            "?" => {
+                shift = true;
+                "/"
+            }
+            "^" => {
+                shift = true;
+                "6"
+            }
+            "<" => {
+                shift = true;
+                ","
+            }
+            ">" => {
+                shift = true;
+                "."
+            }
             _ => key.as_ref(),
         };
         let mut modifiers = 0;
@@ -107,10 +119,18 @@ impl KeyStroke {
 
     pub fn notation(&self) -> String {
         let mut notation = String::with_capacity(self.key.len() + 8);
-        if self.control() { notation.push_str("C-"); }
-        if self.meta() { notation.push_str("M-"); }
-        if self.shift() { notation.push_str("S-"); }
-        if self.command() { notation.push_str("s-"); }
+        if self.control() {
+            notation.push_str("C-");
+        }
+        if self.meta() {
+            notation.push_str("M-");
+        }
+        if self.shift() {
+            notation.push_str("S-");
+        }
+        if self.command() {
+            notation.push_str("s-");
+        }
         notation.push_str(match self.key() {
             "enter" => "RET",
             "escape" => "ESC",
@@ -411,7 +431,10 @@ impl CompiledKeymap {
                         TerminalBinding::PassThrough => KeyLookup::PassThrough,
                     }
                 };
-                Some(KeyContinuation { stroke: edge.stroke, lookup })
+                Some(KeyContinuation {
+                    stroke: edge.stroke,
+                    lookup,
+                })
             })
             .collect()
     }
@@ -486,11 +509,7 @@ impl ActiveKeymaps {
         }
     }
 
-    pub fn with_transient(
-        &self,
-        generation: u64,
-        transient: Arc<CompiledKeymap>,
-    ) -> Arc<Self> {
+    pub fn with_transient(&self, generation: u64, transient: Arc<CompiledKeymap>) -> Arc<Self> {
         Arc::new(Self {
             generation,
             transient: Some(transient),
@@ -574,9 +593,13 @@ impl PendingSequence {
         !self.strokes.is_empty()
     }
 
-    pub fn strokes(&self) -> &[StrokeKey] { &self.strokes }
+    pub fn strokes(&self) -> &[StrokeKey] {
+        &self.strokes
+    }
 
-    pub fn keymaps(&self) -> Arc<ActiveKeymaps> { self.keymaps.clone() }
+    pub fn keymaps(&self) -> Arc<ActiveKeymaps> {
+        self.keymaps.clone()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -686,9 +709,8 @@ mod tests {
         let open = sequence(&mut interner, "C-x C-f");
         let mut builder = KeymapBuilder::new();
         builder.bind(&open, key(9)).unwrap();
-        let active = Arc::new(
-            ActiveKeymaps::new(11, None, vec![], Arc::new(builder.freeze(11))).unwrap(),
-        );
+        let active =
+            Arc::new(ActiveKeymaps::new(11, None, vec![], Arc::new(builder.freeze(11))).unwrap());
         let mut pending = PendingSequence::new(active);
         assert_eq!(pending.feed(open[0]), ResolveOutcome::Pending);
         assert_eq!(pending.generation(), 11);

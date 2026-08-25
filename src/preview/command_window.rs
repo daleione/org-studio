@@ -20,7 +20,12 @@ pub(super) struct CommandWindow {
 
 impl CommandWindow {
     pub fn render(mut self, available_width: f32) -> gpui::Div {
-        let total_items = self.groups.iter().map(|group| group.items.len()).sum::<usize>().max(1);
+        let total_items = self
+            .groups
+            .iter()
+            .map(|group| group.items.len())
+            .sum::<usize>()
+            .max(1);
         for group in &mut self.groups {
             let group_width = available_width * group.items.len() as f32 / total_items as f32;
             let minimum_column_width = group

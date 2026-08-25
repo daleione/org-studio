@@ -111,13 +111,22 @@ impl Subscriber for PerfSubscriber {
     fn exit(&self, id: &Id) {
         let elapsed = ENTERED.with(|entered| {
             let mut entered = entered.borrow_mut();
-            let index = entered.iter().rposition(|(entered_id, _)| *entered_id == id.into_u64())?;
+            let index = entered
+                .iter()
+                .rposition(|(entered_id, _)| *entered_id == id.into_u64())?;
             Some(entered.remove(index).1.elapsed())
         });
         let Some(elapsed) = elapsed else {
             return;
         };
-        let Some(name) = self.state.spans.lock().unwrap().get(&id.into_u64()).copied() else {
+        let Some(name) = self
+            .state
+            .spans
+            .lock()
+            .unwrap()
+            .get(&id.into_u64())
+            .copied()
+        else {
             return;
         };
         self.state

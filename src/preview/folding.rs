@@ -17,11 +17,7 @@ pub(super) fn visible_row_indices(
         .collect()
 }
 
-fn has_folded_ancestor(
-    block_id: BlockId,
-    blocks: &BlockArena,
-    folded: &HashSet<BlockId>,
-) -> bool {
+fn has_folded_ancestor(block_id: BlockId, blocks: &BlockArena, folded: &HashSet<BlockId>) -> bool {
     let mut parent = blocks.nodes()[block_id as usize].parent;
     while let Some(block_id) = parent {
         if folded.contains(&block_id) {

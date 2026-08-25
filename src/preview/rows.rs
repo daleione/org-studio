@@ -5,10 +5,7 @@ use crate::{
 
 use super::PreviewRow;
 
-pub(super) fn build_preview_rows(
-    text: &dyn TextSnapshot,
-    blocks: &BlockArena,
-) -> Vec<PreviewRow> {
+pub(super) fn build_preview_rows(text: &dyn TextSnapshot, blocks: &BlockArena) -> Vec<PreviewRow> {
     let mut rows = Vec::with_capacity(blocks.nodes().len());
     for (block_id, block) in blocks.nodes().iter().enumerate() {
         let block_id = block_id as BlockId;

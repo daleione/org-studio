@@ -1,9 +1,16 @@
-use std::{fmt, sync::Arc, time::{Duration, Instant}};
+use std::{
+    fmt,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use crate::{
-    input::{ContextPredicate, ContextSet, EmacsGrammar, EmacsOutcome},
     command::CommandKey,
-    keymap::{KeyLookup, KeyParseError, KeySequence, KeyStroke, KeymapBuildError, KeymapBuilder, StrokeInterner},
+    input::{ContextPredicate, ContextSet, EmacsGrammar, EmacsOutcome},
+    keymap::{
+        KeyLookup, KeyParseError, KeySequence, KeyStroke, KeymapBuildError, KeymapBuilder,
+        StrokeInterner,
+    },
 };
 
 #[derive(Clone, Copy, Debug)]
@@ -16,7 +23,12 @@ pub struct TransientPolicy {
 
 impl Default for TransientPolicy {
     fn default() -> Self {
-        Self { one_key: false, exit_after_command: true, exit_after_undefined: true, timeout: None }
+        Self {
+            one_key: false,
+            exit_after_command: true,
+            exit_after_undefined: true,
+            timeout: None,
+        }
     }
 }
 
@@ -71,19 +83,36 @@ impl KeyboardRouter {
         }
     }
 
-    pub fn generation(&self) -> u64 { self.generation }
-    pub fn status(&self) -> Option<&str> { self.status.as_deref() }
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+    pub fn status(&self) -> Option<&str> {
+        self.status.as_deref()
+    }
+
+    pub fn dismiss_status(&mut self) -> bool {
+        let had_status = self.status.is_some();
+        self.clear_status();
+        had_status
+    }
 
     pub fn which_key_candidates(&self) -> Vec<WhichKeyCandidate> {
-        self.grammar.continuations().into_iter().filter_map(|candidate| {
-            let stroke = self.interner.stroke(candidate.stroke)?;
-            Some(WhichKeyCandidate {
-                key: Arc::from(stroke.notation()),
-                command: match candidate.lookup { KeyLookup::Command(command) => Some(command), _ => None },
-                is_prefix: candidate.lookup == KeyLookup::Prefix,
-                disabled: candidate.lookup == KeyLookup::Disabled,
+        self.grammar
+            .continuations()
+            .into_iter()
+            .filter_map(|candidate| {
+                let stroke = self.interner.stroke(candidate.stroke)?;
+                Some(WhichKeyCandidate {
+                    key: Arc::from(stroke.notation()),
+                    command: match candidate.lookup {
+                        KeyLookup::Command(command) => Some(command),
+                        _ => None,
+                    },
+                    is_prefix: candidate.lookup == KeyLookup::Prefix,
+                    disabled: candidate.lookup == KeyLookup::Disabled,
+                })
             })
-        }).collect()
+            .collect()
     }
 
     pub fn install_transient(
@@ -97,9 +126,19 @@ impl KeyboardRouter {
         let base = self.grammar.keymaps();
         let mut builder = KeymapBuilder::new();
         for (keys, command) in bindings {
-            let sequence = KeySequence::parse(keys).map_err(|source| TransientInstallError::InvalidSequence { keys: (*keys).into(), source })?;
+            let sequence = KeySequence::parse(keys).map_err(|source| {
+                TransientInstallError::InvalidSequence {
+                    keys: (*keys).into(),
+                    source,
+                }
+            })?;
             let sequence = self.interner.intern_sequence(&sequence);
-            builder.bind(&sequence, *command).map_err(|source| TransientInstallError::BindingConflict { keys: (*keys).into(), source })?;
+            builder.bind(&sequence, *command).map_err(|source| {
+                TransientInstallError::BindingConflict {
+                    keys: (*keys).into(),
+                    source,
+                }
+            })?;
         }
         let transient_map = Arc::new(builder.freeze(generation));
         let active = base.with_transient(generation, transient_map);
@@ -119,8 +158,14 @@ impl KeyboardRouter {
     }
 
     pub fn expire_transient(&mut self, now: Instant) -> bool {
-        let expired = self.transient.as_ref().and_then(|value| value.expires_at).is_some_and(|deadline| now >= deadline);
-        if expired { self.clear_transient(); }
+        let expired = self
+            .transient
+            .as_ref()
+            .and_then(|value| value.expires_at)
+            .is_some_and(|deadline| now >= deadline);
+        if expired {
+            self.clear_transient();
+        }
         expired
     }
 
@@ -146,7 +191,9 @@ impl KeyboardRouter {
         let terminal_key = !matches!(outcome, EmacsOutcome::Pending);
         match outcome {
             EmacsOutcome::Pending => {
-                if !self.sequence.is_empty() { self.sequence.push(' '); }
+                if !self.sequence.is_empty() {
+                    self.sequence.push(' ');
+                }
                 self.sequence.push_str(&notation);
                 self.status = Some(self.pending_status());
             }
@@ -165,7 +212,9 @@ impl KeyboardRouter {
                 self.install_pending();
             }
             EmacsOutcome::Undefined if was_capturing || modified => {
-                if !self.sequence.is_empty() { self.sequence.push(' '); }
+                if !self.sequence.is_empty() {
+                    self.sequence.push(' ');
+                }
                 self.sequence.push_str(&notation);
                 self.status = Some(Arc::from(format!("{} is undefined", self.sequence)));
                 self.sequence.clear();
@@ -178,11 +227,15 @@ impl KeyboardRouter {
         }
         let should_clear_transient = self.transient.as_ref().is_some_and(|transient| {
             (transient.policy.one_key && terminal_key)
-                || (transient.policy.exit_after_command && matches!(outcome, EmacsOutcome::Command { .. }))
-                || (transient.policy.exit_after_undefined && matches!(outcome, EmacsOutcome::Undefined | EmacsOutcome::Disabled))
+                || (transient.policy.exit_after_command
+                    && matches!(outcome, EmacsOutcome::Command { .. }))
+                || (transient.policy.exit_after_undefined
+                    && matches!(outcome, EmacsOutcome::Undefined | EmacsOutcome::Disabled))
                 || matches!(outcome, EmacsOutcome::Cancelled)
         });
-        if should_clear_transient { self.clear_transient(); }
+        if should_clear_transient {
+            self.clear_transient();
+        }
         outcome
     }
 
@@ -222,23 +275,31 @@ impl KeyboardRouter {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TransientInstallError {
-    InvalidSequence { keys: Arc<str>, source: KeyParseError },
-    BindingConflict { keys: Arc<str>, source: KeymapBuildError },
+    InvalidSequence {
+        keys: Arc<str>,
+        source: KeyParseError,
+    },
+    BindingConflict {
+        keys: Arc<str>,
+        source: KeymapBuildError,
+    },
 }
 
 impl fmt::Display for TransientInstallError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result { write!(formatter, "{self:?}") }
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{self:?}")
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
     use super::*;
     use crate::{
         command::CommandKey,
         input::ContextRegistryBuilder,
         keymap::{ActiveKeymaps, KeySequence, KeymapBuilder},
     };
+    use std::sync::Arc;
 
     fn configuration(generation: u64) -> (RouterConfiguration, ContextSet) {
         let mut contexts = ContextRegistryBuilder::default();
@@ -253,12 +314,15 @@ mod tests {
         let maps = Arc::new(
             ActiveKeymaps::new(generation, None, vec![], Arc::new(map.freeze(generation))).unwrap(),
         );
-        (RouterConfiguration {
-            generation,
-            interner,
-            grammar: EmacsGrammar::new(maps),
-            enabled_when: predicate,
-        }, preview)
+        (
+            RouterConfiguration {
+                generation,
+                interner,
+                grammar: EmacsGrammar::new(maps),
+                enabled_when: predicate,
+            },
+            preview,
+        )
     }
 
     fn router(configuration: RouterConfiguration) -> KeyboardRouter {
@@ -274,8 +338,14 @@ mod tests {
     fn route_is_disabled_outside_its_compiled_context() {
         let (initial, preview) = configuration(1);
         let mut router = router(initial);
-        assert_eq!(router.route(KeyStroke::parse("C-x").unwrap(), ContextSet::empty()), EmacsOutcome::PassThrough);
-        assert_eq!(router.route(KeyStroke::parse("C-x").unwrap(), preview), EmacsOutcome::Pending);
+        assert_eq!(
+            router.route(KeyStroke::parse("C-x").unwrap(), ContextSet::empty()),
+            EmacsOutcome::PassThrough
+        );
+        assert_eq!(
+            router.route(KeyStroke::parse("C-x").unwrap(), preview),
+            EmacsOutcome::Pending
+        );
     }
 
     #[test]
@@ -305,18 +375,33 @@ mod tests {
         let (configuration, preview) = configuration(1);
         let mut router = router(configuration);
         let command = CommandKey::from_index(1);
-        router.install_transient(
-            2,
-            &[("y", command)],
-            TransientPolicy { one_key: true, ..TransientPolicy::default() },
-            Instant::now(),
-        ).unwrap();
-        assert!(router.which_key_candidates().iter().any(|candidate| candidate.key.as_ref() == "y"));
+        router
+            .install_transient(
+                2,
+                &[("y", command)],
+                TransientPolicy {
+                    one_key: true,
+                    ..TransientPolicy::default()
+                },
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(
+            router
+                .which_key_candidates()
+                .iter()
+                .any(|candidate| candidate.key.as_ref() == "y")
+        );
         assert!(matches!(
             router.route(KeyStroke::parse("y").unwrap(), preview),
             EmacsOutcome::Command { .. }
         ));
-        assert!(!router.which_key_candidates().iter().any(|candidate| candidate.key.as_ref() == "y"));
+        assert!(
+            !router
+                .which_key_candidates()
+                .iter()
+                .any(|candidate| candidate.key.as_ref() == "y")
+        );
     }
 
     #[test]
@@ -324,12 +409,17 @@ mod tests {
         let (configuration, _) = configuration(1);
         let mut router = router(configuration);
         let now = Instant::now();
-        router.install_transient(
-            2,
-            &[("y", CommandKey::from_index(1))],
-            TransientPolicy { timeout: Some(Duration::from_millis(10)), ..TransientPolicy::default() },
-            now,
-        ).unwrap();
+        router
+            .install_transient(
+                2,
+                &[("y", CommandKey::from_index(1))],
+                TransientPolicy {
+                    timeout: Some(Duration::from_millis(10)),
+                    ..TransientPolicy::default()
+                },
+                now,
+            )
+            .unwrap();
         assert!(!router.expire_transient(now + Duration::from_millis(9)));
         assert!(router.expire_transient(now + Duration::from_millis(10)));
     }

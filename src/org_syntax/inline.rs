@@ -35,7 +35,12 @@ pub fn parse(source: &str) -> InlineText {
     let mut cursor = 0;
     while cursor < source.len() {
         if let Some(end) = footnote_end(source, cursor) {
-            push_span(&mut output, InlineKind::FootnoteReference, cursor..end, &source[cursor..end]);
+            push_span(
+                &mut output,
+                InlineKind::FootnoteReference,
+                cursor..end,
+                &source[cursor..end],
+            );
             cursor = end;
             continue;
         }
@@ -118,16 +123,24 @@ fn push_nested_span(
     let start = output.text.len();
     output.text.push_str(&parsed.text);
     let end = output.text.len();
-    output.spans.push(InlineSpan { kind, source, range: start..end });
-    output.spans.extend(parsed.spans.into_iter().map(|span| InlineSpan {
-        kind: span.kind,
-        source: span.source.start + source_offset..span.source.end + source_offset,
-        range: span.range.start + start..span.range.end + start,
-    }));
+    output.spans.push(InlineSpan {
+        kind,
+        source,
+        range: start..end,
+    });
+    output
+        .spans
+        .extend(parsed.spans.into_iter().map(|span| InlineSpan {
+            kind: span.kind,
+            source: span.source.start + source_offset..span.source.end + source_offset,
+            range: span.range.start + start..span.range.end + start,
+        }));
 }
 
 fn footnote_end(source: &str, start: usize) -> Option<usize> {
-    if !source[start..].starts_with("[fn:") { return None; }
+    if !source[start..].starts_with("[fn:") {
+        return None;
+    }
     let bytes = source.as_bytes();
     let mut index = start + 4;
     let mut link_depth = 0_u32;
@@ -157,7 +170,11 @@ fn target_at(source: &str, start: usize) -> Option<(usize, &str, InlineKind)> {
     };
     let relative = source[start + open..].find(close)?;
     let content_end = start + open + relative;
-    Some((content_end + close.len(), &source[start + open..content_end], kind))
+    Some((
+        content_end + close.len(),
+        &source[start + open..content_end],
+        kind,
+    ))
 }
 
 fn push_span(output: &mut InlineText, kind: InlineKind, source: Range<usize>, display: &str) {
@@ -348,14 +365,31 @@ mod tests {
     fn converts_safe_entities_and_recognizes_native_targets() {
         let parsed = parse(r"\alpha \rightarrow <<chapter>> [fn:note]");
         assert_eq!(parsed.text, "α → chapter [fn:note]");
-        assert_eq!(parsed.spans.iter().filter(|span| span.kind == InlineKind::Target).count(), 1);
-        assert_eq!(parsed.spans.iter().filter(|span| span.kind == InlineKind::FootnoteReference).count(), 1);
+        assert_eq!(
+            parsed
+                .spans
+                .iter()
+                .filter(|span| span.kind == InlineKind::Target)
+                .count(),
+            1
+        );
+        assert_eq!(
+            parsed
+                .spans
+                .iter()
+                .filter(|span| span.kind == InlineKind::FootnoteReference)
+                .count(),
+            1
+        );
     }
 
     #[test]
     fn footnote_scanner_does_not_stop_inside_org_link() {
         let parsed = parse("[fn::See [[file:guide.org][guide]] for details]");
-        assert_eq!(parsed.text, "[fn::See [[file:guide.org][guide]] for details]");
+        assert_eq!(
+            parsed.text,
+            "[fn::See [[file:guide.org][guide]] for details]"
+        );
         assert_eq!(parsed.spans.len(), 1);
         assert_eq!(parsed.spans[0].kind, InlineKind::FootnoteReference);
     }

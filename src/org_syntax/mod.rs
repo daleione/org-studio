@@ -258,7 +258,9 @@ fn drawer_start(line: &str, content_start: u64) -> Option<(String, u64)> {
 
 fn classify_line(line: &str) -> BlockKind {
     if let Some(path) = standalone_image_path(line) {
-        BlockKind::Image { path: path.to_owned() }
+        BlockKind::Image {
+            path: path.to_owned(),
+        }
     } else if line.starts_with("SCHEDULED:")
         || line.starts_with("DEADLINE:")
         || line.starts_with("CLOSED:")
@@ -288,7 +290,7 @@ fn classify_line(line: &str) -> BlockKind {
 }
 
 fn standalone_image_path(line: &str) -> Option<&str> {
-    let target = line.strip_prefix("[[file:")?.strip_suffix("]]" )?;
+    let target = line.strip_prefix("[[file:")?.strip_suffix("]]")?;
     if target.contains("][") || target.is_empty() {
         return None;
     }
@@ -415,9 +417,7 @@ mod tests {
 
     #[test]
     fn closes_indented_blocks_with_indented_or_trailing_space_end_markers() {
-        let text = snapshot(
-            "* SQL\n  #+BEGIN_SRC sql\n  select 1;\n  #+END_SRC  \nAfter block.\n",
-        );
+        let text = snapshot("* SQL\n  #+BEGIN_SRC sql\n  select 1;\n  #+END_SRC  \nAfter block.\n");
         let arena = parse(text.as_ref());
         let nodes = arena.nodes();
 

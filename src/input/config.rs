@@ -71,19 +71,29 @@ pub fn compile_input_profile(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum InputCompileError {
-    InvalidSequence { keys: Arc<str>, source: KeyParseError },
+    InvalidSequence {
+        keys: Arc<str>,
+        source: KeyParseError,
+    },
     UnknownCommand(Arc<str>),
-    BindingConflict { keys: Arc<str>, source: KeymapBuildError },
+    BindingConflict {
+        keys: Arc<str>,
+        source: KeymapBuildError,
+    },
     Context(ContextBuildError),
     ActiveKeymaps(ActiveKeymapError),
 }
 
 impl From<ContextBuildError> for InputCompileError {
-    fn from(value: ContextBuildError) -> Self { Self::Context(value) }
+    fn from(value: ContextBuildError) -> Self {
+        Self::Context(value)
+    }
 }
 
 impl From<ActiveKeymapError> for InputCompileError {
-    fn from(value: ActiveKeymapError) -> Self { Self::ActiveKeymaps(value) }
+    fn from(value: ActiveKeymapError) -> Self {
+        Self::ActiveKeymaps(value)
+    }
 }
 
 impl fmt::Display for InputCompileError {
@@ -106,21 +116,23 @@ mod tests {
 
     fn commands() -> CommandRegistry {
         let mut builder = CommandRegistryBuilder::default();
-        builder.register_builtin(BuiltinCommandSpec {
-            name: "org-studio.test.open".into(),
-            aliases: &["find-file"],
-            title: "Open",
-            description: "Open",
-            command: BuiltinCommand::OpenDocument,
-            role: CommandRole::Action,
-            argument_spec: ArgumentSpec::None,
-            repeat: RepeatPolicy::Never,
-            undo: UndoPolicy::None,
-            availability: Availability::Always,
-            side_effect: SideEffectClass::None,
-            required_capabilities: CapabilitySet::empty(),
-            redaction: RedactionPolicy::None,
-        }).unwrap();
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: "org-studio.test.open".into(),
+                aliases: &["find-file"],
+                title: "Open",
+                description: "Open",
+                command: BuiltinCommand::OpenDocument,
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                undo: UndoPolicy::None,
+                availability: Availability::Always,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::None,
+            })
+            .unwrap();
         builder.build()
     }
 
@@ -133,12 +145,16 @@ mod tests {
         let contexts = contexts.build();
         let profile = compile_input_profile(
             9,
-            &[BindingSpec { keys: "C-x C-f", behavior: BindingBehavior::Command("find-file") }],
+            &[BindingSpec {
+                keys: "C-x C-f",
+                behavior: BindingBehavior::Command("find-file"),
+            }],
             &commands,
             &contexts,
             &["workspace"],
             &["prompt"],
-        ).unwrap();
+        )
+        .unwrap();
         assert_eq!(profile.generation, 9);
     }
 
@@ -151,7 +167,10 @@ mod tests {
         assert!(matches!(
             compile_input_profile(
                 1,
-                &[BindingSpec { keys: "C-x", behavior: BindingBehavior::Command("missing") }],
+                &[BindingSpec {
+                    keys: "C-x",
+                    behavior: BindingBehavior::Command("missing")
+                }],
                 &commands,
                 &contexts,
                 &["workspace"],
@@ -163,8 +182,14 @@ mod tests {
             compile_input_profile(
                 1,
                 &[
-                    BindingSpec { keys: "C-x", behavior: BindingBehavior::Command("find-file") },
-                    BindingSpec { keys: "C-x C-f", behavior: BindingBehavior::Command("find-file") },
+                    BindingSpec {
+                        keys: "C-x",
+                        behavior: BindingBehavior::Command("find-file")
+                    },
+                    BindingSpec {
+                        keys: "C-x C-f",
+                        behavior: BindingBehavior::Command("find-file")
+                    },
                 ],
                 &commands,
                 &contexts,

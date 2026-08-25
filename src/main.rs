@@ -6,7 +6,9 @@ use gpui::{
 };
 use org_studio::{
     perf_tracing,
-    preview::{OpenDocument, OpenFileManager, PreviewApp, ReloadDocument, ReturnToDocument, ToggleSidebar},
+    preview::{
+        OpenDocument, OpenFileManager, PreviewApp, ReloadDocument, ReturnToDocument, ToggleSidebar,
+    },
 };
 
 actions!(org_studio, [Quit]);
@@ -96,15 +98,20 @@ fn main() {
         cx.spawn(async move |cx| {
             while let Ok(urls) = open_receiver.recv().await {
                 for url in urls {
-                    let Ok(url) = url::Url::parse(&url) else { continue };
-                    let Ok(path) = url.to_file_path() else { continue };
+                    let Ok(url) = url::Url::parse(&url) else {
+                        continue;
+                    };
+                    let Ok(path) = url.to_file_path() else {
+                        continue;
+                    };
                     let preview = active_preview.borrow().clone();
                     if let Some(preview) = preview {
                         let _ = preview.update(cx, |app, cx| app.open(path, cx));
                     }
                 }
             }
-        }).detach();
+        })
+        .detach();
 
         cx.activate(true);
     });

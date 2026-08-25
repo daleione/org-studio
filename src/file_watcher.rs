@@ -16,12 +16,21 @@ impl FileWatch {
         })?;
         let parent = target.parent().unwrap_or_else(|| Path::new("."));
         watcher.watch(parent, RecursiveMode::NonRecursive)?;
-        Ok(Self { _watcher: watcher, receiver, target })
+        Ok(Self {
+            _watcher: watcher,
+            receiver,
+            target,
+        })
     }
 
     pub async fn changed(&self) -> bool {
         while let Ok(event) = self.receiver.recv().await {
-            if event.is_ok_and(|event| event.paths.iter().any(|path| same_target(path, &self.target))) {
+            if event.is_ok_and(|event| {
+                event
+                    .paths
+                    .iter()
+                    .any(|path| same_target(path, &self.target))
+            }) {
                 return true;
             }
         }
@@ -35,8 +44,7 @@ impl FileWatch {
 
 fn same_target(event_path: &Path, target: &Path) -> bool {
     event_path == target
-        || (event_path.file_name() == target.file_name()
-            && event_path.parent() == target.parent())
+        || (event_path.file_name() == target.file_name() && event_path.parent() == target.parent())
 }
 
 #[cfg(test)]
@@ -46,8 +54,17 @@ mod tests {
 
     #[test]
     fn matches_direct_and_atomic_replace_target_paths() {
-        assert!(same_target(Path::new("/tmp/note.md"), Path::new("/tmp/note.md")));
-        assert!(!same_target(Path::new("/tmp/.note.md.tmp"), Path::new("/tmp/note.md")));
-        assert!(!same_target(Path::new("/other/note.md"), Path::new("/tmp/note.md")));
+        assert!(same_target(
+            Path::new("/tmp/note.md"),
+            Path::new("/tmp/note.md")
+        ));
+        assert!(!same_target(
+            Path::new("/tmp/.note.md.tmp"),
+            Path::new("/tmp/note.md")
+        ));
+        assert!(!same_target(
+            Path::new("/other/note.md"),
+            Path::new("/tmp/note.md")
+        ));
     }
 }

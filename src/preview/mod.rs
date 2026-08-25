@@ -75,6 +75,7 @@ const DIRED_INVERT_COMMAND: &str = "org-studio.dired.invert-marks";
 const DIRED_DELETE_COMMAND: &str = "org-studio.dired.flag-delete";
 const DIRED_EXECUTE_COMMAND: &str = "org-studio.dired.execute";
 const DIRED_HELP_COMMAND: &str = "org-studio.dired.help";
+const KEY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
 
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
@@ -608,6 +609,8 @@ pub struct PreviewApp {
     scroll_benchmark: Option<ScrollBenchmark>,
     which_key_task: Option<Task<()>>,
     which_key_request: u64,
+    key_feedback_task: Option<Task<()>>,
+    key_feedback_request: u64,
     which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
     dired_help_visible: bool,
     content_route: ContentRoute,
@@ -687,6 +690,8 @@ impl PreviewApp {
                 }),
             which_key_task: None,
             which_key_request: 0,
+            key_feedback_task: None,
+            key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
             dired_help_visible: false,
             content_route: ContentRoute::Document,
@@ -837,9 +842,15 @@ impl PreviewApp {
             cx.notify();
         }
         if matches!(outcome, EmacsOutcome::Pending) {
+            self.cancel_key_feedback();
             self.schedule_which_key(cx);
         } else {
             self.cancel_which_key(cx);
+            if has_feedback {
+                self.schedule_key_feedback_clear(cx);
+            } else {
+                self.cancel_key_feedback();
+            }
         }
         match outcome {
             EmacsOutcome::Command { command, prefix } => {
@@ -934,6 +945,29 @@ impl PreviewApp {
             self.dired_help_visible = false;
             cx.notify();
         }
+    }
+
+    fn schedule_key_feedback_clear(&mut self, cx: &mut Context<Self>) {
+        self.key_feedback_request = self.key_feedback_request.wrapping_add(1);
+        let request = self.key_feedback_request;
+        let delay = cx.background_executor().timer(KEY_FEEDBACK_DURATION);
+        self.key_feedback_task = Some(cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.key_feedback_request != request {
+                    return;
+                }
+                this.key_feedback_task = None;
+                if this.keyboard.dismiss_status() {
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn cancel_key_feedback(&mut self) {
+        self.key_feedback_request = self.key_feedback_request.wrapping_add(1);
+        self.key_feedback_task = None;
     }
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {

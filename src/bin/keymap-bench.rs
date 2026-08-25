@@ -53,7 +53,10 @@ fn main() {
     );
 }
 
-fn time_lookups(mut count: usize, mut lookup: impl FnMut(usize) -> KeyLookup) -> std::time::Duration {
+fn time_lookups(
+    mut count: usize,
+    mut lookup: impl FnMut(usize) -> KeyLookup,
+) -> std::time::Duration {
     let total = count;
     let started = Instant::now();
     while count > 0 {
