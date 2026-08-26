@@ -343,7 +343,7 @@ impl PreviewApp {
         cx.notify();
     }
 
-    pub(super) fn workspace_body(&self, entity: Entity<Self>) -> gpui::Div {
+    pub(super) fn workspace_body(&self, entity: Entity<Self>, viewport_width: f32) -> gpui::Div {
         match self.content_route {
             ContentRoute::FileManager => self.full_page_file_manager(entity),
             ContentRoute::Document if self.sidebar_visible => div()
@@ -359,8 +359,13 @@ impl PreviewApp {
                         .border_color(rgb(current_theme().border))
                         .bg(rgb(current_theme().background_alt)),
                 )
-                .child(div().flex_1().h_full().child(self.body(entity))),
-            ContentRoute::Document => self.body(entity),
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .child(self.body(entity, (viewport_width - 237.0).max(120.0))),
+                ),
+            ContentRoute::Document => self.body(entity, viewport_width),
         }
     }
 

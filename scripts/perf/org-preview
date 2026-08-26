@@ -8,6 +8,9 @@ DEFAULT_MIB="${ORG_STUDIO_PERF_MIB:-50}"
 DEFAULT_FRAMES="${ORG_STUDIO_PERF_FRAMES:-5000}"
 DEFAULT_WARMUP="${ORG_STUDIO_PERF_WARMUP_FRAMES:-1200}"
 DEFAULT_PIXELS="${ORG_STUDIO_PERF_SCROLL_PIXELS:-16}"
+DEFAULT_MINIMAP_WIDTH="${ORG_STUDIO_PERF_MINIMAP_WIDTH:-auto}"
+DEFAULT_WINDOW_WIDTH="${ORG_STUDIO_PERF_WINDOW_WIDTH:-920}"
+DEFAULT_WINDOW_HEIGHT="${ORG_STUDIO_PERF_WINDOW_HEIGHT:-720}"
 
 usage() {
     cat <<'EOF'
@@ -30,6 +33,9 @@ Configuration environment variables:
   ORG_STUDIO_PERF_FRAMES              default 5000
   ORG_STUDIO_PERF_WARMUP_FRAMES       default 1200
   ORG_STUDIO_PERF_SCROLL_PIXELS        default 16
+  ORG_STUDIO_PERF_MINIMAP_WIDTH        default auto; 48..480 logical px
+  ORG_STUDIO_PERF_WINDOW_WIDTH         default 920 logical px
+  ORG_STUDIO_PERF_WINDOW_HEIGHT        default 720 logical px
 
 GUI runs stay still during warmup. Move the window to the Mac internal
 ProMotion display before the warmup counter reaches zero.
@@ -134,12 +140,20 @@ run_scroll() {
     ensure_fixture "$mib"
     ensure_release_binaries
     new_run_dir "scroll-${pixels}px-${mib}m"
+    {
+        printf 'minimap_enabled=%s\n' "${ORG_STUDIO_MINIMAP:-settings}"
+        printf 'minimap_width=%s\n' "$DEFAULT_MINIMAP_WIDTH"
+        printf 'window_size=%sx%s\n' "$DEFAULT_WINDOW_WIDTH" "$DEFAULT_WINDOW_HEIGHT"
+    } >>"$RUN_DIR/metadata.txt"
     printf 'Move the benchmark window to the Mac internal display during the %s-frame warmup.\n' \
         "$DEFAULT_WARMUP"
     local -a env_args=(
         "ORG_STUDIO_SCROLL_BENCH_WARMUP_FRAMES=$DEFAULT_WARMUP"
         "ORG_STUDIO_SCROLL_BENCH_FRAMES=$DEFAULT_FRAMES"
         "ORG_STUDIO_SCROLL_BENCH_PIXELS=$pixels"
+        "ORG_STUDIO_MINIMAP_WIDTH=$DEFAULT_MINIMAP_WIDTH"
+        "ORG_STUDIO_WINDOW_WIDTH=$DEFAULT_WINDOW_WIDTH"
+        "ORG_STUDIO_WINDOW_HEIGHT=$DEFAULT_WINDOW_HEIGHT"
     )
     if [[ "$profile" == "1" ]]; then
         env_args+=("ORG_STUDIO_PROFILE_FRAMES=1")

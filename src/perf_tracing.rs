@@ -83,6 +83,12 @@ pub fn report() {
     }
 }
 
+pub fn reset_samples() {
+    if let Some(state) = TRACE_STATE.get() {
+        state.samples.lock().unwrap().clear();
+    }
+}
+
 impl Subscriber for PerfSubscriber {
     fn enabled(&self, _: &Metadata<'_>) -> bool {
         true

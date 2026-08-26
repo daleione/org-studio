@@ -63,6 +63,7 @@ pub enum BuiltinCommand {
     OpenDefaultDired,
     ReturnToDocument,
     ToggleSidebar,
+    ToggleMinimap,
     DiredNext,
     DiredPrevious,
     DiredOpen,

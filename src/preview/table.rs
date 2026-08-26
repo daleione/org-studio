@@ -16,10 +16,21 @@ const PIPE_WIDTH_PX: f32 = 12.0;
 const CELL_PADDING_PX: f32 = 18.0;
 const MAX_COLUMN_WIDTH: usize = 64;
 
+#[derive(Clone)]
 pub(super) struct TableRowStyle {
     widths: Arc<Vec<usize>>,
     separator: bool,
     alignments: Arc<Vec<Alignment>>,
+}
+
+impl TableRowStyle {
+    pub(super) fn column_widths(&self) -> &[usize] {
+        &self.widths
+    }
+
+    pub(super) fn is_separator(&self) -> bool {
+        self.separator
+    }
 }
 
 #[derive(Clone, Copy, Default)]

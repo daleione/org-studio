@@ -1,14 +1,14 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
 use gpui::{
-    App, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent,
-    ListAlignment, ListOffset, ListState, PathPromptOptions, Render, StyledText, Task, Window,
-    actions, div, img, list, prelude::*, px, rgb,
+    Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent,
+    ListAlignment, ListOffset, ListState, PathPromptOptions, Render, StyledText, Subscription,
+    Task, Window, actions, div, img, list, prelude::*, px, rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -16,6 +16,7 @@ mod command_window;
 mod file_manager_host;
 mod folding;
 mod markdown;
+mod minimap;
 #[cfg(test)]
 mod org_line;
 mod rows;
@@ -40,17 +41,12 @@ use crate::{
     keymap::KeyStroke,
     org_syntax::{
         BlockArena, BlockId, BlockKind, BlockNode,
-        inline::{InlineKind, InlineText, parse as parse_inline},
+        inline::{InlineKind, InlineSpan, InlineText, parse as parse_inline},
         parse,
     },
     theme::current_theme,
 };
 
-const INLINE_CACHE_CAPACITY: usize = 2048;
-const INLINE_CACHE_MAX_BYTES: usize = 8 * 1024 * 1024;
-const MAX_SYNC_INLINE_BYTES: usize = 64 * 1024;
-const HIGHLIGHT_CACHE_CAPACITY: usize = 512;
-const HIGHLIGHT_CACHE_MAX_BYTES: usize = 32 * 1024 * 1024;
 const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
 const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
 const QUIT_APPLICATION_COMMAND: &str = "org-studio.application.quit";
@@ -62,6 +58,7 @@ const OPEN_FILE_MANAGER_COMMAND: &str = "org-studio.file-manager.open";
 const OPEN_DEFAULT_DIRED_COMMAND: &str = "org-studio.dired.open-default";
 const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
 const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
+const TOGGLE_MINIMAP_COMMAND: &str = "org-studio.preview.toggle-minimap";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
 const DIRED_PREVIOUS_COMMAND: &str = "org-studio.dired.previous-line";
 const DIRED_OPEN_COMMAND: &str = "org-studio.dired.find-file";
@@ -76,6 +73,7 @@ const DIRED_DELETE_COMMAND: &str = "org-studio.dired.flag-delete";
 const DIRED_EXECUTE_COMMAND: &str = "org-studio.dired.execute";
 const DIRED_HELP_COMMAND: &str = "org-studio.dired.help";
 const KEY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
+const MAX_EXACT_SCROLL_LAYOUT_ROWS: usize = 4096;
 
 const HIGHLIGHT_NAMES: &[&str] = &[
     "attribute",
@@ -114,7 +112,8 @@ actions!(
         ReloadDocument,
         OpenFileManager,
         ReturnToDocument,
-        ToggleSidebar
+        ToggleSidebar,
+        ToggleMinimap
     ]
 );
 
@@ -133,8 +132,7 @@ pub struct PreviewDocument {
     rows: Arc<Vec<PreviewRow>>,
     tables: Arc<HashMap<BlockId, TableRowStyle>>,
     image_sizes: Arc<HashMap<BlockId, (u32, u32)>>,
-    inline_cache: Mutex<InlineCache>,
-    highlight_cache: Mutex<HighlightCache>,
+    display_map: Option<Arc<minimap::PreviewDisplayMap>>,
     pub metrics: LoadMetrics,
 }
 
@@ -160,26 +158,18 @@ pub struct LoadMetrics {
     pub read: Duration,
     pub rope: Duration,
     pub parse: Duration,
+    pub display_map: Duration,
     pub total: Duration,
 }
 
-struct InlineCache {
-    capacity: usize,
-    max_bytes: usize,
-    bytes: usize,
-    entries: HashMap<BlockId, InlineText>,
-    order: VecDeque<BlockId>,
-    pending: HashSet<BlockId>,
-}
-
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct CodeHighlightSpan {
     start: usize,
     end: usize,
     kind: CodeHighlightKind,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum CodeHighlightKind {
     Attribute,
     Boolean,
@@ -196,214 +186,17 @@ enum CodeHighlightKind {
     Variable,
 }
 
-struct HighlightCache {
-    capacity: usize,
-    max_bytes: usize,
-    bytes: usize,
-    entries: HashMap<BlockId, Arc<Vec<CodeHighlightSpan>>>,
-    order: VecDeque<BlockId>,
-    pending: HashSet<BlockId>,
-}
-
-impl HighlightCache {
-    fn new(capacity: usize, max_bytes: usize) -> Self {
-        Self {
-            capacity,
-            max_bytes,
-            bytes: 0,
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-            pending: HashSet::new(),
-        }
-    }
-
-    fn insert(&mut self, id: BlockId, spans: Vec<CodeHighlightSpan>) {
-        self.pending.remove(&id);
-        let entry_bytes = spans.len() * std::mem::size_of::<CodeHighlightSpan>();
-        while !self.entries.is_empty()
-            && (self.entries.len() >= self.capacity || self.bytes + entry_bytes > self.max_bytes)
-        {
-            if let Some(oldest) = self.order.pop_front()
-                && let Some(removed) = self.entries.remove(&oldest)
-            {
-                self.bytes = self
-                    .bytes
-                    .saturating_sub(removed.len() * std::mem::size_of::<CodeHighlightSpan>());
-            }
-        }
-        if entry_bytes <= self.max_bytes {
-            self.bytes += entry_bytes;
-            self.order.push_back(id);
-            self.entries.insert(id, Arc::new(spans));
-        }
-    }
-}
-
-impl InlineCache {
-    fn new(capacity: usize, max_bytes: usize) -> Self {
-        Self {
-            capacity,
-            max_bytes,
-            bytes: 0,
-            entries: HashMap::new(),
-            order: VecDeque::new(),
-            pending: HashSet::new(),
-        }
-    }
-
-    #[cfg(test)]
-    fn get_or_insert(&mut self, id: BlockId, source: &str) -> InlineText {
-        if let Some(parsed) = self.entries.get(&id) {
-            return parsed.clone();
-        }
-        let parsed = parse_inline(source);
-        self.insert(id, parsed.clone());
-        parsed
-    }
-
-    fn insert(&mut self, id: BlockId, parsed: InlineText) {
-        self.pending.remove(&id);
-        let entry_bytes = parsed.text.len()
-            + parsed.spans.len() * std::mem::size_of::<crate::org_syntax::inline::InlineSpan>();
-        while !self.entries.is_empty()
-            && (self.entries.len() >= self.capacity || self.bytes + entry_bytes > self.max_bytes)
-        {
-            if let Some(oldest) = self.order.pop_front()
-                && let Some(removed) = self.entries.remove(&oldest)
-            {
-                self.bytes = self.bytes.saturating_sub(
-                    removed.text.len()
-                        + removed.spans.len()
-                            * std::mem::size_of::<crate::org_syntax::inline::InlineSpan>(),
-                );
-            }
-        }
-        if entry_bytes <= self.max_bytes {
-            self.bytes += entry_bytes;
-            self.order.push_back(id);
-            self.entries.insert(id, parsed);
-        }
-    }
-}
-
-impl PreviewDocument {
-    fn inline(self: &Arc<Self>, id: BlockId, source: &str, cx: &mut App) -> InlineText {
-        if source.len() > MAX_SYNC_INLINE_BYTES {
-            let mut cache = self.inline_cache.lock().expect("inline cache poisoned");
-            if let Some(parsed) = cache.entries.get(&id) {
-                return parsed.clone();
-            }
-            if cache.pending.insert(id) {
-                let document = self.clone();
-                let source = source.to_owned();
-                cx.spawn(async move |cx| {
-                    let format = document.format;
-                    let parsed = cx
-                        .background_spawn(async move { parse_document_inline(format, &source) })
-                        .await;
-                    document
-                        .inline_cache
-                        .lock()
-                        .expect("inline cache poisoned")
-                        .insert(id, parsed);
-                    let _ = cx.refresh();
-                })
-                .detach();
-            }
-            return InlineText {
-                text: source.to_owned(),
-                spans: Vec::new(),
-            };
-        }
-        let mut cache = self.inline_cache.lock().expect("inline cache poisoned");
-        if let Some(parsed) = cache.entries.get(&id) {
-            return parsed.clone();
-        }
-        let parsed = parse_document_inline(self.format, source);
-        cache.insert(id, parsed.clone());
-        parsed
-    }
-
-    fn code_highlights(
-        self: &Arc<Self>,
-        id: BlockId,
-        language: Option<&str>,
-        cx: &mut App,
-    ) -> Option<Arc<Vec<CodeHighlightSpan>>> {
-        let Some(language) = language.filter(|language| supports_code_language(language)) else {
-            return None;
-        };
-
-        let mut cache = self
-            .highlight_cache
-            .lock()
-            .expect("highlight cache poisoned");
-        if let Some(spans) = cache.entries.get(&id) {
-            return Some(spans.clone());
-        }
-        if cache.pending.insert(id) {
-            let document = self.clone();
-            let range = if self.format == DocumentFormat::Markdown {
-                self.markdown_blocks[id as usize].source
-            } else {
-                self.blocks.nodes()[id as usize].source
-            };
-            let source = self.text.copy_range(range);
-            let language = language.to_owned();
-            cx.spawn(async move |cx| {
-                let spans = cx
-                    .background_spawn(async move {
-                        highlight_code(&language, &source).unwrap_or_default()
-                    })
-                    .await;
-                document
-                    .highlight_cache
-                    .lock()
-                    .expect("highlight cache poisoned")
-                    .insert(id, spans);
-                let _ = cx.refresh();
-            })
-            .detach();
-        }
-        None
-    }
-}
-
-fn supports_code_language(language: &str) -> bool {
-    matches!(
-        language.trim().to_ascii_lowercase().as_str(),
-        "sql"
-            | "postgres"
-            | "postgresql"
-            | "rust"
-            | "rs"
-            | "python"
-            | "py"
-            | "sh"
-            | "shell"
-            | "bash"
-            | "zsh"
-            | "javascript"
-            | "js"
-            | "jsx"
-            | "typescript"
-            | "ts"
-            | "tsx"
-            | "json"
-            | "go"
-            | "golang"
-            | "c"
-            | "h"
-            | "cpp"
-            | "c++"
-            | "cc"
-            | "cxx"
-            | "hpp"
-    )
-}
-
 fn highlight_code(language: &str, source: &str) -> Result<Vec<CodeHighlightSpan>, String> {
     let normalized = language.trim().to_ascii_lowercase();
+    static CONFIGURATIONS: OnceLock<Mutex<HashMap<String, HighlightConfiguration>>> =
+        OnceLock::new();
+    let mut configurations = CONFIGURATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("highlight configuration cache poisoned");
+    if let Some(configuration) = configurations.get(&normalized) {
+        return highlight_with_configuration(configuration, source);
+    }
     let combined_query: String;
     let (language, name, highlights, injections, locals) = match normalized.as_str() {
         "sql" | "postgres" | "postgresql" => (
@@ -526,9 +319,22 @@ fn highlight_code(language: &str, source: &str) -> Result<Vec<CodeHighlightSpan>
             .map_err(|error| error.to_string())?;
     configuration.configure(HIGHLIGHT_NAMES);
 
+    configurations.insert(normalized.clone(), configuration);
+    highlight_with_configuration(
+        configurations
+            .get(&normalized)
+            .expect("inserted highlight configuration"),
+        source,
+    )
+}
+
+fn highlight_with_configuration(
+    configuration: &HighlightConfiguration,
+    source: &str,
+) -> Result<Vec<CodeHighlightSpan>, String> {
     let mut highlighter = Highlighter::new();
     let events = highlighter
-        .highlight(&configuration, source.as_bytes(), None, |_| None)
+        .highlight(configuration, source.as_bytes(), None, |_| None)
         .map_err(|error| error.to_string())?;
     let mut active = Vec::new();
     let mut spans = Vec::new();
@@ -591,6 +397,7 @@ enum PreviewLoadState {
 
 pub struct PreviewApp {
     focus_handle: Option<FocusHandle>,
+    focus_lost_subscription: Option<Subscription>,
     commands: Arc<CommandRegistry>,
     keyboard: KeyboardRouter,
     key_context: ContextSet,
@@ -615,6 +422,14 @@ pub struct PreviewApp {
     dired_help_visible: bool,
     content_route: ContentRoute,
     sidebar_visible: bool,
+    minimap_visible: bool,
+    minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
+    minimap_width: Option<u16>,
+    minimap_resize_preview: Option<f32>,
+    presentation_revision: u64,
+    viewport_revision_key: Option<(u32, u32)>,
+    minimap_pending_seek: Option<(u64, f32, bool)>,
+    minimap_seek_scheduled: bool,
     dired: Option<crate::file_manager::DiredSession>,
     dired_error: Option<Arc<str>>,
     dired_task: Option<Task<()>>,
@@ -653,8 +468,18 @@ impl PreviewApp {
             .and_then(|value| value.parse().ok())
             .unwrap_or(80.0);
         let (commands, keyboard, key_context) = preview_input();
+        let preview_settings = crate::settings::PreviewSettings::load();
+        let minimap_visible = std::env::var("ORG_STUDIO_MINIMAP")
+            .ok()
+            .and_then(|value| match value.as_str() {
+                "1" | "true" | "on" => Some(true),
+                "0" | "false" | "off" => Some(false),
+                _ => None,
+            })
+            .unwrap_or(preview_settings.minimap_enabled);
         Self {
             focus_handle: None,
+            focus_lost_subscription: None,
             commands,
             keyboard,
             key_context,
@@ -696,6 +521,16 @@ impl PreviewApp {
             dired_help_visible: false,
             content_route: ContentRoute::Document,
             sidebar_visible: false,
+            minimap_visible,
+            minimap_thumb_visibility: crate::settings::initial_minimap_thumb_visibility(
+                preview_settings.minimap_thumb_visibility,
+            ),
+            minimap_width: crate::settings::initial_minimap_width(preview_settings.minimap_width),
+            minimap_resize_preview: None,
+            presentation_revision: 0,
+            viewport_revision_key: None,
+            minimap_pending_seek: None,
+            minimap_seek_scheduled: false,
             dired: None,
             dired_error: None,
             dired_task: None,
@@ -714,7 +549,7 @@ impl PreviewApp {
             &self.commands,
             name,
             InvocationOrigin::PlatformAction,
-            CapabilitySet::READ_FILE_SYSTEM,
+            CapabilitySet::READ_FILE_SYSTEM.union(CapabilitySet::CONFIGURATION),
         );
         let Ok(prepared) = prepared else {
             return;
@@ -788,6 +623,9 @@ impl PreviewApp {
             CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => {
                 self.toggle_sidebar(cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::ToggleMinimap) => {
+                self.toggle_minimap(cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::DiredNext) => {
                 self.dired_move(command_count(prefix) as i64, cx)
             }
@@ -827,6 +665,11 @@ impl PreviewApp {
     }
 
     fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+        if event.keystroke.key == "escape" && self.cancel_minimap_interaction() {
+            cx.stop_propagation();
+            cx.notify();
+            return;
+        }
         let modifiers = event.keystroke.modifiers;
         let stroke = KeyStroke::new(
             event.keystroke.key.as_str(),
@@ -971,6 +814,8 @@ impl PreviewApp {
     }
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.cancel_minimap_interaction();
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.generation += 1;
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
@@ -982,37 +827,49 @@ impl PreviewApp {
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
-                if !accept_generation(this.generation, generation) {
-                    return;
+                if this.apply_load_result(generation, result) {
+                    cx.notify();
                 }
-
-                this.state = match result {
-                    Ok(document) => {
-                        let document = Arc::new(document);
-                        this.folded = Arc::new(HashSet::new());
-                        this.visible_rows = if document.format == DocumentFormat::Markdown {
-                            Arc::new((0..document.rows.len()).collect())
-                        } else {
-                            Arc::new(visible_row_indices(
-                                &document.rows,
-                                &document.blocks,
-                                &this.folded,
-                            ))
-                        };
-                        this.list_state.reset(this.visible_rows.len());
-                        this.last_ready = Some((generation, document.clone()));
-                        PreviewLoadState::Ready {
-                            generation,
-                            document,
-                        }
-                    }
-                    Err((path, message)) => PreviewLoadState::Failed { path, message },
-                };
-                cx.notify();
             });
         }));
 
         cx.notify();
+    }
+
+    fn apply_load_result(
+        &mut self,
+        generation: u64,
+        result: Result<PreviewDocument, (PathBuf, String)>,
+    ) -> bool {
+        if !accept_generation(self.generation, generation) {
+            return false;
+        }
+        self.state = match result {
+            Ok(document) => {
+                let document = Arc::new(document);
+                self.folded = Arc::new(HashSet::new());
+                self.visible_rows = if document.format == DocumentFormat::Markdown {
+                    Arc::new((0..document.rows.len()).collect())
+                } else {
+                    Arc::new(visible_row_indices(
+                        &document.rows,
+                        &document.blocks,
+                        &self.folded,
+                    ))
+                };
+                self.list_state.reset(self.visible_rows.len());
+                if self.visible_rows.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {
+                    self.list_state.clone().measure_all();
+                }
+                self.last_ready = Some((generation, document.clone()));
+                PreviewLoadState::Ready {
+                    generation,
+                    document,
+                }
+            }
+            Err((path, message)) => PreviewLoadState::Failed { path, message },
+        };
+        true
     }
 
     fn choose_file(&mut self, cx: &mut Context<Self>) {
@@ -1070,8 +927,63 @@ impl PreviewApp {
         }
     }
 
-    fn body(&self, entity: gpui::Entity<Self>) -> gpui::Div {
+    pub fn toggle_minimap(&mut self, cx: &mut Context<Self>) {
+        self.minimap_visible = !self.minimap_visible;
+        self.save_preview_settings();
+        cx.notify();
+    }
+
+    fn save_preview_settings(&self) {
+        crate::settings::PreviewSettings {
+            minimap_enabled: self.minimap_visible,
+            minimap_thumb_visibility: self.minimap_thumb_visibility,
+            minimap_width: self.minimap_width,
+        }
+        .save_async();
+    }
+
+    fn change_minimap_width(
+        &mut self,
+        change: minimap::MinimapWidthChange,
+        cx: &mut Context<Self>,
+    ) {
+        match change {
+            minimap::MinimapWidthChange::Preview(width) => {
+                if self.minimap_resize_preview != Some(width) {
+                    self.minimap_resize_preview = Some(width);
+                    cx.notify();
+                }
+            }
+            minimap::MinimapWidthChange::Commit(width) => {
+                self.minimap_resize_preview = None;
+                let width = width.round().clamp(48.0, minimap::MINIMAP_MANUAL_MAX_PX) as u16;
+                if self.minimap_width != Some(width) {
+                    self.minimap_width = Some(width);
+                    self.presentation_revision = self.presentation_revision.wrapping_add(1);
+                    self.cancel_minimap_interaction();
+                    self.save_preview_settings();
+                }
+                cx.notify();
+            }
+            minimap::MinimapWidthChange::Reset => {
+                self.minimap_resize_preview = None;
+                if self.minimap_width.take().is_some() {
+                    self.presentation_revision = self.presentation_revision.wrapping_add(1);
+                    self.cancel_minimap_interaction();
+                    self.save_preview_settings();
+                }
+                cx.notify();
+            }
+        }
+    }
+
+    pub fn minimap_visible(&self) -> bool {
+        self.minimap_visible
+    }
+
+    fn body(&self, entity: gpui::Entity<Self>, editor_width: f32) -> gpui::Div {
         let theme = current_theme();
+        let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);
         match &self.state {
             PreviewLoadState::Empty => centered_message(
                 "ORG STUDIO",
@@ -1108,6 +1020,12 @@ impl PreviewApp {
                             self.visible_rows.clone(),
                             self.folded.clone(),
                             entity,
+                            self.minimap_visible,
+                            editor_width,
+                            minimap_width,
+                            self.minimap_resize_preview,
+                            self.minimap_thumb_visibility,
+                            self.presentation_revision,
                         ))
                 } else {
                     centered_message("COULD NOT OPEN DOCUMENT", &error)
@@ -1119,6 +1037,12 @@ impl PreviewApp {
                 self.visible_rows.clone(),
                 self.folded.clone(),
                 entity,
+                self.minimap_visible,
+                editor_width,
+                minimap_width,
+                self.minimap_resize_preview,
+                self.minimap_thumb_visibility,
+                self.presentation_revision,
             ),
         }
     }
@@ -1133,6 +1057,8 @@ impl PreviewApp {
         ) {
             return;
         }
+        self.cancel_minimap_interaction();
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
         let folded = Arc::make_mut(&mut self.folded);
         if !folded.remove(&block_id) {
             folded.insert(block_id);
@@ -1144,7 +1070,29 @@ impl PreviewApp {
         ));
         let (old_range, new_count) = changed_range(&self.visible_rows, &new_visible);
         self.list_state.splice(old_range, new_count);
+        if new_visible.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {
+            self.list_state.clone().measure_all();
+        }
         self.visible_rows = new_visible;
+    }
+
+    fn cancel_minimap_interaction(&mut self) -> bool {
+        self.minimap_pending_seek = None;
+        self.minimap_seek_scheduled = false;
+        self.minimap_resize_preview = None;
+        let was_dragging = match &self.state {
+            PreviewLoadState::Ready { document, .. } => document
+                .display_map
+                .as_ref()
+                .is_some_and(|map| map.cancel_minimap_interaction()),
+            _ => self
+                .last_ready
+                .as_ref()
+                .and_then(|(_, document)| document.display_map.as_ref())
+                .is_some_and(|map| map.cancel_minimap_interaction()),
+        };
+        self.list_state.scrollbar_drag_ended();
+        was_dragging
     }
 
     fn window_title(&self) -> String {
@@ -1194,6 +1142,7 @@ impl PreviewApp {
             }
             if !benchmark.sampling_started {
                 benchmark.sampling_started = true;
+                crate::perf_tracing::reset_samples();
                 benchmark.last_frame = now;
                 this.list_state.scroll_by(px(benchmark.scroll_pixels));
                 this.schedule_scroll_sample(window, cx);
@@ -1267,6 +1216,16 @@ fn accept_generation(current: u64, completed: u64) -> bool {
 impl Render for PreviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::scope!("PreviewApp::render");
+        let viewport = window.viewport_size();
+        let viewport_key = (
+            f32::from(viewport.width).to_bits(),
+            f32::from(viewport.height).to_bits(),
+        );
+        if self.viewport_revision_key != Some(viewport_key) {
+            self.viewport_revision_key = Some(viewport_key);
+            self.presentation_revision = self.presentation_revision.wrapping_add(1);
+            self.cancel_minimap_interaction();
+        }
         let focus_handle = self
             .focus_handle
             .get_or_insert_with(|| {
@@ -1275,6 +1234,13 @@ impl Render for PreviewApp {
                 handle
             })
             .clone();
+        if self.focus_lost_subscription.is_none() {
+            self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
+                if this.cancel_minimap_interaction() {
+                    cx.notify();
+                }
+            }));
+        }
         window.set_window_title(&self.window_title());
         if (self.dired_pending_presentation.is_some()
             || self.sidebar_pending_presentation.is_some())
@@ -1364,7 +1330,7 @@ impl Render for PreviewApp {
             .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
-            .child(self.workspace_body(entity))
+            .child(self.workspace_body(entity, command_window_width))
             .when(!which_key_items.is_empty(), |view| {
                 view.child(if dired_help_visible {
                     dired_help_window(which_key_items.clone(), command_window_width)
@@ -1558,6 +1524,12 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
             ArgumentSpec::None,
         ),
         (
+            TOGGLE_MINIMAP_COMMAND,
+            "Toggle Minimap",
+            BuiltinCommand::ToggleMinimap,
+            ArgumentSpec::None,
+        ),
+        (
             DIRED_NEXT_COMMAND,
             "Next Line",
             BuiltinCommand::DiredNext,
@@ -1636,6 +1608,7 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
             ArgumentSpec::None,
         ),
     ] {
+        let configuration = command == BuiltinCommand::ToggleMinimap;
         builder
             .register_builtin(BuiltinCommandSpec {
                 name: name.into(),
@@ -1648,8 +1621,16 @@ fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
                 repeat: RepeatPolicy::Repeatable,
                 undo: UndoPolicy::None,
                 availability: Availability::FocusedView,
-                side_effect: SideEffectClass::None,
-                required_capabilities: CapabilitySet::empty(),
+                side_effect: if configuration {
+                    SideEffectClass::Configuration
+                } else {
+                    SideEffectClass::None
+                },
+                required_capabilities: if configuration {
+                    CapabilitySet::CONFIGURATION
+                } else {
+                    CapabilitySet::empty()
+                },
                 redaction: RedactionPolicy::None,
             })
             .expect("valid built-in file manager command");
@@ -1913,6 +1894,25 @@ fn build_image_sizes(document_path: &Path, blocks: &BlockArena) -> HashMap<Block
         .collect()
 }
 
+fn build_markdown_image_sizes(
+    document_path: &Path,
+    blocks: &[markdown::MarkdownBlock],
+) -> HashMap<BlockId, (u32, u32)> {
+    blocks
+        .iter()
+        .enumerate()
+        .filter_map(|(block_id, block)| {
+            let markdown::MarkdownKind::Image { path } = &block.kind else {
+                return None;
+            };
+            image::image_dimensions(resolve_image_path(document_path, path))
+                .ok()
+                .filter(|&(width, height)| width > 0 && height > 0)
+                .map(|size| (block_id as BlockId, size))
+        })
+        .collect()
+}
+
 fn fitted_image_size(source_width: u32, source_height: u32, available_width: f32) -> (f32, f32) {
     let scale = (available_width.min(960.0) / source_width as f32)
         .min(480.0 / source_height as f32)
@@ -1925,6 +1925,19 @@ pub fn load_document(path: PathBuf) -> Result<PreviewDocument, (PathBuf, String)
 }
 
 pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf, String)> {
+    load_document_profiled_impl(path, true)
+}
+
+pub fn load_document_profiled_without_display_map(
+    path: PathBuf,
+) -> Result<PreviewDocument, (PathBuf, String)> {
+    load_document_profiled_impl(path, false)
+}
+
+fn load_document_profiled_impl(
+    path: PathBuf,
+    build_display_map: bool,
+) -> Result<PreviewDocument, (PathBuf, String)> {
     let total_started = Instant::now();
     let read_started = Instant::now();
     let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
@@ -1967,13 +1980,12 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
             Arc::new(build_markdown_table_styles(text.as_ref(), &markdown_blocks))
         }
     };
-    let image_sizes = if format == DocumentFormat::Org {
-        Arc::new(build_image_sizes(&path, &blocks))
-    } else {
-        Arc::new(HashMap::new())
+    let image_sizes = match format {
+        DocumentFormat::Org => Arc::new(build_image_sizes(&path, &blocks)),
+        DocumentFormat::Markdown => Arc::new(build_markdown_image_sizes(&path, &markdown_blocks)),
     };
 
-    Ok(PreviewDocument {
+    let mut document = PreviewDocument {
         path,
         text,
         format,
@@ -1982,22 +1994,23 @@ pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf
         rows,
         tables,
         image_sizes,
-        inline_cache: Mutex::new(InlineCache::new(
-            INLINE_CACHE_CAPACITY,
-            INLINE_CACHE_MAX_BYTES,
-        )),
-        highlight_cache: Mutex::new(HighlightCache::new(
-            HIGHLIGHT_CACHE_CAPACITY,
-            HIGHLIGHT_CACHE_MAX_BYTES,
-        )),
+        display_map: None,
         metrics: LoadMetrics {
             bytes: byte_count,
             read,
             rope,
             parse,
-            total: total_started.elapsed(),
+            display_map: Duration::ZERO,
+            total: Duration::ZERO,
         },
-    })
+    };
+    if build_display_map {
+        let display_map_started = Instant::now();
+        document.display_map = Some(Arc::new(minimap::build_display_map(&document)));
+        document.metrics.display_map = display_map_started.elapsed();
+    }
+    document.metrics.total = total_started.elapsed();
+    Ok(document)
 }
 
 fn centered_message(title: &str, detail: &str) -> gpui::Div {
@@ -2035,165 +2048,230 @@ fn render_document(
     visible_rows: Arc<Vec<usize>>,
     folded: Arc<HashSet<BlockId>>,
     entity: gpui::Entity<PreviewApp>,
+    minimap_visible: bool,
+    editor_width: f32,
+    minimap_width: f32,
+    minimap_resize_preview: Option<f32>,
+    minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
+    presentation_revision: u64,
 ) -> gpui::Div {
     let theme = current_theme();
+    let preview_display_map = document.display_map.clone();
+    let minimap_list_state = list_state.clone();
+    let minimap_entity = entity.clone();
+    let minimap_resize_entity = entity.clone();
     div()
         .size_full()
         .flex()
-        .flex_col()
         .relative()
         .bg(rgb(theme.background))
         .child(
             div()
-                .absolute()
-                .top_0()
-                .bottom_0()
-                .left_0()
-                .w(px(50.0))
-                .bg(rgb(theme.background_alt))
-                .border_r_1()
-                .border_color(rgb(theme.border)),
-        )
-        .child({
-            let document = document.clone();
-            let visible_rows = visible_rows.clone();
-            let folded = folded.clone();
-            list(list_state, move |index, window, cx| {
-                let actual_index = visible_rows[index];
-                let row = document.rows[actual_index];
-                let (is_heading, is_table_row) = if document.format == DocumentFormat::Markdown {
-                    let kind = &document.markdown_blocks[row.block_id as usize].kind;
-                    (
-                        matches!(kind, markdown::MarkdownKind::Heading { .. }),
-                        matches!(kind, markdown::MarkdownKind::TableRow),
-                    )
-                } else {
-                    let kind = &document.blocks.nodes()[row.block_id as usize].kind;
-                    (
-                        matches!(kind, BlockKind::Heading { .. }),
-                        matches!(kind, BlockKind::TableRow),
-                    )
-                };
-                let is_folded = is_heading && folded.contains(&row.block_id);
-                let document_for_click = document.clone();
-                let entity_for_click = entity.clone();
-                div()
-                    .id(("preview-row", actual_index))
-                    .w_full()
-                    .min_h(px(24.0))
-                    .when(index == 0, |element| element.pt_1())
-                    .when(index + 1 == visible_rows.len(), |element| element.pb_2())
-                    .when(is_heading, |element| {
-                        element.cursor_pointer().on_click(move |_, _, cx| {
-                            entity_for_click.update(cx, |this, cx| {
-                                this.toggle_fold(row.block_id, &document_for_click);
-                                cx.notify();
-                            });
-                        })
-                    })
-                    .flex()
-                    .items_start()
-                    .child(
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .flex()
+                .flex_col()
+                .relative()
+                .child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .left_0()
+                        .w(px(50.0))
+                        .bg(rgb(theme.background_alt))
+                        .border_r_1()
+                        .border_color(rgb(theme.border)),
+                )
+                .child({
+                    let document = document.clone();
+                    let visible_rows = visible_rows.clone();
+                    let folded = folded.clone();
+                    list(list_state, move |index, _window, _cx| {
+                        let actual_index = visible_rows[index];
+                        let row = document.rows[actual_index];
+                        let display_map = document
+                            .display_map
+                            .as_ref()
+                            .expect("preview display map must exist after loading");
+                        let is_heading = display_map.is_heading(actual_index);
+                        let is_table_row = display_map.is_table(actual_index);
+                        let is_folded = is_heading && folded.contains(&row.block_id);
+                        let document_for_click = document.clone();
+                        let entity_for_click = entity.clone();
                         div()
-                            .flex_none()
-                            .w(px(50.0))
-                            .pr_3()
-                            .h(px(24.0))
-                            .flex()
-                            .items_center()
-                            .justify_end()
-                            .text_right()
-                            .font_family("Menlo")
-                            .text_size(px(10.0))
-                            .text_color(rgb(theme.foreground_dim))
-                            .child(if row.show_line_number {
-                                row.source_line.to_string()
-                            } else {
-                                String::new()
-                            }),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
+                            .id(("preview-row", actual_index))
+                            .w_full()
                             .min_h(px(24.0))
-                            .flex()
-                            .items_center()
-                            .pl_3()
-                            .pr_8()
-                            .when(is_table_row, |element| {
-                                element.bg(rgb(current_theme().background_alt))
+                            .when(index == 0, |element| element.pt_1())
+                            .when(index + 1 == visible_rows.len(), |element| element.pb_2())
+                            .when(is_heading, |element| {
+                                element.cursor_pointer().on_click(move |_, _, cx| {
+                                    entity_for_click.update(cx, |this, cx| {
+                                        this.toggle_fold(row.block_id, &document_for_click);
+                                        cx.notify();
+                                    });
+                                })
                             })
-                            .child(div().w_full().child(
-                                if document.format == DocumentFormat::Markdown {
-                                    render_markdown_block(
-                                        &document,
-                                        row,
-                                        &document.markdown_blocks[row.block_id as usize],
-                                        (f32::from(window.viewport_size().width) - 110.0)
-                                            .max(120.0),
-                                        cx,
-                                    )
-                                } else {
-                                    render_block(
-                                        &document,
-                                        row.block_id,
-                                        row,
-                                        &document.blocks.nodes()[row.block_id as usize],
-                                        is_folded,
-                                        (f32::from(window.viewport_size().width) - 110.0)
-                                            .max(120.0),
-                                        cx,
-                                    )
-                                },
-                            )),
-                    )
-                    .into_any()
-            })
-            .flex_1()
-            .w_full()
+                            .flex()
+                            .items_start()
+                            .child(
+                                div()
+                                    .flex_none()
+                                    .w(px(50.0))
+                                    .pr_3()
+                                    .h(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_end()
+                                    .text_right()
+                                    .font_family("Menlo")
+                                    .text_size(px(10.0))
+                                    .text_color(rgb(theme.foreground_dim))
+                                    .child(if row.show_line_number {
+                                        row.source_line.to_string()
+                                    } else {
+                                        String::new()
+                                    }),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .min_h(px(24.0))
+                                    .flex()
+                                    .items_center()
+                                    .pl_3()
+                                    .pr_8()
+                                    .when(is_table_row, |element| {
+                                        element.bg(rgb(current_theme().background_alt))
+                                    })
+                                    .child(div().w_full().child(
+                                        if document.format == DocumentFormat::Markdown {
+                                            render_markdown_block(
+                                                &document,
+                                                actual_index,
+                                                &document.markdown_blocks[row.block_id as usize],
+                                                {
+                                                    let minimap = minimap_visible
+                                                        .then_some(minimap_width)
+                                                        .unwrap_or(0.0);
+                                                    (editor_width - 110.0 - minimap).max(120.0)
+                                                },
+                                            )
+                                        } else {
+                                            render_block(
+                                                &document,
+                                                actual_index,
+                                                row,
+                                                &document.blocks.nodes()[row.block_id as usize],
+                                                is_folded,
+                                                {
+                                                    let minimap = minimap_visible
+                                                        .then_some(minimap_width)
+                                                        .unwrap_or(0.0);
+                                                    (editor_width - 110.0 - minimap).max(120.0)
+                                                },
+                                            )
+                                        },
+                                    )),
+                            )
+                            .into_any()
+                    })
+                    .flex_1()
+                    .w_full()
+                }),
+        )
+        .when_some(
+            minimap_visible.then_some(preview_display_map).flatten(),
+            |layout, display_map| {
+                layout.child(minimap::render(
+                    display_map,
+                    visible_rows.clone(),
+                    folded.clone(),
+                    minimap_list_state,
+                    editor_width,
+                    minimap_width,
+                    minimap_thumb_visibility,
+                    move |ratio, center, window, cx| {
+                        minimap_entity.update(cx, |this, cx| {
+                            this.minimap_pending_seek =
+                                Some((presentation_revision, ratio, center));
+                            if this.minimap_seek_scheduled {
+                                return;
+                            }
+                            this.minimap_seek_scheduled = true;
+                            cx.on_next_frame(window, |this, _, cx| {
+                                this.minimap_seek_scheduled = false;
+                                if let Some((revision, ratio, center)) =
+                                    this.minimap_pending_seek.take()
+                                    && accept_generation(this.presentation_revision, revision)
+                                {
+                                    minimap::seek_to_ratio(&this.list_state, ratio, center);
+                                    cx.notify();
+                                }
+                            });
+                        });
+                    },
+                    move |change, _, cx| {
+                        minimap_resize_entity.update(cx, |this, cx| {
+                            this.change_minimap_width(change, cx);
+                        });
+                    },
+                ))
+            },
+        )
+        .when_some(minimap_resize_preview, |layout, width| {
+            layout.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .right(px(width))
+                    .w(px(1.0))
+                    .bg(rgb(theme.heading[0])),
+            )
         })
 }
 
 fn render_block(
     document: &Arc<PreviewDocument>,
-    block_id: BlockId,
+    display_row: usize,
     row: PreviewRow,
     block: &BlockNode,
     is_folded: bool,
     available_width: f32,
-    cx: &mut App,
 ) -> gpui::Div {
     let theme = current_theme();
+    let display_map = document
+        .display_map
+        .as_ref()
+        .expect("preview display map must exist after loading");
+    let display_runs = display_map.runs(display_row);
+    let row_layout = display_map.layout(display_row);
     if row.blank {
-        return div().h(px(24.0));
+        return div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)));
     }
-    let text = document
-        .text
-        .copy_range(row.content)
-        .trim_end_matches(['\r', '\n'])
-        .to_owned();
+    let text = display_runs.text.clone();
+    let inline = || styled_inline_runs(text.clone(), display_runs.inline_spans.clone());
 
     let element = match &block.kind {
-        BlockKind::BlankLine => div().h(px(24.0)),
+        BlockKind::BlankLine => {
+            div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)))
+        }
         BlockKind::Heading { level } => {
             let heading_index = (*level as usize).saturating_sub(1);
             let marker = format!(
                 "{} ",
                 theme.heading_bullets[heading_index % theme.heading_bullets.len()]
             );
-            let size = match level {
-                1 => 22.0,
-                2 => 18.0,
-                3 => 15.0,
-                _ => 14.0,
-            };
             div()
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(size))
-                .line_height(px(24.0))
+                .text_size(px(row_layout.font_size))
+                .line_height(px(row_layout.line_height))
                 .font_weight(if *level <= 2 {
                     FontWeight::SEMIBOLD
                 } else {
@@ -2215,7 +2293,7 @@ fn render_block(
                         .min_w_0()
                         .flex()
                         .items_center()
-                        .child(styled_inline(document.inline(block_id, &text, cx)))
+                        .child(inline())
                         .when(is_folded, |element| {
                             element.child(
                                 div()
@@ -2228,10 +2306,10 @@ fn render_block(
         }
         BlockKind::Paragraph => {
             let paragraph = div()
-                .text_size(px(14.0))
-                .line_height(px(22.0))
+                .text_size(px(row_layout.font_size))
+                .line_height(px(row_layout.line_height))
                 .text_color(rgb(theme.foreground))
-                .child(styled_inline(document.inline(block_id, &text, cx)));
+                .child(inline());
             if row.continuation {
                 paragraph
             } else {
@@ -2241,15 +2319,14 @@ fn render_block(
         BlockKind::Image { path } => {
             let source = resolve_image_path(&document.path, path);
             let (width, height) = document
-                .image_sizes
-                .get(&block_id)
-                .map(|&(source_width, source_height)| {
-                    fitted_image_size(source_width, source_height, available_width)
-                })
+                .display_map
+                .as_ref()
+                .and_then(|map| map.image_size(display_row, available_width))
                 .unwrap_or_else(|| (available_width.min(640.0), 240.0));
             div()
                 .w_full()
-                .py_2()
+                .pt(px(row_layout.padding_top))
+                .pb(px(row_layout.padding_bottom))
                 .flex()
                 .items_start()
                 .justify_start()
@@ -2257,54 +2334,48 @@ fn render_block(
         }
         BlockKind::Planning => div()
             .font_family("Menlo")
-            .text_size(px(13.0))
-            .line_height(px(22.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.date))
             .child(text),
         BlockKind::ListItem => div()
-            .pl_1()
-            .text_size(px(14.0))
-            .line_height(px(22.0))
+            .pl(px(row_layout.padding_left))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.foreground))
-            .child(styled_inline(document.inline(block_id, &text, cx))),
+            .child(inline()),
         BlockKind::FixedWidth => div()
             .font_family("Menlo")
-            .text_size(px(13.0))
-            .line_height(px(22.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.code_foreground))
             .child(text),
         BlockKind::FootnoteDefinition => div()
             .font_family("Menlo")
-            .text_size(px(13.0))
-            .line_height(px(22.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.link))
             .child(text),
         BlockKind::TableRow => render_table_row(
             &text,
-            document
-                .tables
-                .get(&block_id)
+            display_map
+                .table_layout(display_row)
                 .expect("table row layout must exist"),
         ),
-        BlockKind::SourceBlock { language } => {
+        BlockKind::SourceBlock { .. } => {
             let marker = text.trim_start().to_ascii_lowercase();
             let is_boundary = marker.starts_with("#+begin_") || marker.starts_with("#+end_");
             let content = if is_boundary {
                 StyledText::new(text.clone())
-            } else if let Some(spans) = document.code_highlights(block_id, language.as_deref(), cx)
-            {
-                styled_code_row(
-                    text.clone(),
-                    row.content.start.0.saturating_sub(block.source.start.0) as usize,
-                    &spans,
-                )
             } else {
-                StyledText::new(text.clone())
+                styled_code_runs(text.clone(), display_runs.code_spans.clone())
             };
             div()
-                .min_h(px(24.0))
-                .px_4()
-                .py(px(2.0))
+                .min_h(px(row_layout.min_height))
+                .pl(px(row_layout.padding_left))
+                .pr(px(row_layout.padding_right))
+                .pt(px(row_layout.padding_top))
+                .pb(px(row_layout.padding_bottom))
                 .bg(rgb(if is_boundary {
                     theme.code_boundary_background
                 } else {
@@ -2316,71 +2387,85 @@ fn render_block(
                     rgb(theme.code_foreground)
                 })
                 .font_family("Menlo")
-                .text_size(px(13.0))
-                .line_height(px(19.0))
+                .text_size(px(row_layout.font_size))
+                .line_height(px(row_layout.line_height))
                 .child(content)
         }
         BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
-            .min_h(px(24.0))
-            .px_4()
-            .py(px(2.0))
+            .min_h(px(row_layout.min_height))
+            .pl(px(row_layout.padding_left))
+            .pr(px(row_layout.padding_right))
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
             .bg(rgb(theme.code_background))
             .font_family("Menlo")
-            .text_size(px(13.0))
-            .line_height(px(21.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.code_foreground))
             .child(text),
         BlockKind::QuoteBlock => div()
-            .pl_4()
-            .pr_2()
-            .py_2()
+            .pl(px(row_layout.padding_left))
+            .pr(px(row_layout.padding_right))
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
             .border_l_2()
             .border_color(rgb(theme.heading[1]))
             .text_color(rgb(theme.quote))
-            .text_size(px(16.0))
-            .line_height(px(25.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .child(text),
         BlockKind::VerseBlock => div()
-            .pl_4()
+            .pl(px(row_layout.padding_left))
             .font_family("Menlo")
-            .text_size(px(13.0))
-            .line_height(px(22.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.quote))
             .child(text),
         BlockKind::CenterBlock => div()
             .w_full()
             .text_center()
-            .text_size(px(14.0))
-            .line_height(px(22.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.foreground))
             .child(text),
         BlockKind::SpecialBlock { name } => div()
-            .min_h(px(24.0))
-            .px_4()
-            .py(px(2.0))
+            .min_h(px(row_layout.min_height))
+            .pl(px(row_layout.padding_left))
+            .pr(px(row_layout.padding_right))
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
             .bg(rgb(theme.code_background))
             .text_color(rgb(theme.attribute))
             .font_family("Menlo")
-            .text_size(px(13.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .child(format!("{name}: {text}")),
         BlockKind::Drawer { .. } => div()
-            .px_3()
-            .py(px(2.0))
+            .pl(px(row_layout.padding_left))
+            .pr(px(row_layout.padding_right))
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
             .bg(rgb(theme.background_alt))
             .font_family("Menlo")
-            .text_size(px(12.0))
-            .line_height(px(19.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.meta))
             .child(text),
         BlockKind::Keyword => div()
-            .py(px(3.0))
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
             .font_family("Menlo")
-            .text_size(px(12.0))
-            .line_height(px(18.0))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.meta))
             .child(text),
         BlockKind::Comment | BlockKind::CommentBlock => div(),
-        BlockKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
+        BlockKind::HorizontalRule => div()
+            .mt(px(row_layout.margin_top))
+            .mb(px(row_layout.margin_bottom))
+            .h(px(row_layout.fixed_height.unwrap_or(1.0)))
+            .w_full()
+            .bg(rgb(theme.border)),
     };
     element
 }
@@ -2394,34 +2479,32 @@ fn parse_document_inline(format: DocumentFormat, source: &str) -> InlineText {
 
 fn render_markdown_block(
     document: &Arc<PreviewDocument>,
-    row: PreviewRow,
+    display_row: usize,
     block: &markdown::MarkdownBlock,
     available_width: f32,
-    cx: &mut App,
 ) -> gpui::Div {
     use markdown::MarkdownKind;
     let theme = current_theme();
-    let text = document
-        .text
-        .copy_range(row.content)
-        .trim_end_matches(['\r', '\n'])
-        .to_owned();
+    let display_map = document
+        .display_map
+        .as_ref()
+        .expect("preview display map must exist after loading");
+    let display_runs = display_map.runs(display_row);
+    let row_layout = display_map.layout(display_row);
+    let text = display_runs.text.clone();
+    let inline = || styled_inline_runs(text.clone(), display_runs.inline_spans.clone());
     match &block.kind {
-        MarkdownKind::Blank => div().h(px(24.0)),
+        MarkdownKind::Blank => {
+            div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)))
+        }
         MarkdownKind::Heading { level } => {
             let index = (*level as usize).saturating_sub(1).min(3);
-            let size = match level {
-                1 => 22.0,
-                2 => 18.0,
-                3 => 15.0,
-                _ => 14.0,
-            };
             div()
                 .flex()
                 .items_center()
                 .gap_1()
-                .text_size(px(size))
-                .line_height(px(24.0))
+                .text_size(px(row_layout.font_size))
+                .line_height(px(row_layout.line_height))
                 .font_weight(if *level <= 2 {
                     FontWeight::SEMIBOLD
                 } else {
@@ -2434,45 +2517,40 @@ fn render_markdown_block(
                         .text_size(px(13.0))
                         .child(format!("{} ", theme.heading_bullets[index])),
                 )
-                .child(styled_inline(document.inline(row.block_id, &text, cx)))
+                .child(inline())
         }
         MarkdownKind::Paragraph => div()
-            .text_size(px(14.0))
-            .line_height(px(22.0))
-            .child(styled_inline(document.inline(row.block_id, &text, cx))),
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
+            .child(inline()),
         MarkdownKind::ListItem => div()
-            .pl_1()
-            .text_size(px(14.0))
-            .line_height(px(22.0))
-            .child(styled_inline(document.inline(row.block_id, &text, cx))),
+            .pl(px(row_layout.padding_left))
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
+            .child(inline()),
         MarkdownKind::Quote => div()
-            .pl_4()
-            .pr_2()
-            .py_1()
+            .pl(px(row_layout.padding_left))
+            .pr(px(row_layout.padding_right))
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
             .border_l_2()
             .border_color(rgb(theme.heading[1]))
             .text_color(rgb(theme.quote))
-            .text_size(px(15.0))
-            .line_height(px(23.0))
-            .child(styled_inline(document.inline(row.block_id, &text, cx))),
-        MarkdownKind::Code { language, boundary } => {
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
+            .child(inline()),
+        MarkdownKind::Code { boundary, .. } => {
             let content = if *boundary {
                 StyledText::new(text.clone())
-            } else if let Some(spans) =
-                document.code_highlights(row.block_id, language.as_deref(), cx)
-            {
-                styled_code_row(
-                    text.clone(),
-                    row.content.start.0.saturating_sub(block.source.start.0) as usize,
-                    &spans,
-                )
             } else {
-                StyledText::new(text.clone())
+                styled_code_runs(text.clone(), display_runs.code_spans.clone())
             };
             div()
-                .min_h(px(24.0))
-                .px_4()
-                .py(px(2.0))
+                .min_h(px(row_layout.min_height))
+                .pl(px(row_layout.padding_left))
+                .pr(px(row_layout.padding_right))
+                .pt(px(row_layout.padding_top))
+                .pb(px(row_layout.padding_bottom))
                 .bg(rgb(if *boundary {
                     theme.code_boundary_background
                 } else {
@@ -2484,42 +2562,44 @@ fn render_markdown_block(
                     theme.code_foreground
                 }))
                 .font_family("Menlo")
-                .text_size(px(13.0))
-                .line_height(px(19.0))
+                .text_size(px(row_layout.font_size))
+                .line_height(px(row_layout.line_height))
                 .child(content)
         }
         MarkdownKind::TableRow => render_table_row(
             &text,
-            document
-                .tables
-                .get(&row.block_id)
+            display_map
+                .table_layout(display_row)
                 .expect("markdown table row layout must exist"),
         ),
-        MarkdownKind::HorizontalRule => div().my_5().h(px(1.0)).w_full().bg(rgb(theme.border)),
+        MarkdownKind::HorizontalRule => div()
+            .mt(px(row_layout.margin_top))
+            .mb(px(row_layout.margin_bottom))
+            .h(px(row_layout.fixed_height.unwrap_or(1.0)))
+            .w_full()
+            .bg(rgb(theme.border)),
         MarkdownKind::Image { path } => {
             let source = resolve_image_path(&document.path, path);
+            let fitted = display_map.image_size(display_row, available_width);
             div()
                 .w_full()
-                .py_2()
+                .pt(px(row_layout.padding_top))
+                .pb(px(row_layout.padding_bottom))
                 .flex()
                 .items_start()
-                .child(img(source).max_w(px(available_width.min(960.0))))
+                .child(if let Some((width, height)) = fitted {
+                    img(source).w(px(width)).h(px(height))
+                } else {
+                    img(source).max_w(px(available_width.min(960.0)))
+                })
         }
     }
 }
 
-fn styled_code_row(text: String, row_start: usize, spans: &[CodeHighlightSpan]) -> StyledText {
-    let row_end = row_start + text.len();
-    let highlights = spans.iter().filter_map(|span| {
-        let start = span.start.max(row_start);
-        let end = span.end.min(row_end);
-        (start < end).then(|| {
-            (
-                start - row_start..end - row_start,
-                code_highlight_style(span.kind),
-            )
-        })
-    });
+fn styled_code_runs(text: gpui::SharedString, spans: Arc<[CodeHighlightSpan]>) -> StyledText {
+    let highlights = spans
+        .iter()
+        .map(|span| (span.start..span.end, code_highlight_style(span.kind)));
     StyledText::new(text).with_highlights(highlights)
 }
 
@@ -2544,9 +2624,9 @@ fn code_highlight_style(kind: CodeHighlightKind) -> HighlightStyle {
     }
 }
 
-fn styled_inline(parsed: InlineText) -> StyledText {
+fn styled_inline_runs(text: gpui::SharedString, spans: Arc<[InlineSpan]>) -> StyledText {
     let theme = current_theme();
-    let highlights = parsed.spans.into_iter().map(|span| {
+    let highlights = spans.iter().map(|span| {
         let style = match span.kind {
             InlineKind::Bold => HighlightStyle {
                 font_weight: Some(FontWeight::BOLD),
@@ -2588,17 +2668,14 @@ fn styled_inline(parsed: InlineText) -> StyledText {
                 ..Default::default()
             },
         };
-        (span.range, style)
+        (span.range.clone(), style)
     });
-    StyledText::new(parsed.text).with_highlights(highlights)
+    StyledText::new(text).with_highlights(highlights)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        InlineCache, InlineText, MAX_SYNC_INLINE_BYTES, accept_generation, dired_command_items,
-        preview_input,
-    };
+    use super::{accept_generation, dired_command_items, preview_input};
 
     #[test]
     fn stale_generations_are_rejected() {
@@ -2607,26 +2684,41 @@ mod tests {
     }
 
     #[test]
-    fn inline_cache_never_exceeds_capacity() {
-        let mut cache = InlineCache::new(4, 1024);
-        for id in 0..32 {
-            cache.get_or_insert(id, "*text*");
-            assert!(cache.entries.len() <= 4);
-        }
-    }
+    fn reload_failure_retains_previous_document_and_rejects_stale_completion() {
+        let path = std::env::temp_dir().join(format!(
+            "org-studio-reload-state-{}.org",
+            std::process::id()
+        ));
+        std::fs::write(&path, "* retained\n").unwrap();
+        let document = super::load_document(path.clone()).unwrap();
+        let _ = std::fs::remove_file(&path);
 
-    #[test]
-    fn inline_cache_enforces_byte_capacity() {
-        let mut cache = InlineCache::new(4, 1024);
-        cache.insert(
-            0,
-            InlineText {
-                text: "a".repeat(MAX_SYNC_INLINE_BYTES + 1),
-                spans: Vec::new(),
-            },
+        let mut app = super::PreviewApp::new();
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document)));
+        assert_eq!(
+            app.last_ready.as_ref().map(|(generation, _)| *generation),
+            Some(1)
         );
-        assert!(cache.entries.is_empty());
-        assert_eq!(cache.bytes, 0);
+
+        app.generation = 2;
+        assert!(app.apply_load_result(2, Err((path.clone(), "reload failed".to_owned()))));
+        assert!(matches!(app.state, super::PreviewLoadState::Failed { .. }));
+        assert_eq!(
+            app.last_ready.as_ref().map(|(generation, _)| *generation),
+            Some(1)
+        );
+
+        let stale_path = path.with_extension("md");
+        std::fs::write(&stale_path, "# stale\n").unwrap();
+        let stale = super::load_document(stale_path.clone()).unwrap();
+        let _ = std::fs::remove_file(stale_path);
+        assert!(!app.apply_load_result(1, Ok(stale)));
+        assert!(matches!(app.state, super::PreviewLoadState::Failed { .. }));
+        assert_eq!(
+            app.last_ready.as_ref().map(|(generation, _)| *generation),
+            Some(1)
+        );
     }
 
     #[test]
@@ -2664,5 +2756,85 @@ mod tests {
         assert!(document.blocks.nodes().is_empty());
         assert!(!document.markdown_blocks.is_empty());
         assert_eq!(document.rows.len(), 3);
+    }
+
+    #[test]
+    fn markdown_parent_and_minimap_share_identical_display_runs() {
+        let path = std::env::temp_dir().join(format!(
+            "org-studio-shared-display-runs-{}.md",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "# **标题** and *italic*\n\n```rust\nlet answer = 42;\n```\n",
+        )
+        .unwrap();
+        let document = super::load_document(path.clone()).unwrap();
+        let _ = std::fs::remove_file(path);
+        let display_map = document.display_map.as_ref().unwrap();
+        let heading_layout = display_map.layout(0);
+        assert_eq!(heading_layout.font_size, 22.0);
+        assert_eq!(heading_layout.line_height, 24.0);
+        let blank_layout = display_map.layout(1);
+        assert_eq!(blank_layout.fixed_height, Some(24.0));
+
+        let heading =
+            super::parse_document_inline(super::DocumentFormat::Markdown, "**标题** and *italic*");
+        let heading_runs = display_map.runs(0);
+        assert_eq!(heading_runs.text.as_ref(), heading.text);
+        assert_eq!(heading_runs.inline_spans.as_ref(), heading.spans);
+
+        let code_row = document
+            .rows
+            .iter()
+            .position(|row| document.text.copy_range(row.content).contains("answer"))
+            .expect("code row");
+        assert!(!display_map.runs(code_row).code_spans.is_empty());
+        let code_layout = display_map.layout(code_row);
+        assert_eq!(code_layout.padding_left, 16.0);
+        assert_eq!(code_layout.padding_right, 16.0);
+        assert_eq!(code_layout.min_height, 24.0);
+    }
+
+    #[test]
+    fn org_parent_and_minimap_share_identical_display_runs() {
+        let path = std::env::temp_dir().join(format!(
+            "org-studio-shared-display-runs-{}.org",
+            std::process::id()
+        ));
+        std::fs::write(
+            &path,
+            "* *粗体* and /italic/\n\n#+begin_src rust\nlet n = 7;\n#+end_src\n",
+        )
+        .unwrap();
+        let document = super::load_document(path.clone()).unwrap();
+        let _ = std::fs::remove_file(path);
+        let display_map = document.display_map.as_ref().unwrap();
+        let heading_layout = display_map.layout(0);
+        assert_eq!(heading_layout.font_size, 22.0);
+        assert_eq!(heading_layout.line_height, 24.0);
+        let blank_layout = display_map.layout(1);
+        assert_eq!(blank_layout.fixed_height, Some(24.0));
+        let source = document
+            .text
+            .copy_range(document.rows[0].content)
+            .trim_end_matches(['\r', '\n'])
+            .to_owned();
+        let expected = super::parse_document_inline(super::DocumentFormat::Org, &source);
+        let heading_runs = display_map.runs(0);
+        assert_eq!(heading_runs.text.as_ref(), expected.text);
+        assert_eq!(heading_runs.inline_spans.as_ref(), expected.spans);
+
+        let code_row = document
+            .rows
+            .iter()
+            .position(|row| document.text.copy_range(row.content).contains("let n"))
+            .expect("code row");
+        assert!(!display_map.runs(code_row).code_spans.is_empty());
+        let code_layout = display_map.layout(code_row);
+        assert_eq!(code_layout.padding_left, 16.0);
+        assert_eq!(code_layout.padding_right, 16.0);
+        assert_eq!(code_layout.line_height, 19.0);
+        assert_eq!(code_layout.min_height, 24.0);
     }
 }

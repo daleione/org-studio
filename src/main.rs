@@ -7,7 +7,8 @@ use gpui::{
 use org_studio::{
     perf_tracing,
     preview::{
-        OpenDocument, OpenFileManager, PreviewApp, ReloadDocument, ReturnToDocument, ToggleSidebar,
+        OpenDocument, OpenFileManager, PreviewApp, ReloadDocument, ReturnToDocument, ToggleMinimap,
+        ToggleSidebar,
     },
 };
 
@@ -23,36 +24,26 @@ fn main() {
     });
 
     application.run(move |cx: &mut App| {
+        let active_preview: Rc<RefCell<Option<gpui::Entity<PreviewApp>>>> =
+            Rc::new(RefCell::new(None));
         cx.on_action(|_: &Quit, cx| cx.quit());
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenDocument, None),
             KeyBinding::new("cmd-r", ReloadDocument, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
-        cx.set_menus(vec![
-            Menu {
-                name: "Org Studio".into(),
-                items: vec![
-                    MenuItem::os_submenu("Services", SystemMenuType::Services),
-                    MenuItem::separator(),
-                    MenuItem::action("Quit Org Studio", Quit),
-                ],
-            },
-            Menu {
-                name: "File".into(),
-                items: vec![
-                    MenuItem::action("Open...", OpenDocument),
-                    MenuItem::action("Open File Manager...", OpenFileManager),
-                    MenuItem::action("Return to Document", ReturnToDocument),
-                    MenuItem::separator(),
-                    MenuItem::action("Reload", ReloadDocument),
-                ],
-            },
-            Menu {
-                name: "View".into(),
-                items: vec![MenuItem::action("Show/Hide Sidebar", ToggleSidebar)],
-            },
-        ]);
+        cx.set_menus(app_menus(org_studio::settings::initial_minimap_enabled()));
+        let preview_for_minimap = active_preview.clone();
+        cx.on_action(move |_: &ToggleMinimap, cx| {
+            let Some(preview) = preview_for_minimap.borrow().clone() else {
+                return;
+            };
+            let visible = preview.update(cx, |preview, cx| {
+                preview.toggle_minimap(cx);
+                preview.minimap_visible()
+            });
+            cx.set_menus(app_menus(visible));
+        });
         let displays = cx.displays();
         for (index, display) in displays.iter().enumerate() {
             eprintln!(
@@ -66,9 +57,22 @@ fn main() {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .and_then(|index| displays.get(index).map(|display| display.id()));
-        let bounds = Bounds::centered(requested_display, size(px(920.0), px(720.0)), cx);
+        let window_width = std::env::var("ORG_STUDIO_WINDOW_WIDTH")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite() && *value >= 320.0)
+            .unwrap_or(920.0);
+        let window_height = std::env::var("ORG_STUDIO_WINDOW_HEIGHT")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite() && *value >= 240.0)
+            .unwrap_or(720.0);
+        let bounds = Bounds::centered(
+            requested_display,
+            size(px(window_width), px(window_height)),
+            cx,
+        );
         let path = initial_path.clone();
-        let active_preview = Rc::new(RefCell::new(None));
         let preview_for_window = active_preview.clone();
 
         cx.open_window(
@@ -118,4 +122,41 @@ fn main() {
     if let Some(perf_trace) = perf_trace {
         perf_trace.report();
     }
+}
+
+fn app_menus(minimap_enabled: bool) -> Vec<Menu> {
+    vec![
+        Menu {
+            name: "Org Studio".into(),
+            items: vec![
+                MenuItem::os_submenu("Services", SystemMenuType::Services),
+                MenuItem::separator(),
+                MenuItem::action("Quit Org Studio", Quit),
+            ],
+        },
+        Menu {
+            name: "File".into(),
+            items: vec![
+                MenuItem::action("Open...", OpenDocument),
+                MenuItem::action("Open File Manager...", OpenFileManager),
+                MenuItem::action("Return to Document", ReturnToDocument),
+                MenuItem::separator(),
+                MenuItem::action("Reload", ReloadDocument),
+            ],
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![
+                MenuItem::action("Show/Hide Sidebar", ToggleSidebar),
+                MenuItem::action(
+                    if minimap_enabled {
+                        "✓ Minimap"
+                    } else {
+                        "Minimap"
+                    },
+                    ToggleMinimap,
+                ),
+            ],
+        },
+    ]
 }

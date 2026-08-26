@@ -8,4 +8,5 @@ pub mod navigation;
 pub mod org_syntax;
 pub mod perf_tracing;
 pub mod preview;
+pub mod settings;
 pub mod theme;
