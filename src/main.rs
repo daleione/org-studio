@@ -1,8 +1,8 @@
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gpui::{
-    App, Application, Bounds, KeyBinding, Menu, MenuItem, SharedString, SystemMenuType,
-    TitlebarOptions, WindowBounds, WindowOptions, actions, prelude::*, px, size,
+    App, Bounds, KeyBinding, Menu, MenuItem, SharedString, SystemMenuType, TitlebarOptions,
+    WindowBounds, WindowOptions, actions, prelude::*, px, size,
 };
 use org_studio::{
     perf_tracing,
@@ -14,11 +14,19 @@ use org_studio::{
 
 actions!(org_studio, [Quit]);
 
+const DISABLE_INACTIVE_THROTTLE_ENV: &str = "ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE";
+
+fn benchmark_disables_inactive_throttle() -> bool {
+    std::env::var(DISABLE_INACTIVE_THROTTLE_ENV)
+        .ok()
+        .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "on"))
+}
+
 fn main() {
     let perf_trace = perf_tracing::PerfTrace::install();
     let initial_path = std::env::args_os().nth(1).map(PathBuf::from);
     let (open_sender, open_receiver) = async_channel::unbounded::<Vec<String>>();
-    let application = Application::new();
+    let application = gpui_platform::application();
     application.on_open_urls(move |urls| {
         let _ = open_sender.try_send(urls);
     });
@@ -75,16 +83,28 @@ fn main() {
         let path = initial_path.clone();
         let preview_for_window = active_preview.clone();
 
-        cx.open_window(
-            WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
-                titlebar: Some(TitlebarOptions {
-                    title: Some(SharedString::from("Org Studio")),
-                    appears_transparent: false,
-                    ..Default::default()
-                }),
+        let disable_inactive_throttle = benchmark_disables_inactive_throttle();
+        let mut window_options = WindowOptions {
+            window_bounds: Some(WindowBounds::Windowed(bounds)),
+            titlebar: Some(TitlebarOptions {
+                title: Some(SharedString::from("Org Studio")),
+                appears_transparent: false,
                 ..Default::default()
-            },
+            }),
+            ..Default::default()
+        };
+        if disable_inactive_throttle {
+            // Synthetic on_next_frame benchmarks do not generate native input and macOS does not
+            // guarantee that an unattended process becomes the active application. Disable only
+            // GPUI's inactive-window energy throttle so the sample remains display-link paced.
+            window_options.inactive_frame_interval = None;
+            eprintln!(
+                "org_studio_benchmark_frame_policy inactive_window_throttle=disabled env={DISABLE_INACTIVE_THROTTLE_ENV}"
+            );
+        }
+
+        cx.open_window(
+            window_options,
             move |_window, cx| {
                 let preview = cx.new(|cx| {
                     let mut app = PreviewApp::new();
@@ -126,37 +146,28 @@ fn main() {
 
 fn app_menus(minimap_enabled: bool) -> Vec<Menu> {
     vec![
-        Menu {
-            name: "Org Studio".into(),
-            items: vec![
-                MenuItem::os_submenu("Services", SystemMenuType::Services),
-                MenuItem::separator(),
-                MenuItem::action("Quit Org Studio", Quit),
-            ],
-        },
-        Menu {
-            name: "File".into(),
-            items: vec![
-                MenuItem::action("Open...", OpenDocument),
-                MenuItem::action("Open File Manager...", OpenFileManager),
-                MenuItem::action("Return to Document", ReturnToDocument),
-                MenuItem::separator(),
-                MenuItem::action("Reload", ReloadDocument),
-            ],
-        },
-        Menu {
-            name: "View".into(),
-            items: vec![
-                MenuItem::action("Show/Hide Sidebar", ToggleSidebar),
-                MenuItem::action(
-                    if minimap_enabled {
-                        "✓ Minimap"
-                    } else {
-                        "Minimap"
-                    },
-                    ToggleMinimap,
-                ),
-            ],
-        },
+        Menu::new("Org Studio").items([
+            MenuItem::os_submenu("Services", SystemMenuType::Services),
+            MenuItem::separator(),
+            MenuItem::action("Quit Org Studio", Quit),
+        ]),
+        Menu::new("File").items([
+            MenuItem::action("Open...", OpenDocument),
+            MenuItem::action("Open File Manager...", OpenFileManager),
+            MenuItem::action("Return to Document", ReturnToDocument),
+            MenuItem::separator(),
+            MenuItem::action("Reload", ReloadDocument),
+        ]),
+        Menu::new("View").items([
+            MenuItem::action("Show/Hide Sidebar", ToggleSidebar),
+            MenuItem::action(
+                if minimap_enabled {
+                    "✓ Minimap"
+                } else {
+                    "Minimap"
+                },
+                ToggleMinimap,
+            ),
+        ]),
     ]
 }

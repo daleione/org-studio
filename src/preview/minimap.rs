@@ -54,10 +54,14 @@ const MINIMAP_AUTO_GROW_START_PX: f32 = 1280.0;
 const MINIMAP_AUTO_GROW_PER_PX: f32 = 0.11;
 const MINIMAP_AUTO_MAX_PX: f32 = 220.0;
 const MINIMAP_RESIZE_HANDLE_PX: f32 = 6.0;
-const MINIMAP_INDEX_FRAME_BUDGET: Duration = Duration::from_millis(6);
+// Leave the overwhelming majority of a 120Hz frame (8.333ms) to GPUI layout,
+// paint and presentation. Projection refinement is cooperative and can take as
+// many frames as necessary because an estimated projection is available first.
+const MINIMAP_INDEX_FRAME_BUDGET: Duration = Duration::from_micros(350);
 #[cfg(test)]
 const PREVIEW_BASE_ROW_PX: f32 = 24.0;
 const RASTER_TILE_ROWS: usize = 128;
+const PROJECTION_CHUNK_ROWS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum MinimapDensity {
@@ -117,6 +121,13 @@ impl MinimapDensity {
 fn minimap_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("ORG_STUDIO_MINIMAP_TRACE").is_some())
+}
+
+fn minimap_perf_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var_os("ORG_STUDIO_MINIMAP_PERF").is_some() || minimap_trace_enabled()
+    })
 }
 
 pub(super) fn automatic_width_for_viewport(viewport_width: f32) -> f32 {
@@ -254,6 +265,21 @@ pub(super) struct PreviewDisplayMap {
     minimap_drag: Arc<Mutex<Option<MinimapDragSession>>>,
     minimap_resize_drag: Arc<Mutex<Option<MinimapResizeSession>>>,
     minimap_interaction_anchor: Arc<Mutex<Option<MinimapInteractionAnchor>>>,
+    perf: MinimapPerfState,
+}
+
+struct MinimapPerfState {
+    first_tile_completed: AtomicBool,
+    first_pixels_painted: AtomicBool,
+}
+
+impl MinimapPerfState {
+    fn new() -> Self {
+        Self {
+            first_tile_completed: AtomicBool::new(false),
+            first_pixels_painted: AtomicBool::new(false),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -293,9 +319,205 @@ struct MinimapLineIndex {
     width: u16,
     rows_signature: u64,
     density: MinimapDensity,
+    projection: Arc<ProjectionSnapshot>,
+    total: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ProjectionMeasure {
+    display_lines: u32,
+    pixels: f32,
+    exact: bool,
+}
+
+impl ProjectionMeasure {
+    fn new(display_lines: usize, pixels: f32, exact: bool) -> Self {
+        Self {
+            display_lines: display_lines.max(1).min(u32::MAX as usize) as u32,
+            pixels: pixels.max(0.0),
+            exact,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ProjectionChunk {
+    measures: Arc<[ProjectionMeasure]>,
+    display_lines: usize,
+    pixels: f32,
+    exact_rows: usize,
+}
+
+impl ProjectionChunk {
+    fn new(measures: Vec<ProjectionMeasure>) -> Self {
+        let display_lines = measures
+            .iter()
+            .map(|measure| measure.display_lines as usize)
+            .sum();
+        let pixels = measures.iter().map(|measure| measure.pixels).sum();
+        let exact_rows = measures.iter().filter(|measure| measure.exact).count();
+        Self {
+            measures: measures.into(),
+            display_lines,
+            pixels,
+            exact_rows,
+        }
+    }
+}
+
+#[derive(Clone)]
+struct ProjectionSnapshot {
+    chunks: Arc<[Arc<ProjectionChunk>]>,
     display_prefix: Arc<[usize]>,
     pixel_prefix: Arc<[f32]>,
-    total: usize,
+    rows: usize,
+    exact_rows: usize,
+}
+
+impl ProjectionSnapshot {
+    fn new(measures: Vec<ProjectionMeasure>) -> Self {
+        let chunks = measures
+            .chunks(PROJECTION_CHUNK_ROWS)
+            .map(|chunk| Arc::new(ProjectionChunk::new(chunk.to_vec())))
+            .collect::<Vec<_>>();
+        Self::from_chunks(chunks)
+    }
+
+    fn from_chunks(chunks: Vec<Arc<ProjectionChunk>>) -> Self {
+        let mut display_prefix = Vec::with_capacity(chunks.len() + 1);
+        let mut pixel_prefix = Vec::with_capacity(chunks.len() + 1);
+        display_prefix.push(0usize);
+        pixel_prefix.push(0.0f32);
+        let mut rows = 0usize;
+        let mut exact_rows = 0usize;
+        for chunk in &chunks {
+            display_prefix.push(
+                display_prefix
+                    .last()
+                    .copied()
+                    .unwrap_or(0)
+                    .saturating_add(chunk.display_lines),
+            );
+            pixel_prefix.push(pixel_prefix.last().copied().unwrap_or(0.0) + chunk.pixels);
+            rows += chunk.measures.len();
+            exact_rows += chunk.exact_rows;
+        }
+        Self {
+            chunks: chunks.into(),
+            display_prefix: display_prefix.into(),
+            pixel_prefix: pixel_prefix.into(),
+            rows,
+            exact_rows,
+        }
+    }
+
+    fn replacing(&self, updates: &[(usize, ProjectionMeasure)]) -> Self {
+        if updates.is_empty() {
+            return self.clone();
+        }
+        let mut chunks = self.chunks.to_vec();
+        let mut cursor = 0usize;
+        while cursor < updates.len() {
+            let chunk_index = updates[cursor].0 / PROJECTION_CHUNK_ROWS;
+            if chunk_index >= chunks.len() {
+                break;
+            }
+            let mut measures = chunks[chunk_index].measures.to_vec();
+            while cursor < updates.len() && updates[cursor].0 / PROJECTION_CHUNK_ROWS == chunk_index
+            {
+                let local = updates[cursor].0 % PROJECTION_CHUNK_ROWS;
+                if local < measures.len() {
+                    measures[local] = updates[cursor].1;
+                }
+                cursor += 1;
+            }
+            chunks[chunk_index] = Arc::new(ProjectionChunk::new(measures));
+        }
+        Self::from_chunks(chunks)
+    }
+
+    fn total_display_lines(&self) -> usize {
+        self.display_prefix.last().copied().unwrap_or(0)
+    }
+
+    fn total_pixels(&self) -> f32 {
+        self.pixel_prefix.last().copied().unwrap_or(0.0)
+    }
+
+    fn estimated_heap_bytes(&self) -> usize {
+        self.rows * std::mem::size_of::<ProjectionMeasure>()
+            + self.chunks.len() * std::mem::size_of::<Arc<ProjectionChunk>>()
+            + self.display_prefix.len() * std::mem::size_of::<usize>()
+            + self.pixel_prefix.len() * std::mem::size_of::<f32>()
+    }
+
+    fn prefix_for_row(&self, row: usize) -> (usize, f32) {
+        if self.rows == 0 {
+            return (0, 0.0);
+        }
+        let row = row.min(self.rows);
+        let chunk_index = (row / PROJECTION_CHUNK_ROWS).min(self.chunks.len());
+        let mut display = self.display_prefix[chunk_index];
+        let mut pixels = self.pixel_prefix[chunk_index];
+        if chunk_index < self.chunks.len() {
+            let local_end = row % PROJECTION_CHUNK_ROWS;
+            for measure in self.chunks[chunk_index].measures.iter().take(local_end) {
+                display = display.saturating_add(measure.display_lines as usize);
+                pixels += measure.pixels;
+            }
+        }
+        (display, pixels)
+    }
+
+    fn measure(&self, row: usize) -> ProjectionMeasure {
+        let chunk = row / PROJECTION_CHUNK_ROWS;
+        let local = row % PROJECTION_CHUNK_ROWS;
+        self.chunks[chunk].measures[local]
+    }
+
+    fn locate_display(&self, display_line: usize) -> (usize, usize) {
+        if self.rows == 0 {
+            return (0, 0);
+        }
+        let chunk_index = self
+            .display_prefix
+            .partition_point(|&start| start <= display_line)
+            .saturating_sub(1)
+            .min(self.chunks.len() - 1);
+        let mut remaining = display_line.saturating_sub(self.display_prefix[chunk_index]);
+        for (local, measure) in self.chunks[chunk_index].measures.iter().enumerate() {
+            let count = measure.display_lines as usize;
+            if remaining < count {
+                return (chunk_index * PROJECTION_CHUNK_ROWS + local, remaining);
+            }
+            remaining = remaining.saturating_sub(count);
+        }
+        (
+            self.rows - 1,
+            self.measure(self.rows - 1).display_lines as usize,
+        )
+    }
+
+    fn locate_pixel(&self, pixel: f32) -> (usize, f32) {
+        if self.rows == 0 {
+            return (0, 0.0);
+        }
+        let pixel = pixel.clamp(0.0, self.total_pixels());
+        let chunk_index = self
+            .pixel_prefix
+            .partition_point(|&start| start <= pixel)
+            .saturating_sub(1)
+            .min(self.chunks.len() - 1);
+        let mut remaining = (pixel - self.pixel_prefix[chunk_index]).max(0.0);
+        for (local, measure) in self.chunks[chunk_index].measures.iter().enumerate() {
+            if remaining < measure.pixels || measure.pixels <= f32::EPSILON {
+                return (chunk_index * PROJECTION_CHUNK_ROWS + local, remaining);
+            }
+            remaining -= measure.pixels;
+        }
+        let last = self.rows - 1;
+        (last, self.measure(last).pixels)
+    }
 }
 
 #[derive(Clone)]
@@ -329,107 +551,204 @@ struct MinimapLineIndexBuilder {
     key: MinimapLineIndexKey,
     presentation_rows: Arc<Vec<usize>>,
     rows_signature: u64,
-    next_row: usize,
+    sequential_cursor: usize,
+    priority_range: Range<usize>,
+    priority_cursor: usize,
+    exact_bits: Vec<u64>,
+    exact_rows: usize,
     started_at: Instant,
-    display_prefix: Vec<usize>,
-    pixel_prefix: Vec<f32>,
+    projection: Arc<ProjectionSnapshot>,
+    pending_updates: Vec<(usize, ProjectionMeasure)>,
+    slices: usize,
+    work: Duration,
+    max_slice: Duration,
 }
 
 impl MinimapLineIndexBuilder {
     fn new(
+        model: &PreviewDisplayMap,
         key: MinimapLineIndexKey,
         presentation_rows: Arc<Vec<usize>>,
+        available_width: f32,
+        density: MinimapDensity,
     ) -> MinimapLineIndexBuilder {
+        let started_at = Instant::now();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         presentation_rows.hash(&mut hasher);
-        let capacity = presentation_rows.len() + 1;
-        let mut display_prefix = Vec::with_capacity(capacity);
-        let mut pixel_prefix = Vec::with_capacity(capacity);
-        display_prefix.push(0);
-        pixel_prefix.push(0.0);
+        let rows_signature = hasher.finish();
+        let estimated_index = model.estimated_minimap_line_index(
+            &presentation_rows,
+            key.width,
+            rows_signature,
+            available_width,
+            density,
+        );
         Self {
             key,
+            projection: estimated_index.projection,
             presentation_rows,
-            rows_signature: hasher.finish(),
-            next_row: 0,
-            started_at: Instant::now(),
-            display_prefix,
-            pixel_prefix,
+            rows_signature,
+            sequential_cursor: 0,
+            priority_range: 0..0,
+            priority_cursor: 0,
+            exact_bits: vec![0; key.presentation_rows.div_ceil(64)],
+            exact_rows: 0,
+            started_at,
+            pending_updates: Vec::with_capacity(16),
+            slices: 0,
+            work: Duration::ZERO,
+            max_slice: Duration::ZERO,
         }
     }
+
+    fn record_slice(&mut self, elapsed: Duration) {
+        self.slices += 1;
+        self.work += elapsed;
+        self.max_slice = self.max_slice.max(elapsed);
+    }
+
+    fn publish_pending(&mut self) {
+        if self.pending_updates.is_empty() {
+            return;
+        }
+        self.projection = Arc::new(self.projection.replacing(&self.pending_updates));
+        self.pending_updates.clear();
+    }
+
+    fn index(&self, density: MinimapDensity) -> MinimapLineIndex {
+        MinimapLineIndex {
+            width: self.key.width,
+            rows_signature: self.rows_signature,
+            density,
+            total: self.projection.total_display_lines(),
+            projection: self.projection.clone(),
+        }
+    }
+
+    fn is_exact(&self, row: usize) -> bool {
+        self.exact_bits
+            .get(row / 64)
+            .is_some_and(|bits| bits & (1u64 << (row % 64)) != 0)
+    }
+
+    fn mark_exact(&mut self, row: usize) {
+        let bit = 1u64 << (row % 64);
+        let word = &mut self.exact_bits[row / 64];
+        if *word & bit == 0 {
+            *word |= bit;
+            self.exact_rows += 1;
+        }
+    }
+
+    fn prioritize(&mut self, center: usize) {
+        if self.presentation_rows.is_empty() {
+            return;
+        }
+        let center = center.min(self.presentation_rows.len() - 1);
+        if self.priority_range.contains(&center) {
+            return;
+        }
+        let start = center.saturating_sub(RASTER_TILE_ROWS);
+        let end = (center + RASTER_TILE_ROWS * 2).min(self.presentation_rows.len());
+        self.priority_range = start..end;
+        self.priority_cursor = start;
+    }
+
+    fn next_candidate(&mut self) -> Option<usize> {
+        while self.priority_cursor < self.priority_range.end {
+            let row = self.priority_cursor;
+            self.priority_cursor += 1;
+            if !self.is_exact(row) {
+                return Some(row);
+            }
+        }
+        while self.sequential_cursor < self.presentation_rows.len() {
+            let row = self.sequential_cursor;
+            self.sequential_cursor += 1;
+            if !self.is_exact(row) {
+                return Some(row);
+            }
+        }
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MinimapProjectionReadiness {
+    Estimated,
+    PartiallyExact,
+    Exact,
+}
+
+struct MinimapLineIndexProgress {
+    index: MinimapLineIndex,
+    readiness: MinimapProjectionReadiness,
+    exact_rows: usize,
 }
 
 impl MinimapLineIndex {
     fn locate(&self, display_line: usize) -> (usize, usize) {
-        if self.display_prefix.len() <= 1 {
-            return (0, 0);
-        }
-        let row = self
-            .display_prefix
-            .partition_point(|&start| start <= display_line)
-            .saturating_sub(1)
-            .min(self.display_prefix.len() - 2);
-        (row, display_line.saturating_sub(self.display_prefix[row]))
+        self.projection.locate_display(display_line)
     }
 
     fn pixel_for_list_offset(&self, offset: ListOffset) -> f32 {
-        if self.pixel_prefix.len() <= 1 {
+        if self.projection.rows == 0 {
             return 0.0;
         }
-        let row = offset.item_ix.min(self.pixel_prefix.len() - 2);
-        let row_height = (self.pixel_prefix[row + 1] - self.pixel_prefix[row]).max(0.0);
-        (self.pixel_prefix[row] + f32::from(offset.offset_in_item).clamp(0.0, row_height))
-            .clamp(0.0, *self.pixel_prefix.last().unwrap_or(&0.0))
+        let row = offset.item_ix.min(self.projection.rows - 1);
+        let (_, pixel_start) = self.projection.prefix_for_row(row);
+        let row_height = self.projection.measure(row).pixels;
+        (pixel_start + f32::from(offset.offset_in_item).clamp(0.0, row_height))
+            .clamp(0.0, self.projection.total_pixels())
     }
 
     fn list_offset_for_display_position(&self, position: f32) -> ListOffset {
-        if self.display_prefix.len() <= 1 {
+        if self.projection.rows == 0 {
             return ListOffset::default();
         }
         let position = position.clamp(0.0, self.total as f32);
         let (row, _) = self.locate(position.floor() as usize);
-        let display_start = self.display_prefix[row] as f32;
-        let display_count = (self.display_prefix[row + 1] - self.display_prefix[row]).max(1) as f32;
-        let pixel_height = (self.pixel_prefix[row + 1] - self.pixel_prefix[row]).max(0.0);
+        let (display_start, _) = self.projection.prefix_for_row(row);
+        let measure = self.projection.measure(row);
+        let display_count = measure.display_lines.max(1) as f32;
+        let pixel_height = measure.pixels;
         ListOffset {
             item_ix: row,
             offset_in_item: px(
-                ((position - display_start) / display_count).clamp(0.0, 1.0) * pixel_height
+                ((position - display_start as f32) / display_count).clamp(0.0, 1.0) * pixel_height,
             ),
         }
     }
 
     fn display_position_for_pixel(&self, pixel: f32) -> f32 {
-        if self.pixel_prefix.len() <= 1 {
+        if self.projection.rows == 0 {
             return 0.0;
         }
-        let document_pixels = *self.pixel_prefix.last().unwrap_or(&0.0);
+        let document_pixels = self.projection.total_pixels();
         let pixel = pixel.clamp(0.0, document_pixels);
-        let row = self
-            .pixel_prefix
-            .partition_point(|&start| start <= pixel)
-            .saturating_sub(1)
-            .min(self.pixel_prefix.len() - 2);
-        let row_pixels = (self.pixel_prefix[row + 1] - self.pixel_prefix[row]).max(1.0);
-        let row_lines = (self.display_prefix[row + 1] - self.display_prefix[row]).max(1) as f32;
-        self.display_prefix[row] as f32
-            + ((pixel - self.pixel_prefix[row]) / row_pixels).clamp(0.0, 1.0) * row_lines
+        let (row, pixel_in_row) = self.projection.locate_pixel(pixel);
+        let (display_start, _) = self.projection.prefix_for_row(row);
+        let measure = self.projection.measure(row);
+        display_start as f32
+            + (pixel_in_row / measure.pixels.max(1.0)).clamp(0.0, 1.0)
+                * measure.display_lines.max(1) as f32
     }
 
     fn list_offset_for_pixel(&self, pixel: f32) -> ListOffset {
-        if self.pixel_prefix.len() <= 1 {
+        if self.projection.rows == 0 {
             return ListOffset::default();
         }
-        let pixel = pixel.clamp(0.0, *self.pixel_prefix.last().unwrap_or(&0.0));
-        let row = self
-            .pixel_prefix
-            .partition_point(|&start| start <= pixel)
-            .saturating_sub(1)
-            .min(self.pixel_prefix.len() - 2);
+        let (row, pixel_in_row) = self
+            .projection
+            .locate_pixel(pixel.clamp(0.0, self.projection.total_pixels()));
         ListOffset {
             item_ix: row,
-            offset_in_item: px(pixel - self.pixel_prefix[row]),
+            offset_in_item: px(pixel_in_row),
         }
+    }
+
+    fn document_pixels(&self) -> f32 {
+        self.projection.total_pixels()
     }
 }
 
@@ -539,7 +858,12 @@ impl RasterTileCache {
                 .then(|| self.entries.get(candidate).cloned())
                 .flatten()
         });
-        (fallback, self.in_flight.insert(key))
+        let should_spawn = if self.in_flight.is_empty() {
+            self.in_flight.insert(key)
+        } else {
+            false
+        };
+        (fallback, should_spawn)
     }
 
     fn insert(&mut self, key: RasterTileKey, image: Arc<RenderImage>) {
@@ -563,6 +887,14 @@ struct RasterTilePaint {
     y: f32,
     width: f32,
     height: f32,
+}
+
+struct RasterizedTile {
+    image: Arc<RenderImage>,
+    line_count: usize,
+    total: Duration,
+    text_system_wait: Duration,
+    cold_text_system: bool,
 }
 
 #[cfg(test)]
@@ -616,7 +948,7 @@ fn minimap_visible_display_range(
     scroll_pixels: f32,
     viewport_pixels: f32,
 ) -> (f32, f32) {
-    let document_pixels = index.pixel_prefix.last().copied().unwrap_or(0.0);
+    let document_pixels = index.document_pixels();
     let top = index.display_position_for_pixel(scroll_pixels);
     let bottom = index
         .display_position_for_pixel((scroll_pixels + viewport_pixels).clamp(0.0, document_pixels));
@@ -629,7 +961,7 @@ fn minimap_thumb_height_for_scroll(
     viewport_pixels: f32,
     interaction_height: f32,
 ) -> f32 {
-    let document_pixels = index.pixel_prefix.last().copied().unwrap_or(0.0);
+    let document_pixels = index.document_pixels();
     if document_pixels <= viewport_pixels || document_pixels <= f32::EPSILON {
         return interaction_height;
     }
@@ -682,7 +1014,7 @@ fn minimap_viewport_for_list(
     let interaction_height = minimap_projection_height(index.total, track_height, index.density);
     let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
     let total = index.total as f32;
-    let document_pixels = index.pixel_prefix.last().copied().unwrap_or(0.0);
+    let document_pixels = index.document_pixels();
     let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
     let scroll_pixels = index
         .pixel_for_list_offset(list_state.logical_scroll_top())
@@ -768,7 +1100,7 @@ fn minimap_click_target_for_viewport(
     .clamp(0.0, index.total as f32);
     let clicked_offset = index.list_offset_for_display_position(clicked_display);
     let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
-    let document_pixels = index.pixel_prefix.last().copied().unwrap_or(0.0);
+    let document_pixels = index.document_pixels();
     let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
     let target_pixels = (index.pixel_for_list_offset(clicked_offset) - viewport_pixels * 0.5)
         .clamp(0.0, max_scroll_pixels);
@@ -816,7 +1148,7 @@ fn scroll_ratio_after_wheel(
     wheel_delta_y: f32,
 ) -> f32 {
     let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
-    let document_pixels = index.pixel_prefix.last().copied().unwrap_or(0.0);
+    let document_pixels = index.document_pixels();
     let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
     if max_scroll_pixels <= f32::EPSILON {
         return 0.0;
@@ -835,7 +1167,7 @@ fn scroll_list_to_ratio(index: &MinimapLineIndex, list_state: &ListState, ratio:
         });
     } else {
         let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
-        let document_pixels = index.pixel_prefix.last().copied().unwrap_or(0.0);
+        let document_pixels = index.document_pixels();
         let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
         list_state.scroll_to(index.list_offset_for_pixel(ratio * max_scroll_pixels));
     }
@@ -976,10 +1308,10 @@ fn syntax_color(kind: super::CodeHighlightKind) -> u32 {
     }
 }
 
-fn cosmic_runs<'a>(
+fn cosmic_runs(
     kind: PreviewLineKind,
-    line: &'a DisplayRuns,
-) -> Vec<(&'a str, cosmic_text::Attrs<'static>)> {
+    line: &DisplayRuns,
+) -> Vec<(&str, cosmic_text::Attrs<'static>)> {
     let mut boundaries =
         Vec::with_capacity((line.inline_spans.len() + line.code_spans.len()) * 2 + 2);
     boundaries.extend([0, line.text.len()]);
@@ -1078,6 +1410,22 @@ fn minimap_font_system() -> cosmic_text::FontSystem {
     cosmic_text::FontSystem::new()
 }
 
+type MinimapTextRasterizer = Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)>;
+static TEXT_RASTERIZER: OnceLock<MinimapTextRasterizer> = OnceLock::new();
+
+pub(super) fn prewarm_text_rasterizer() {
+    let started = Instant::now();
+    let was_ready = TEXT_RASTERIZER.get().is_some();
+    TEXT_RASTERIZER
+        .get_or_init(|| Mutex::new((minimap_font_system(), cosmic_text::SwashCache::new())));
+    if minimap_perf_enabled() && !was_ready {
+        eprintln!(
+            "org_studio_minimap_text_prewarm elapsed_ms={:.3}",
+            started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
+}
+
 fn rasterize_tile(
     model: &PreviewDisplayMap,
     presentation_rows: &[RasterRow],
@@ -1085,12 +1433,10 @@ fn rasterize_tile(
     folded: &HashSet<u32>,
     scale_factor: f32,
     density: MinimapDensity,
-) -> Arc<RenderImage> {
-    use cosmic_text::{
-        Attrs, Buffer, Color, Family, FontSystem, Metrics, Shaping, SwashCache, Wrap,
-    };
+) -> RasterizedTile {
+    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
 
-    static TEXT_RASTERIZER: OnceLock<Mutex<(FontSystem, SwashCache)>> = OnceLock::new();
+    let started = Instant::now();
     let line_count = presentation_rows
         .iter()
         .map(RasterRow::line_count)
@@ -1101,9 +1447,12 @@ fn rasterize_tile(
     let logical_width = width.max(1);
     let width = (logical_width as f32 * scale_factor).ceil() as u32;
     let mut pixels = vec![0_u8; width as usize * height as usize * 4];
-    let rasterizer =
-        TEXT_RASTERIZER.get_or_init(|| Mutex::new((minimap_font_system(), SwashCache::new())));
+    let text_system_started = Instant::now();
+    let cold_text_system = TEXT_RASTERIZER.get().is_none();
+    let rasterizer = TEXT_RASTERIZER
+        .get_or_init(|| Mutex::new((minimap_font_system(), cosmic_text::SwashCache::new())));
     let mut rasterizer = rasterizer.lock().expect("minimap rasterizer poisoned");
+    let text_system_wait = text_system_started.elapsed();
     let (font_system, swash_cache) = &mut *rasterizer;
     let mut buffer = Buffer::new(
         font_system,
@@ -1257,7 +1606,13 @@ fn rasterize_tile(
         }
     }
     let buffer = RgbaImage::from_raw(width, height, pixels).expect("valid minimap tile dimensions");
-    Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(buffer), 1)))
+    RasterizedTile {
+        image: Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(buffer), 1))),
+        line_count,
+        total: started.elapsed(),
+        text_system_wait,
+        cold_text_system,
+    }
 }
 
 // Historical CoreText implementation retained temporarily for comparison.
@@ -1615,13 +1970,78 @@ impl PreviewDisplayMap {
         lines
     }
 
+    fn estimated_minimap_line_index(
+        &self,
+        presentation_rows: &[usize],
+        width: u16,
+        rows_signature: u64,
+        available_width: f32,
+        density: MinimapDensity,
+    ) -> MinimapLineIndex {
+        let mut measures = Vec::with_capacity(presentation_rows.len());
+
+        for &row in presentation_rows {
+            let layout = self.layout(row);
+            let kind = self.row_kind(self.rows[row].block_id);
+            let marker_width = if matches!(kind, PreviewLineKind::Heading(_)) {
+                20.0
+            } else {
+                0.0
+            };
+            let wrap_width =
+                (available_width - layout.padding_left - layout.padding_right - marker_width)
+                    .max(1.0);
+            let source_bytes = self.rows[row]
+                .content
+                .end
+                .0
+                .saturating_sub(self.rows[row].content.start.0)
+                as f32;
+            // This estimate intentionally uses metadata only: no text copy, inline
+            // parsing, shaping or font lock. The coefficient is a conservative
+            // average across ASCII and UTF-8 CJK source. Exact wrapping replaces it.
+            let estimated_text_width = source_bytes * layout.font_size * 0.5;
+            let line_count = if layout.fixed_height.is_some()
+                || self.image_sizes.contains_key(&self.rows[row].block_id)
+            {
+                1
+            } else {
+                (estimated_text_width / wrap_width).ceil().max(1.0) as usize
+            };
+            let parent_height = self
+                .image_size(row, available_width)
+                .map(|(_, height)| height + layout.padding_top + layout.padding_bottom)
+                .or(layout.fixed_height)
+                .unwrap_or_else(|| {
+                    (line_count as f32 * layout.line_height
+                        + layout.padding_top
+                        + layout.padding_bottom)
+                        .max(layout.min_height)
+                })
+                + layout.margin_top
+                + layout.margin_bottom;
+            measures.push(ProjectionMeasure::new(line_count, parent_height, false));
+        }
+
+        let projection = Arc::new(ProjectionSnapshot::new(measures));
+        MinimapLineIndex {
+            width,
+            rows_signature,
+            density,
+            total: projection.total_display_lines(),
+            projection,
+        }
+    }
+
     fn advance_minimap_line_index(
         &self,
         presentation_rows: &Arc<Vec<usize>>,
         available_width: f32,
         density: MinimapDensity,
+        priority_row: usize,
+        allow_refinement: bool,
         text_system: &gpui::WindowTextSystem,
-    ) -> Option<MinimapLineIndex> {
+    ) -> MinimapLineIndexProgress {
         let key = MinimapLineIndexKey::new(presentation_rows, available_width, density);
         let cached = self
             .minimap_line_index
@@ -1634,59 +2054,127 @@ impl PreviewDisplayMap {
                     && cached.index.density == density
             })
             .map(|cached| cached.index.clone());
-        if cached.is_some() {
-            return cached;
+        if let Some(index) = cached {
+            return MinimapLineIndexProgress {
+                exact_rows: presentation_rows.len(),
+                index,
+                readiness: MinimapProjectionReadiness::Exact,
+            };
         }
         let mut build = self
             .minimap_line_index_build
             .lock()
             .expect("minimap line-index builder poisoned");
-        if build.as_ref().is_none_or(|builder| builder.key != key) {
-            *build = Some(MinimapLineIndexBuilder::new(key, presentation_rows.clone()));
+        let created = build.as_ref().is_none_or(|builder| builder.key != key);
+        if created {
+            *build = Some(MinimapLineIndexBuilder::new(
+                self,
+                key,
+                presentation_rows.clone(),
+                available_width,
+                density,
+            ));
+        }
+        if created {
+            let builder = build.as_mut().expect("line-index builder initialized");
+            if minimap_perf_enabled() {
+                eprintln!(
+                    "org_studio_minimap_ready readiness=estimated rows={} exact_rows=0 width={} elapsed_ms={:.3} projection_bytes={}",
+                    builder.presentation_rows.len(),
+                    key.width,
+                    builder.started_at.elapsed().as_secs_f64() * 1000.0,
+                    builder.projection.estimated_heap_bytes(),
+                );
+            }
+            return MinimapLineIndexProgress {
+                index: builder.index(density),
+                readiness: MinimapProjectionReadiness::Estimated,
+                exact_rows: 0,
+            };
+        }
+        if !allow_refinement {
+            let builder = build.as_ref().expect("line-index builder initialized");
+            return MinimapLineIndexProgress {
+                index: builder.index(density),
+                readiness: if builder.exact_rows == 0 {
+                    MinimapProjectionReadiness::Estimated
+                } else {
+                    MinimapProjectionReadiness::PartiallyExact
+                },
+                exact_rows: builder.exact_rows,
+            };
         }
         let started = Instant::now();
         let builder = build.as_mut().expect("line-index builder initialized");
-        while builder.next_row < builder.presentation_rows.len() {
-            let row = builder.presentation_rows[builder.next_row];
+        builder.prioritize(priority_row);
+        let mut processed = 0usize;
+        while builder.exact_rows < builder.presentation_rows.len() {
+            let Some(projection_row) = builder.next_candidate() else {
+                break;
+            };
+            let row = builder.presentation_rows[projection_row];
             let lines = self.display_lines(row, available_width, text_system);
             let count = lines.ranges.len().max(1);
-            builder.display_prefix.push(
+            builder.pending_updates.push((
+                projection_row,
+                ProjectionMeasure::new(count, lines.parent_height, true),
+            ));
+            builder.mark_exact(projection_row);
+            processed += 1;
+            if processed.is_multiple_of(4) && started.elapsed() >= MINIMAP_INDEX_FRAME_BUDGET {
+                let elapsed = started.elapsed();
+                builder.record_slice(elapsed);
                 builder
-                    .display_prefix
-                    .last()
-                    .copied()
-                    .unwrap_or(0)
-                    .saturating_add(count),
-            );
-            builder.pixel_prefix.push(
-                builder.pixel_prefix.last().copied().unwrap_or(0.0) + lines.parent_height.max(0.0),
-            );
-            builder.next_row += 1;
-            if builder.next_row.is_multiple_of(32)
-                && started.elapsed() >= MINIMAP_INDEX_FRAME_BUDGET
-            {
-                return None;
+                    .pending_updates
+                    .sort_unstable_by_key(|update| update.0);
+                let batch_rows = builder.pending_updates.len();
+                let publish_started = Instant::now();
+                builder.publish_pending();
+                let publish_elapsed = publish_started.elapsed();
+                if minimap_trace_enabled() || builder.projection.exact_rows == batch_rows {
+                    eprintln!(
+                        "org_studio_minimap_projection_publish readiness=partially_exact exact_rows={} rows={} batch_rows={} commit_ms={:.3}",
+                        builder.projection.exact_rows,
+                        builder.presentation_rows.len(),
+                        batch_rows,
+                        publish_elapsed.as_secs_f64() * 1000.0,
+                    );
+                }
+                if minimap_trace_enabled() {
+                    eprintln!(
+                        "org_studio_minimap_index_slice rows_done={} rows_total={} slice_ms={:.3}",
+                        builder.exact_rows,
+                        builder.presentation_rows.len(),
+                        elapsed.as_secs_f64() * 1000.0,
+                    );
+                }
+                return MinimapLineIndexProgress {
+                    index: builder.index(density),
+                    readiness: MinimapProjectionReadiness::PartiallyExact,
+                    exact_rows: builder.exact_rows,
+                };
             }
         }
+        builder.record_slice(started.elapsed());
+        let builder = build.as_mut().expect("completed line-index builder");
+        builder
+            .pending_updates
+            .sort_unstable_by_key(|update| update.0);
+        builder.publish_pending();
         let builder = build.take().expect("completed line-index builder");
-        if minimap_trace_enabled() {
+        if minimap_perf_enabled() {
             eprintln!(
-                "org_studio_minimap_index_ready rows={} width={} density={:?} elapsed_ms={:.3}",
+                "org_studio_minimap_index_ready rows={} width={} density={:?} elapsed_ms={:.3} work_ms={:.3} max_slice_ms={:.3} slices={}",
                 builder.presentation_rows.len(),
                 key.width,
                 density,
                 builder.started_at.elapsed().as_secs_f64() * 1000.0,
+                builder.work.as_secs_f64() * 1000.0,
+                builder.max_slice.as_secs_f64() * 1000.0,
+                builder.slices,
             );
         }
-        let total = builder.display_prefix.last().copied().unwrap_or(0);
-        let index = MinimapLineIndex {
-            width: key.width,
-            rows_signature: builder.rows_signature,
-            density,
-            display_prefix: builder.display_prefix.into(),
-            pixel_prefix: builder.pixel_prefix.into(),
-            total,
-        };
+        let index = builder.index(density);
         *self
             .minimap_line_index
             .lock()
@@ -1694,7 +2182,11 @@ impl PreviewDisplayMap {
             presentation_rows: builder.presentation_rows,
             index: index.clone(),
         });
-        Some(index)
+        MinimapLineIndexProgress {
+            exact_rows: presentation_rows.len(),
+            index,
+            readiness: MinimapProjectionReadiness::Exact,
+        }
     }
 
     pub(super) fn is_table(&self, row: usize) -> bool {
@@ -1886,6 +2378,7 @@ pub(super) fn build_display_map(document: &PreviewDocument) -> PreviewDisplayMap
         minimap_drag: Arc::new(Mutex::new(None)),
         minimap_resize_drag: Arc::new(Mutex::new(None)),
         minimap_interaction_anchor: Arc::new(Mutex::new(None)),
+        perf: MinimapPerfState::new(),
     }
 }
 
@@ -1945,6 +2438,9 @@ pub(super) fn render(
     editor_width: f32,
     minimap_width: f32,
     thumb_visibility: crate::settings::MinimapThumbVisibility,
+    generation: u64,
+    presentation_revision: u64,
+    opened_at: Instant,
     _on_seek: impl Fn(f32, bool, &mut gpui::Window, &mut gpui::App) + 'static,
     on_width_change: impl Fn(MinimapWidthChange, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
@@ -1959,6 +2455,7 @@ pub(super) fn render(
     let paint_list = list_state.clone();
     let shape_list = list_state.clone();
     let shape_model = model.clone();
+    let paint_model = model.clone();
     let shape_rows = presentation_rows.clone();
     let shape_folded = folded;
     let active_line_index = Arc::new(Mutex::new(None::<MinimapLineIndex>));
@@ -1987,20 +2484,44 @@ pub(super) fn render(
             let width = f32::from(bounds.size.width).ceil().max(1.0) as usize;
             let scale_factor = window.scale_factor().max(1.0);
             let parent_width = (editor_width - 110.0 - minimap_width).max(120.0);
-            let line_index = {
+            let priority_row = shape_list
+                .logical_scroll_top()
+                .item_ix
+                .min(shape_rows.len().saturating_sub(1));
+            let interaction_active = shape_model
+                .minimap_drag
+                .lock()
+                .expect("minimap drag state poisoned")
+                .is_some()
+                || shape_model
+                    .minimap_resize_drag
+                    .lock()
+                    .expect("minimap resize state poisoned")
+                    .is_some();
+            let projection = {
                 profiling::scope!("Minimap::line_index");
                 shape_model.advance_minimap_line_index(
                     &shape_rows,
                     parent_width,
                     density,
+                    priority_row,
+                    !interaction_active,
                     window.text_system(),
                 )
             };
-            let Some(line_index) = line_index else {
-                *shape_line_index.lock().expect("active line index poisoned") = None;
-                window.refresh();
-                return SmallVec::new();
-            };
+            if projection.readiness != MinimapProjectionReadiness::Exact && !interaction_active {
+                // Drive cooperative exact refinement at display cadence. The
+                // estimated projection remains paintable throughout the process.
+                window.request_animation_frame();
+                if minimap_trace_enabled() {
+                    eprintln!(
+                        "org_studio_minimap_projection_progress readiness=estimated exact_rows={} rows_total={}",
+                        projection.exact_rows,
+                        shape_rows.len(),
+                    );
+                }
+            }
+            let line_index = projection.index;
             *shape_line_index.lock().expect("active line index poisoned") =
                 Some(line_index.clone());
             let viewport = minimap_viewport_for_list_with_anchor(
@@ -2103,7 +2624,7 @@ pub(super) fn render(
                     let tile_rows = raster_rows;
                     let tile_folded = shape_folded.clone();
                     let background = cx.background_executor().spawn(async move {
-                        let image = rasterize_tile(
+                        let rasterized = rasterize_tile(
                             &tile_model,
                             &tile_rows,
                             width,
@@ -2111,7 +2632,27 @@ pub(super) fn render(
                             scale_factor,
                             density,
                         );
-                        (tile_model, image)
+                        if minimap_perf_enabled() {
+                            let first = !tile_model
+                                .perf
+                                .first_tile_completed
+                                .swap(true, Ordering::AcqRel);
+                            eprintln!(
+                                "org_studio_minimap_tile_ready generation={} revision={} tile_start={} rows={} lines={} width={} total_ms={:.3} text_system_wait_ms={:.3} cold_text_system={} first={} since_open_ms={:.3}",
+                                generation,
+                                presentation_revision,
+                                tile_start,
+                                tile_rows.len(),
+                                rasterized.line_count,
+                                width,
+                                rasterized.total.as_secs_f64() * 1000.0,
+                                rasterized.text_system_wait.as_secs_f64() * 1000.0,
+                                rasterized.cold_text_system,
+                                first,
+                                opened_at.elapsed().as_secs_f64() * 1000.0,
+                            );
+                        }
+                        (tile_model, rasterized.image)
                     });
                     cx.spawn(async move |cx| {
                         let (tile_model, image) = background.await;
@@ -2120,7 +2661,7 @@ pub(super) fn render(
                             .lock()
                             .expect("minimap raster tile cache poisoned")
                             .insert(key, image);
-                        let _ = cx.refresh();
+                        cx.refresh();
                     })
                     .detach();
                 }
@@ -2128,14 +2669,35 @@ pub(super) fn render(
             }
             tiles
         },
-        move |bounds, tiles: SmallVec<[RasterTilePaint; 6]>, window, _cx| {
+        move |bounds, tiles: SmallVec<[RasterTilePaint; 6]>, window, cx| {
             profiling::scope!("Minimap::paint");
+            if !tiles.is_empty()
+                && !paint_model
+                    .perf
+                    .first_pixels_painted
+                    .swap(true, Ordering::AcqRel)
+            {
+                if minimap_perf_enabled() {
+                    eprintln!(
+                        "org_studio_minimap_first_pixels generation={} revision={} tiles={} since_open_ms={:.3}",
+                        generation,
+                        presentation_revision,
+                        tiles.len(),
+                        opened_at.elapsed().as_secs_f64() * 1000.0,
+                    );
+                }
+                if std::env::var_os("ORG_STUDIO_EXIT_AFTER_MINIMAP_FRAME").is_some() {
+                    cx.quit();
+                }
+            }
             for tile in tiles {
+                let image_bounds = Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + px(tile.y)),
+                    gpui::size(px(tile.width), px(tile.height)),
+                );
                 let _ = window.paint_image(
-                    Bounds::new(
-                        point(bounds.origin.x, bounds.origin.y + px(tile.y)),
-                        gpui::size(px(tile.width), px(tile.height)),
-                    ),
+                    image_bounds,
+                    image_bounds,
                     Corners::default(),
                     tile.image,
                     0,
@@ -2541,7 +3103,7 @@ fn minimap_layout_from_metrics(
 fn scroll_metrics(list_state: &ListState) -> ScrollMetrics {
     ScrollMetrics {
         offset: -f32::from(list_state.scroll_px_offset_for_scrollbar().y),
-        max_offset: f32::from(list_state.max_offset_for_scrollbar().height).max(0.0),
+        max_offset: f32::from(list_state.max_offset_for_scrollbar().y).max(0.0),
         viewport: f32::from(list_state.viewport_bounds().size.height).max(0.0),
     }
 }
@@ -2807,6 +3369,31 @@ fn minimap_text_runs(
 mod tests {
     use super::*;
 
+    fn test_line_index(
+        width: u16,
+        rows_signature: u64,
+        density: MinimapDensity,
+        display_prefix: &[usize],
+        pixel_prefix: &[f32],
+    ) -> MinimapLineIndex {
+        assert_eq!(display_prefix.len(), pixel_prefix.len());
+        let measures = display_prefix
+            .windows(2)
+            .zip(pixel_prefix.windows(2))
+            .map(|(display, pixels)| {
+                ProjectionMeasure::new(display[1] - display[0], pixels[1] - pixels[0], true)
+            })
+            .collect();
+        let projection = Arc::new(ProjectionSnapshot::new(measures));
+        MinimapLineIndex {
+            width,
+            rows_signature,
+            density,
+            total: projection.total_display_lines(),
+            projection,
+        }
+    }
+
     #[test]
     fn minimap_width_matches_render_constraints() {
         assert_eq!(width_for_viewport(100.0, None), 24.0);
@@ -2857,15 +3444,107 @@ mod tests {
     }
 
     #[test]
-    fn larger_density_expands_the_projection_and_visible_thumb_span() {
-        let mut index = MinimapLineIndex {
-            width: 100,
+    fn projection_snapshot_publishes_exact_chunks_without_rebuilding_unchanged_leaves() {
+        let estimates = (0..600)
+            .map(|_| ProjectionMeasure::new(1, 24.0, false))
+            .collect();
+        let initial = ProjectionSnapshot::new(estimates);
+        assert_eq!(initial.chunks.len(), 3);
+        assert_eq!(initial.exact_rows, 0);
+        assert_eq!(initial.total_display_lines(), 600);
+
+        let first_chunk = initial.chunks[0].clone();
+        let last_chunk = initial.chunks[2].clone();
+        let updated = initial.replacing(&[
+            (255, ProjectionMeasure::new(3, 72.0, true)),
+            (256, ProjectionMeasure::new(2, 48.0, true)),
+        ]);
+
+        assert!(!Arc::ptr_eq(&first_chunk, &updated.chunks[0]));
+        assert!(!Arc::ptr_eq(&initial.chunks[1], &updated.chunks[1]));
+        assert!(Arc::ptr_eq(&last_chunk, &updated.chunks[2]));
+        assert_eq!(updated.exact_rows, 2);
+        assert_eq!(updated.total_display_lines(), 603);
+        assert_eq!(updated.total_pixels(), 600.0 * 24.0 + 72.0);
+        assert_eq!(updated.locate_display(255), (255, 0));
+        assert_eq!(updated.locate_display(257), (255, 2));
+        assert_eq!(updated.locate_display(258), (256, 0));
+        assert_eq!(updated.prefix_for_row(257), (260, 6240.0));
+    }
+
+    #[test]
+    fn projection_snapshot_prefix_and_reverse_lookup_match_a_naive_model() {
+        let measures = (0..10_000)
+            .map(|row| ProjectionMeasure::new(row % 5 + 1, (row % 7 + 1) as f32 * 3.0, false))
+            .collect::<Vec<_>>();
+        let projection = ProjectionSnapshot::new(measures.clone());
+        let mut display = 0usize;
+        let mut pixels = 0.0f32;
+        for (row, measure) in measures.iter().enumerate() {
+            assert_eq!(projection.prefix_for_row(row), (display, pixels));
+            assert_eq!(projection.locate_display(display), (row, 0));
+            assert_eq!(projection.locate_pixel(pixels), (row, 0.0));
+            display += measure.display_lines as usize;
+            pixels += measure.pixels;
+        }
+        assert_eq!(projection.prefix_for_row(measures.len()), (display, pixels));
+        assert_eq!(projection.total_display_lines(), display);
+        assert_eq!(projection.total_pixels(), pixels);
+
+        let fifty_mib_fixture_rows = ProjectionSnapshot::new(
+            (0..341_392)
+                .map(|_| ProjectionMeasure::new(1, 24.0, false))
+                .collect(),
+        );
+        assert!(fifty_mib_fixture_rows.estimated_heap_bytes() <= 8 * 1024 * 1024);
+    }
+
+    #[test]
+    fn projection_scheduler_prioritizes_the_current_view_before_sequential_work() {
+        let row_count = 2_000;
+        let projection = Arc::new(ProjectionSnapshot::new(
+            (0..row_count)
+                .map(|_| ProjectionMeasure::new(1, 24.0, false))
+                .collect(),
+        ));
+        let mut builder = MinimapLineIndexBuilder {
+            key: MinimapLineIndexKey {
+                presentation_rows: 1,
+                width: 800,
+                density: MinimapDensity::Compact,
+            },
+            presentation_rows: Arc::new((0..row_count).collect()),
             rows_signature: 1,
-            density: MinimapDensity::Compact,
-            display_prefix: Arc::from([0, 100]),
-            pixel_prefix: Arc::from([0.0, 100.0]),
-            total: 100,
+            sequential_cursor: 0,
+            priority_range: 0..0,
+            priority_cursor: 0,
+            exact_bits: vec![0; row_count.div_ceil(64)],
+            exact_rows: 0,
+            started_at: Instant::now(),
+            projection,
+            pending_updates: Vec::new(),
+            slices: 0,
+            work: Duration::ZERO,
+            max_slice: Duration::ZERO,
         };
+
+        builder.prioritize(1_000);
+        assert_eq!(builder.next_candidate(), Some(872));
+        builder.mark_exact(872);
+        assert_eq!(builder.next_candidate(), Some(873));
+
+        builder.prioritize(1_600);
+        assert_eq!(builder.next_candidate(), Some(1_472));
+        for row in 1_472..1_856 {
+            builder.mark_exact(row);
+        }
+        builder.priority_cursor = builder.priority_range.end;
+        assert_eq!(builder.next_candidate(), Some(0));
+    }
+
+    #[test]
+    fn larger_density_expands_the_projection_and_visible_thumb_span() {
+        let mut index = test_line_index(100, 1, MinimapDensity::Compact, &[0, 100], &[0.0, 100.0]);
         assert_eq!(
             minimap_projection_height(100, 1_000.0, index.density),
             268.0
@@ -2887,14 +3566,13 @@ mod tests {
 
     #[test]
     fn display_line_index_locates_wrapped_rows_without_changing_units() {
-        let index = MinimapLineIndex {
-            width: 800,
-            rows_signature: 1,
-            density: MinimapDensity::Compact,
-            display_prefix: Arc::from([0, 1, 4, 6]),
-            pixel_prefix: Arc::from([0.0, 24.0, 96.0, 144.0]),
-            total: 6,
-        };
+        let index = test_line_index(
+            800,
+            1,
+            MinimapDensity::Compact,
+            &[0, 1, 4, 6],
+            &[0.0, 24.0, 96.0, 144.0],
+        );
         assert_eq!(index.locate(0), (0, 0));
         assert_eq!(index.locate(1), (1, 0));
         assert_eq!(index.locate(3), (1, 2));
@@ -3077,6 +3755,17 @@ mod tests {
             * 4.0
             * RasterTileCache::CAPACITY as f32;
         assert!(retina_maximum_bytes < 30_000_000.0);
+
+        let first = tile_key(&[0], 0, 96, 0, 1, 2.0, MinimapDensity::Compact);
+        let second = tile_key(&[128], 128, 96, 0, 1, 2.0, MinimapDensity::Compact);
+        let mut cache = RasterTileCache {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            in_flight: HashSet::new(),
+        };
+        assert!(cache.image_or_fallback(first).1);
+        assert!(!cache.image_or_fallback(second).1);
+        assert_eq!(cache.in_flight.len(), 1);
     }
 
     #[gpui::test]
@@ -3109,17 +3798,17 @@ mod tests {
                     state: state.clone(),
                     heights: heights.clone(),
                 })
+                .into_any_element()
             },
         );
 
-        let index = MinimapLineIndex {
-            width: 100,
-            rows_signature: 1,
-            density: MinimapDensity::Compact,
-            display_prefix: Arc::from([0, 10, 120, 140, 280, 300]),
-            pixel_prefix: Arc::from([0.0, 24.0, 264.0, 312.0, 612.0, 636.0]),
-            total: 300,
-        };
+        let index = test_line_index(
+            100,
+            1,
+            MinimapDensity::Compact,
+            &[0, 10, 120, 140, 280, 300],
+            &[0.0, 24.0, 264.0, 312.0, 612.0, 636.0],
+        );
         state.scroll_to(index.list_offset_for_pixel(200.0));
         let wheel_down = scroll_ratio_after_wheel(&index, &state, -40.0);
         let wheel_up = scroll_ratio_after_wheel(&index, &state, 40.0);
@@ -3166,14 +3855,13 @@ mod tests {
             "the clicked minimap content must land at the left viewport center"
         );
 
-        let short_projection = MinimapLineIndex {
-            width: 100,
-            rows_signature: 2,
-            density: MinimapDensity::Compact,
-            display_prefix: Arc::from([0, 1, 3, 4, 8, 9]),
-            pixel_prefix: index.pixel_prefix.clone(),
-            total: 9,
-        };
+        let short_projection = test_line_index(
+            100,
+            2,
+            MinimapDensity::Compact,
+            &[0, 1, 3, 4, 8, 9],
+            &[0.0, 24.0, 264.0, 312.0, 612.0, 636.0],
+        );
         scroll_list_to_ratio(&short_projection, &state, 1.0);
         let short_bottom = minimap_viewport_for_list(&short_projection, &state, 500.0);
         let projected_height = 9.0 * MINIMAP_LINE_HEIGHT_PX + MINIMAP_EDGE_PADDING_PX * 2.0;
@@ -3183,7 +3871,7 @@ mod tests {
             "a fullscreen thumb must stop at the document projection, not in track whitespace"
         );
 
-        let max = f32::from(state.max_offset_for_scrollbar().height);
+        let max = f32::from(state.max_offset_for_scrollbar().y);
         assert_eq!(max, 536.0);
         seek_to_ratio(&state, 1.0, false);
         assert_eq!(-f32::from(state.scroll_px_offset_for_scrollbar().y), max);
@@ -3197,6 +3885,7 @@ mod tests {
                     state: state.clone(),
                     heights: heights.clone(),
                 })
+                .into_any_element()
             },
         );
         let tall = thumb_geometry(&state, heights.len(), 500.0);
@@ -3215,11 +3904,12 @@ mod tests {
                     state: state.clone(),
                     heights: heights.clone(),
                 })
+                .into_any_element()
             },
         );
         assert_eq!(state.item_count(), 3);
         seek_to_ratio(&state, 1.0, false);
-        let folded_max = f32::from(state.max_offset_for_scrollbar().height);
+        let folded_max = f32::from(state.max_offset_for_scrollbar().y);
         assert_eq!(
             -f32::from(state.scroll_px_offset_for_scrollbar().y),
             folded_max
@@ -3541,6 +4231,7 @@ mod tests {
                     active: active.clone(),
                     move_positions: move_positions.clone(),
                 })
+                .into_any_element()
             },
         );
         cx.simulate_mouse_down(
@@ -3564,14 +4255,13 @@ mod tests {
 
     #[test]
     fn thumb_height_uses_the_exact_visible_display_span() {
-        let index = MinimapLineIndex {
-            width: 100,
-            rows_signature: 1,
-            density: MinimapDensity::Compact,
-            display_prefix: Arc::from([0, 100, 101, 201]),
-            pixel_prefix: Arc::from([0.0, 100.0, 400.0, 500.0]),
-            total: 201,
-        };
+        let index = test_line_index(
+            100,
+            1,
+            MinimapDensity::Compact,
+            &[0, 100, 101, 201],
+            &[0.0, 100.0, 400.0, 500.0],
+        );
 
         let dense_text = minimap_thumb_height_for_scroll(&index, 0.0, 100.0, 500.0);
         let tall_block = minimap_thumb_height_for_scroll(&index, 150.0, 100.0, 500.0);

@@ -11,6 +11,7 @@ DEFAULT_PIXELS="${ORG_STUDIO_PERF_SCROLL_PIXELS:-16}"
 DEFAULT_MINIMAP_WIDTH="${ORG_STUDIO_PERF_MINIMAP_WIDTH:-auto}"
 DEFAULT_WINDOW_WIDTH="${ORG_STUDIO_PERF_WINDOW_WIDTH:-920}"
 DEFAULT_WINDOW_HEIGHT="${ORG_STUDIO_PERF_WINDOW_HEIGHT:-720}"
+DEFAULT_DISABLE_INACTIVE_THROTTLE="${ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE:-1}"
 
 usage() {
     cat <<'EOF'
@@ -21,6 +22,7 @@ Commands:
   build                       Build all release binaries.
   cpu [MIB]                   Run the visible-block CPU benchmark.
   first-frame [MIB]           Measure the first readable GPUI frame.
+  minimap-first-frame [MIB]   Measure minimap index, first tile, and first pixels.
   scroll [PIXELS] [MIB]       Run one GUI scroll sample.
   profile [PIXELS] [MIB]      Run scroll plus GPUI profiling spans.
   suite [MIB]                 Build, prepare, then run CPU and 0/16/80px GUI samples.
@@ -36,9 +38,12 @@ Configuration environment variables:
   ORG_STUDIO_PERF_MINIMAP_WIDTH        default auto; 48..480 logical px
   ORG_STUDIO_PERF_WINDOW_WIDTH         default 920 logical px
   ORG_STUDIO_PERF_WINDOW_HEIGHT        default 720 logical px
+  ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE
+                                         default 1; set 0 to test GPUI background throttling
 
-GUI runs stay still during warmup. Move the window to the Mac internal
-ProMotion display before the warmup counter reaches zero.
+GUI scroll runs disable GPUI's inactive-window throttle by default, but remain
+paced by the target display link. Move the window to the Mac internal ProMotion
+display before the warmup counter reaches zero.
 EOF
 }
 
@@ -53,6 +58,10 @@ require_positive_integer() {
 
 require_nonnegative_number() {
     [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "$2 must be a non-negative number: $1"
+}
+
+require_boolean() {
+    [[ "$1" == "0" || "$1" == "1" ]] || die "$2 must be 0 or 1: $1"
 }
 
 fixture_path() {
@@ -123,11 +132,30 @@ run_first_frame() {
     require_positive_integer "$mib" "fixture MiB"
     ensure_fixture "$mib"
     ensure_release_binaries
+    require_boolean "$DEFAULT_DISABLE_INACTIVE_THROTTLE" "ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE"
     new_run_dir "first-frame-${mib}m"
+    printf 'inactive_window_throttle_disabled=%s\n' "$DEFAULT_DISABLE_INACTIVE_THROTTLE" >>"$RUN_DIR/metadata.txt"
     ORG_STUDIO_RELOAD_BENCH=1 \
     ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
+    ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE="$DEFAULT_DISABLE_INACTIVE_THROTTLE" \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
         2>&1 | tee "$RUN_DIR/first-frame.log"
+}
+
+run_minimap_first_frame() {
+    local mib="${1:-$DEFAULT_MIB}"
+    require_positive_integer "$mib" "fixture MiB"
+    ensure_fixture "$mib"
+    ensure_release_binaries
+    require_boolean "$DEFAULT_DISABLE_INACTIVE_THROTTLE" "ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE"
+    new_run_dir "minimap-first-frame-${mib}m"
+    printf 'inactive_window_throttle_disabled=%s\n' "$DEFAULT_DISABLE_INACTIVE_THROTTLE" >>"$RUN_DIR/metadata.txt"
+    ORG_STUDIO_MINIMAP=1 \
+    ORG_STUDIO_MINIMAP_PERF=1 \
+    ORG_STUDIO_EXIT_AFTER_MINIMAP_FRAME=1 \
+    ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE="$DEFAULT_DISABLE_INACTIVE_THROTTLE" \
+        "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
+        2>&1 | tee "$RUN_DIR/minimap-first-frame.log"
 }
 
 run_scroll() {
@@ -139,11 +167,14 @@ run_scroll() {
     [[ "$(uname -s)" == "Darwin" ]] || die "GUI scroll benchmark currently requires macOS"
     ensure_fixture "$mib"
     ensure_release_binaries
+    require_boolean "$DEFAULT_DISABLE_INACTIVE_THROTTLE" "ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE"
     new_run_dir "scroll-${pixels}px-${mib}m"
     {
         printf 'minimap_enabled=%s\n' "${ORG_STUDIO_MINIMAP:-settings}"
         printf 'minimap_width=%s\n' "$DEFAULT_MINIMAP_WIDTH"
         printf 'window_size=%sx%s\n' "$DEFAULT_WINDOW_WIDTH" "$DEFAULT_WINDOW_HEIGHT"
+        printf 'requested_display_index=%s\n' "${ORG_STUDIO_DISPLAY_INDEX:-manual}"
+        printf 'inactive_window_throttle_disabled=%s\n' "$DEFAULT_DISABLE_INACTIVE_THROTTLE"
     } >>"$RUN_DIR/metadata.txt"
     printf 'Move the benchmark window to the Mac internal display during the %s-frame warmup.\n' \
         "$DEFAULT_WARMUP"
@@ -154,6 +185,7 @@ run_scroll() {
         "ORG_STUDIO_MINIMAP_WIDTH=$DEFAULT_MINIMAP_WIDTH"
         "ORG_STUDIO_WINDOW_WIDTH=$DEFAULT_WINDOW_WIDTH"
         "ORG_STUDIO_WINDOW_HEIGHT=$DEFAULT_WINDOW_HEIGHT"
+        "ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=$DEFAULT_DISABLE_INACTIVE_THROTTLE"
     )
     if [[ "$profile" == "1" ]]; then
         env_args+=("ORG_STUDIO_PROFILE_FRAMES=1")
@@ -182,6 +214,7 @@ case "$command" in
     build) build_release ;;
     cpu) run_cpu "$@" ;;
     first-frame) run_first_frame "$@" ;;
+    minimap-first-frame) run_minimap_first_frame "$@" ;;
     scroll) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 0 ;;
     profile) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 1 ;;
     suite) run_suite "$@" ;;

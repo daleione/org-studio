@@ -823,6 +823,11 @@ impl PreviewApp {
         self.state = PreviewLoadState::Loading { path: path.clone() };
         self.watch_document(path.clone(), cx);
 
+        if self.minimap_visible {
+            cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
+                .detach();
+        }
+
         let background = cx.background_spawn(async move { load_document(path) });
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
@@ -929,6 +934,10 @@ impl PreviewApp {
 
     pub fn toggle_minimap(&mut self, cx: &mut Context<Self>) {
         self.minimap_visible = !self.minimap_visible;
+        if self.minimap_visible {
+            cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
+                .detach();
+        }
         self.save_preview_settings();
         cx.notify();
     }
@@ -994,7 +1003,7 @@ impl PreviewApp {
             }
             PreviewLoadState::Failed { path, message } => {
                 let error = format!("{}: {message}", path.display());
-                if let Some((_, document)) = &self.last_ready {
+                if let Some((generation, document)) = &self.last_ready {
                     div()
                         .size_full()
                         .flex()
@@ -1025,13 +1034,18 @@ impl PreviewApp {
                             minimap_width,
                             self.minimap_resize_preview,
                             self.minimap_thumb_visibility,
+                            *generation,
                             self.presentation_revision,
+                            self.opened_at.unwrap_or_else(Instant::now),
                         ))
                 } else {
                     centered_message("COULD NOT OPEN DOCUMENT", &error)
                 }
             }
-            PreviewLoadState::Ready { document, .. } => render_document(
+            PreviewLoadState::Ready {
+                generation,
+                document,
+            } => render_document(
                 document.clone(),
                 self.list_state.clone(),
                 self.visible_rows.clone(),
@@ -1042,7 +1056,9 @@ impl PreviewApp {
                 minimap_width,
                 self.minimap_resize_preview,
                 self.minimap_thumb_visibility,
+                *generation,
                 self.presentation_revision,
+                self.opened_at.unwrap_or_else(Instant::now),
             ),
         }
     }
@@ -1131,13 +1147,20 @@ impl PreviewApp {
                 benchmark.warmup_remaining -= 1;
                 if benchmark.warmup_remaining % 60 == 0 {
                     eprintln!(
-                        "org_preview_scroll_warmup remaining={} display={:?}",
+                        "org_preview_scroll_warmup remaining={} display={:?} active={}",
                         benchmark.warmup_remaining,
-                        window.display(cx).map(|display| display.id())
+                        window.display(cx).map(|display| display.id()),
+                        window.is_window_active(),
                     );
+                    // AppKit may briefly create the window on the current display
+                    // before applying the requested benchmark bounds. Reactivate
+                    // after migration so ProMotion does not throttle an otherwise
+                    // deterministic, unattended sample as a background window.
+                    window.activate_window();
                 }
                 benchmark.last_frame = now;
                 this.schedule_scroll_sample(window, cx);
+                cx.notify();
                 return;
             }
             if !benchmark.sampling_started {
@@ -1146,6 +1169,7 @@ impl PreviewApp {
                 benchmark.last_frame = now;
                 this.list_state.scroll_by(px(benchmark.scroll_pixels));
                 this.schedule_scroll_sample(window, cx);
+                cx.notify();
                 return;
             }
             benchmark
@@ -1204,6 +1228,7 @@ impl PreviewApp {
             } else {
                 this.list_state.scroll_by(px(benchmark.scroll_pixels));
                 this.schedule_scroll_sample(window, cx);
+                cx.notify();
             }
         });
     }
@@ -1230,7 +1255,7 @@ impl Render for PreviewApp {
             .focus_handle
             .get_or_insert_with(|| {
                 let handle = cx.focus_handle();
-                window.focus(&handle);
+                window.focus(&handle, cx);
                 handle
             })
             .clone();
@@ -1274,7 +1299,7 @@ impl Render for PreviewApp {
                 cx.notify();
             });
         }
-        if self.scroll_benchmark.is_some() {
+        if self.scroll_benchmark.is_some() && !self.minimap_visible {
             window.request_animation_frame();
         }
         if let PreviewLoadState::Ready { generation, .. } = &self.state
@@ -1298,6 +1323,7 @@ impl Render for PreviewApp {
                     return;
                 }
                 if this.scroll_benchmark.is_some() {
+                    window.activate_window();
                     if let Some(benchmark) = this.scroll_benchmark.as_mut() {
                         benchmark.last_frame = Instant::now();
                     }
@@ -2053,7 +2079,9 @@ fn render_document(
     minimap_width: f32,
     minimap_resize_preview: Option<f32>,
     minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
+    generation: u64,
     presentation_revision: u64,
+    opened_at: Instant,
 ) -> gpui::Div {
     let theme = current_theme();
     let preview_display_map = document.display_map.clone();
@@ -2194,6 +2222,9 @@ fn render_document(
                     editor_width,
                     minimap_width,
                     minimap_thumb_visibility,
+                    generation,
+                    presentation_revision,
+                    opened_at,
                     move |ratio, center, window, cx| {
                         minimap_entity.update(cx, |this, cx| {
                             this.minimap_pending_seek =

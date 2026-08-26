@@ -6,7 +6,8 @@ publish = false
 
 [dependencies]
 async-channel = "2"
-gpui = "0.2.2"
+gpui = { path = "../zed/crates/gpui" }
+gpui_platform = { path = "../zed/crates/gpui_platform", features = ["font-kit"] }
 image = "0.25.10"
 notify = "8"
 profiling = { version = "1", features = ["profile-with-tracing"] }
@@ -31,4 +32,10 @@ url = "2"
 cosmic-text = { version = "0.19", features = ["monospace_fallback", "shape-run-cache"] }
 
 [dev-dependencies]
-gpui = { version = "0.2.2", features = ["test-support"] }
+gpui = { path = "../zed/crates/gpui", features = ["test-support"] }
+
+[build-dependencies]
+# gpui_apple compiles gpui as a macOS build dependency. Keep the profiling
+# backend identical in Cargo's host and target dependency graphs so GPUI's
+# profiling attributes resolve to the same tracing implementation.
+profiling = { version = "1", features = ["profile-with-tracing"] }
