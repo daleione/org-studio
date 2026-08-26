@@ -6,9 +6,9 @@ use std::{
 };
 
 use gpui::{
-    Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent,
-    ListAlignment, ListOffset, ListState, PathPromptOptions, Render, StyledText, Subscription,
-    Task, Window, actions, div, img, list, prelude::*, px, rgb,
+    App, BackgroundExecutor, Context, FocusHandle, FontStyle, FontWeight, HighlightStyle,
+    IntoElement, KeyDownEvent, ListAlignment, ListOffset, ListState, PathPromptOptions, Render,
+    StyledText, Subscription, Task, Window, actions, div, img, list, prelude::*, px, rgb,
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -134,6 +134,78 @@ pub struct PreviewDocument {
     image_sizes: Arc<HashMap<BlockId, (u32, u32)>>,
     display_map: Option<Arc<minimap::PreviewDisplayMap>>,
     pub metrics: LoadMetrics,
+}
+
+pub struct InitialDocumentLoad {
+    path: PathBuf,
+    started_at: Instant,
+    minimap_prewarm_scheduled: bool,
+    receiver: async_channel::Receiver<Result<PreviewDocument, (PathBuf, String)>>,
+}
+
+/// Starts loading the command-line document before the native window is created. Small documents
+/// are normally ready by the time GPUI constructs the view; large documents remain asynchronous.
+/// This is deliberately independent of file size so both paths have identical parsing semantics.
+pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad {
+    let started_at = Instant::now();
+    let (sender, receiver) = async_channel::bounded(1);
+    let load_path = path.clone();
+    let minimap_prewarm_scheduled = configured_minimap_visible();
+    let prewarm_executor = cx.background_executor().clone();
+    if minimap_prewarm_scheduled {
+        cx.background_executor()
+            .spawn(async { minimap::prewarm_text_rasterizer() })
+            .detach();
+    }
+    cx.background_executor()
+        .spawn_with_priority(gpui::Priority::High, async move {
+            if minimap::minimap_perf_enabled() {
+                eprintln!("org_preview_initial_prefetch_start since_open_ms=0.000");
+            }
+            let result = load_document(load_path);
+            schedule_document_prewarm(minimap_prewarm_scheduled, &result, &prewarm_executor);
+            if minimap::minimap_perf_enabled() {
+                eprintln!(
+                    "org_preview_initial_prefetch_complete since_open_ms={:.3}",
+                    started_at.elapsed().as_secs_f64() * 1000.0,
+                );
+            }
+            let _ = sender.send(result).await;
+        })
+        .detach();
+    InitialDocumentLoad {
+        path,
+        started_at,
+        minimap_prewarm_scheduled,
+        receiver,
+    }
+}
+
+fn configured_minimap_visible() -> bool {
+    let preview_settings = crate::settings::PreviewSettings::load();
+    std::env::var("ORG_STUDIO_MINIMAP")
+        .ok()
+        .and_then(|value| match value.as_str() {
+            "1" | "true" | "on" => Some(true),
+            "0" | "false" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(preview_settings.minimap_enabled)
+}
+
+fn schedule_document_prewarm(
+    enabled: bool,
+    result: &Result<PreviewDocument, (PathBuf, String)>,
+    executor: &BackgroundExecutor,
+) {
+    if enabled
+        && let Ok(document) = result
+        && let Some(model) = document.display_map.clone()
+    {
+        executor
+            .spawn(async move { minimap::prewarm_document_text(model) })
+            .detach();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -469,14 +541,7 @@ impl PreviewApp {
             .unwrap_or(80.0);
         let (commands, keyboard, key_context) = preview_input();
         let preview_settings = crate::settings::PreviewSettings::load();
-        let minimap_visible = std::env::var("ORG_STUDIO_MINIMAP")
-            .ok()
-            .and_then(|value| match value.as_str() {
-                "1" | "true" | "on" => Some(true),
-                "0" | "false" | "off" => Some(false),
-                _ => None,
-            })
-            .unwrap_or(preview_settings.minimap_enabled);
+        let minimap_visible = configured_minimap_visible();
         Self {
             focus_handle: None,
             focus_lost_subscription: None,
@@ -813,22 +878,102 @@ impl PreviewApp {
         self.key_feedback_task = None;
     }
 
-    pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    fn begin_open(&mut self, path: PathBuf, opened_at: Instant, cx: &mut Context<Self>) -> u64 {
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.generation += 1;
-        self.opened_at = Some(Instant::now());
+        self.opened_at = Some(opened_at);
         self.first_frame_scheduled = None;
         let generation = self.generation;
         self.state = PreviewLoadState::Loading { path: path.clone() };
+        let watch_started = Instant::now();
         self.watch_document(path.clone(), cx);
-
-        if self.minimap_visible {
-            cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
-                .detach();
+        if minimap::minimap_perf_enabled() {
+            eprintln!(
+                "org_preview_file_watch_ready generation={} elapsed_ms={:.3} since_open_ms={:.3}",
+                generation,
+                watch_started.elapsed().as_secs_f64() * 1000.0,
+                self.opened_at
+                    .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
+            );
         }
+        generation
+    }
 
-        let background = cx.background_spawn(async move { load_document(path) });
+    pub fn open_initial(&mut self, load: InitialDocumentLoad, cx: &mut Context<Self>) {
+        let InitialDocumentLoad {
+            path,
+            started_at,
+            minimap_prewarm_scheduled,
+            receiver,
+        } = load;
+        let generation = self.begin_open(path.clone(), started_at, cx);
+        let prewarm_minimap = self.minimap_visible;
+
+        match receiver.try_recv() {
+            Ok(result) => {
+                if !minimap_prewarm_scheduled {
+                    schedule_document_prewarm(prewarm_minimap, &result, cx.background_executor());
+                }
+                if self.apply_load_result(generation, result) {
+                    cx.notify();
+                }
+            }
+            Err(async_channel::TryRecvError::Empty) => {
+                let prewarm_executor = cx.background_executor().clone();
+                self.load_task = Some(cx.spawn(async move |this, cx| {
+                    let result = receiver.recv().await.unwrap_or_else(|_| {
+                        Err((path, "initial document loader stopped".to_owned()))
+                    });
+                    if !minimap_prewarm_scheduled {
+                        schedule_document_prewarm(prewarm_minimap, &result, &prewarm_executor);
+                    }
+                    let _ = this.update(cx, |this, cx| {
+                        if this.apply_load_result(generation, result) {
+                            cx.notify();
+                        }
+                    });
+                }));
+            }
+            Err(async_channel::TryRecvError::Closed) => {
+                let result = Err((path, "initial document loader stopped".to_owned()));
+                if self.apply_load_result(generation, result) {
+                    cx.notify();
+                }
+            }
+        }
+    }
+
+    pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        let generation = self.begin_open(path.clone(), Instant::now(), cx);
+
+        // Opening the requested document is user-visible latency. Submit it before minimap
+        // prewarming and at GPUI's high background priority so platform/font startup work cannot
+        // leave a sub-millisecond file load queued for hundreds of milliseconds.
+        let opened_at = self.opened_at.unwrap_or_else(Instant::now);
+        let prewarm_minimap = self.minimap_visible;
+        let prewarm_executor = cx.background_executor().clone();
+        let background =
+            cx.background_executor()
+                .spawn_with_priority(gpui::Priority::High, async move {
+                    if minimap::minimap_perf_enabled() {
+                        eprintln!(
+                            "org_preview_document_load_start generation={} since_open_ms={:.3}",
+                            generation,
+                            opened_at.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
+                    let result = load_document(path);
+                    if minimap::minimap_perf_enabled() {
+                        eprintln!(
+                            "org_preview_document_load_complete generation={} since_open_ms={:.3}",
+                            generation,
+                            opened_at.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
+                    schedule_document_prewarm(prewarm_minimap, &result, &prewarm_executor);
+                    result
+                });
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
@@ -851,6 +996,21 @@ impl PreviewApp {
         }
         self.state = match result {
             Ok(document) => {
+                if minimap::minimap_perf_enabled() {
+                    eprintln!(
+                        "org_preview_document_ready generation={} bytes={} rows={} read_ms={:.3} rope_ms={:.3} parse_ms={:.3} display_map_ms={:.3} load_total_ms={:.3} since_open_ms={:.3}",
+                        generation,
+                        document.metrics.bytes,
+                        document.rows.len(),
+                        document.metrics.read.as_secs_f64() * 1000.0,
+                        document.metrics.rope.as_secs_f64() * 1000.0,
+                        document.metrics.parse.as_secs_f64() * 1000.0,
+                        document.metrics.display_map.as_secs_f64() * 1000.0,
+                        document.metrics.total.as_secs_f64() * 1000.0,
+                        self.opened_at
+                            .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
+                    );
+                }
                 let document = Arc::new(document);
                 self.folded = Arc::new(HashSet::new());
                 self.visible_rows = if document.format == DocumentFormat::Markdown {
@@ -2085,6 +2245,11 @@ fn render_document(
 ) -> gpui::Div {
     let theme = current_theme();
     let preview_display_map = document.display_map.clone();
+    let defer_initial_reveal = minimap_visible
+        && preview_display_map
+            .as_ref()
+            .is_some_and(|display_map| !display_map.initial_minimap_batch_ready());
+    let opening_path = document.path.display().to_string();
     let minimap_list_state = list_state.clone();
     let minimap_entity = entity.clone();
     let minimap_resize_entity = entity.clone();
@@ -2262,6 +2427,17 @@ fn render_document(
                     .right(px(width))
                     .w(px(1.0))
                     .bg(rgb(theme.heading[0])),
+            )
+        })
+        .when(defer_initial_reveal, |layout| {
+            layout.child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .right_0()
+                    .bottom_0()
+                    .left_0()
+                    .child(centered_message("OPENING DOCUMENT", &opening_path)),
             )
         })
 }

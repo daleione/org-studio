@@ -8,7 +8,7 @@ use org_studio::{
     perf_tracing,
     preview::{
         OpenDocument, OpenFileManager, PreviewApp, ReloadDocument, ReturnToDocument, ToggleMinimap,
-        ToggleSidebar,
+        ToggleSidebar, preload_initial_document,
     },
 };
 
@@ -32,6 +32,12 @@ fn main() {
     });
 
     application.run(move |cx: &mut App| {
+        // Give command-line documents a head start while menus, displays and the native window are
+        // initialized. `open_initial` consumes an already-ready small document synchronously and
+        // continues awaiting a large one without blocking the window.
+        let initial_load = initial_path
+            .clone()
+            .map(|path| preload_initial_document(path, cx));
         let active_preview: Rc<RefCell<Option<gpui::Entity<PreviewApp>>>> =
             Rc::new(RefCell::new(None));
         cx.on_action(|_: &Quit, cx| cx.quit());
@@ -80,7 +86,6 @@ fn main() {
             size(px(window_width), px(window_height)),
             cx,
         );
-        let path = initial_path.clone();
         let preview_for_window = active_preview.clone();
 
         let disable_inactive_throttle = benchmark_disables_inactive_throttle();
@@ -108,8 +113,8 @@ fn main() {
             move |_window, cx| {
                 let preview = cx.new(|cx| {
                     let mut app = PreviewApp::new();
-                    if let Some(path) = path {
-                        app.open(path, cx);
+                    if let Some(load) = initial_load {
+                        app.open_initial(load, cx);
                     }
                     app
                 });

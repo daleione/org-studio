@@ -61,6 +61,7 @@ const MINIMAP_INDEX_FRAME_BUDGET: Duration = Duration::from_micros(350);
 #[cfg(test)]
 const PREVIEW_BASE_ROW_PX: f32 = 24.0;
 const RASTER_TILE_ROWS: usize = 128;
+const RASTER_TILE_CACHE_CAPACITY: usize = 6;
 const PROJECTION_CHUNK_ROWS: usize = 256;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -123,7 +124,7 @@ fn minimap_trace_enabled() -> bool {
     *ENABLED.get_or_init(|| std::env::var_os("ORG_STUDIO_MINIMAP_TRACE").is_some())
 }
 
-fn minimap_perf_enabled() -> bool {
+pub(super) fn minimap_perf_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var_os("ORG_STUDIO_MINIMAP_PERF").is_some() || minimap_trace_enabled()
@@ -265,6 +266,7 @@ pub(super) struct PreviewDisplayMap {
     minimap_drag: Arc<Mutex<Option<MinimapDragSession>>>,
     minimap_resize_drag: Arc<Mutex<Option<MinimapResizeSession>>>,
     minimap_interaction_anchor: Arc<Mutex<Option<MinimapInteractionAnchor>>>,
+    initial_visible_batch_ready: AtomicBool,
     perf: MinimapPerfState,
 }
 
@@ -843,9 +845,9 @@ struct RasterTileCache {
 }
 
 impl RasterTileCache {
-    const CAPACITY: usize = 6;
+    const CAPACITY: usize = RASTER_TILE_CACHE_CAPACITY;
 
-    fn image_or_fallback(&mut self, key: RasterTileKey) -> (Option<Arc<RenderImage>>, bool) {
+    fn image_or_fallback(&self, key: RasterTileKey) -> (Option<Arc<RenderImage>>, bool) {
         if let Some(image) = self.entries.get(&key).cloned() {
             return (Some(image), false);
         }
@@ -858,26 +860,56 @@ impl RasterTileCache {
                 .then(|| self.entries.get(candidate).cloned())
                 .flatten()
         });
-        let should_spawn = if self.in_flight.is_empty() {
-            self.in_flight.insert(key)
-        } else {
-            false
-        };
-        (fallback, should_spawn)
+        (fallback, true)
     }
 
-    fn insert(&mut self, key: RasterTileKey, image: Arc<RenderImage>) {
-        if self.entries.contains_key(&key) {
-            return;
+    fn reserve(&mut self, keys: &[RasterTileKey]) -> bool {
+        if keys.is_empty() || !self.in_flight.is_empty() {
+            return false;
         }
-        while self.entries.len() >= Self::CAPACITY {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
+        for &key in keys {
+            if !self.entries.contains_key(&key) {
+                self.in_flight.insert(key);
             }
         }
-        self.order.push_back(key);
-        self.entries.insert(key, image);
-        self.in_flight.remove(&key);
+        !self.in_flight.is_empty()
+    }
+
+    fn insert_batch(
+        &mut self,
+        tiles: Vec<(RasterTileKey, Arc<RenderImage>)>,
+        visible_keys: &[RasterTileKey],
+    ) {
+        let new_entries = tiles
+            .iter()
+            .filter(|(key, _)| !self.entries.contains_key(key))
+            .count();
+        // A complete visible frame is the atomic cache unit. Very tall windows may need more
+        // than the normal six retained tiles, so allow this batch itself to define the temporary
+        // capacity while evicting older, non-visible entries before publication.
+        let target_capacity = Self::CAPACITY.max(visible_keys.len());
+        while self.entries.len() + new_entries > target_capacity {
+            let Some(position) = self
+                .order
+                .iter()
+                .position(|candidate| !visible_keys.contains(candidate))
+            else {
+                break;
+            };
+            let oldest = self
+                .order
+                .remove(position)
+                .expect("cache position is valid");
+            self.entries.remove(&oldest);
+        }
+        for (key, image) in tiles {
+            self.in_flight.remove(&key);
+            if self.entries.contains_key(&key) {
+                continue;
+            }
+            self.order.push_back(key);
+            self.entries.insert(key, image);
+        }
     }
 }
 
@@ -895,6 +927,11 @@ struct RasterizedTile {
     total: Duration,
     text_system_wait: Duration,
     cold_text_system: bool,
+}
+
+struct RasterTileRequest {
+    key: RasterTileKey,
+    rows: Vec<RasterRow>,
 }
 
 #[cfg(test)]
@@ -1412,16 +1449,93 @@ fn minimap_font_system() -> cosmic_text::FontSystem {
 
 type MinimapTextRasterizer = Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)>;
 static TEXT_RASTERIZER: OnceLock<MinimapTextRasterizer> = OnceLock::new();
+static TEXT_RASTERIZER_PREWARMED: OnceLock<()> = OnceLock::new();
 
 pub(super) fn prewarm_text_rasterizer() {
+    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
+
     let started = Instant::now();
-    let was_ready = TEXT_RASTERIZER.get().is_some();
-    TEXT_RASTERIZER
+    let rasterizer = TEXT_RASTERIZER
         .get_or_init(|| Mutex::new((minimap_font_system(), cosmic_text::SwashCache::new())));
-    if minimap_perf_enabled() && !was_ready {
+    let mut did_work = false;
+    TEXT_RASTERIZER_PREWARMED.get_or_init(|| {
+        did_work = true;
+        // FontSystem construction only scans the database. Shape and raster a bounded corpus as
+        // well so the first real tile does not pay lazy fallback/font-face/Swash initialization.
+        // This runs in the existing background prewarm task and never changes rendered content.
+        let mut rasterizer = rasterizer.lock().expect("minimap rasterizer poisoned");
+        let (font_system, swash_cache) = &mut *rasterizer;
+        let attrs = Attrs::new()
+            .family(Family::Name("Menlo"))
+            .weight(cosmic_text::Weight::BLACK);
+        let mut buffer = Buffer::new(font_system, Metrics::new(3.6, 5.0));
+        buffer.set_size(Some(480.0), Some(20.0));
+        buffer.set_wrap(Wrap::None);
+        buffer.set_text(
+            "Org Markdown 中文预览 AaZz 0123456789 +-*/_`#[](){} :=> ",
+            &attrs,
+            Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(font_system, false);
+        buffer.draw(
+            font_system,
+            swash_cache,
+            Color::rgb(0, 0, 0),
+            |_, _, _, _, _| {},
+        );
+    });
+    if minimap_perf_enabled() && did_work {
         eprintln!(
             "org_studio_minimap_text_prewarm elapsed_ms={:.3}",
             started.elapsed().as_secs_f64() * 1000.0,
+        );
+    }
+}
+
+pub(super) fn prewarm_document_text(model: Arc<PreviewDisplayMap>) {
+    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
+
+    const PREWARM_BUDGET: Duration = Duration::from_millis(350);
+    let started = Instant::now();
+    prewarm_text_rasterizer();
+    if started.elapsed() >= PREWARM_BUDGET {
+        return;
+    }
+    let rasterizer = TEXT_RASTERIZER
+        .get()
+        .expect("minimap rasterizer must exist after prewarm");
+    let mut rasterizer = rasterizer.lock().expect("minimap rasterizer poisoned");
+    let (font_system, swash_cache) = &mut *rasterizer;
+    let density = MinimapDensity::Compact;
+    let mut buffer = Buffer::new(
+        font_system,
+        Metrics::new(density.font_px(), density.line_height()),
+    );
+    buffer.set_size(
+        Some(MINIMAP_AUTO_COMPACT_MAX_PX - 6.0),
+        Some(density.line_height()),
+    );
+    buffer.set_wrap(Wrap::None);
+    let attrs = Attrs::new()
+        .family(Family::Name("Menlo"))
+        .weight(cosmic_text::Weight::BLACK);
+
+    // A 720px initial window exposes at most 277 compact display lines. Include bounded
+    // overdraw and wrapped-row slack while keeping this independent of total document size.
+    for row in 0..model.rows.len().min(384) {
+        if started.elapsed() >= PREWARM_BUDGET {
+            break;
+        }
+        let kind = model.row_kind(model.rows[row].block_id);
+        let display = model.runs(row);
+        buffer.set_rich_text(cosmic_runs(kind, &display), &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(font_system, false);
+        buffer.draw(
+            font_system,
+            swash_cache,
+            Color::rgb(0, 0, 0),
+            |_, _, _, _, _| {},
         );
     }
 }
@@ -2378,7 +2492,14 @@ pub(super) fn build_display_map(document: &PreviewDocument) -> PreviewDisplayMap
         minimap_drag: Arc::new(Mutex::new(None)),
         minimap_resize_drag: Arc::new(Mutex::new(None)),
         minimap_interaction_anchor: Arc::new(Mutex::new(None)),
+        initial_visible_batch_ready: AtomicBool::new(false),
         perf: MinimapPerfState::new(),
+    }
+}
+
+impl PreviewDisplayMap {
+    pub(super) fn initial_minimap_batch_ready(&self) -> bool {
+        self.initial_visible_batch_ready.load(Ordering::Acquire)
     }
 }
 
@@ -2550,6 +2671,8 @@ pub(super) fn render(
             let last_line = visible_range.rows.end;
             let first_tile = first_line / RASTER_TILE_ROWS * RASTER_TILE_ROWS;
             let mut tiles: SmallVec<[RasterTilePaint; 6]> = SmallVec::new();
+            let mut raster_requests: SmallVec<[RasterTileRequest; 6]> = SmallVec::new();
+            let mut visible_keys: SmallVec<[RasterTileKey; 6]> = SmallVec::new();
             let mut tile_y = minimap_edge_padding - content_fraction * minimap_line_height;
             for tile_start in (first_tile..last_line).step_by(RASTER_TILE_ROWS) {
                 let tile_end = (tile_start + RASTER_TILE_ROWS).min(shape_rows.len());
@@ -2606,7 +2729,8 @@ pub(super) fn render(
                     scale_factor,
                     density,
                 );
-                let (image, should_spawn) = shape_model
+                visible_keys.push(key);
+                let (image, is_missing) = shape_model
                     .raster_tiles
                     .lock()
                     .expect("minimap raster tile cache poisoned")
@@ -2619,14 +2743,34 @@ pub(super) fn render(
                         height: tile_height,
                     });
                 }
-                if should_spawn {
-                    let tile_model = shape_model.clone();
-                    let tile_rows = raster_rows;
-                    let tile_folded = shape_folded.clone();
-                    let background = cx.background_executor().spawn(async move {
+                if is_missing {
+                    raster_requests.push(RasterTileRequest {
+                        key,
+                        rows: raster_rows,
+                    });
+                }
+                tile_y += tile_height;
+            }
+            let request_count = raster_requests.len();
+            let request_keys = raster_requests
+                .iter()
+                .map(|request| request.key)
+                .collect::<SmallVec<[_; 6]>>();
+            let should_spawn = shape_model
+                .raster_tiles
+                .lock()
+                .expect("minimap raster tile cache poisoned")
+                .reserve(&request_keys);
+            if should_spawn {
+                let tile_model = shape_model.clone();
+                let tile_folded = shape_folded.clone();
+                let atomic_batch = request_count > 1;
+                let background = cx.background_executor().spawn(async move {
+                    let mut completed = Vec::with_capacity(raster_requests.len());
+                    for request in raster_requests {
                         let rasterized = rasterize_tile(
                             &tile_model,
-                            &tile_rows,
+                            &request.rows,
                             width,
                             &tile_folded,
                             scale_factor,
@@ -2641,8 +2785,8 @@ pub(super) fn render(
                                 "org_studio_minimap_tile_ready generation={} revision={} tile_start={} rows={} lines={} width={} total_ms={:.3} text_system_wait_ms={:.3} cold_text_system={} first={} since_open_ms={:.3}",
                                 generation,
                                 presentation_revision,
-                                tile_start,
-                                tile_rows.len(),
+                                request.key.first_row,
+                                request.rows.len(),
                                 rasterized.line_count,
                                 width,
                                 rasterized.total.as_secs_f64() * 1000.0,
@@ -2652,20 +2796,33 @@ pub(super) fn render(
                                 opened_at.elapsed().as_secs_f64() * 1000.0,
                             );
                         }
-                        (tile_model, rasterized.image)
-                    });
-                    cx.spawn(async move |cx| {
-                        let (tile_model, image) = background.await;
-                        tile_model
-                            .raster_tiles
-                            .lock()
-                            .expect("minimap raster tile cache poisoned")
-                            .insert(key, image);
-                        cx.refresh();
-                    })
-                    .detach();
-                }
-                tile_y += tile_height;
+                        completed.push((request.key, rasterized.image));
+                    }
+                    let completed_count = completed.len();
+                    tile_model
+                        .raster_tiles
+                        .lock()
+                        .expect("minimap raster tile cache poisoned")
+                        .insert_batch(completed, &visible_keys);
+                    // Publish a complete visible minimap frame as one unit. The preview keeps its
+                    // loading cover in place until this release store, so users never see the
+                    // document appear first and the minimap fill one or two frames later.
+                    tile_model
+                        .initial_visible_batch_ready
+                        .store(true, Ordering::Release);
+                    if minimap_perf_enabled() && atomic_batch {
+                        eprintln!(
+                            "org_studio_minimap_tile_batch_ready tiles={} since_open_ms={:.3}",
+                            completed_count,
+                            opened_at.elapsed().as_secs_f64() * 1000.0,
+                        );
+                    }
+                });
+                cx.spawn(async move |cx| {
+                    background.await;
+                    cx.refresh();
+                })
+                .detach();
             }
             tiles
         },
@@ -2683,6 +2840,12 @@ pub(super) fn render(
                         generation,
                         presentation_revision,
                         tiles.len(),
+                        opened_at.elapsed().as_secs_f64() * 1000.0,
+                    );
+                    eprintln!(
+                        "org_preview_coherent_first_frame generation={} revision={} since_open_ms={:.3}",
+                        generation,
+                        presentation_revision,
                         opened_at.elapsed().as_secs_f64() * 1000.0,
                     );
                 }
@@ -3764,8 +3927,41 @@ mod tests {
             in_flight: HashSet::new(),
         };
         assert!(cache.image_or_fallback(first).1);
-        assert!(!cache.image_or_fallback(second).1);
-        assert_eq!(cache.in_flight.len(), 1);
+        assert!(cache.image_or_fallback(second).1);
+        assert!(cache.reserve(&[first, second]));
+        assert_eq!(cache.in_flight.len(), 2);
+        assert!(!cache.reserve(&[second]));
+    }
+
+    #[test]
+    fn complete_visible_batch_is_published_without_internal_eviction() {
+        let density = MinimapDensity::Compact;
+        let keys = (0..RasterTileCache::CAPACITY + 1)
+            .map(|index| {
+                let row = index * RASTER_TILE_ROWS;
+                tile_key(&[row], row, 96, 0, 1, 2.0, density)
+            })
+            .collect::<Vec<_>>();
+        let mut cache = RasterTileCache {
+            entries: HashMap::new(),
+            order: VecDeque::new(),
+            in_flight: HashSet::new(),
+        };
+        assert!(cache.reserve(&keys));
+        let completed = keys
+            .iter()
+            .copied()
+            .map(|key| {
+                let pixels = RgbaImage::new(1, 1);
+                let image = Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(pixels), 1)));
+                (key, image)
+            })
+            .collect();
+        cache.insert_batch(completed, &keys);
+
+        assert_eq!(cache.entries.len(), keys.len());
+        assert!(cache.in_flight.is_empty());
+        assert!(keys.iter().all(|key| cache.entries.contains_key(key)));
     }
 
     #[gpui::test]
