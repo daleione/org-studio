@@ -43,7 +43,7 @@ mod table;
 mod tests;
 mod visual_recipe;
 use app::ScrollBenchmark;
-use folding::{changed_range, visible_row_indices};
+use folding::{changed_range, visible_markdown_row_indices, visible_row_indices};
 use projection::build_projection_snapshot;
 use rows::build_preview_rows;
 use table::{build_markdown_table_styles, build_table_styles, render_table_row};

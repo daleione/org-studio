@@ -130,6 +130,7 @@ pub(in crate::preview) fn render_document(
                                                 &document,
                                                 actual_index,
                                                 &document.markdown_blocks[row.block_id as usize],
+                                                is_folded,
                                                 {
                                                     let minimap = if minimap_visible {
                                                         minimap_width

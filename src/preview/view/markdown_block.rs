@@ -19,6 +19,7 @@ pub(super) fn render_markdown_block(
     document: &Arc<PreviewDocument>,
     display_row: usize,
     block: &markdown::MarkdownBlock,
+    is_folded: bool,
     available_width: f32,
 ) -> gpui::Div {
     use markdown::MarkdownKind;
@@ -55,7 +56,22 @@ pub(super) fn render_markdown_block(
                         .text_size(px(13.0))
                         .child(format!("{} ", theme.heading_bullets[index])),
                 )
-                .child(inline())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .child(inline())
+                        .when(is_folded, |element| {
+                            element.child(
+                                div()
+                                    .flex_none()
+                                    .text_color(rgb(theme.keyword))
+                                    .child("..."),
+                            )
+                        }),
+                )
         }
         MarkdownKind::Paragraph => div()
             .text_size(px(row_layout.font_size))

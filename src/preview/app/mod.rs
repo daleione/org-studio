@@ -8,7 +8,7 @@ use super::{
     centered_message, changed_range, command_count, compile_input_profile,
     configured_minimap_visible, current_theme, dired_bindings, load_document, minimap,
     preview_bindings, preview_input, px, render_document, schedule_document_prewarm,
-    visible_row_indices,
+    visible_markdown_row_indices, visible_row_indices,
 };
 use gpui::{div, prelude::*, rgb};
 
@@ -221,13 +221,20 @@ impl PreviewApp {
     }
 
     pub(super) fn toggle_fold(&mut self, block_id: BlockId, document: &Arc<PreviewDocument>) {
-        if document.format == DocumentFormat::Markdown {
-            return;
-        }
-        if !matches!(
-            document.blocks.nodes()[block_id as usize].kind,
-            BlockKind::Heading { .. }
-        ) {
+        let is_heading = match document.format {
+            DocumentFormat::Org => document
+                .blocks
+                .nodes()
+                .get(block_id as usize)
+                .is_some_and(|block| matches!(block.kind, BlockKind::Heading { .. })),
+            DocumentFormat::Markdown => document
+                .markdown_blocks
+                .get(block_id as usize)
+                .is_some_and(|block| {
+                    matches!(block.kind, super::markdown::MarkdownKind::Heading { .. })
+                }),
+        };
+        if !is_heading {
             return;
         }
         self.cancel_minimap_interaction();
@@ -236,11 +243,16 @@ impl PreviewApp {
         if !folded.remove(&block_id) {
             folded.insert(block_id);
         }
-        let new_visible = Arc::new(visible_row_indices(
-            &document.projection.rows,
-            &document.blocks,
-            &self.folded,
-        ));
+        let new_visible = Arc::new(match document.format {
+            DocumentFormat::Org => {
+                visible_row_indices(&document.projection.rows, &document.blocks, &self.folded)
+            }
+            DocumentFormat::Markdown => visible_markdown_row_indices(
+                &document.projection.rows,
+                &document.markdown_blocks,
+                &self.folded,
+            ),
+        });
         let (old_range, new_count) = changed_range(&self.visible_rows, &new_visible);
         self.list_state.splice(old_range, new_count);
         if new_visible.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {
