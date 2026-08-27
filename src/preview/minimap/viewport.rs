@@ -222,6 +222,60 @@ pub(in crate::preview) fn minimap_viewport_for_list_with_anchor(
     viewport
 }
 
+pub(in crate::preview) fn minimap_anchor_for_thumb_top(
+    index: &MinimapLineIndex,
+    list_state: &ListState,
+    track_height: f32,
+    thumb_top: f32,
+) -> MinimapInteractionAnchor {
+    // Wrapped rows do not have a uniform preview-pixel/display-line ratio. Choose the
+    // minimap camera that makes the settled, projection-derived thumb meet the dragged
+    // position, so dropping the transient drag overlay cannot make it jump.
+    let viewport = minimap_viewport_for_list(index, list_state, track_height);
+    let visible_minimap_lines = ((viewport.interaction_height
+        - index.density.edge_padding() * 2.0)
+        / index.density.line_height())
+    .max(1.0);
+    let max_content_top = (index.total as f32 - visible_minimap_lines).max(0.0);
+    let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
+    let document_pixels = index.document_pixels();
+    let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
+    let scroll_pixels = index
+        .pixel_for_list_offset(list_state.logical_scroll_top())
+        .clamp(0.0, max_scroll_pixels);
+    let (editor_top, editor_bottom) =
+        minimap_visible_display_range(index, scroll_pixels, viewport_pixels);
+    let minimum_content_top = (editor_bottom - visible_minimap_lines)
+        .max(0.0)
+        .min(max_content_top);
+    let maximum_content_top = editor_top.max(minimum_content_top).min(max_content_top);
+    let desired_content_top = editor_top
+        - ((thumb_top - index.density.edge_padding()) / index.density.line_height()).max(0.0);
+
+    MinimapInteractionAnchor {
+        layout: index.layout,
+        width: index.width,
+        rows_signature: index.rows_signature,
+        interaction_height: viewport.interaction_height,
+        content_top: desired_content_top.clamp(minimum_content_top, maximum_content_top),
+    }
+}
+
+pub(in crate::preview) fn minimap_thumb_for_drag(
+    viewport: MinimapViewport,
+    session: Option<MinimapDragSession>,
+) -> ThumbGeometry {
+    let mut thumb = viewport.thumb;
+    if let Some(session) = session {
+        // During a drag the pointer is the visual source of truth. Deriving `top` again
+        // from scroll progress would lag or stick whenever wrapped-row heights vary.
+        thumb.top = session
+            .current_thumb_top
+            .clamp(0.0, (viewport.interaction_height - thumb.height).max(0.0));
+    }
+    thumb
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(in crate::preview) struct MinimapClickTarget {
     pub(in crate::preview) offset: ListOffset,

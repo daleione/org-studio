@@ -76,6 +76,7 @@ pub(in crate::preview) struct DragSession {
     pub(in crate::preview) start_pointer_y: f32,
     pub(in crate::preview) start_thumb_top: f32,
     pub(in crate::preview) start_ratio: f32,
+    pub(in crate::preview) current_thumb_top: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

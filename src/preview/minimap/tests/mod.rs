@@ -619,6 +619,32 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
         "the first wheel event after a click must move continuously, not drop the minimap camera"
     );
 
+    scroll_list_to_ratio(&index, &state, 0.5);
+    let variable_height_viewport = minimap_viewport_for_list(&index, &state, 500.0);
+    let desired_thumb_top = 180.0;
+    assert!(
+        (variable_height_viewport.thumb.top - desired_thumb_top).abs() > 1.0,
+        "the fixture must exercise the non-linear variable-height mapping"
+    );
+    let drag = MinimapDragSession {
+        start_pointer_y: desired_thumb_top,
+        start_thumb_top: desired_thumb_top,
+        start_ratio: variable_height_viewport.scroll_ratio,
+        current_thumb_top: desired_thumb_top,
+    };
+    assert_eq!(
+        minimap_thumb_for_drag(variable_height_viewport, Some(drag)).top,
+        desired_thumb_top,
+        "the active transparent viewport must paint at the pointer-derived position"
+    );
+    let aligned_anchor = minimap_anchor_for_thumb_top(&index, &state, 500.0, desired_thumb_top);
+    let released_viewport =
+        minimap_viewport_for_list_with_anchor(&index, &state, 500.0, Some(aligned_anchor));
+    assert!(
+        (released_viewport.thumb.top - desired_thumb_top).abs() < 0.001,
+        "releasing after a variable-height drag must not jump the viewport"
+    );
+
     let short_projection = test_line_index(
         100,
         2,
@@ -918,6 +944,7 @@ fn dragging_is_the_exact_inverse_of_thumb_travel() {
         start_pointer_y: 360.0,
         start_thumb_top: 320.0,
         start_ratio: 0.5,
+        current_thumb_top: 320.0,
     };
     assert_eq!(
         minimap_drag_target(360.0, session, 80.0, 720.0),
@@ -941,6 +968,7 @@ fn absolute_drag_keeps_the_grab_point_and_clamps_outside_the_track() {
         start_pointer_y: 140.0,
         start_thumb_top: 120.0,
         start_ratio: 0.5,
+        current_thumb_top: 120.0,
     };
     assert_eq!(
         minimap_drag_target(140.0, session, thumb_height, track_height),
@@ -965,6 +993,7 @@ fn tiny_move_after_content_click_is_continuous_from_the_clicked_ratio() {
         start_pointer_y: 120.0,
         start_thumb_top: 80.0,
         start_ratio: 0.72,
+        current_thumb_top: 80.0,
     };
     let unchanged = minimap_drag_target(120.0, session, 60.0, 240.0);
     assert_eq!(unchanged, (0.72, 80.0));

@@ -22,10 +22,10 @@ use super::{
     MinimapLineIndex, MinimapProjectionReadiness, MinimapResizeSession, MinimapState,
     MinimapWidthChange, PreviewDisplayMap, PreviewLineKind, RASTER_TILE_ROWS, RasterRow,
     RasterTileKey, RasterTilePaint, RasterTileRequest, SCROLL_WHEEL_LINE_PX,
-    current_resize_session, display_window_range, folded_signature,
+    current_resize_session, display_window_range, folded_signature, minimap_anchor_for_thumb_top,
     minimap_click_target_for_viewport, minimap_drag_target, minimap_perf_enabled,
-    minimap_trace_enabled, minimap_viewport_for_list_with_anchor, rasterize_tile,
-    scroll_list_to_ratio, scroll_ratio_after_wheel, source_target_for_list_offset,
+    minimap_thumb_for_drag, minimap_trace_enabled, minimap_viewport_for_list_with_anchor,
+    rasterize_tile, scroll_list_to_ratio, scroll_ratio_after_wheel, source_target_for_list_offset,
     take_resize_session, thumb_alphas, tile_key, width_from_resize_drag,
 };
 
@@ -381,7 +381,7 @@ pub fn render(
                 );
             }
             let track_height = f32::from(bounds.size.height);
-            let thumb = paint_line_index
+            let viewport = paint_line_index
                 .lock()
                 .expect("active line index poisoned")
                 .as_ref()
@@ -392,9 +392,12 @@ pub fn render(
                         track_height,
                         *paint_anchor.lock().expect("minimap anchor poisoned"),
                     )
-                    .thumb
                 })
                 .unwrap_or_default();
+            let thumb = minimap_thumb_for_drag(
+                viewport,
+                *paint_drag.lock().expect("minimap drag state poisoned"),
+            );
             let thumb_bounds = Bounds::new(
                 point(bounds.origin.x, bounds.origin.y + px(thumb.top)),
                 gpui::size(bounds.size.width, px(thumb.height)),
@@ -461,7 +464,7 @@ pub fn render(
                     f32::from(bounds.size.height),
                     current_anchor,
                 );
-                let (target, _desired_thumb_top) = minimap_drag_target(
+                let (target, desired_thumb_top) = minimap_drag_target(
                     local_y,
                     session,
                     viewport.thumb.height,
@@ -475,6 +478,30 @@ pub fn render(
                     );
                 }
                 scroll_list_to_ratio(&index, &move_list, target);
+                let settled_viewport = minimap_viewport_for_list_with_anchor(
+                    &index,
+                    &move_list,
+                    f32::from(bounds.size.height),
+                    current_anchor,
+                );
+                let desired_thumb_top = desired_thumb_top.clamp(
+                    0.0,
+                    (settled_viewport.interaction_height - settled_viewport.thumb.height).max(0.0),
+                );
+                *move_anchor.lock().expect("minimap anchor poisoned") =
+                    Some(minimap_anchor_for_thumb_top(
+                        &index,
+                        &move_list,
+                        f32::from(bounds.size.height),
+                        desired_thumb_top,
+                    ));
+                if let Some(active_session) = move_drag
+                    .lock()
+                    .expect("minimap drag state poisoned")
+                    .as_mut()
+                {
+                    active_session.current_thumb_top = desired_thumb_top;
+                }
                 window.refresh();
             });
 
@@ -626,6 +653,7 @@ pub fn render(
                 start_pointer_y: local_y,
                 start_thumb_top: drag_start.0,
                 start_ratio: drag_start.1,
+                current_thumb_top: drag_start.0,
             });
         })
         .on_scroll_wheel(move |event, window, cx| {

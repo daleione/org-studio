@@ -83,8 +83,9 @@ pub(super) use state::{
 };
 pub(super) use viewport::MinimapInteractionAnchor;
 use viewport::{
-    minimap_click_target_for_viewport, minimap_drag_target, minimap_viewport_for_list_with_anchor,
-    scroll_list_to_ratio, scroll_ratio_after_wheel, source_target_for_list_offset, thumb_alphas,
+    minimap_anchor_for_thumb_top, minimap_click_target_for_viewport, minimap_drag_target,
+    minimap_thumb_for_drag, minimap_viewport_for_list_with_anchor, scroll_list_to_ratio,
+    scroll_ratio_after_wheel, source_target_for_list_offset, thumb_alphas,
 };
 pub(super) use width::Density as MinimapDensity;
 use width::{
