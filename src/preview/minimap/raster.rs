@@ -24,9 +24,8 @@ use crate::{
 };
 
 use super::{
-    DisplayLines, DisplayRuns, MINIMAP_AUTO_COMPACT_MAX_PX, MinimapDensity, PreviewDisplayMap,
-    PreviewLineKind, RASTER_TILE_CACHE_CAPACITY, kind_color, minimap_perf_enabled, minimap_runs,
-    slice_display_runs,
+    DisplayLines, DisplayRuns, MinimapDensity, PreviewDisplayMap, PreviewLineKind,
+    RASTER_TILE_CACHE_CAPACITY, kind_color, minimap_perf_enabled, minimap_runs, slice_display_runs,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -441,53 +440,6 @@ pub(in crate::preview) fn prewarm_text_rasterizer() {
         eprintln!(
             "org_studio_minimap_text_prewarm elapsed_ms={:.3}",
             started.elapsed().as_secs_f64() * 1000.0,
-        );
-    }
-}
-
-pub(in crate::preview) fn prewarm_document_text(model: Arc<PreviewDisplayMap>) {
-    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
-
-    const PREWARM_BUDGET: Duration = Duration::from_millis(350);
-    let started = Instant::now();
-    prewarm_text_rasterizer();
-    if started.elapsed() >= PREWARM_BUDGET {
-        return;
-    }
-    let rasterizer = TEXT_RASTERIZER
-        .get()
-        .expect("minimap rasterizer must exist after prewarm");
-    let mut rasterizer = rasterizer.lock().expect("minimap rasterizer poisoned");
-    let (font_system, swash_cache) = &mut *rasterizer;
-    let density = MinimapDensity::Compact;
-    let mut buffer = Buffer::new(
-        font_system,
-        Metrics::new(density.font_px(), density.line_height()),
-    );
-    buffer.set_size(
-        Some(MINIMAP_AUTO_COMPACT_MAX_PX - 6.0),
-        Some(density.line_height()),
-    );
-    buffer.set_wrap(Wrap::None);
-    let attrs = Attrs::new()
-        .family(Family::Name("Menlo"))
-        .weight(cosmic_text::Weight::BLACK);
-
-    // A 720px initial window exposes at most 277 compact display lines. Include bounded
-    // overdraw and wrapped-row slack while keeping this independent of total document size.
-    for row in 0..model.projection.rows.len().min(384) {
-        if started.elapsed() >= PREWARM_BUDGET {
-            break;
-        }
-        let kind = model.row_kind(row);
-        let display = model.runs(row);
-        buffer.set_rich_text(cosmic_runs(kind, &display), &attrs, Shaping::Advanced, None);
-        buffer.shape_until_scroll(font_system, false);
-        buffer.draw(
-            font_system,
-            swash_cache,
-            Color::rgb(0, 0, 0),
-            |_, _, _, _, _| {},
         );
     }
 }

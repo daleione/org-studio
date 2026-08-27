@@ -71,11 +71,11 @@ pub(super) use projection::{
     CachedMinimapLineIndex, MinimapLineIndex, MinimapLineIndexBuilder, MinimapProjectionReadiness,
 };
 pub(super) use raster::RasterTileCache;
+pub(super) use raster::prewarm_text_rasterizer;
 use raster::{
     RasterRow, RasterTileKey, RasterTilePaint, RasterTileRequest, display_window_range,
     folded_signature, rasterize_tile, tile_key,
 };
-pub(super) use raster::{prewarm_document_text, prewarm_text_rasterizer};
 pub(super) use render::render;
 pub(super) use state::{
     DragSession as MinimapDragSession, MinimapState, ResizeSession as MinimapResizeSession,
@@ -88,9 +88,7 @@ use viewport::{
     scroll_ratio_after_wheel, source_target_for_list_offset, thumb_alphas,
 };
 pub(super) use width::Density as MinimapDensity;
-use width::{
-    AUTO_COMPACT_MAX_PX as MINIMAP_AUTO_COMPACT_MAX_PX, from_resize_drag as width_from_resize_drag,
-};
+use width::from_resize_drag as width_from_resize_drag;
 #[cfg(test)]
 use width::{
     EDGE_PADDING_PX as MINIMAP_EDGE_PADDING_PX, FONT_PX as MINIMAP_FONT_PX,

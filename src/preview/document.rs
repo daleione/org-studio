@@ -5,7 +5,7 @@ use crate::{
     document::{Revision, RevisionRange, SharedTextSnapshot},
     org_syntax::{BlockArena, BlockId},
 };
-use gpui::{App, BackgroundExecutor};
+use gpui::App;
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -28,7 +28,6 @@ pub struct PreviewDocument {
 pub struct InitialDocumentLoad {
     pub(in crate::preview) path: PathBuf,
     pub(in crate::preview) started_at: Instant,
-    pub(in crate::preview) minimap_prewarm_scheduled: bool,
     pub(in crate::preview) receiver:
         async_channel::Receiver<Result<PreviewDocument, (PathBuf, String)>>,
 }
@@ -40,20 +39,12 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
     let started_at = Instant::now();
     let (sender, receiver) = async_channel::bounded(1);
     let load_path = path.clone();
-    let minimap_prewarm_scheduled = configured_minimap_visible();
-    let prewarm_executor = cx.background_executor().clone();
-    if minimap_prewarm_scheduled {
-        cx.background_executor()
-            .spawn(async { minimap::prewarm_text_rasterizer() })
-            .detach();
-    }
     cx.background_executor()
         .spawn_with_priority(gpui::Priority::High, async move {
             if minimap::minimap_perf_enabled() {
                 eprintln!("org_preview_initial_prefetch_start since_open_ms=0.000");
             }
             let result = load_document(load_path);
-            schedule_document_prewarm(minimap_prewarm_scheduled, &result, &prewarm_executor);
             if minimap::minimap_perf_enabled() {
                 eprintln!(
                     "org_preview_initial_prefetch_complete since_open_ms={:.3}",
@@ -66,7 +57,6 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
     InitialDocumentLoad {
         path,
         started_at,
-        minimap_prewarm_scheduled,
         receiver,
     }
 }
@@ -81,21 +71,6 @@ pub(in crate::preview) fn configured_minimap_visible() -> bool {
             _ => None,
         })
         .unwrap_or(preview_settings.minimap_enabled)
-}
-
-pub(in crate::preview) fn schedule_document_prewarm(
-    enabled: bool,
-    result: &Result<PreviewDocument, (PathBuf, String)>,
-    executor: &BackgroundExecutor,
-) {
-    if enabled
-        && let Ok(document) = result
-        && let Some(model) = document.display_map.clone()
-    {
-        executor
-            .spawn(async move { minimap::prewarm_document_text(model) })
-            .detach();
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

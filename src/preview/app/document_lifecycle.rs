@@ -1,8 +1,8 @@
 use super::{
     Arc, Context, DocumentFormat, Duration, HashSet, InitialDocumentLoad, Instant,
     MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions, PreviewApp, PreviewDocument,
-    PreviewLoadState, accept_generation, load_document, minimap, schedule_document_prewarm,
-    visible_markdown_row_indices, visible_row_indices,
+    PreviewLoadState, accept_generation, load_document, minimap, visible_markdown_row_indices,
+    visible_row_indices,
 };
 use gpui::AppContext;
 
@@ -23,12 +23,7 @@ impl PreviewApp {
         cx.notify();
     }
 
-    pub(in crate::preview) fn begin_open(
-        &mut self,
-        path: PathBuf,
-        opened_at: Instant,
-        cx: &mut Context<Self>,
-    ) -> u64 {
+    pub(in crate::preview) fn begin_open(&mut self, path: PathBuf, opened_at: Instant) -> u64 {
         self.home_error = None;
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
@@ -37,17 +32,6 @@ impl PreviewApp {
         self.first_frame_scheduled = None;
         let generation = self.generation;
         self.state = PreviewLoadState::Loading { path: path.clone() };
-        let watch_started = Instant::now();
-        self.watch_document(path.clone(), cx);
-        if minimap::minimap_perf_enabled() {
-            eprintln!(
-                "org_preview_file_watch_ready generation={} elapsed_ms={:.3} since_open_ms={:.3}",
-                generation,
-                watch_started.elapsed().as_secs_f64() * 1000.0,
-                self.opened_at
-                    .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
-            );
-        }
         generation
     }
 
@@ -55,30 +39,22 @@ impl PreviewApp {
         let InitialDocumentLoad {
             path,
             started_at,
-            minimap_prewarm_scheduled,
             receiver,
         } = load;
-        let generation = self.begin_open(path.clone(), started_at, cx);
-        let prewarm_minimap = self.minimap_visible;
+        let generation = self.begin_open(path.clone(), started_at);
+        self.watch_document_profiled(path.clone(), generation, cx);
 
         match receiver.try_recv() {
             Ok(result) => {
-                if !minimap_prewarm_scheduled {
-                    schedule_document_prewarm(prewarm_minimap, &result, cx.background_executor());
-                }
                 if self.apply_load_result(generation, result) {
                     cx.notify();
                 }
             }
             Err(async_channel::TryRecvError::Empty) => {
-                let prewarm_executor = cx.background_executor().clone();
                 self.load_task = Some(cx.spawn(async move |this, cx| {
                     let result = receiver.recv().await.unwrap_or_else(|_| {
                         Err((path, "initial document loader stopped".to_owned()))
                     });
-                    if !minimap_prewarm_scheduled {
-                        schedule_document_prewarm(prewarm_minimap, &result, &prewarm_executor);
-                    }
                     let _ = this.update(cx, |this, cx| {
                         if this.apply_load_result(generation, result) {
                             cx.notify();
@@ -96,14 +72,13 @@ impl PreviewApp {
     }
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let generation = self.begin_open(path.clone(), Instant::now(), cx);
+        let generation = self.begin_open(path.clone(), Instant::now());
 
-        // Opening the requested document is user-visible latency. Submit it before minimap
-        // prewarming and at GPUI's high background priority so platform/font startup work cannot
-        // leave a sub-millisecond file load queued for hundreds of milliseconds.
+        // Opening the requested document is user-visible latency. Submit it before synchronous
+        // file-watcher setup and before one-time font startup work so a small local file is not
+        // queued behind either of them.
         let opened_at = self.opened_at.unwrap_or_else(Instant::now);
-        let prewarm_minimap = self.minimap_visible;
-        let prewarm_executor = cx.background_executor().clone();
+        let watch_path = path.clone();
         let background =
             cx.background_executor()
                 .spawn_with_priority(gpui::Priority::High, async move {
@@ -122,7 +97,6 @@ impl PreviewApp {
                             opened_at.elapsed().as_secs_f64() * 1000.0,
                         );
                     }
-                    schedule_document_prewarm(prewarm_minimap, &result, &prewarm_executor);
                     result
                 });
         self.load_task = Some(cx.spawn(async move |this, cx| {
@@ -133,8 +107,23 @@ impl PreviewApp {
                 }
             });
         }));
+        self.watch_document_profiled(watch_path, generation, cx);
 
         cx.notify();
+    }
+
+    fn watch_document_profiled(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+        let watch_started = Instant::now();
+        self.watch_document(path, cx);
+        if minimap::minimap_perf_enabled() {
+            eprintln!(
+                "org_preview_file_watch_ready generation={} elapsed_ms={:.3} since_open_ms={:.3}",
+                generation,
+                watch_started.elapsed().as_secs_f64() * 1000.0,
+                self.opened_at
+                    .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
+            );
+        }
     }
 
     pub(in crate::preview) fn apply_load_result(

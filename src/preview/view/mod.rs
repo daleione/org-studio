@@ -15,7 +15,7 @@ mod markdown_block;
 mod overlays;
 mod styled_text;
 pub(super) use document::render_document;
-pub(super) use home::render_home;
+pub(super) use home::{render_home, render_loading};
 pub(super) use markdown_block::parse_document_inline;
 use markdown_block::render_markdown_block;
 use overlays::{dired_help_window, which_key_window};

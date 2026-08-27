@@ -18,7 +18,7 @@ mod input;
 mod layout;
 mod loading;
 mod view;
-use document::{DocumentFormat, PreviewRow, configured_minimap_visible, schedule_document_prewarm};
+use document::{DocumentFormat, PreviewRow, configured_minimap_visible};
 pub use document::{InitialDocumentLoad, LoadMetrics, PreviewDocument, preload_initial_document};
 use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 use input::*;

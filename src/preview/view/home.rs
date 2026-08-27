@@ -181,6 +181,43 @@ pub(in crate::preview) fn render_home(
         )
 }
 
+pub(in crate::preview) fn render_loading(path: &std::path::Path) -> gpui::Div {
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string());
+    div()
+        .size_full()
+        .bg(rgb(0xf7f7f8))
+        .font_family(".SystemUIFont")
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .max_w(px(520.0))
+                .px_7()
+                .flex()
+                .flex_col()
+                .items_center()
+                .child(
+                    div()
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(0x303034))
+                        .child(format!("Opening {name}")),
+                )
+                .child(
+                    div()
+                        .mt_2()
+                        .text_size(px(12.0))
+                        .text_color(rgb(0x83838a))
+                        .overflow_hidden()
+                        .child(path.display().to_string()),
+                ),
+        )
+}
+
 fn picker_copy(
     title: impl Into<SharedString>,
     detail: impl Into<SharedString>,
