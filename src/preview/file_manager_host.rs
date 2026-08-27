@@ -199,7 +199,7 @@ impl PreviewApp {
         cx.notify();
     }
 
-    pub(super) fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_visible = !self.sidebar_visible;
         if self.sidebar_visible
             && self.dired.is_none()

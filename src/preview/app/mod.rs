@@ -147,6 +147,20 @@ impl PreviewApp {
         self.minimap_visible
     }
 
+    pub fn sidebar_visible(&self) -> bool {
+        self.sidebar_visible
+    }
+
+    pub fn current_document_path(&self) -> Option<&std::path::Path> {
+        match &self.state {
+            PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
+                Some(path)
+            }
+            PreviewLoadState::Ready { document, .. } => Some(&document.path),
+            PreviewLoadState::Empty => None,
+        }
+    }
+
     pub(super) fn body(&self, entity: gpui::Entity<Self>, editor_width: f32) -> gpui::Div {
         let theme = current_theme();
         let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);

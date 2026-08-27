@@ -13,6 +13,7 @@ impl PreviewApp {
         opened_at: Instant,
         cx: &mut Context<Self>,
     ) -> u64 {
+        crate::settings::remember_last_document(&path);
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.generation += 1;

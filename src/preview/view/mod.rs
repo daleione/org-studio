@@ -3,9 +3,9 @@ use super::{
     DocumentFormat, FontStyle, FontWeight, HashSet, HighlightStyle, InlineKind, InlineSpan,
     InlineText, Instant, IntoElement, ListOffset, ListState, OPEN_DOCUMENT_COMMAND, OpenDocument,
     OpenFileManager, PreviewApp, PreviewDocument, PreviewLoadState, PreviewRow,
-    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, StyledText, ToggleSidebar,
-    Window, accept_generation, current_theme, div, img, markdown, minimap, parse_inline, px,
-    render_table_row, resolve_image_path, rgb,
+    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, StyledText, ToggleMinimap,
+    ToggleSidebar, Window, accept_generation, current_theme, div, img, markdown, minimap,
+    parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
 use gpui::prelude::*;
 
@@ -139,6 +139,7 @@ impl Render for PreviewApp {
             .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
             .child(self.workspace_body(entity, command_window_width))
             .when(!which_key_items.is_empty(), |view| {
                 view.child(if dired_help_visible {

@@ -1,8 +1,10 @@
 use std::{
     fs, io,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{OnceLock, mpsc},
 };
+
+const LAST_DOCUMENT_FILE: &str = "last-document";
 
 const SETTINGS_VERSION: u32 = 1;
 
@@ -165,6 +167,42 @@ pub fn initial_minimap_width(fallback: Option<u16>) -> Option<u16> {
                 .map(Some),
         })
         .unwrap_or(fallback)
+}
+
+pub fn remember_last_document(path: &Path) {
+    static SENDER: OnceLock<mpsc::Sender<PathBuf>> = OnceLock::new();
+    let sender = SENDER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel::<PathBuf>();
+        std::thread::Builder::new()
+            .name("org-studio-session".into())
+            .spawn(move || {
+                while let Ok(mut latest) = receiver.recv() {
+                    while let Ok(newer) = receiver.try_recv() {
+                        latest = newer;
+                    }
+                    let Some(directory) =
+                        settings_path().and_then(|path| path.parent().map(Path::to_path_buf))
+                    else {
+                        continue;
+                    };
+                    if fs::create_dir_all(&directory).is_ok() {
+                        let _ = fs::write(
+                            directory.join(LAST_DOCUMENT_FILE),
+                            latest.as_os_str().as_encoded_bytes(),
+                        );
+                    }
+                }
+            })
+            .expect("session writer must start");
+        sender
+    });
+    let _ = sender.send(path.to_path_buf());
+}
+
+pub fn last_document_path() -> Option<PathBuf> {
+    let path = settings_path()?.parent()?.join(LAST_DOCUMENT_FILE);
+    let bytes = fs::read(path).ok()?;
+    (!bytes.is_empty()).then(|| PathBuf::from(String::from_utf8_lossy(&bytes).into_owned()))
 }
 
 fn settings_path() -> Option<PathBuf> {

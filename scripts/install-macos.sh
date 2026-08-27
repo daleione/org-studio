@@ -12,10 +12,9 @@ ditto "$source_app" "$installed_app"
 
 launcher="$bin_dir/org-studio"
 escaped_app=$(printf '%s' "$installed_app" | sed "s/'/'\\\\''/g")
-# `--args` puts document paths in argv before GPUI creates its first window;
-# plain `--` delivers them later through the open-URLs callback and flashes the
-# Empty state. `-n` guarantees those argv reach a fresh process, while `open`
-# remains a detached launcher and immediately returns control to the terminal.
+# Route documents through Launch Services so an already-running Org Studio
+# process receives them through its open-URLs handler. Do not use `-n`: that
+# would create one process and Dock icon per CLI invocation.
 printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
@@ -24,10 +23,9 @@ printf '%s\n' \
     '        /*) document=$1 ;;' \
     '        *) document=$(CDPATH= cd -- "$(dirname -- "$1")" && pwd -P)/$(basename -- "$1") ;;' \
     '    esac' \
-    '    shift' \
-    '    set -- "$document" "$@"' \
+    "    exec /usr/bin/open -a '$escaped_app' \"\$document\"" \
     'fi' \
-    "exec /usr/bin/open -n -a '$escaped_app' --args \"\$@\"" > "$launcher"
+    "exec /usr/bin/open -a '$escaped_app'" > "$launcher"
 chmod 755 "$launcher"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$installed_app"
 
