@@ -3,9 +3,13 @@ use std::{
     sync::{Arc, Mutex, atomic::AtomicBool},
 };
 
-use super::{MinimapInteractionAnchor, RasterTileCache};
+use super::{
+    CachedMinimapLineIndex, MinimapInteractionAnchor, MinimapLineIndexBuilder, RasterTileCache,
+};
 
 pub(in crate::preview) struct MinimapState {
+    pub(in crate::preview) line_index: Mutex<Option<CachedMinimapLineIndex>>,
+    pub(in crate::preview) line_index_build: Mutex<Option<MinimapLineIndexBuilder>>,
     pub(in crate::preview) raster_tiles: Mutex<RasterTileCache>,
     pub(in crate::preview) drag: Arc<Mutex<Option<DragSession>>>,
     pub(in crate::preview) resize_drag: Arc<Mutex<Option<ResizeSession>>>,
@@ -17,6 +21,8 @@ pub(in crate::preview) struct MinimapState {
 impl MinimapState {
     pub(in crate::preview) fn new() -> Self {
         Self {
+            line_index: Mutex::new(None),
+            line_index_build: Mutex::new(None),
             raster_tiles: Mutex::new(RasterTileCache {
                 entries: HashMap::with_capacity(RasterTileCache::CAPACITY),
                 order: VecDeque::with_capacity(RasterTileCache::CAPACITY),

@@ -170,7 +170,6 @@ pub(in crate::preview) fn render_document(
                 layout.child(minimap::render(
                     display_map,
                     document.minimap.clone(),
-                    document.layout.clone(),
                     visible_rows.clone(),
                     folded.clone(),
                     minimap_list_state,

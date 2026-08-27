@@ -33,7 +33,6 @@ use super::{
 pub fn render(
     model: Arc<PreviewDisplayMap>,
     state: Arc<MinimapState>,
-    layout_state: Arc<crate::preview::layout::LayoutState>,
     presentation_rows: Arc<Vec<usize>>,
     folded: Arc<HashSet<u32>>,
     list_state: ListState,
@@ -60,7 +59,6 @@ pub fn render(
     let shape_list = list_state.clone();
     let shape_model = model.clone();
     let shape_state = state.clone();
-    let shape_layout_state = layout_state;
     let paint_state = state.clone();
     let shape_rows = presentation_rows.clone();
     let shape_folded = folded;
@@ -107,7 +105,7 @@ pub fn render(
             let projection = {
                 profiling::scope!("Minimap::line_index");
                 shape_model.advance_minimap_line_index(
-                    &shape_layout_state,
+                    &shape_state,
                     &shape_rows,
                     parent_width,
                     density,

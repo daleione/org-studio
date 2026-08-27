@@ -160,7 +160,6 @@ fn load_document_profiled_impl(
         markdown_blocks,
         projection,
         minimap: Arc::new(super::minimap::MinimapState::new()),
-        layout: Arc::new(super::layout::LayoutState::new()),
         display_map: None,
         metrics: LoadMetrics {
             bytes: byte_count,

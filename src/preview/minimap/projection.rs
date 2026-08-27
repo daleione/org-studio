@@ -7,7 +7,7 @@ use std::{
 
 use crate::{
     document::Revision,
-    preview::layout::{LayoutKey, LayoutSnapshot, LayoutState, ResolvedRow},
+    preview::layout::{LayoutKey, LayoutSnapshot, ResolvedRow},
 };
 use gpui::{ListOffset, px};
 
@@ -345,7 +345,7 @@ impl PreviewDisplayMap {
 
     pub(super) fn advance_minimap_line_index(
         &self,
-        state: &LayoutState,
+        state: &super::MinimapState,
         presentation_rows: &Arc<Vec<usize>>,
         available_width: f32,
         density: MinimapDensity,

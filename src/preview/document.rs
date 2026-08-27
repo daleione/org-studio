@@ -1,6 +1,5 @@
 use super::{
-    display_map, layout::LayoutState, loading::load_document, markdown, minimap,
-    projection::PreviewProjectionSnapshot,
+    display_map, loading::load_document, markdown, minimap, projection::PreviewProjectionSnapshot,
 };
 use crate::{
     document::{Revision, RevisionRange, SharedTextSnapshot},
@@ -22,7 +21,6 @@ pub struct PreviewDocument {
     pub(in crate::preview) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     pub(in crate::preview) projection: Arc<PreviewProjectionSnapshot>,
     pub(in crate::preview) minimap: Arc<minimap::MinimapState>,
-    pub(in crate::preview) layout: Arc<LayoutState>,
     pub(in crate::preview) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
     pub metrics: LoadMetrics,
 }

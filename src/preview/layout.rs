@@ -1,11 +1,7 @@
-use std::{
-    ops::Range,
-    sync::{Arc, Mutex},
-};
+use std::{ops::Range, sync::Arc};
 
 use crate::document::Revision;
 
-use super::minimap::{CachedMinimapLineIndex, MinimapLineIndexBuilder};
 use super::projection::{InvalidationFlags, VisualPatch};
 
 const LAYOUT_CHUNK_ROWS: usize = 256;
@@ -263,23 +259,6 @@ pub(in crate::preview) struct LayoutKey {
     pub(in crate::preview) content_width_px: u16,
     pub(in crate::preview) text_metrics_revision: u64,
     pub(in crate::preview) fold_revision: u64,
-}
-
-/// Width-dependent presentation state. It is owned beside the document
-/// projection, not by the minimap backend. Preview measurement and minimap
-/// navigation therefore publish and consume the same index revision.
-pub(in crate::preview) struct LayoutState {
-    pub(in crate::preview) line_index: Mutex<Option<CachedMinimapLineIndex>>,
-    pub(in crate::preview) line_index_build: Mutex<Option<MinimapLineIndexBuilder>>,
-}
-
-impl LayoutState {
-    pub(in crate::preview) fn new() -> Self {
-        Self {
-            line_index: Mutex::new(None),
-            line_index_build: Mutex::new(None),
-        }
-    }
 }
 
 #[allow(dead_code)] // Used by the editor transaction host once editing is enabled.
