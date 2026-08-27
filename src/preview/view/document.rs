@@ -1,8 +1,8 @@
 use super::{
-    Arc, BlockId, BlockKind, BlockNode, DocumentFormat, FontWeight, HashSet, Instant, ListState,
-    PreviewApp, PreviewDocument, PreviewRow, StyledText, accept_generation, current_theme, div,
-    img, minimap, px, render_markdown_block, render_table_row, resolve_image_path, rgb,
-    styled_code_runs, styled_inline_runs,
+    Arc, BlockId, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FoldTransition,
+    FontWeight, HashSet, Instant, ListState, PreviewApp, PreviewDocument, PreviewRow, StyledText,
+    accept_generation, current_theme, div, img, minimap, px, render_markdown_block,
+    render_table_row, resolve_image_path, rgb, styled_code_runs, styled_inline_runs,
 };
 use gpui::{list, prelude::*};
 
@@ -12,6 +12,7 @@ pub(in crate::preview) fn render_document(
     list_state: ListState,
     visible_rows: Arc<Vec<usize>>,
     fold_markers: Arc<HashSet<BlockId>>,
+    fold_animation: Option<FoldTransition>,
     entity: gpui::Entity<PreviewApp>,
     minimap_visible: bool,
     editor_width: f32,
@@ -27,6 +28,11 @@ pub(in crate::preview) fn render_document(
     let minimap_list_state = list_state.clone();
     let minimap_entity = entity.clone();
     let minimap_resize_entity = entity.clone();
+    let rendered_item_count = list_state.item_count();
+    let minimap_rows = fold_animation.as_ref().map_or_else(
+        || visible_rows.clone(),
+        |transition| transition.presentation_rows(&visible_rows),
+    );
     div()
         .size_full()
         .flex()
@@ -55,8 +61,28 @@ pub(in crate::preview) fn render_document(
                     let document = document.clone();
                     let visible_rows = visible_rows.clone();
                     let fold_markers = fold_markers.clone();
+                    let fold_animation = fold_animation.clone();
                     list(list_state, move |index, _window, _cx| {
-                        let actual_index = visible_rows[index];
+                        let available_width = {
+                            let minimap = if minimap_visible { minimap_width } else { 0.0 };
+                            (editor_width - 110.0 - minimap).max(120.0)
+                        };
+                        if let Some(animation) = fold_animation.as_ref()
+                            && let Some(shell) = animation.segment_at(index)
+                        {
+                            return render_fold_shell(
+                                document.clone(),
+                                animation.direction,
+                                animation.progress,
+                                shell.clone(),
+                                available_width,
+                            )
+                            .into_any_element();
+                        }
+                        let row_index = fold_animation
+                            .as_ref()
+                            .map_or(index, |transition| transition.target_index_for_item(index));
+                        let actual_index = visible_rows[row_index];
                         let row = document
                             .projection
                             .source_row(actual_index)
@@ -67,93 +93,43 @@ pub(in crate::preview) fn render_document(
                             .expect("preview display map must exist after loading");
                         let is_heading = display_map.is_heading(actual_index);
                         let is_table_row = display_map.is_table(actual_index);
-                        let is_folded = is_heading && fold_markers.contains(&row.block_id);
+                        let is_collapsing_heading = fold_animation
+                            .as_ref()
+                            .is_some_and(|animation| animation.heading == row.block_id);
+                        let is_folded = is_heading
+                            && fold_markers.contains(&row.block_id)
+                            && !is_collapsing_heading;
                         let document_for_click = document.clone();
                         let entity_for_click = entity.clone();
-                        div()
-                            .id(("preview-row", actual_index))
-                            .w_full()
-                            .min_h(px(24.0))
-                            .when(index == 0, |element| element.pt_1())
-                            .when(index + 1 == visible_rows.len(), |element| element.pb_2())
-                            .when(is_heading, |element| {
-                                element.cursor_pointer().on_click(move |_, _, cx| {
-                                    entity_for_click.update(cx, |this, cx| {
-                                        this.toggle_fold(row.block_id, &document_for_click);
-                                        cx.notify();
-                                    });
-                                })
+                        let row_element = render_preview_row(
+                            &document,
+                            actual_index,
+                            row,
+                            is_table_row,
+                            is_folded,
+                            available_width,
+                        )
+                        .id(("preview-row", actual_index))
+                        .when(index == 0, |element| element.pt_1())
+                        .when(index + 1 == rendered_item_count, |element| element.pb_2())
+                        .when(is_heading, |element| {
+                            element.cursor_pointer().on_click(move |_, window, cx| {
+                                let viewport_height = f32::from(window.viewport_size().height);
+                                entity_for_click.update(cx, |this, cx| {
+                                    this.toggle_fold_animated(
+                                        row.block_id,
+                                        &document_for_click,
+                                        viewport_height,
+                                        available_width,
+                                        Some(window),
+                                        cx,
+                                    );
+                                    cx.notify();
+                                });
                             })
-                            .flex()
-                            .items_start()
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .w(px(50.0))
-                                    .pr_3()
-                                    .h(px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_end()
-                                    .text_right()
-                                    .font_family("Menlo")
-                                    .text_size(px(10.0))
-                                    .text_color(rgb(theme.foreground_dim))
-                                    .child(if row.show_line_number {
-                                        (document.text.line_of_byte(row.content.range.start) + 1)
-                                            .to_string()
-                                    } else {
-                                        String::new()
-                                    }),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .min_h(px(24.0))
-                                    .flex()
-                                    .items_center()
-                                    .pl_3()
-                                    .pr_8()
-                                    .when(is_table_row, |element| {
-                                        element.bg(rgb(current_theme().background_alt))
-                                    })
-                                    .child(div().w_full().child(
-                                        if document.format == DocumentFormat::Markdown {
-                                            render_markdown_block(
-                                                &document,
-                                                actual_index,
-                                                &document.markdown_blocks[row.block_id as usize],
-                                                is_folded,
-                                                {
-                                                    let minimap = if minimap_visible {
-                                                        minimap_width
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    (editor_width - 110.0 - minimap).max(120.0)
-                                                },
-                                            )
-                                        } else {
-                                            render_block(
-                                                &document,
-                                                actual_index,
-                                                row,
-                                                &document.blocks.nodes()[row.block_id as usize],
-                                                is_folded,
-                                                {
-                                                    let minimap = if minimap_visible {
-                                                        minimap_width
-                                                    } else {
-                                                        0.0
-                                                    };
-                                                    (editor_width - 110.0 - minimap).max(120.0)
-                                                },
-                                            )
-                                        },
-                                    )),
-                            )
-                            .into_any()
+                        });
+
+                        row_element.into_any_element()
                     })
                     .flex_1()
                     .w_full()
@@ -165,7 +141,7 @@ pub(in crate::preview) fn render_document(
                 layout.child(minimap::render(
                     display_map,
                     document.minimap.clone(),
-                    visible_rows.clone(),
+                    minimap_rows.clone(),
                     fold_markers.clone(),
                     minimap_list_state,
                     editor_width,
@@ -211,6 +187,137 @@ pub(in crate::preview) fn render_document(
                     .bg(rgb(theme.heading[0])),
             )
         })
+}
+
+fn render_fold_shell(
+    document: Arc<PreviewDocument>,
+    direction: FoldDirection,
+    progress: f32,
+    shell: FoldSegment,
+    available_width: f32,
+) -> gpui::Div {
+    let distance = shell.distance;
+    let rows = shell.rendered_rows;
+    let (shell_height, body_offset) = fold_shell_geometry(direction, progress, distance);
+    let rendered_rows = rows
+        .iter()
+        .copied()
+        .map(|row| render_fold_shell_row(&document, row, available_width))
+        .collect::<Vec<_>>();
+    div()
+        .relative()
+        .w_full()
+        .h(px(shell_height))
+        .overflow_hidden()
+        .child(
+            div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .top(px(body_offset))
+                .children(rendered_rows),
+        )
+}
+
+fn fold_shell_geometry(direction: FoldDirection, delta: f32, distance: f32) -> (f32, f32) {
+    match direction {
+        FoldDirection::Collapse => (distance * (1.0 - delta), -distance * delta),
+        FoldDirection::Expand => (distance * delta, -distance * (1.0 - delta)),
+    }
+}
+
+fn render_fold_shell_row(
+    document: &Arc<PreviewDocument>,
+    actual_index: usize,
+    available_width: f32,
+) -> gpui::Div {
+    let row = document
+        .projection
+        .source_row(actual_index)
+        .expect("fold shell row maps to the current revision");
+    let display_map = document
+        .display_map
+        .as_ref()
+        .expect("preview display map must exist after loading");
+    let is_table_row = display_map.is_table(actual_index);
+    render_preview_row(
+        document,
+        actual_index,
+        row,
+        is_table_row,
+        false,
+        available_width,
+    )
+}
+
+fn render_preview_row(
+    document: &Arc<PreviewDocument>,
+    actual_index: usize,
+    row: PreviewRow,
+    is_table_row: bool,
+    is_folded: bool,
+    available_width: f32,
+) -> gpui::Div {
+    let theme = current_theme();
+    div()
+        .w_full()
+        .min_h(px(24.0))
+        .flex()
+        .items_start()
+        .child(
+            div()
+                .flex_none()
+                .w(px(50.0))
+                .pr_3()
+                .h(px(24.0))
+                .flex()
+                .items_center()
+                .justify_end()
+                .text_right()
+                .font_family("Menlo")
+                .text_size(px(10.0))
+                .text_color(rgb(theme.foreground_dim))
+                .child(if row.show_line_number {
+                    (document.text.line_of_byte(row.content.range.start) + 1).to_string()
+                } else {
+                    String::new()
+                }),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .min_h(px(24.0))
+                .flex()
+                .items_center()
+                .pl_3()
+                .pr_8()
+                .when(is_table_row, |element| {
+                    element.bg(rgb(current_theme().background_alt))
+                })
+                .child(
+                    div()
+                        .w_full()
+                        .child(if document.format == DocumentFormat::Markdown {
+                            render_markdown_block(
+                                document,
+                                actual_index,
+                                &document.markdown_blocks[row.block_id as usize],
+                                is_folded,
+                                available_width,
+                            )
+                        } else {
+                            render_block(
+                                document,
+                                actual_index,
+                                row,
+                                &document.blocks.nodes()[row.block_id as usize],
+                                is_folded,
+                                available_width,
+                            )
+                        }),
+                ),
+        )
 }
 
 fn render_block(
@@ -445,5 +552,34 @@ fn render_block(
             .h(px(row_layout.fixed_height.unwrap_or(1.0)))
             .w_full()
             .bg(rgb(theme.border)),
+    }
+}
+
+#[cfg(test)]
+mod animation_tests {
+    use super::{FoldDirection, fold_shell_geometry};
+
+    #[test]
+    fn shell_height_and_body_offset_share_one_linear_progress() {
+        assert_eq!(
+            fold_shell_geometry(FoldDirection::Collapse, 0.0, 96.0),
+            (96.0, 0.0)
+        );
+        assert_eq!(
+            fold_shell_geometry(FoldDirection::Collapse, 0.5, 96.0),
+            (48.0, -48.0)
+        );
+        assert_eq!(
+            fold_shell_geometry(FoldDirection::Expand, 0.0, 96.0),
+            (0.0, -96.0)
+        );
+        assert_eq!(
+            fold_shell_geometry(FoldDirection::Expand, 0.5, 96.0),
+            (48.0, -48.0)
+        );
+        assert_eq!(
+            fold_shell_geometry(FoldDirection::Expand, 1.0, 96.0),
+            (96.0, 0.0)
+        );
     }
 }

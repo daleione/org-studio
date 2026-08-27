@@ -4,6 +4,7 @@ use super::{
 };
 
 use crate::{input::EmacsOutcome, keymap::KeyStroke};
+use gpui::AppContext;
 
 fn visible_source_lines(app: &super::PreviewApp, document: &super::PreviewDocument) -> Vec<u64> {
     app.visible_rows
@@ -21,6 +22,55 @@ fn visible_source_lines(app: &super::PreviewApp, document: &super::PreviewDocume
             ) + 1
         })
         .collect()
+}
+
+fn simulate_next_frame<V: gpui::Render + 'static>(
+    window: &gpui::WindowHandle<V>,
+    cx: &mut gpui::TestAppContext,
+) -> usize {
+    let root = window.entity(cx).unwrap();
+    let callback_count = cx.update(|cx| {
+        cx.with_window(root.entity_id(), |window, cx| {
+            window.simulate_next_frame(cx)
+        })
+        .unwrap()
+    });
+    cx.run_until_parked();
+    callback_count
+}
+
+fn finish_fold_animation<V: gpui::Render + 'static>(
+    window: &gpui::WindowHandle<V>,
+    cx: &mut gpui::TestAppContext,
+) {
+    std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION + std::time::Duration::from_millis(20));
+    assert!(simulate_next_frame(window, cx) > 0);
+    assert!(simulate_next_frame(window, cx) > 0);
+}
+
+fn ready_document(app: &super::PreviewApp) -> std::sync::Arc<super::PreviewDocument> {
+    match &app.state {
+        super::PreviewLoadState::Ready { document, .. } => document.clone(),
+        _ => panic!("document should be ready"),
+    }
+}
+
+fn heading_id(
+    document: &super::PreviewDocument,
+    level: u16,
+    ordinal: usize,
+) -> crate::org_syntax::BlockId {
+    document
+        .blocks
+        .nodes()
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| {
+            matches!(block.kind, crate::org_syntax::BlockKind::Heading { level: actual } if actual == level)
+        })
+        .nth(ordinal)
+        .map(|(index, _)| index as crate::org_syntax::BlockId)
+        .expect("requested heading should exist")
 }
 
 #[test]
@@ -97,32 +147,9 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent() {
     app.cycle_global_visibility();
     app.cycle_global_visibility();
 
-    let document = match &app.state {
-        super::PreviewLoadState::Ready { document, .. } => document.clone(),
-        _ => panic!("document should be ready"),
-    };
-    let parent = document
-        .blocks
-        .nodes()
-        .iter()
-        .position(|block| {
-            matches!(
-                block.kind,
-                crate::org_syntax::BlockKind::Heading { level: 1 }
-            )
-        })
-        .unwrap() as u32;
-    let child = document
-        .blocks
-        .nodes()
-        .iter()
-        .position(|block| {
-            matches!(
-                block.kind,
-                crate::org_syntax::BlockKind::Heading { level: 2 }
-            )
-        })
-        .unwrap() as u32;
+    let document = ready_document(&app);
+    let parent = heading_id(&document, 1, 0);
+    let child = heading_id(&document, 2, 0);
 
     assert!(!app.fold_markers.contains(&parent));
     assert!(app.fold_markers.contains(&child));
@@ -163,32 +190,9 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent() {
     app.cycle_global_visibility();
     app.cycle_global_visibility();
 
-    let document = match &app.state {
-        super::PreviewLoadState::Ready { document, .. } => document.clone(),
-        _ => panic!("document should be ready"),
-    };
-    let parent = document
-        .blocks
-        .nodes()
-        .iter()
-        .position(|block| {
-            matches!(
-                block.kind,
-                crate::org_syntax::BlockKind::Heading { level: 1 }
-            )
-        })
-        .unwrap() as u32;
-    let child = document
-        .blocks
-        .nodes()
-        .iter()
-        .position(|block| {
-            matches!(
-                block.kind,
-                crate::org_syntax::BlockKind::Heading { level: 2 }
-            )
-        })
-        .unwrap() as u32;
+    let document = ready_document(&app);
+    let parent = heading_id(&document, 1, 0);
+    let child = heading_id(&document, 2, 0);
 
     assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 5, 7]);
     assert!(!app.fold_markers.contains(&parent));
@@ -218,21 +222,8 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states() {
     app.generation = 1;
     assert!(app.apply_load_result(1, Ok(document)));
     app.cycle_global_visibility();
-    let document = match &app.state {
-        super::PreviewLoadState::Ready { document, .. } => document.clone(),
-        _ => panic!("document should be ready"),
-    };
-    let parent = document
-        .blocks
-        .nodes()
-        .iter()
-        .position(|block| {
-            matches!(
-                block.kind,
-                crate::org_syntax::BlockKind::Heading { level: 1 }
-            )
-        })
-        .unwrap() as u32;
+    let document = ready_document(&app);
+    let parent = heading_id(&document, 1, 0);
 
     app.toggle_fold(parent, &document);
     assert_eq!(
@@ -257,6 +248,379 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states() {
         Some((parent, super::LocalVisibility::Folded))
     );
     assert_eq!(visible_source_lines(&app, &document), vec![1, 7]);
+}
+
+#[gpui::test]
+fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
+    cx: &mut gpui::TestAppContext,
+) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-animated-local-cycle-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "* Parent\nparent body\n** Child\nchild body\n* Other\nother body\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let app = cx.new(|_| super::PreviewApp::new());
+
+    app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document)));
+        let document = ready_document(app);
+        let parent = heading_id(&document, 1, 0);
+
+        app.toggle_fold_animated(parent, &document, 700.0, 790.0, None, cx);
+        assert_eq!(visible_source_lines(app, &document), vec![1, 5, 6]);
+        assert_eq!(
+            app.fold_animation
+                .as_ref()
+                .map(|animation| animation.segments[0].transition_index),
+            Some(1)
+        );
+        assert_eq!(app.list_state.item_count(), app.visible_rows.len() + 1);
+
+        app.toggle_fold_animated(parent, &document, 700.0, 790.0, None, cx);
+        assert_eq!(visible_source_lines(app, &document), vec![1, 2, 3, 5, 6]);
+        let expansion = app.fold_animation.as_ref().unwrap();
+        assert!(matches!(expansion.direction, super::FoldDirection::Expand));
+        assert_eq!(expansion.segments[0].target_len, 2);
+        assert_eq!(app.list_state.item_count(), app.visible_rows.len() - 1);
+        app.discard_fold_animation();
+    });
+
+    app.read_with(cx, |app, _| {
+        assert!(app.fold_animation.is_none());
+        assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+    });
+}
+
+#[gpui::test]
+fn reduced_motion_applies_local_fold_without_a_delayed_projection(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-reduced-motion-fold-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(&path, "* Parent\nbody\n** Child\nchild body\n").unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let app = cx.new(|_| super::PreviewApp::new());
+
+    app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document)));
+        let document = ready_document(app);
+        let parent = heading_id(&document, 1, 0);
+
+        app.toggle_fold_animated(parent, &document, 700.0, 790.0, None, cx);
+        assert_eq!(visible_source_lines(app, &document), vec![1]);
+        assert!(app.fold_animation.is_none());
+    });
+}
+
+#[gpui::test]
+fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui::TestAppContext) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-rendered-fold-travel-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "* Parent\nparent body\n** Child One\nchild one body\n** Child Two\nchild two body\n* Other\nother body\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
+        super::PreviewApp::new()
+    });
+    window
+        .update(cx, |app, _window, cx| {
+            app.generation = 1;
+            assert!(app.apply_load_result(1, Ok(document)));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |app, window, cx| {
+            let document = ready_document(app);
+            let parent = heading_id(&document, 1, 0);
+            let first_hidden = app.list_state.bounds_for_item(1).unwrap();
+            let following = app.list_state.bounds_for_item(6).unwrap();
+            let expected_distance = f32::from(following.top() - first_hidden.top());
+
+            app.toggle_fold_animated(parent, &document, 700.0, 790.0, Some(window), cx);
+            let animation = app.fold_animation.as_ref().unwrap();
+            let shell = &animation.segments[0];
+            assert_eq!(shell.transition_index, 1);
+            assert!((shell.distance - expected_distance).abs() < 0.01);
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len() + 1);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    // Even if preparing the first Shell frame exceeds the whole nominal duration, animation
+    // time starts only after that frame is presented.
+    std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION + std::time::Duration::from_millis(20));
+    assert!(simulate_next_frame(&window, cx) > 0);
+    let first_gap = window
+        .read_with(cx, |app, _| {
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert_eq!(animation.progress, 0.0);
+            assert!(animation.started_at.is_some());
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let peer = app.list_state.bounds_for_item(2).unwrap();
+            f32::from(peer.top() - heading.bottom())
+        })
+        .unwrap();
+    std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION / 3);
+    assert!(simulate_next_frame(&window, cx) > 0);
+    let later_gap = window
+        .read_with(cx, |app, _| {
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert!(animation.progress > 0.0);
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let shell = app.list_state.bounds_for_item(1).unwrap();
+            let peer = app.list_state.bounds_for_item(2).unwrap();
+            assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
+            assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
+            let gap = f32::from(peer.top() - heading.bottom());
+            let expected_gap = animation.segments[0].distance * (1.0 - animation.progress);
+            assert!(
+                (gap - expected_gap).abs() < 1.0,
+                "gap={gap} expected_gap={expected_gap} progress={}",
+                animation.progress
+            );
+            gap
+        })
+        .unwrap();
+    assert!(later_gap < first_gap);
+
+    finish_fold_animation(&window, cx);
+    window
+        .read_with(cx, |app, _| {
+            assert!(app.fold_animation.is_none());
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+        })
+        .unwrap();
+
+    window
+        .update(cx, |app, window, cx| {
+            let document = ready_document(app);
+            let parent = heading_id(&document, 1, 0);
+            app.toggle_fold_animated(parent, &document, 700.0, 790.0, Some(window), cx);
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert!(matches!(animation.direction, super::FoldDirection::Expand));
+            assert_eq!(animation.segments[0].transition_index, 1);
+            assert_eq!(animation.segments[0].target_len, 3);
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len() - 2);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(simulate_next_frame(&window, cx) > 0);
+    let first_gap = window
+        .read_with(cx, |app, _| {
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert_eq!(animation.progress, 0.0);
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let shell = app.list_state.bounds_for_item(1).unwrap();
+            let peer = app.list_state.bounds_for_item(2).unwrap();
+            assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
+            assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
+            f32::from(peer.top() - heading.bottom())
+        })
+        .unwrap();
+    std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION / 3);
+    assert!(simulate_next_frame(&window, cx) > 0);
+    let later_gap = window
+        .read_with(cx, |app, _| {
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert!(animation.progress > 0.0);
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let shell = app.list_state.bounds_for_item(1).unwrap();
+            let peer = app.list_state.bounds_for_item(2).unwrap();
+            assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
+            assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
+            let gap = f32::from(peer.top() - heading.bottom());
+            let expected_gap = animation.segments[0].distance * animation.progress;
+            assert!(
+                (gap - expected_gap).abs() < 1.0,
+                "gap={gap} expected_gap={expected_gap} progress={}",
+                animation.progress
+            );
+            gap
+        })
+        .unwrap();
+    assert!(later_gap > first_gap);
+
+    finish_fold_animation(&window, cx);
+    window
+        .read_with(cx, |app, _| {
+            assert!(app.fold_animation.is_none());
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let peer = app.list_state.bounds_for_item(4).unwrap();
+            assert!(peer.top() > heading.bottom());
+        })
+        .unwrap();
+
+    window
+        .update(cx, |app, window, cx| {
+            let document = ready_document(app);
+            let parent = heading_id(&document, 1, 0);
+            app.toggle_fold_animated(parent, &document, 700.0, 790.0, Some(window), cx);
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert!(matches!(animation.direction, super::FoldDirection::Expand));
+            assert_eq!(animation.segments.len(), 2);
+            assert_eq!(animation.segments[0].transition_index, 3);
+            assert_eq!(animation.segments[1].transition_index, 5);
+            assert!(animation.segments.iter().all(|shell| shell.target_len == 1));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(simulate_next_frame(&window, cx) > 0);
+    window
+        .read_with(cx, |app, _| {
+            let first_shell = app.list_state.bounds_for_item(3).unwrap();
+            let second_shell = app.list_state.bounds_for_item(5).unwrap();
+            assert!(f32::from(first_shell.size.height).abs() < 0.01);
+            assert!(f32::from(second_shell.size.height).abs() < 0.01);
+        })
+        .unwrap();
+    std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION / 3);
+    assert!(simulate_next_frame(&window, cx) > 0);
+    window
+        .read_with(cx, |app, _| {
+            let animation = app.fold_animation.as_ref().unwrap();
+            assert!(animation.progress > 0.0);
+            let first_child = app.list_state.bounds_for_item(2).unwrap();
+            let first_shell = app.list_state.bounds_for_item(3).unwrap();
+            let second_child = app.list_state.bounds_for_item(4).unwrap();
+            let second_shell = app.list_state.bounds_for_item(5).unwrap();
+            let peer = app.list_state.bounds_for_item(6).unwrap();
+            assert!((f32::from(first_shell.top() - first_child.bottom())).abs() < 0.01);
+            assert!((f32::from(second_child.top() - first_shell.bottom())).abs() < 0.01);
+            assert!((f32::from(second_shell.top() - second_child.bottom())).abs() < 0.01);
+            assert!((f32::from(peer.top() - second_shell.bottom())).abs() < 0.01);
+            for (index, shell) in animation.segments.iter().enumerate() {
+                let bounds = app
+                    .list_state
+                    .bounds_for_item(shell.transition_index)
+                    .unwrap();
+                let expected = shell.distance * animation.progress;
+                assert!(
+                    (f32::from(bounds.size.height) - expected).abs() < 1.0,
+                    "shell {index} height did not share the expansion progress"
+                );
+            }
+        })
+        .unwrap();
+    finish_fold_animation(&window, cx);
+    window
+        .read_with(cx, |app, _| {
+            assert!(app.fold_animation.is_none());
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+            let first_child_body = app.list_state.bounds_for_item(3).unwrap();
+            let second_child = app.list_state.bounds_for_item(4).unwrap();
+            let second_child_body = app.list_state.bounds_for_item(5).unwrap();
+            let peer = app.list_state.bounds_for_item(6).unwrap();
+            assert!(first_child_body.size.height > gpui::px(0.0));
+            assert!(second_child.top() >= first_child_body.bottom());
+            assert!(second_child_body.size.height > gpui::px(0.0));
+            assert!(peer.top() >= second_child_body.bottom());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::TestAppContext) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-offscreen-fold-peer-{}.org",
+        std::process::id()
+    ));
+    let mut source = String::from("* Parent\n");
+    for index in 0..48 {
+        source.push_str(&format!("** Child {index}\nbody {index}\n"));
+    }
+    source.push_str("* Other\nother body\n");
+    std::fs::write(&path, source).unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(320.0)), |_, _| {
+        super::PreviewApp::new()
+    });
+    window
+        .update(cx, |app, _window, cx| {
+            app.generation = 1;
+            assert!(app.apply_load_result(1, Ok(document)));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |app, window, cx| {
+            let document = ready_document(app);
+            let parent = heading_id(&document, 1, 0);
+            let peer = heading_id(&document, 1, 1);
+            let peer_row = document
+                .projection
+                .rows
+                .iter()
+                .position(|row| row.block_id == peer)
+                .unwrap();
+            let old_peer_position = app.visible_rows.binary_search(&peer_row).unwrap();
+            assert!(
+                app.list_state
+                    .bounds_for_item(old_peer_position)
+                    .unwrap()
+                    .top()
+                    > gpui::px(320.0)
+            );
+
+            app.toggle_fold_animated(parent, &document, 320.0, 790.0, Some(window), cx);
+            let animation = app.fold_animation.as_ref().unwrap();
+            let shell = &animation.segments[0];
+            assert_eq!(shell.transition_index, 1);
+            assert!(shell.distance <= 320.0);
+            assert!(shell.rendered_rows.len() < 20);
+            assert_eq!(app.visible_rows[1], peer_row);
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len() + 1);
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+    assert!(simulate_next_frame(&window, cx) > 0);
+
+    window
+        .read_with(cx, |app, _| {
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let shell = app.list_state.bounds_for_item(1).unwrap();
+            let peer = app.list_state.bounds_for_item(2).unwrap();
+            assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
+            assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
+            assert!(f32::from(peer.top() - heading.bottom()) > 24.0);
+            assert!(app.fold_animation.is_some());
+        })
+        .unwrap();
+    finish_fold_animation(&window, cx);
+    window
+        .read_with(cx, |app, _| {
+            let heading = app.list_state.bounds_for_item(0).unwrap();
+            let peer = app.list_state.bounds_for_item(1).unwrap();
+            assert!((f32::from(peer.top() - heading.bottom())).abs() < 0.01);
+            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+            assert!(app.fold_animation.is_none());
+        })
+        .unwrap();
 }
 
 #[test]

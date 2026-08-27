@@ -1,14 +1,15 @@
 use super::{
     Arc, BlockId, BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation,
-    CommandKey, ContentRoute, Context, DocumentFormat, Duration, EmacsOutcome, HashMap, HashSet,
-    InitialDocumentLoad, Instant, InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke,
-    ListAlignment, ListState, MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions,
-    PrefixArgument, PreviewApp, PreviewDocument, PreviewLoadState, Window, accept_generation,
-    built_in_contexts, changed_range, command_count, compile_input_profile,
-    configured_minimap_visible, current_theme, cycle_markdown_subtree_visibility,
-    cycle_org_subtree_visibility, dired_bindings, global_markdown_visibility,
-    global_org_visibility, load_document, minimap, preview_bindings, preview_input, px,
-    render_document, render_home, render_loading,
+    CommandKey, ContentRoute, Context, DocumentFormat, Duration, EmacsOutcome, FoldMeasurement,
+    FoldTransitionInput, FoldTransitionPlan, HashMap, HashSet, InitialDocumentLoad, Instant,
+    InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke,
+    LOCAL_FOLD_ANIMATION_DURATION, ListAlignment, ListState, LocalCycleProjection,
+    MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions, PrefixArgument, PreviewApp,
+    PreviewDocument, PreviewLoadState, Window, accept_generation, built_in_contexts, changed_range,
+    command_count, compile_input_profile, configured_minimap_visible, current_theme,
+    cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, dired_bindings,
+    global_markdown_visibility, global_org_visibility, load_document, minimap, preview_bindings,
+    preview_input, px, render_document, render_home, render_loading,
 };
 use gpui::{div, prelude::*, rgb};
 
@@ -87,6 +88,8 @@ impl PreviewApp {
             global_visibility: super::GlobalVisibility::All,
             global_cycle_contiguous: false,
             local_cycle_continuation: None,
+            fold_animation_revision: 0,
+            fold_animation: None,
             presentation_revision: 0,
             viewport_revision_key: None,
             minimap_pending_seek: None,
@@ -204,6 +207,7 @@ impl PreviewApp {
                             self.list_state.clone(),
                             self.visible_rows.clone(),
                             self.fold_markers.clone(),
+                            self.fold_animation.clone(),
                             entity,
                             self.minimap_visible,
                             editor_width,
@@ -226,6 +230,7 @@ impl PreviewApp {
                 self.list_state.clone(),
                 self.visible_rows.clone(),
                 self.fold_markers.clone(),
+                self.fold_animation.clone(),
                 entity,
                 self.minimap_visible,
                 editor_width,
@@ -239,10 +244,82 @@ impl PreviewApp {
         }
     }
 
+    #[cfg(test)]
     pub(super) fn toggle_fold(&mut self, block_id: BlockId, document: &Arc<PreviewDocument>) {
+        self.discard_fold_animation();
+        let Some(projection) = self.local_fold_projection(block_id, document) else {
+            return;
+        };
+        self.remember_local_fold(block_id, projection.visibility);
+        if projection.visibility == super::LocalVisibility::Empty {
+            return;
+        }
+        self.apply_local_fold_projection(projection);
+    }
+
+    pub(super) fn toggle_fold_animated(
+        &mut self,
+        block_id: BlockId,
+        document: &Arc<PreviewDocument>,
+        viewport_height: f32,
+        available_width: f32,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
+        self.discard_fold_animation();
+        let Some(projection) = self.local_fold_projection(block_id, document) else {
+            return;
+        };
+        self.remember_local_fold(block_id, projection.visibility);
+        if projection.visibility == super::LocalVisibility::Empty {
+            return;
+        }
+
+        if cx.reduce_motion() {
+            self.apply_local_fold_projection(projection);
+            return;
+        }
+        let measurement = window
+            .as_deref()
+            .map_or(FoldMeasurement::Estimated, FoldMeasurement::Rendered);
+        let Some(plan) = FoldTransitionPlan::build(FoldTransitionInput {
+            current_rows: &self.visible_rows,
+            target_rows: &projection.visible_rows,
+            document,
+            list_state: &self.list_state,
+            viewport_height,
+            available_width,
+            measurement,
+        }) else {
+            self.apply_local_fold_projection(projection);
+            return;
+        };
+
+        self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
+        let revision = self.fold_animation_revision;
+        let transition = plan.into_transition(revision, block_id);
+
+        self.cancel_minimap_interaction();
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.fold_markers = Arc::new(projection.fold_markers);
+        self.visible_rows = Arc::new(projection.visible_rows);
+        for edit in transition.initial_edits.iter() {
+            self.list_state.splice(edit.range.clone(), edit.new_count);
+        }
+        self.fold_animation = Some(transition);
+        if let Some(window) = window {
+            self.schedule_fold_animation_frame(revision, window, cx);
+        }
+    }
+
+    fn local_fold_projection(
+        &self,
+        block_id: BlockId,
+        document: &Arc<PreviewDocument>,
+    ) -> Option<LocalCycleProjection> {
         let continue_from_children =
             self.local_cycle_continuation == Some((block_id, super::LocalVisibility::Children));
-        let projection = match document.format {
+        match document.format {
             DocumentFormat::Org => cycle_org_subtree_visibility(
                 &document.projection.rows,
                 &document.blocks,
@@ -259,25 +336,96 @@ impl PreviewApp {
                 block_id,
                 continue_from_children,
             ),
-        };
-        let Some(projection) = projection else {
-            return;
-        };
+        }
+    }
+
+    fn remember_local_fold(&mut self, block_id: BlockId, visibility: super::LocalVisibility) {
         self.global_cycle_contiguous = false;
-        self.local_cycle_continuation = match projection.visibility {
+        self.local_cycle_continuation = match visibility {
             super::LocalVisibility::Empty => None,
             visibility => Some((block_id, visibility)),
         };
-        if projection.visibility == super::LocalVisibility::Empty {
-            return;
-        }
+    }
+
+    fn apply_local_fold_projection(&mut self, projection: LocalCycleProjection) {
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.fold_markers = Arc::new(projection.fold_markers);
         self.apply_visible_rows(Arc::new(projection.visible_rows));
     }
 
+    pub(super) fn discard_fold_animation(&mut self) {
+        self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
+        self.finish_fold_transition();
+    }
+
+    fn finish_fold_transition(&mut self) {
+        let Some(animation) = self.fold_animation.take() else {
+            return;
+        };
+        let actual_count = self.list_state.item_count();
+        let expected_count = animation.transition_item_count();
+        debug_assert_eq!(actual_count, expected_count);
+        if actual_count != expected_count {
+            // Recover to the semantic projection instead of leaving temporary segments behind.
+            self.list_state
+                .splice(0..actual_count, self.visible_rows.len());
+            return;
+        }
+        for edit in animation.completion_edits() {
+            self.list_state.splice(edit.range, edit.new_count);
+        }
+    }
+
+    fn schedule_fold_animation_frame(
+        &mut self,
+        revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.on_next_frame(window, move |this, window, cx| {
+            let Some(animation) = this.fold_animation.as_mut() else {
+                return;
+            };
+            if animation.revision != revision {
+                return;
+            }
+            let Some(started_at) = animation.started_at else {
+                // Establish time zero only after the full-height Shell has completed its first
+                // frame. Otherwise a slow initial layout consumes the whole animation duration.
+                animation.started_at = Some(Instant::now());
+                this.schedule_fold_animation_frame(revision, window, cx);
+                return;
+            };
+            let progress = (started_at.elapsed().as_secs_f32()
+                / LOCAL_FOLD_ANIMATION_DURATION.as_secs_f32())
+            .clamp(0.0, 1.0);
+            animation.progress = progress;
+            // ListState caches item heights. Invalidating only the visible transition Shells makes
+            // the outer list physically reflow following rows without remeasuring the document.
+            for shell in animation.segments.iter() {
+                this.list_state
+                    .remeasure_items(shell.transition_index..shell.transition_index + 1);
+            }
+            cx.notify();
+
+            if progress < 1.0 {
+                this.schedule_fold_animation_frame(revision, window, cx);
+            } else {
+                cx.on_next_frame(window, move |this, _, cx| {
+                    if this.fold_animation.as_ref().is_some_and(|animation| {
+                        animation.revision == revision && animation.progress >= 1.0
+                    }) {
+                        this.finish_fold_transition();
+                        cx.notify();
+                    }
+                });
+            }
+        });
+    }
+
     pub(super) fn cycle_global_visibility(&mut self) {
+        self.discard_fold_animation();
         let document = match &self.state {
             PreviewLoadState::Ready { document, .. } => document.clone(),
             _ => return,

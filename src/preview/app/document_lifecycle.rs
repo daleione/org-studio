@@ -7,6 +7,7 @@ use gpui::AppContext;
 
 impl PreviewApp {
     pub(in crate::preview) fn show_home(&mut self, cx: &mut Context<Self>) {
+        self.discard_fold_animation();
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
         self.file_watch_request = self.file_watch_request.wrapping_add(1);
@@ -23,6 +24,7 @@ impl PreviewApp {
     }
 
     pub(in crate::preview) fn begin_open(&mut self, path: PathBuf, opened_at: Instant) -> u64 {
+        self.discard_fold_animation();
         self.home_error = None;
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
@@ -160,6 +162,7 @@ impl PreviewApp {
                 self.global_visibility = super::super::GlobalVisibility::All;
                 self.global_cycle_contiguous = false;
                 self.local_cycle_continuation = None;
+                self.discard_fold_animation();
                 self.visible_rows = Arc::new((0..document.projection.rows.len()).collect());
                 self.list_state.reset(self.visible_rows.len());
                 if self.visible_rows.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {

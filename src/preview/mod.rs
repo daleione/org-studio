@@ -30,6 +30,7 @@ use view::*;
 mod command_window;
 mod coordinates;
 mod file_manager_host;
+mod fold_transition;
 mod folding;
 mod markdown;
 mod minimap;
@@ -43,9 +44,14 @@ mod table;
 mod tests;
 mod visual_recipe;
 use app::ScrollBenchmark;
+use fold_transition::{
+    FoldDirection, FoldMeasurement, FoldSegment, FoldTransition, FoldTransitionInput,
+    FoldTransitionPlan,
+};
 use folding::{
-    GlobalVisibility, LocalVisibility, changed_range, cycle_markdown_subtree_visibility,
-    cycle_org_subtree_visibility, global_markdown_visibility, global_org_visibility,
+    GlobalVisibility, LocalCycleProjection, LocalVisibility, changed_range,
+    cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
+    global_org_visibility,
 };
 use projection::build_projection_snapshot;
 use rows::build_preview_rows;
@@ -94,6 +100,7 @@ const DIRED_EXECUTE_COMMAND: &str = "org-studio.dired.execute";
 const DIRED_HELP_COMMAND: &str = "org-studio.dired.help";
 const KEY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
 const MAX_EXACT_SCROLL_LAYOUT_ROWS: usize = 4096;
+const LOCAL_FOLD_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 
 actions!(
     org_preview,
@@ -165,6 +172,8 @@ pub struct PreviewApp {
     global_visibility: GlobalVisibility,
     global_cycle_contiguous: bool,
     local_cycle_continuation: Option<(BlockId, LocalVisibility)>,
+    fold_animation_revision: u64,
+    fold_animation: Option<FoldTransition>,
     presentation_revision: u64,
     viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,

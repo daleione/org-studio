@@ -1,11 +1,12 @@
 use super::{
     Arc, BlockId, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context,
-    DocumentFormat, FontStyle, FontWeight, HashSet, HighlightStyle, InlineKind, InlineSpan,
-    InlineText, Instant, IntoElement, ListOffset, ListState, OPEN_DOCUMENT_COMMAND, OpenDocument,
-    OpenFileManager, PreviewApp, PreviewDocument, PreviewLoadState, PreviewRow,
-    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SHOW_HOME_COMMAND, ShowHome,
-    StyledText, ToggleMinimap, ToggleSidebar, Window, accept_generation, current_theme, div, img,
-    markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
+    DocumentFormat, FoldDirection, FoldSegment, FoldTransition, FontStyle, FontWeight, HashSet,
+    HighlightStyle, InlineKind, InlineSpan, InlineText, Instant, IntoElement, ListOffset,
+    ListState, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager, PreviewApp, PreviewDocument,
+    PreviewLoadState, PreviewRow, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render,
+    ReturnToDocument, SHOW_HOME_COMMAND, ShowHome, StyledText, ToggleMinimap, ToggleSidebar,
+    Window, accept_generation, current_theme, div, img, markdown, minimap, parse_inline, px,
+    render_table_row, resolve_image_path, rgb,
 };
 use gpui::{ExternalPaths, prelude::*};
 
