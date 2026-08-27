@@ -66,10 +66,14 @@ fn minimap_width_matches_render_constraints() {
     assert_eq!(MinimapDensity::for_width(320.0), MinimapDensity::ExtraLarge);
     assert_eq!(MinimapDensity::for_width(440.0), MinimapDensity::Maximum);
     assert_eq!(MinimapDensity::Compact.font_px(), 2.0);
-    assert_eq!(MinimapDensity::Comfortable.font_px(), 2.4);
-    assert_eq!(MinimapDensity::Large.font_px(), 2.8);
-    assert_eq!(MinimapDensity::ExtraLarge.font_px(), 3.2);
-    assert_eq!(MinimapDensity::Maximum.font_px(), 3.6);
+    assert_eq!(MinimapDensity::Comfortable.font_px(), 3.0);
+    assert_eq!(MinimapDensity::Large.font_px(), 3.8);
+    assert_eq!(MinimapDensity::ExtraLarge.font_px(), 4.1);
+    assert_eq!(MinimapDensity::Maximum.font_px(), 4.25);
+    assert!(
+        MinimapDensity::Large.font_px() / MinimapDensity::Compact.font_px() > 1.8,
+        "automatic large-screen density must provide a perceptible clarity gain"
+    );
 }
 
 #[test]
@@ -275,11 +279,11 @@ fn larger_density_expands_the_projection_and_visible_thumb_span() {
     index.density = MinimapDensity::Large;
     assert_eq!(
         minimap_projection_height(100, 1_000.0, index.density),
-        392.0
+        472.0
     );
     assert_eq!(
         minimap_thumb_height_for_scroll(&index, 0.0, 50.0, 1_000.0),
-        190.0
+        230.0
     );
 }
 

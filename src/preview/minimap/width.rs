@@ -47,19 +47,19 @@ impl Density {
     pub(in crate::preview) fn font_px(self) -> f32 {
         match self {
             Self::Compact => FONT_PX,
-            Self::Comfortable => 2.4,
-            Self::Large => 2.8,
-            Self::ExtraLarge => 3.2,
-            Self::Maximum => 3.6,
+            Self::Comfortable => 3.0,
+            Self::Large => 3.8,
+            Self::ExtraLarge => 4.1,
+            Self::Maximum => 4.25,
         }
     }
 
     pub(in crate::preview) fn line_height(self) -> f32 {
         match self {
             Self::Compact => LINE_HEIGHT_PX,
-            Self::Comfortable => 3.2,
-            Self::Large => 3.8,
-            Self::ExtraLarge => 4.4,
+            Self::Comfortable => 3.8,
+            Self::Large => 4.6,
+            Self::ExtraLarge => 4.9,
             Self::Maximum => 5.0,
         }
     }
