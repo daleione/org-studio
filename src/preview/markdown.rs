@@ -109,9 +109,8 @@ pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Ve
         });
         rows.push(PreviewRow {
             block_id: id,
-            content: ByteRange::new(content_start, content_end),
+            content: text.revision_range(ByteRange::new(content_start, content_end)),
             continuation: false,
-            source_line: text.line_of_byte(line.range.start) + 1,
             show_line_number: true,
             blank,
         });
@@ -184,7 +183,6 @@ fn fence_start(line: &str) -> Option<(char, usize, Option<String>, usize)> {
     }
     let marker_bytes = marker.len_utf8() * count;
     let language = line[marker_bytes..]
-        .trim()
         .split_whitespace()
         .next()
         .filter(|value| !value.is_empty())

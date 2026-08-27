@@ -2,10 +2,10 @@ use std::collections::HashSet;
 
 use crate::org_syntax::{BlockArena, BlockId};
 
-use super::PreviewRow;
+use super::projection::VisualRowTree;
 
 pub(super) fn visible_row_indices(
-    rows: &[PreviewRow],
+    rows: &VisualRowTree,
     blocks: &BlockArena,
     folded: &HashSet<BlockId>,
 ) -> Vec<usize> {
@@ -51,7 +51,7 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::{
-        document::RopeSnapshot,
+        document::{RopeSnapshot, TextSnapshot},
         org_syntax::{BlockKind, parse},
         preview::rows::build_preview_rows,
     };
@@ -72,10 +72,21 @@ mod tests {
             .position(|block| matches!(block.kind, BlockKind::Heading { level: 1 }))
             .unwrap() as u32;
 
-        let visible = visible_row_indices(&rows, &blocks, &HashSet::from([heading]));
+        let projection = crate::preview::projection::build_projection_snapshot(
+            text.revision(),
+            crate::preview::DocumentFormat::Org,
+            std::sync::Arc::new(rows),
+            &blocks,
+            &[],
+            &std::collections::HashMap::new(),
+            &std::collections::HashMap::new(),
+        );
+        let visible = visible_row_indices(&projection.rows, &blocks, &HashSet::from([heading]));
         let lines = visible
             .into_iter()
-            .map(|index| rows[index].source_line)
+            .map(|index| {
+                text.line_of_byte(projection.rows.get(index).unwrap().source.range.start) + 1
+            })
             .collect::<Vec<_>>();
         assert_eq!(lines, vec![1, 5, 6]);
     }

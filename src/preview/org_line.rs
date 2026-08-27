@@ -93,7 +93,7 @@ pub(crate) fn parse_heading(text: &str) -> HeadingParts {
     if todo.is_some() {
         words.next();
     }
-    let priority = words.peek().and_then(|word| parse_priority(word));
+    let priority = words.peek().and_then(parse_priority);
     if priority.is_some() {
         words.next();
     }

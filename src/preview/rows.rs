@@ -1,5 +1,5 @@
 use crate::{
-    document::{ByteOffset, ByteRange, TextSnapshot},
+    document::{ByteRange, TextSnapshot},
     org_syntax::{BlockArena, BlockId, BlockKind},
 };
 
@@ -33,9 +33,8 @@ pub(super) fn build_preview_rows(text: &dyn TextSnapshot, blocks: &BlockArena) -
         if matches!(block.kind, BlockKind::BlankLine) {
             rows.push(PreviewRow {
                 block_id,
-                content: block.content,
+                content: text.revision_range(block.content),
                 continuation: false,
-                source_line: text.line_of_byte(block.source.start) + 1,
                 show_line_number: true,
                 blank: true,
             });
@@ -45,9 +44,8 @@ pub(super) fn build_preview_rows(text: &dyn TextSnapshot, blocks: &BlockArena) -
         if !matches!(block.kind, BlockKind::Paragraph) {
             rows.push(PreviewRow {
                 block_id,
-                content: block.content,
+                content: text.revision_range(block.content),
                 continuation: false,
-                source_line: text.line_of_byte(block.content.start) + 1,
                 show_line_number: true,
                 blank: false,
             });
@@ -81,9 +79,8 @@ fn push_physical_rows(
         let global_start = range.start.0 + start as u64;
         rows.push(PreviewRow {
             block_id,
-            content: ByteRange::new(global_start, range.start.0 + end as u64),
+            content: text.revision_range(ByteRange::new(global_start, range.start.0 + end as u64)),
             continuation,
-            source_line: text.line_of_byte(ByteOffset(global_start)) + 1,
             show_line_number: true,
             blank,
         });
@@ -108,7 +105,9 @@ mod tests {
         let rows = build_preview_rows(&text, &blocks);
 
         assert_eq!(
-            rows.iter().map(|row| row.source_line).collect::<Vec<_>>(),
+            rows.iter()
+                .map(|row| text.line_of_byte(row.content.range.start) + 1)
+                .collect::<Vec<_>>(),
             vec![1, 2, 3, 4, 5]
         );
         assert!(rows[2].blank);
@@ -131,6 +130,6 @@ mod tests {
         let rows = build_preview_rows(&text, &blocks);
 
         assert_eq!(rows.len(), 1);
-        assert_eq!(text.copy_range(rows[0].content), source.trim_end());
+        assert_eq!(text.copy_range(rows[0].content.range), source.trim_end());
     }
 }

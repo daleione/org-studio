@@ -2,6 +2,14 @@ use std::{ops::Range, sync::Arc};
 
 use ropey::Rope;
 
+mod revision;
+mod transaction;
+
+pub use revision::{
+    EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
+};
+pub use transaction::{DocumentBuffer, EditError, EditTransaction, TextEdit};
+
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ByteOffset(pub u64);
 
@@ -30,6 +38,14 @@ pub struct TextChunk<'a> {
 }
 
 pub trait TextSnapshot: Send + Sync {
+    fn revision(&self) -> Revision {
+        Revision::INITIAL
+    }
+
+    fn revision_range(&self, range: ByteRange) -> RevisionRange {
+        RevisionRange::new(self.revision(), range)
+    }
+
     fn len_bytes(&self) -> u64;
     fn line_of_byte(&self, offset: ByteOffset) -> u64;
     fn chunk_at(&self, offset: ByteOffset) -> Option<TextChunk<'_>>;
@@ -38,8 +54,10 @@ pub trait TextSnapshot: Send + Sync {
 
 pub type SharedTextSnapshot = Arc<dyn TextSnapshot>;
 
+#[derive(Clone)]
 pub struct RopeSnapshot {
     rope: Rope,
+    revision: Revision,
 }
 
 impl RopeSnapshot {
@@ -54,11 +72,25 @@ impl RopeSnapshot {
 
         Ok(Self {
             rope: Rope::from_str(&text),
+            revision: Revision::INITIAL,
         })
+    }
+
+    pub fn with_revision(mut self, revision: Revision) -> Self {
+        self.revision = revision;
+        self
+    }
+
+    pub(super) fn from_rope(rope: Rope, revision: Revision) -> Self {
+        Self { rope, revision }
     }
 }
 
 impl TextSnapshot for RopeSnapshot {
+    fn revision(&self) -> Revision {
+        self.revision
+    }
+
     fn len_bytes(&self) -> u64 {
         self.rope.len_bytes() as u64
     }
