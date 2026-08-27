@@ -42,8 +42,12 @@ pub fn render(
     generation: u64,
     presentation_revision: u64,
     opened_at: Instant,
-    on_seek: impl Fn(super::viewport::MinimapSourceTarget, f32, bool, &mut gpui::Window, &mut gpui::App)
-    + 'static,
+    on_seek: impl Fn(
+        super::viewport::MinimapSourceTarget,
+        ListOffset,
+        &mut gpui::Window,
+        &mut gpui::App,
+    ) + 'static,
     on_width_change: impl Fn(MinimapWidthChange, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
     let theme = current_theme();
@@ -603,7 +607,7 @@ pub fn render(
                     target.offset,
                     crate::preview::coordinates::Bias::for_boundary(false),
                 ) {
-                    down_seek(source_target, target.ratio, true, window, cx);
+                    down_seek(source_target, target.offset, window, cx);
                 }
                 *down_anchor.lock().expect("minimap anchor poisoned") =
                     Some(MinimapInteractionAnchor {

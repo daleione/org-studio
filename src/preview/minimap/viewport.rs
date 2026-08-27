@@ -1,6 +1,6 @@
 #[cfg(test)]
-use gpui::Bounds;
-use gpui::{ListOffset, ListState, point, px};
+use gpui::{Bounds, point};
+use gpui::{ListOffset, ListState, px};
 
 use super::{MIN_THUMB_PX, MinimapDensity, MinimapLineIndex};
 #[cfg(test)]
@@ -338,6 +338,7 @@ pub(in crate::preview) struct MinimapLayout {
     pub(in crate::preview) thumb: ThumbGeometry,
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(in crate::preview) struct ScrollMetrics {
     pub(in crate::preview) offset: f32,
@@ -384,6 +385,7 @@ pub(in crate::preview) fn local_y_ratio(
     }
 }
 
+#[cfg(test)]
 pub(in crate::preview) fn seek_to_ratio(list_state: &ListState, ratio: f32, center: bool) {
     let metrics = scroll_metrics(list_state);
     let mut offset = ratio.clamp(0.0, 1.0) * metrics.max_offset;
@@ -428,6 +430,7 @@ pub(in crate::preview) fn minimap_layout_from_metrics(
     }
 }
 
+#[cfg(test)]
 pub(in crate::preview) fn scroll_metrics(list_state: &ListState) -> ScrollMetrics {
     ScrollMetrics {
         offset: -f32::from(list_state.scroll_px_offset_for_scrollbar().y),

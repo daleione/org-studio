@@ -156,7 +156,7 @@ pub struct PreviewApp {
     minimap_resize_preview: Option<f32>,
     presentation_revision: u64,
     viewport_revision_key: Option<(u32, u32)>,
-    minimap_pending_seek: Option<(u64, f32, bool)>,
+    minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
     dired: Option<crate::file_manager::DiredSession>,
     dired_error: Option<Arc<str>>,

@@ -82,7 +82,6 @@ pub(super) use state::{
     current_resize_session, take_resize_session,
 };
 pub(super) use viewport::MinimapInteractionAnchor;
-pub(super) use viewport::seek_to_ratio;
 use viewport::{
     minimap_click_target_for_viewport, minimap_drag_target, minimap_viewport_for_list_with_anchor,
     scroll_list_to_ratio, scroll_ratio_after_wheel, source_target_for_list_offset, thumb_alphas,

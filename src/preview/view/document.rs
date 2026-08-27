@@ -179,21 +179,19 @@ pub(in crate::preview) fn render_document(
                     generation,
                     presentation_revision,
                     opened_at,
-                    move |_source_target, ratio, center, window, cx| {
+                    move |_source_target, offset, window, cx| {
                         minimap_entity.update(cx, |this, cx| {
-                            this.minimap_pending_seek =
-                                Some((presentation_revision, ratio, center));
+                            this.minimap_pending_seek = Some((presentation_revision, offset));
                             if this.minimap_seek_scheduled {
                                 return;
                             }
                             this.minimap_seek_scheduled = true;
                             cx.on_next_frame(window, |this, _, cx| {
                                 this.minimap_seek_scheduled = false;
-                                if let Some((revision, ratio, center)) =
-                                    this.minimap_pending_seek.take()
+                                if let Some((revision, offset)) = this.minimap_pending_seek.take()
                                     && accept_generation(this.presentation_revision, revision)
                                 {
-                                    minimap::seek_to_ratio(&this.list_state, ratio, center);
+                                    this.list_state.scroll_to(offset);
                                     cx.notify();
                                 }
                             });
