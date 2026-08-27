@@ -461,45 +461,20 @@ pub fn render(
                     f32::from(bounds.size.height),
                     current_anchor,
                 );
-                let raw_thumb_top = local_y - session.grab_offset;
-                let (target, desired_thumb_top) = minimap_drag_target(
+                let (target, _desired_thumb_top) = minimap_drag_target(
                     local_y,
-                    session.grab_offset,
+                    session,
                     viewport.thumb.height,
                     viewport.interaction_height,
                 );
                 if minimap_trace_enabled() {
                     eprintln!(
-                        "minimap drag y={local_y:.2} grab={:.2} raw_top={raw_thumb_top:.2} current_ratio={:.5} target_ratio={target:.5}",
-                        session.grab_offset,
+                        "minimap drag y={local_y:.2} start_y={:.2} current_ratio={:.5} target_ratio={target:.5}",
+                        session.start_pointer_y,
                         viewport.scroll_ratio,
                     );
                 }
                 scroll_list_to_ratio(&index, &move_list, target);
-                if current_anchor.is_some_and(|anchor| anchor.matches(&index, viewport)) {
-                    let travel = (viewport.interaction_height - viewport.thumb.height).max(0.0);
-                    let visible_minimap_lines = ((viewport.interaction_height
-                        - index.density.edge_padding() * 2.0)
-                        / index.density.line_height())
-                        .max(1.0);
-                    let max_content_top =
-                        (index.total as f32 - visible_minimap_lines).max(0.0);
-                    let content_top = if raw_thumb_top < 0.0 || raw_thumb_top > travel {
-                        target * max_content_top
-                    } else {
-                        viewport.content_top
-                    };
-                    *move_anchor.lock().expect("minimap anchor poisoned") =
-                        Some(MinimapInteractionAnchor {
-                            layout: index.layout,
-                            width: index.width,
-                            rows_signature: index.rows_signature,
-                            interaction_height: viewport.interaction_height,
-                            scroll_ratio: target,
-                            content_top,
-                            thumb_top: desired_thumb_top,
-                        });
-                }
                 window.refresh();
             });
 
@@ -542,7 +517,6 @@ pub fn render(
     let down_line_index = active_line_index.clone();
     let down_drag = drag_session.clone();
     let down_anchor = interaction_anchor.clone();
-    let scroll_anchor = interaction_anchor.clone();
     let scroll_drag = drag_session;
     let scroll_line_index = active_line_index;
     let scroll_list = list_state.clone();
@@ -588,7 +562,7 @@ pub fn render(
             );
             let thumb = viewport.thumb;
             let clicked_thumb = local_y >= thumb.top && local_y <= thumb.top + thumb.height;
-            let grab_offset;
+            let drag_start;
             if minimap_trace_enabled() {
                 eprintln!(
                     "minimap down y={local_y:.2} thumb_top={:.2} thumb_h={:.2} extent={:.2} inside={clicked_thumb} content_top={:.2}",
@@ -615,9 +589,7 @@ pub fn render(
                         width: index.width,
                         rows_signature: index.rows_signature,
                         interaction_height: viewport.interaction_height,
-                        scroll_ratio: target.ratio,
                         content_top: viewport.content_top,
-                        thumb_top: target.thumb_top,
                     });
                 if minimap_trace_enabled() {
                     eprintln!(
@@ -636,24 +608,25 @@ pub fn render(
                 } else {
                     down_list.scroll_to(target.offset);
                 }
-                grab_offset = (local_y - target.thumb_top).clamp(0.0, target.thumb_height);
+                drag_start = (target.thumb_top, target.ratio);
                 window.refresh();
             } else {
-                grab_offset = (local_y - thumb.top).clamp(0.0, thumb.height);
+                drag_start = (thumb.top, viewport.scroll_ratio);
                 *down_anchor.lock().expect("minimap anchor poisoned") =
                     Some(MinimapInteractionAnchor {
                         layout: index.layout,
                         width: index.width,
                         rows_signature: index.rows_signature,
                         interaction_height: viewport.interaction_height,
-                        scroll_ratio: viewport.scroll_ratio,
                         content_top: viewport.content_top,
-                        thumb_top: viewport.thumb.top,
                     });
             }
             down_list.scrollbar_drag_started();
-            *down_drag.lock().expect("minimap drag state poisoned") =
-                Some(MinimapDragSession { grab_offset });
+            *down_drag.lock().expect("minimap drag state poisoned") = Some(MinimapDragSession {
+                start_pointer_y: local_y,
+                start_thumb_top: drag_start.0,
+                start_ratio: drag_start.1,
+            });
         })
         .on_scroll_wheel(move |event, window, cx| {
             let delta_y = f32::from(event.delta.pixel_delta(px(SCROLL_WHEEL_LINE_PX)).y);
@@ -675,10 +648,6 @@ pub fn render(
             let Some(index) = index else {
                 return;
             };
-            scroll_anchor
-                .lock()
-                .expect("minimap anchor poisoned")
-                .take();
             let target = scroll_ratio_after_wheel(&index, &scroll_list, delta_y);
             scroll_list_to_ratio(&index, &scroll_list, target);
             window.refresh();

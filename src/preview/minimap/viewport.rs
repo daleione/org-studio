@@ -2,7 +2,7 @@
 use gpui::{Bounds, point};
 use gpui::{ListOffset, ListState, px};
 
-use super::{MIN_THUMB_PX, MinimapDensity, MinimapLineIndex};
+use super::{MIN_THUMB_PX, MinimapDensity, MinimapDragSession, MinimapLineIndex};
 #[cfg(test)]
 use super::{MINIMAP_EDGE_PADDING_PX, MINIMAP_LINE_HEIGHT_PX, PREVIEW_BASE_ROW_PX};
 use crate::preview::{
@@ -33,22 +33,19 @@ pub(in crate::preview) struct MinimapInteractionAnchor {
     pub(in crate::preview) width: u16,
     pub(in crate::preview) rows_signature: u64,
     pub(in crate::preview) interaction_height: f32,
-    pub(in crate::preview) scroll_ratio: f32,
     pub(in crate::preview) content_top: f32,
-    pub(in crate::preview) thumb_top: f32,
 }
 
 impl MinimapInteractionAnchor {
     pub(in crate::preview) fn matches(
         self,
         index: &MinimapLineIndex,
-        viewport: MinimapViewport,
+        interaction_height: f32,
     ) -> bool {
         self.layout == index.layout
             && self.width == index.width
             && self.rows_signature == index.rows_signature
-            && (self.interaction_height - viewport.interaction_height).abs() < 0.5
-            && (self.scroll_ratio - viewport.scroll_ratio).abs() < 0.001
+            && (self.interaction_height - interaction_height).abs() < 0.5
     }
 }
 
@@ -183,18 +180,44 @@ pub(in crate::preview) fn minimap_viewport_for_list_with_anchor(
     anchor: Option<MinimapInteractionAnchor>,
 ) -> MinimapViewport {
     let mut viewport = minimap_viewport_for_list(index, list_state, track_height);
-    if let Some(anchor) = anchor.filter(|anchor| anchor.matches(index, viewport)) {
+    if let Some(anchor) = anchor.filter(|anchor| anchor.matches(index, viewport.interaction_height))
+    {
         let visible_minimap_lines = ((viewport.interaction_height
             - index.density.edge_padding() * 2.0)
             / index.density.line_height())
         .max(1.0);
+        let max_content_top = (index.total as f32 - visible_minimap_lines).max(0.0);
+        let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
+        let document_pixels = index.document_pixels();
+        let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
+        let scroll_pixels = index
+            .pixel_for_list_offset(list_state.logical_scroll_top())
+            .clamp(0.0, max_scroll_pixels);
+        let (editor_top, editor_bottom) =
+            minimap_visible_display_range(index, scroll_pixels, viewport_pixels);
+        let minimum_content_top = (editor_bottom - visible_minimap_lines)
+            .max(0.0)
+            .min(max_content_top);
+        let maximum_content_top = editor_top.max(minimum_content_top).min(max_content_top);
+
+        // Keep the minimap camera stable while deriving the viewport marker from
+        // the editor's real scroll position. If the marker reaches an edge, pan
+        // only as far as needed to keep the whole editor viewport visible.
         viewport.content_top = anchor
             .content_top
-            .clamp(0.0, (index.total as f32 - visible_minimap_lines).max(0.0));
-        viewport.thumb.top = anchor.thumb_top.clamp(
-            0.0,
-            (viewport.interaction_height - viewport.thumb.height).max(0.0),
-        );
+            .clamp(minimum_content_top, maximum_content_top);
+        let raw_top = index.density.edge_padding()
+            + (editor_top - viewport.content_top).max(0.0) * index.density.line_height();
+        viewport.thumb.top = if viewport.scroll_ratio <= f32::EPSILON {
+            0.0
+        } else if viewport.scroll_ratio >= 1.0 - f32::EPSILON {
+            (viewport.interaction_height - viewport.thumb.height).max(0.0)
+        } else {
+            raw_top.clamp(
+                0.0,
+                (viewport.interaction_height - viewport.thumb.height).max(0.0),
+            )
+        };
     }
     viewport
 }
@@ -205,7 +228,6 @@ pub(in crate::preview) struct MinimapClickTarget {
     pub(in crate::preview) ratio: f32,
     pub(in crate::preview) clicked_display: f32,
     pub(in crate::preview) thumb_top: f32,
-    pub(in crate::preview) thumb_height: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -271,13 +293,12 @@ pub(in crate::preview) fn minimap_click_target_for_viewport(
             0.0,
             (viewport.interaction_height - target_thumb_height).max(0.0),
         ),
-        thumb_height: target_thumb_height,
     }
 }
 
 pub(in crate::preview) fn minimap_drag_target(
     local_y: f32,
-    grab_offset: f32,
+    session: MinimapDragSession,
     thumb_height: f32,
     track_height: f32,
 ) -> (f32, f32) {
@@ -285,8 +306,22 @@ pub(in crate::preview) fn minimap_drag_target(
     if travel <= f32::EPSILON {
         (0.0, 0.0)
     } else {
-        let thumb_top = (local_y - grab_offset).clamp(0.0, travel);
-        (thumb_top / travel, thumb_top)
+        let start_top = session.start_thumb_top.clamp(0.0, travel);
+        let thumb_top = (start_top + local_y - session.start_pointer_y).clamp(0.0, travel);
+        let start_ratio = session.start_ratio.clamp(0.0, 1.0);
+        let ratio = if thumb_top >= start_top {
+            let remaining_travel = travel - start_top;
+            if remaining_travel <= f32::EPSILON {
+                1.0
+            } else {
+                start_ratio + (thumb_top - start_top) / remaining_travel * (1.0 - start_ratio)
+            }
+        } else if start_top <= f32::EPSILON {
+            0.0
+        } else {
+            start_ratio - (start_top - thumb_top) / start_top * start_ratio
+        };
+        (ratio.clamp(0.0, 1.0), thumb_top)
     }
 }
 

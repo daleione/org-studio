@@ -586,9 +586,7 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
         width: index.width,
         rows_signature: index.rows_signature,
         interaction_height: before_content_click.interaction_height,
-        scroll_ratio: content_target.ratio,
         content_top: before_content_click.content_top,
-        thumb_top: content_target.thumb_top,
     };
     let after_content_click =
         minimap_viewport_for_list_with_anchor(&index, &state, 500.0, Some(anchor));
@@ -603,6 +601,18 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
     assert!(
         (index.pixel_for_list_offset(content_target.offset) + 50.0 - clicked_pixel).abs() < 0.001,
         "the clicked minimap content must land at the left viewport center"
+    );
+
+    let clicked_thumb_center =
+        after_content_click.thumb.top + after_content_click.thumb.height * 0.5;
+    let wheel_target = scroll_ratio_after_wheel(&index, &state, -8.0);
+    scroll_list_to_ratio(&index, &state, wheel_target);
+    let after_first_wheel =
+        minimap_viewport_for_list_with_anchor(&index, &state, 500.0, Some(anchor));
+    let wheel_thumb_center = after_first_wheel.thumb.top + after_first_wheel.thumb.height * 0.5;
+    assert!(
+        (wheel_thumb_center - clicked_thumb_center).abs() < 20.0,
+        "the first wheel event after a click must move continuously, not drop the minimap camera"
     );
 
     let short_projection = test_line_index(
@@ -900,28 +910,63 @@ fn pointer_ratio_is_relative_to_minimap_not_window() {
 
 #[test]
 fn dragging_is_the_exact_inverse_of_thumb_travel() {
-    assert_eq!(minimap_drag_target(360.0, 40.0, 80.0, 720.0), (0.5, 320.0));
-    assert_eq!(minimap_drag_target(-100.0, 40.0, 80.0, 720.0), (0.0, 0.0));
-    assert_eq!(minimap_drag_target(900.0, 40.0, 80.0, 720.0), (1.0, 640.0));
+    let session = MinimapDragSession {
+        start_pointer_y: 360.0,
+        start_thumb_top: 320.0,
+        start_ratio: 0.5,
+    };
+    assert_eq!(
+        minimap_drag_target(360.0, session, 80.0, 720.0),
+        (0.5, 320.0)
+    );
+    assert_eq!(
+        minimap_drag_target(-100.0, session, 80.0, 720.0),
+        (0.0, 0.0)
+    );
+    assert_eq!(
+        minimap_drag_target(900.0, session, 80.0, 720.0),
+        (1.0, 640.0)
+    );
 }
 
 #[test]
 fn absolute_drag_keeps_the_grab_point_and_clamps_outside_the_track() {
     let thumb_height = 80.0;
     let track_height = 320.0;
-    let grab_offset = 20.0;
+    let session = MinimapDragSession {
+        start_pointer_y: 140.0,
+        start_thumb_top: 120.0,
+        start_ratio: 0.5,
+    };
     assert_eq!(
-        minimap_drag_target(140.0, grab_offset, thumb_height, track_height),
+        minimap_drag_target(140.0, session, thumb_height, track_height),
         (0.5, 120.0)
     );
     assert_eq!(
-        minimap_drag_target(-40.0, grab_offset, thumb_height, track_height),
+        minimap_drag_target(-40.0, session, thumb_height, track_height),
         (0.0, 0.0)
     );
     assert_eq!(
-        minimap_drag_target(400.0, grab_offset, thumb_height, track_height),
+        minimap_drag_target(400.0, session, thumb_height, track_height),
         (1.0, 240.0)
     );
+}
+
+#[test]
+fn tiny_move_after_content_click_is_continuous_from_the_clicked_ratio() {
+    // In a small viewport the anchored thumb position is intentionally not
+    // `ratio * travel`. The first drag event must start at the clicked ratio,
+    // rather than jumping to the absolute thumb/travel ratio.
+    let session = MinimapDragSession {
+        start_pointer_y: 120.0,
+        start_thumb_top: 80.0,
+        start_ratio: 0.72,
+    };
+    let unchanged = minimap_drag_target(120.0, session, 60.0, 240.0);
+    assert_eq!(unchanged, (0.72, 80.0));
+    let moved = minimap_drag_target(121.0, session, 60.0, 240.0);
+    assert!(moved.0 > 0.72 && moved.0 < 0.73);
+    assert_eq!(moved.1, 81.0);
 }
 
 #[gpui::test]
