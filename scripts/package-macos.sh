@@ -9,6 +9,7 @@ cargo build --manifest-path "$project_dir/Cargo.toml" --release --bin org-studio
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$project_dir/target/release/org-studio" "$app/Contents/MacOS/org-studio"
 cp "$project_dir/assets/macos/Info.plist" "$app/Contents/Info.plist"
+cp "$project_dir/assets/macos/OrgStudio.icns" "$app/Contents/Resources/OrgStudio.icns"
 chmod 755 "$app/Contents/MacOS/org-studio"
 codesign --force --deep --sign - "$app"
 printf '%s\n' "$app"
