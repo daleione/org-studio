@@ -1,8 +1,8 @@
 use super::{
     Arc, BlockId, BlockKind, BlockNode, DocumentFormat, FontWeight, HashSet, Instant, ListState,
-    PreviewApp, PreviewDocument, PreviewRow, StyledText, accept_generation, centered_message,
-    current_theme, div, img, minimap, px, render_markdown_block, render_table_row,
-    resolve_image_path, rgb, styled_code_runs, styled_inline_runs,
+    PreviewApp, PreviewDocument, PreviewRow, StyledText, accept_generation, current_theme, div,
+    img, minimap, px, render_markdown_block, render_table_row, resolve_image_path, rgb,
+    styled_code_runs, styled_inline_runs,
 };
 use gpui::{list, prelude::*};
 
@@ -24,12 +24,6 @@ pub(in crate::preview) fn render_document(
 ) -> gpui::Div {
     let theme = current_theme();
     let preview_display_map = document.display_map.clone();
-    let defer_initial_reveal = minimap_visible
-        && !document
-            .minimap
-            .initial_visible_batch_ready
-            .load(std::sync::atomic::Ordering::Acquire);
-    let opening_path = document.path.display().to_string();
     let minimap_list_state = list_state.clone();
     let minimap_entity = entity.clone();
     let minimap_resize_entity = entity.clone();
@@ -215,17 +209,6 @@ pub(in crate::preview) fn render_document(
                     .right(px(width))
                     .w(px(1.0))
                     .bg(rgb(theme.heading[0])),
-            )
-        })
-        .when(defer_initial_reveal, |layout| {
-            layout.child(
-                div()
-                    .absolute()
-                    .top_0()
-                    .right_0()
-                    .bottom_0()
-                    .left_0()
-                    .child(centered_message("OPENING DOCUMENT", &opening_path)),
             )
         })
 }

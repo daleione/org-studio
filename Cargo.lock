@@ -3699,6 +3699,8 @@ dependencies = [
  "profiling",
  "pulldown-cmark",
  "ropey",
+ "serde",
+ "serde_json",
  "smallvec",
  "tracing",
  "tree-sitter-bash",

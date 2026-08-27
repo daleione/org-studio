@@ -7,7 +7,7 @@ use gpui::{
 use org_studio::{
     perf_tracing,
     preview::{
-        InitialDocumentLoad, OpenDocument, PreviewApp, ReloadDocument, ToggleMinimap,
+        InitialDocumentLoad, OpenDocument, PreviewApp, ReloadDocument, ShowHome, ToggleMinimap,
         ToggleSidebar, preload_initial_document,
     },
 };
@@ -29,12 +29,7 @@ struct ApplicationController {
 
 impl ApplicationController {
     fn reopen(&mut self, cx: &mut App) {
-        let path = self
-            .active_preview(cx)
-            .is_none()
-            .then(org_studio::settings::last_document_path)
-            .flatten();
-        self.open_or_activate(path, None, cx);
+        self.open_or_activate(None, None, cx);
     }
 
     fn open_or_activate(
@@ -77,16 +72,6 @@ impl ApplicationController {
             .expect("failed to open Org Studio window");
         self.main_window = Some(handle);
         cx.activate(true);
-    }
-
-    fn active_preview(&mut self, cx: &mut App) -> Option<WindowHandle<PreviewApp>> {
-        let handle = self.main_window?;
-        if handle.read(cx).is_ok() {
-            Some(handle)
-        } else {
-            self.main_window = None;
-            None
-        }
     }
 }
 
@@ -160,10 +145,7 @@ fn main() {
             .into_iter()
             .flat_map(paths_from_urls)
             .last();
-        let initial_path = initial_path
-            .clone()
-            .or(launch_path)
-            .or_else(org_studio::settings::last_document_path);
+        let initial_path = initial_path.clone().or(launch_path);
         let initial_load = initial_path
             .clone()
             .map(|path| preload_initial_document(path, cx));
@@ -231,6 +213,8 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::action("Quit Org Studio", Quit),
         ]),
         Menu::new("File").items([
+            MenuItem::action("Home", ShowHome),
+            MenuItem::separator(),
             MenuItem::action("Open...", OpenDocument),
             MenuItem::separator(),
             MenuItem::action("Reload", ReloadDocument),

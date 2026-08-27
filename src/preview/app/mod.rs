@@ -4,11 +4,10 @@ use super::{
     EmacsOutcome, HashMap, HashSet, InitialDocumentLoad, Instant, InvocationOrigin,
     KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, ListAlignment, ListState,
     MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions, PrefixArgument, PreviewApp,
-    PreviewDocument, PreviewLoadState, Window, accept_generation, built_in_contexts,
-    centered_message, changed_range, command_count, compile_input_profile,
-    configured_minimap_visible, current_theme, dired_bindings, load_document, minimap,
-    preview_bindings, preview_input, px, render_document, schedule_document_prewarm,
-    visible_markdown_row_indices, visible_row_indices,
+    PreviewDocument, PreviewLoadState, Window, accept_generation, built_in_contexts, changed_range,
+    command_count, compile_input_profile, configured_minimap_visible, current_theme,
+    dired_bindings, load_document, minimap, preview_bindings, preview_input, px, render_document,
+    render_home, schedule_document_prewarm, visible_markdown_row_indices, visible_row_indices,
 };
 use gpui::{div, prelude::*, rgb};
 
@@ -39,6 +38,8 @@ impl PreviewApp {
             keyboard,
             key_context,
             state: PreviewLoadState::Empty,
+            recent_documents: crate::recent_documents::load(),
+            home_error: None,
             generation: 0,
             load_task: None,
             file_watch_task: None,
@@ -165,12 +166,55 @@ impl PreviewApp {
         let theme = current_theme();
         let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);
         match &self.state {
-            PreviewLoadState::Empty => centered_message(
-                "ORG STUDIO",
-                "Open an Org document from the File menu or press Command-O.",
+            PreviewLoadState::Empty => render_home(
+                entity,
+                &self.recent_documents,
+                self.home_error.as_deref(),
+                None,
             ),
             PreviewLoadState::Loading { path } => {
-                centered_message("OPENING DOCUMENT", &path.display().to_string())
+                if let Some((generation, document)) = &self.last_ready {
+                    div()
+                        .size_full()
+                        .flex()
+                        .flex_col()
+                        .bg(rgb(theme.background))
+                        .child(
+                            div()
+                                .flex_none()
+                                .px_6()
+                                .py_2()
+                                .bg(rgb(0xf3f8fd))
+                                .border_b_1()
+                                .border_color(rgb(0xd5e4f2))
+                                .font_family(".SystemUIFont")
+                                .text_size(px(12.0))
+                                .text_color(rgb(0x55728d))
+                                .child(format!("Opening {}", path.display())),
+                        )
+                        .child(render_document(
+                            document.clone(),
+                            self.list_state.clone(),
+                            self.visible_rows.clone(),
+                            self.folded.clone(),
+                            entity,
+                            self.minimap_visible,
+                            editor_width,
+                            minimap_width,
+                            self.minimap_resize_preview,
+                            self.minimap_thumb_visibility,
+                            *generation,
+                            self.presentation_revision,
+                            self.opened_at.unwrap_or_else(Instant::now),
+                        ))
+                } else {
+                    render_home(
+                        entity,
+                        &self.recent_documents,
+                        self.home_error.as_deref(),
+                        Some(path),
+                    )
+                }
             }
             PreviewLoadState::Failed { path, message } => {
                 let error = format!("{}: {message}", path.display());
@@ -210,7 +254,7 @@ impl PreviewApp {
                             self.opened_at.unwrap_or_else(Instant::now),
                         ))
                 } else {
-                    centered_message("COULD NOT OPEN DOCUMENT", &error)
+                    render_home(entity, &self.recent_documents, Some(&error), None)
                 }
             }
             PreviewLoadState::Ready {

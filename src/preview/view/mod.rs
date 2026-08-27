@@ -3,20 +3,21 @@ use super::{
     DocumentFormat, FontStyle, FontWeight, HashSet, HighlightStyle, InlineKind, InlineSpan,
     InlineText, Instant, IntoElement, ListOffset, ListState, OPEN_DOCUMENT_COMMAND, OpenDocument,
     OpenFileManager, PreviewApp, PreviewDocument, PreviewLoadState, PreviewRow,
-    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, StyledText, ToggleMinimap,
-    ToggleSidebar, Window, accept_generation, current_theme, div, img, markdown, minimap,
-    parse_inline, px, render_table_row, resolve_image_path, rgb,
+    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SHOW_HOME_COMMAND, ShowHome,
+    StyledText, ToggleMinimap, ToggleSidebar, Window, accept_generation, current_theme, div, img,
+    markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
-use gpui::prelude::*;
+use gpui::{ExternalPaths, prelude::*};
 
 mod document;
+mod home;
 mod markdown_block;
 mod overlays;
 mod styled_text;
 pub(super) use document::render_document;
+pub(super) use home::render_home;
 pub(super) use markdown_block::parse_document_inline;
 use markdown_block::render_markdown_block;
-pub(super) use overlays::centered_message;
 use overlays::{dired_help_window, which_key_window};
 pub(super) use styled_text::code_highlight_style;
 use styled_text::{styled_code_runs, styled_inline_runs};
@@ -133,6 +134,11 @@ impl Render for PreviewApp {
             .on_action(cx.listener(|this, _: &OpenDocument, _, cx| {
                 this.dispatch_command(OPEN_DOCUMENT_COMMAND, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &ShowHome, _, cx| {
+                    this.dispatch_command(SHOW_HOME_COMMAND, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| {
                 this.dispatch_command(RELOAD_DOCUMENT_COMMAND, cx)
             }))
@@ -140,6 +146,11 @@ impl Render for PreviewApp {
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
+            .on_drop(
+                cx.listener(|this, paths: &ExternalPaths, _, cx| {
+                    this.open_dropped_paths(paths, cx)
+                }),
+            )
             .child(self.workspace_body(entity, command_window_width))
             .when(!which_key_items.is_empty(), |view| {
                 view.child(if dired_help_visible {

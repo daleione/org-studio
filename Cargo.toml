@@ -13,6 +13,8 @@ notify = "8"
 profiling = { version = "1", features = ["profile-with-tracing"] }
 pulldown-cmark = "0.13"
 ropey = "1.6.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 tracing = "0.1"
 tree-sitter-highlight = "0.26.7"
 tree-sitter-sequel = "0.3.11"

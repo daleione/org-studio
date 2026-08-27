@@ -7,13 +7,29 @@ use super::{
 use gpui::AppContext;
 
 impl PreviewApp {
+    pub(in crate::preview) fn show_home(&mut self, cx: &mut Context<Self>) {
+        self.generation = self.generation.wrapping_add(1);
+        self.load_task = None;
+        self.file_watch_request = self.file_watch_request.wrapping_add(1);
+        self.file_watch_task = None;
+        self.cancel_minimap_interaction();
+        self.state = PreviewLoadState::Empty;
+        self.last_ready = None;
+        self.opened_at = None;
+        self.first_frame_scheduled = None;
+        self.home_error = None;
+        self.content_route = super::super::ContentRoute::Document;
+        self.install_preview_keymap();
+        cx.notify();
+    }
+
     pub(in crate::preview) fn begin_open(
         &mut self,
         path: PathBuf,
         opened_at: Instant,
         cx: &mut Context<Self>,
     ) -> u64 {
-        crate::settings::remember_last_document(&path);
+        self.home_error = None;
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.generation += 1;
@@ -146,6 +162,11 @@ impl PreviewApp {
                             .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
                     );
                 }
+                crate::recent_documents::record_success(
+                    &mut self.recent_documents,
+                    document.path.clone(),
+                );
+                self.home_error = None;
                 let document = Arc::new(document);
                 self.folded = Arc::new(HashSet::new());
                 self.visible_rows = Arc::new(match document.format {
@@ -191,6 +212,45 @@ impl PreviewApp {
                 let _ = this.update(cx, |this, cx| this.open(path, cx));
             }
         }));
+    }
+
+    pub(in crate::preview) fn open_recent(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if super::super::is_supported_document(&path) {
+            self.open(path, cx);
+        } else {
+            crate::recent_documents::remove(&mut self.recent_documents, &path);
+            self.home_error = Some(
+                format!(
+                    "The recent document is no longer available: {}",
+                    path.display()
+                )
+                .into(),
+            );
+            cx.notify();
+        }
+    }
+
+    pub(in crate::preview) fn clear_recent_documents(&mut self, cx: &mut Context<Self>) {
+        crate::recent_documents::clear(&mut self.recent_documents);
+        self.home_error = None;
+        cx.notify();
+    }
+
+    pub(in crate::preview) fn open_dropped_paths(
+        &mut self,
+        paths: &gpui::ExternalPaths,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(path) = paths
+            .paths()
+            .iter()
+            .find(|path| super::super::is_supported_document(path))
+        {
+            self.open(path.clone(), cx);
+            return;
+        }
+        self.home_error = Some("Drop an Org or Markdown document to open it.".into());
+        cx.notify();
     }
 
     pub(in crate::preview) fn watch_document(&mut self, path: PathBuf, cx: &mut Context<Self>) {

@@ -53,6 +53,7 @@ impl CommandKey {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinCommand {
     OpenDocument,
+    ShowHome,
     ReloadDocument,
     QuitApplication,
     ScrollForward,

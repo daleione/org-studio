@@ -19,7 +19,7 @@ use super::{
     DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, OPEN_DEFAULT_DIRED_COMMAND,
     OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, QUIT_APPLICATION_COMMAND,
     RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
-    SCROLL_FORWARD_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
 };
 
 pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
@@ -41,6 +41,23 @@ pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in open command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: SHOW_HOME_COMMAND.into(),
+            aliases: &["list-buffers"],
+            title: "Home",
+            description: "Show the document home and recent files",
+            command: BuiltinCommand::ShowHome,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::None,
+            required_capabilities: CapabilitySet::empty(),
+            redaction: RedactionPolicy::None,
+        })
+        .expect("valid built-in home command");
     builder
         .register_builtin(BuiltinCommandSpec {
             name: RELOAD_DOCUMENT_COMMAND.into(),
@@ -292,6 +309,10 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
             behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND),
         },
         BindingSpec {
+            keys: "C-x C-b",
+            behavior: BindingBehavior::Command(SHOW_HOME_COMMAND),
+        },
+        BindingSpec {
             keys: "C-x C-r",
             behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
         },
@@ -336,6 +357,10 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
 
 pub(super) fn dired_bindings() -> Vec<BindingSpec<'static>> {
     vec![
+        BindingSpec {
+            keys: "C-x C-b",
+            behavior: BindingBehavior::Command(SHOW_HOME_COMMAND),
+        },
         BindingSpec {
             keys: "n",
             behavior: BindingBehavior::Command(DIRED_NEXT_COMMAND),

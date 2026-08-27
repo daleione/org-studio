@@ -63,6 +63,7 @@ use crate::{
 };
 
 const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
+const SHOW_HOME_COMMAND: &str = "org-studio.workspace.show-home";
 const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
 const QUIT_APPLICATION_COMMAND: &str = "org-studio.application.quit";
 const SCROLL_FORWARD_COMMAND: &str = "org-studio.preview.scroll-forward";
@@ -94,6 +95,7 @@ actions!(
     org_preview,
     [
         OpenDocument,
+        ShowHome,
         ReloadDocument,
         OpenFileManager,
         ReturnToDocument,
@@ -130,6 +132,8 @@ pub struct PreviewApp {
     keyboard: KeyboardRouter,
     key_context: ContextSet,
     state: PreviewLoadState,
+    recent_documents: Vec<crate::recent_documents::RecentDocument>,
+    home_error: Option<Arc<str>>,
     generation: u64,
     load_task: Option<Task<()>>,
     file_watch_task: Option<Task<()>>,
@@ -178,6 +182,18 @@ pub struct PreviewApp {
     dired_presentation_scheduled: bool,
     dired_viewport_memory: HashMap<PathBuf, (usize, f32)>,
     sidebar_viewport_memory: HashMap<PathBuf, (usize, f32)>,
+}
+
+fn is_supported_document(path: &std::path::Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                extension.eq_ignore_ascii_case("org")
+                    || extension.eq_ignore_ascii_case("md")
+                    || extension.eq_ignore_ascii_case("markdown")
+            })
 }
 
 fn accept_generation(current: u64, completed: u64) -> bool {

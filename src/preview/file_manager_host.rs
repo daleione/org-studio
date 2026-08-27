@@ -344,6 +344,9 @@ impl PreviewApp {
     }
 
     pub(super) fn workspace_body(&self, entity: Entity<Self>, viewport_width: f32) -> gpui::Div {
+        if matches!(self.state, PreviewLoadState::Empty) {
+            return self.body(entity, viewport_width);
+        }
         match self.content_route {
             ContentRoute::FileManager => self.full_page_file_manager(entity),
             ContentRoute::Document if self.sidebar_visible => div()
@@ -578,10 +581,14 @@ fn dired_row(
             row.bg(rgb(current_theme().code_boundary_background))
         })
         .hover(|style| style.bg(rgb(current_theme().background_alt)))
-        .on_click(move |_, _, cx| {
+        .on_click(move |event, _, cx| {
             entity.update(cx, |this, cx| {
                 if let Some(session) = this.dired.as_mut() {
                     session.set_cursor(id);
+                }
+                if event.click_count() >= 2 {
+                    this.dired_open_selected(cx);
+                } else {
                     cx.notify();
                 }
             })

@@ -48,6 +48,7 @@ impl PreviewApp {
     ) {
         match implementation {
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
+            CommandImplementation::Builtin(BuiltinCommand::ShowHome) => self.show_home(cx),
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
                 if self.content_route == ContentRoute::FileManager {
                     self.reload_file_manager(cx);

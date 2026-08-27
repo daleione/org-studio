@@ -53,7 +53,7 @@ fn dired_help_lists_every_command_and_groups_alias_keys() {
         .map(|(keys, title)| (keys.as_ref(), title.as_ref()))
         .collect::<Vec<_>>();
 
-    assert_eq!(items.len(), 18);
+    assert_eq!(items.len(), 19);
     assert!(labels.contains(&("n / j", "Next Line")));
     assert!(labels.contains(&("p / k", "Previous Line")));
     assert!(labels.contains(&("^ / h", "Up Directory")));
@@ -62,6 +62,7 @@ fn dired_help_lists_every_command_and_groups_alias_keys() {
     assert!(labels.contains(&("L", "History Forward")));
     assert!(labels.contains(&("g", "Refresh Directory")));
     assert!(labels.contains(&("C-x d", "Open Dired")));
+    assert!(labels.contains(&("C-x C-b", "Home")));
     assert!(labels.contains(&("C-x C-d", "Toggle Sidebar")));
     assert!(labels.contains(&("?", "Dired Help")));
     assert!(labels.contains(&("C-g", "Close command list")));
