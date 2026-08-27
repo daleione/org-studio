@@ -1,13 +1,14 @@
 use super::{
-    Arc, BlockId, BlockKind, BuiltinCommand, CapabilitySet, CommandDispatcher,
-    CommandImplementation, CommandKey, ContentRoute, Context, DocumentFormat, Duration,
-    EmacsOutcome, HashMap, HashSet, InitialDocumentLoad, Instant, InvocationOrigin,
-    KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, ListAlignment, ListState,
-    MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions, PrefixArgument, PreviewApp,
-    PreviewDocument, PreviewLoadState, Window, accept_generation, built_in_contexts, changed_range,
-    command_count, compile_input_profile, configured_minimap_visible, current_theme,
-    dired_bindings, load_document, minimap, preview_bindings, preview_input, px, render_document,
-    render_home, render_loading, visible_markdown_row_indices, visible_row_indices,
+    Arc, BlockId, BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation,
+    CommandKey, ContentRoute, Context, DocumentFormat, Duration, EmacsOutcome, HashMap, HashSet,
+    InitialDocumentLoad, Instant, InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke,
+    ListAlignment, ListState, MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions,
+    PrefixArgument, PreviewApp, PreviewDocument, PreviewLoadState, Window, accept_generation,
+    built_in_contexts, changed_range, command_count, compile_input_profile,
+    configured_minimap_visible, current_theme, cycle_markdown_subtree_visibility,
+    cycle_org_subtree_visibility, dired_bindings, global_markdown_visibility,
+    global_org_visibility, load_document, minimap, preview_bindings, preview_input, px,
+    render_document, render_home, render_loading,
 };
 use gpui::{div, prelude::*, rgb};
 
@@ -46,7 +47,7 @@ impl PreviewApp {
             file_watch_request: 0,
             picker_task: None,
             list_state: ListState::new(0, ListAlignment::Top, px(list_overdraw)),
-            folded: Arc::new(HashSet::new()),
+            fold_markers: Arc::new(HashSet::new()),
             visible_rows: Arc::new(Vec::new()),
             last_ready: None,
             opened_at: None,
@@ -83,6 +84,9 @@ impl PreviewApp {
             ),
             minimap_width: crate::settings::initial_minimap_width(preview_settings.minimap_width),
             minimap_resize_preview: None,
+            global_visibility: super::GlobalVisibility::All,
+            global_cycle_contiguous: false,
+            local_cycle_continuation: None,
             presentation_revision: 0,
             viewport_revision_key: None,
             minimap_pending_seek: None,
@@ -199,7 +203,7 @@ impl PreviewApp {
                             document.clone(),
                             self.list_state.clone(),
                             self.visible_rows.clone(),
-                            self.folded.clone(),
+                            self.fold_markers.clone(),
                             entity,
                             self.minimap_visible,
                             editor_width,
@@ -221,7 +225,7 @@ impl PreviewApp {
                 document.clone(),
                 self.list_state.clone(),
                 self.visible_rows.clone(),
-                self.folded.clone(),
+                self.fold_markers.clone(),
                 entity,
                 self.minimap_visible,
                 editor_width,
@@ -236,38 +240,77 @@ impl PreviewApp {
     }
 
     pub(super) fn toggle_fold(&mut self, block_id: BlockId, document: &Arc<PreviewDocument>) {
-        let is_heading = match document.format {
-            DocumentFormat::Org => document
-                .blocks
-                .nodes()
-                .get(block_id as usize)
-                .is_some_and(|block| matches!(block.kind, BlockKind::Heading { .. })),
-            DocumentFormat::Markdown => document
-                .markdown_blocks
-                .get(block_id as usize)
-                .is_some_and(|block| {
-                    matches!(block.kind, super::markdown::MarkdownKind::Heading { .. })
-                }),
+        let continue_from_children =
+            self.local_cycle_continuation == Some((block_id, super::LocalVisibility::Children));
+        let projection = match document.format {
+            DocumentFormat::Org => cycle_org_subtree_visibility(
+                &document.projection.rows,
+                &document.blocks,
+                &self.visible_rows,
+                &self.fold_markers,
+                block_id,
+                continue_from_children,
+            ),
+            DocumentFormat::Markdown => cycle_markdown_subtree_visibility(
+                &document.projection.rows,
+                &document.markdown_blocks,
+                &self.visible_rows,
+                &self.fold_markers,
+                block_id,
+                continue_from_children,
+            ),
         };
-        if !is_heading {
+        let Some(projection) = projection else {
+            return;
+        };
+        self.global_cycle_contiguous = false;
+        self.local_cycle_continuation = match projection.visibility {
+            super::LocalVisibility::Empty => None,
+            visibility => Some((block_id, visibility)),
+        };
+        if projection.visibility == super::LocalVisibility::Empty {
             return;
         }
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
-        let folded = Arc::make_mut(&mut self.folded);
-        if !folded.remove(&block_id) {
-            folded.insert(block_id);
-        }
-        let new_visible = Arc::new(match document.format {
+        self.fold_markers = Arc::new(projection.fold_markers);
+        self.apply_visible_rows(Arc::new(projection.visible_rows));
+    }
+
+    pub(super) fn cycle_global_visibility(&mut self) {
+        let document = match &self.state {
+            PreviewLoadState::Ready { document, .. } => document.clone(),
+            _ => return,
+        };
+        let next = if self.global_cycle_contiguous {
+            self.global_visibility.next()
+        } else {
+            super::GlobalVisibility::Overview
+        };
+        let (new_visible, new_markers) = match document.format {
             DocumentFormat::Org => {
-                visible_row_indices(&document.projection.rows, &document.blocks, &self.folded)
+                global_org_visibility(&document.projection.rows, &document.blocks, next)
             }
-            DocumentFormat::Markdown => visible_markdown_row_indices(
+            DocumentFormat::Markdown => global_markdown_visibility(
                 &document.projection.rows,
                 &document.markdown_blocks,
-                &self.folded,
+                next,
             ),
-        });
+        };
+        if new_visible.is_empty() && next != super::GlobalVisibility::All {
+            return;
+        }
+
+        self.cancel_minimap_interaction();
+        self.global_visibility = next;
+        self.global_cycle_contiguous = true;
+        self.local_cycle_continuation = None;
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.fold_markers = Arc::new(new_markers);
+        self.apply_visible_rows(Arc::new(new_visible));
+    }
+
+    fn apply_visible_rows(&mut self, new_visible: Arc<Vec<usize>>) {
         let (old_range, new_count) = changed_range(&self.visible_rows, &new_visible);
         self.list_state.splice(old_range, new_count);
         if new_visible.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {

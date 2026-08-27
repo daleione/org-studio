@@ -43,7 +43,10 @@ mod table;
 mod tests;
 mod visual_recipe;
 use app::ScrollBenchmark;
-use folding::{changed_range, visible_markdown_row_indices, visible_row_indices};
+use folding::{
+    GlobalVisibility, LocalVisibility, changed_range, cycle_markdown_subtree_visibility,
+    cycle_org_subtree_visibility, global_markdown_visibility, global_org_visibility,
+};
 use projection::build_projection_snapshot;
 use rows::build_preview_rows;
 use table::{build_markdown_table_styles, build_table_styles, render_table_row};
@@ -75,6 +78,7 @@ const OPEN_DEFAULT_DIRED_COMMAND: &str = "org-studio.dired.open-default";
 const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
 const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
 const TOGGLE_MINIMAP_COMMAND: &str = "org-studio.preview.toggle-minimap";
+const GLOBAL_VISIBILITY_CYCLE_COMMAND: &str = "org-studio.preview.global-visibility-cycle";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
 const DIRED_PREVIOUS_COMMAND: &str = "org-studio.dired.previous-line";
 const DIRED_OPEN_COMMAND: &str = "org-studio.dired.find-file";
@@ -140,7 +144,7 @@ pub struct PreviewApp {
     file_watch_request: u64,
     picker_task: Option<Task<()>>,
     list_state: ListState,
-    folded: Arc<HashSet<BlockId>>,
+    fold_markers: Arc<HashSet<BlockId>>,
     visible_rows: Arc<Vec<usize>>,
     last_ready: Option<(u64, Arc<PreviewDocument>)>,
     opened_at: Option<Instant>,
@@ -158,6 +162,9 @@ pub struct PreviewApp {
     minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
     minimap_width: Option<u16>,
     minimap_resize_preview: Option<f32>,
+    global_visibility: GlobalVisibility,
+    global_cycle_contiguous: bool,
+    local_cycle_continuation: Option<(BlockId, LocalVisibility)>,
     presentation_revision: u64,
     viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,

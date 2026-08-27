@@ -1,8 +1,7 @@
 use super::{
-    Arc, Context, DocumentFormat, Duration, HashSet, InitialDocumentLoad, Instant,
-    MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions, PreviewApp, PreviewDocument,
-    PreviewLoadState, accept_generation, load_document, minimap, visible_markdown_row_indices,
-    visible_row_indices,
+    Arc, Context, Duration, HashSet, InitialDocumentLoad, Instant, MAX_EXACT_SCROLL_LAYOUT_ROWS,
+    PathBuf, PathPromptOptions, PreviewApp, PreviewDocument, PreviewLoadState, accept_generation,
+    load_document, minimap,
 };
 use gpui::AppContext;
 
@@ -157,19 +156,11 @@ impl PreviewApp {
                 );
                 self.home_error = None;
                 let document = Arc::new(document);
-                self.folded = Arc::new(HashSet::new());
-                self.visible_rows = Arc::new(match document.format {
-                    DocumentFormat::Org => visible_row_indices(
-                        &document.projection.rows,
-                        &document.blocks,
-                        &self.folded,
-                    ),
-                    DocumentFormat::Markdown => visible_markdown_row_indices(
-                        &document.projection.rows,
-                        &document.markdown_blocks,
-                        &self.folded,
-                    ),
-                });
+                self.fold_markers = Arc::new(HashSet::new());
+                self.global_visibility = super::super::GlobalVisibility::All;
+                self.global_cycle_contiguous = false;
+                self.local_cycle_continuation = None;
+                self.visible_rows = Arc::new((0..document.projection.rows.len()).collect());
                 self.list_state.reset(self.visible_rows.len());
                 if self.visible_rows.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {
                     self.list_state.clone().measure_all();

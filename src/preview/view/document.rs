@@ -11,7 +11,7 @@ pub(in crate::preview) fn render_document(
     document: Arc<PreviewDocument>,
     list_state: ListState,
     visible_rows: Arc<Vec<usize>>,
-    folded: Arc<HashSet<BlockId>>,
+    fold_markers: Arc<HashSet<BlockId>>,
     entity: gpui::Entity<PreviewApp>,
     minimap_visible: bool,
     editor_width: f32,
@@ -54,7 +54,7 @@ pub(in crate::preview) fn render_document(
                 .child({
                     let document = document.clone();
                     let visible_rows = visible_rows.clone();
-                    let folded = folded.clone();
+                    let fold_markers = fold_markers.clone();
                     list(list_state, move |index, _window, _cx| {
                         let actual_index = visible_rows[index];
                         let row = document
@@ -67,7 +67,7 @@ pub(in crate::preview) fn render_document(
                             .expect("preview display map must exist after loading");
                         let is_heading = display_map.is_heading(actual_index);
                         let is_table_row = display_map.is_table(actual_index);
-                        let is_folded = is_heading && folded.contains(&row.block_id);
+                        let is_folded = is_heading && fold_markers.contains(&row.block_id);
                         let document_for_click = document.clone();
                         let entity_for_click = entity.clone();
                         div()
@@ -166,7 +166,7 @@ pub(in crate::preview) fn render_document(
                     display_map,
                     document.minimap.clone(),
                     visible_rows.clone(),
-                    folded.clone(),
+                    fold_markers.clone(),
                     minimap_list_state,
                     editor_width,
                     minimap_width,

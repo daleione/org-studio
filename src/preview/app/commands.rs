@@ -46,6 +46,13 @@ impl PreviewApp {
         prefix: PrefixArgument,
         cx: &mut Context<Self>,
     ) {
+        if !matches!(
+            implementation,
+            CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle)
+        ) {
+            self.global_cycle_contiguous = false;
+            self.local_cycle_continuation = None;
+        }
         match implementation {
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
             CommandImplementation::Builtin(BuiltinCommand::ShowHome) => self.show_home(cx),
@@ -91,6 +98,10 @@ impl PreviewApp {
             }
             CommandImplementation::Builtin(BuiltinCommand::ToggleMinimap) => {
                 self.toggle_minimap(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle) => {
+                self.cycle_global_visibility();
+                cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredNext) => {
                 self.dired_move(command_count(prefix) as i64, cx)

@@ -65,6 +65,7 @@ pub enum BuiltinCommand {
     ReturnToDocument,
     ToggleSidebar,
     ToggleMinimap,
+    GlobalVisibilityCycle,
     DiredNext,
     DiredPrevious,
     DiredOpen,

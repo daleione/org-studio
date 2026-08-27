@@ -1,9 +1,262 @@
-use super::{accept_generation, dired_command_items, preview_input};
+use super::{
+    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, accept_generation, dired_command_items,
+    preview_input,
+};
+
+use crate::{input::EmacsOutcome, keymap::KeyStroke};
+
+fn visible_source_lines(app: &super::PreviewApp, document: &super::PreviewDocument) -> Vec<u64> {
+    app.visible_rows
+        .iter()
+        .map(|index| {
+            document.text.line_of_byte(
+                document
+                    .projection
+                    .rows
+                    .get(*index)
+                    .unwrap()
+                    .source
+                    .range
+                    .start,
+            ) + 1
+        })
+        .collect()
+}
 
 #[test]
 fn stale_generations_are_rejected() {
     assert!(accept_generation(7, 7));
     assert!(!accept_generation(8, 7));
+}
+
+#[test]
+fn shift_tab_dispatches_the_global_visibility_cycle() {
+    let (commands, mut keyboard, context) = preview_input();
+    let expected = commands.key(GLOBAL_VISIBILITY_CYCLE_COMMAND).unwrap();
+    assert_eq!(
+        keyboard.route(KeyStroke::new("tab", false, false, true, false), context),
+        EmacsOutcome::Command {
+            command: expected,
+            prefix: crate::command::PrefixArgument::None,
+        }
+    );
+}
+
+#[test]
+fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together() {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-global-visibility-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "preamble\n* One\nbody\n** Child\nchild body\n* Two\nvisible\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let mut app = super::PreviewApp::new();
+    app.generation = 1;
+    assert!(app.apply_load_result(1, Ok(document)));
+
+    app.cycle_global_visibility();
+    assert_eq!(app.global_visibility, GlobalVisibility::Overview);
+    assert_eq!(app.visible_rows.len(), 2);
+    assert_eq!(app.fold_markers.len(), 2);
+    assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+
+    app.cycle_global_visibility();
+    assert_eq!(app.global_visibility, GlobalVisibility::Contents);
+    assert_eq!(app.visible_rows.len(), 3);
+    assert_eq!(app.fold_markers.len(), 2);
+    assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+
+    app.cycle_global_visibility();
+    assert_eq!(app.global_visibility, GlobalVisibility::All);
+    assert!(app.fold_markers.is_empty());
+    assert_eq!(app.visible_rows.len(), 7);
+    assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+}
+
+#[test]
+fn expanding_a_child_from_contents_does_not_collapse_its_parent() {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-contents-child-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "preamble\n* One\nparent body\n** Child\nchild body\n* Two\nsecond body\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let mut app = super::PreviewApp::new();
+    app.generation = 1;
+    assert!(app.apply_load_result(1, Ok(document)));
+    app.cycle_global_visibility();
+    app.cycle_global_visibility();
+
+    let document = match &app.state {
+        super::PreviewLoadState::Ready { document, .. } => document.clone(),
+        _ => panic!("document should be ready"),
+    };
+    let parent = document
+        .blocks
+        .nodes()
+        .iter()
+        .position(|block| {
+            matches!(
+                block.kind,
+                crate::org_syntax::BlockKind::Heading { level: 1 }
+            )
+        })
+        .unwrap() as u32;
+    let child = document
+        .blocks
+        .nodes()
+        .iter()
+        .position(|block| {
+            matches!(
+                block.kind,
+                crate::org_syntax::BlockKind::Heading { level: 2 }
+            )
+        })
+        .unwrap() as u32;
+
+    assert!(!app.fold_markers.contains(&parent));
+    assert!(app.fold_markers.contains(&child));
+
+    app.toggle_fold(child, &document);
+    assert_eq!(app.global_visibility, GlobalVisibility::Contents);
+    assert!(!app.fold_markers.contains(&parent));
+    assert!(!app.fold_markers.contains(&child));
+    assert_eq!(visible_source_lines(&app, &document), vec![2, 4, 5, 6]);
+
+    app.toggle_fold(child, &document);
+    assert_eq!(app.global_visibility, GlobalVisibility::Contents);
+    assert_eq!(app.visible_rows.len(), 3);
+    assert!(!app.fold_markers.contains(&parent));
+    assert!(app.fold_markers.contains(&child));
+
+    app.cycle_global_visibility();
+    assert_eq!(app.global_visibility, GlobalVisibility::Overview);
+    assert_eq!(app.visible_rows.len(), 2);
+}
+
+#[test]
+fn clicking_a_second_level_heading_in_contents_never_folds_its_parent() {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-contents-second-level-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "* Parent\nparent body\n** Child\nchild body\n*** Grandchild\ngrandchild body\n* Other\nother body\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let mut app = super::PreviewApp::new();
+    app.generation = 1;
+    assert!(app.apply_load_result(1, Ok(document)));
+    app.cycle_global_visibility();
+    app.cycle_global_visibility();
+
+    let document = match &app.state {
+        super::PreviewLoadState::Ready { document, .. } => document.clone(),
+        _ => panic!("document should be ready"),
+    };
+    let parent = document
+        .blocks
+        .nodes()
+        .iter()
+        .position(|block| {
+            matches!(
+                block.kind,
+                crate::org_syntax::BlockKind::Heading { level: 1 }
+            )
+        })
+        .unwrap() as u32;
+    let child = document
+        .blocks
+        .nodes()
+        .iter()
+        .position(|block| {
+            matches!(
+                block.kind,
+                crate::org_syntax::BlockKind::Heading { level: 2 }
+            )
+        })
+        .unwrap() as u32;
+
+    assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 5, 7]);
+    assert!(!app.fold_markers.contains(&parent));
+
+    app.toggle_fold(child, &document);
+    assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 7]);
+    assert!(!app.fold_markers.contains(&parent));
+    assert!(app.fold_markers.contains(&child));
+
+    app.toggle_fold(child, &document);
+    assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 4, 5, 7]);
+    assert!(!app.fold_markers.contains(&parent));
+}
+
+#[test]
+fn heading_click_cycles_only_its_subtree_through_official_local_states() {
+    let path =
+        std::env::temp_dir().join(format!("org-studio-local-cycle-{}.org", std::process::id()));
+    std::fs::write(
+        &path,
+        "* Parent\nparent body\n** Child\nchild body\n** Sibling\nsibling body\n* Other\nother body\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let mut app = super::PreviewApp::new();
+    app.generation = 1;
+    assert!(app.apply_load_result(1, Ok(document)));
+    app.cycle_global_visibility();
+    let document = match &app.state {
+        super::PreviewLoadState::Ready { document, .. } => document.clone(),
+        _ => panic!("document should be ready"),
+    };
+    let parent = document
+        .blocks
+        .nodes()
+        .iter()
+        .position(|block| {
+            matches!(
+                block.kind,
+                crate::org_syntax::BlockKind::Heading { level: 1 }
+            )
+        })
+        .unwrap() as u32;
+
+    app.toggle_fold(parent, &document);
+    assert_eq!(
+        app.local_cycle_continuation,
+        Some((parent, super::LocalVisibility::Children))
+    );
+    assert_eq!(visible_source_lines(&app, &document), vec![1, 2, 3, 5, 7]);
+
+    app.toggle_fold(parent, &document);
+    assert_eq!(
+        app.local_cycle_continuation,
+        Some((parent, super::LocalVisibility::Subtree))
+    );
+    assert_eq!(
+        visible_source_lines(&app, &document),
+        vec![1, 2, 3, 4, 5, 6, 7]
+    );
+
+    app.toggle_fold(parent, &document);
+    assert_eq!(
+        app.local_cycle_continuation,
+        Some((parent, super::LocalVisibility::Folded))
+    );
+    assert_eq!(visible_source_lines(&app, &document), vec![1, 7]);
 }
 
 #[test]

@@ -16,10 +16,11 @@ use super::{
     BEGINNING_COMMAND, DIRED_BACK_COMMAND, DIRED_DELETE_COMMAND, DIRED_EXECUTE_COMMAND,
     DIRED_FORWARD_COMMAND, DIRED_HELP_COMMAND, DIRED_INVERT_COMMAND, DIRED_MARK_COMMAND,
     DIRED_NEXT_COMMAND, DIRED_OPEN_COMMAND, DIRED_PREVIOUS_COMMAND, DIRED_UNMARK_ALL_COMMAND,
-    DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, OPEN_DEFAULT_DIRED_COMMAND,
-    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, QUIT_APPLICATION_COMMAND,
-    RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
-    SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
+    OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
+    QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
+    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND,
+    TOGGLE_SIDEBAR_COMMAND,
 };
 
 pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
@@ -154,6 +155,12 @@ pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
             TOGGLE_MINIMAP_COMMAND,
             "Toggle Minimap",
             BuiltinCommand::ToggleMinimap,
+            ArgumentSpec::None,
+        ),
+        (
+            GLOBAL_VISIBILITY_CYCLE_COMMAND,
+            "Cycle Document Visibility",
+            BuiltinCommand::GlobalVisibilityCycle,
             ArgumentSpec::None,
         ),
         (
@@ -351,6 +358,10 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec {
             keys: "C-x C-d",
             behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-tab",
+            behavior: BindingBehavior::Command(GLOBAL_VISIBILITY_CYCLE_COMMAND),
         },
     ]
 }
