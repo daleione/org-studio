@@ -233,7 +233,7 @@ pub fn render(
                     .max(1.0);
                 let key = tile_key(
                     &tile_identity_rows,
-                    tile_identity_rows.first().copied().unwrap_or(0),
+                    tile_start,
                     width,
                     folded_signature(&shape_model, tile_rows, &shape_folded),
                     wrap_hasher.finish(),
@@ -298,7 +298,7 @@ pub fn render(
                                 "org_studio_minimap_tile_ready generation={} revision={} tile_start={} rows={} lines={} width={} total_ms={:.3} text_system_wait_ms={:.3} cold_text_system={} first={} since_open_ms={:.3}",
                                 generation,
                                 presentation_revision,
-                                request.key.first_row,
+                                request.key.tile_start,
                                 request.rows.len(),
                                 rasterized.line_count,
                                 width,

@@ -29,10 +29,10 @@ pub(in crate::preview) fn render_document(
     let minimap_entity = entity.clone();
     let minimap_resize_entity = entity.clone();
     let rendered_item_count = list_state.item_count();
-    let minimap_rows = fold_animation.as_ref().map_or_else(
-        || visible_rows.clone(),
-        |transition| transition.presentation_rows(&visible_rows),
-    );
+    // The minimap represents the final semantic projection. The temporary flow segments belong
+    // only to the main list; exposing them here causes a second tile refresh when the animation
+    // completes and the segment is removed.
+    let minimap_rows = visible_rows.clone();
     div()
         .size_full()
         .flex()

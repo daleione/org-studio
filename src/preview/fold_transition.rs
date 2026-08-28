@@ -129,19 +129,6 @@ impl FoldTransition {
         target_cursor + transition_index - physical_cursor
     }
 
-    pub(super) fn presentation_rows(&self, target_rows: &[usize]) -> Arc<Vec<usize>> {
-        debug_assert_eq!(target_rows.len(), self.target_item_count);
-        let mut rows = Vec::with_capacity(self.transition_item_count());
-        let mut target_cursor = 0usize;
-        for segment in self.segments.iter() {
-            rows.extend_from_slice(&target_rows[target_cursor..segment.target_start]);
-            rows.push(segment.rendered_rows[0]);
-            target_cursor = segment.target_start + segment.target_len;
-        }
-        rows.extend_from_slice(&target_rows[target_cursor..]);
-        Arc::new(rows)
-    }
-
     pub(super) fn transition_item_count(&self) -> usize {
         self.segments
             .iter()
@@ -434,12 +421,6 @@ mod tests {
         assert_eq!(transition.target_index_for_item(0), 0);
         assert_eq!(transition.target_index_for_item(2), 3);
         assert_eq!(transition.target_index_for_item(4), 6);
-        assert_eq!(
-            transition
-                .presentation_rows(&[0, 1, 2, 3, 4, 5, 6, 7])
-                .as_ref(),
-            &[0, 1, 3, 4, 6, 7]
-        );
         assert_eq!(
             transition.completion_edits().collect::<Vec<_>>(),
             vec![

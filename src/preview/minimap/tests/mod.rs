@@ -465,6 +465,32 @@ fn raster_tile_key_rejects_fold_and_resize_reuse() {
 }
 
 #[test]
+fn fold_refresh_keeps_the_previous_tile_until_its_replacement_is_ready() {
+    let density = MinimapDensity::Compact;
+    let previous = tile_key(&[10, 11, 12], 128, 96, 0, 1, 2.0, density);
+    let folded = tile_key(&[10, 42], 128, 96, 1, 2, 2.0, density);
+    let another_slot = tile_key(&[200, 201], 256, 96, 1, 2, 2.0, density);
+    let image = Arc::new(RenderImage::new(SmallVec::from_elem(
+        Frame::new(RgbaImage::new(1, 1)),
+        1,
+    )));
+    let mut cache = RasterTileCache {
+        entries: HashMap::new(),
+        order: VecDeque::new(),
+        in_flight: HashSet::new(),
+    };
+    cache.insert_batch(vec![(previous, image.clone())], &[previous]);
+
+    let (fallback, is_missing) = cache.image_or_fallback(folded);
+    assert!(is_missing, "the replacement tile still needs rasterizing");
+    assert!(
+        fallback.is_some_and(|fallback| Arc::ptr_eq(&fallback, &image)),
+        "the last image in the same tile slot should remain paintable"
+    );
+    assert!(cache.image_or_fallback(another_slot).0.is_none());
+}
+
+#[test]
 fn raster_tile_cache_and_in_flight_sets_are_bounded_by_design() {
     assert_eq!(RASTER_TILE_ROWS, 128);
     assert_eq!(RasterTileCache::CAPACITY, 6);

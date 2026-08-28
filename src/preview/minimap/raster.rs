@@ -30,7 +30,11 @@ use super::{
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(in crate::preview) struct RasterTileKey {
-    pub(in crate::preview) first_row: usize,
+    /// Tile position in the current presentation. Stable across a local fold even when the rows
+    /// occupying this slot change.
+    pub(in crate::preview) tile_start: usize,
+    /// Stable visual identity of the first row, used for exact-content fallback across reflow.
+    pub(in crate::preview) first_row_id: usize,
     pub(in crate::preview) row_signature: u64,
     pub(in crate::preview) width: u16,
     pub(in crate::preview) theme_signature: u64,
@@ -56,15 +60,30 @@ impl RasterTileCache {
         if let Some(image) = self.entries.get(&key).cloned() {
             return (Some(image), false);
         }
-        let fallback = self.order.iter().rev().find_map(|candidate| {
-            (candidate.first_row == key.first_row
-                && candidate.row_signature == key.row_signature
-                && candidate.theme_signature == key.theme_signature
-                && candidate.folded_signature == key.folded_signature
-                && candidate.scale_factor_x100 == key.scale_factor_x100)
-                .then(|| self.entries.get(candidate).cloned())
-                .flatten()
-        });
+        let fallback = self
+            .order
+            .iter()
+            .rev()
+            .find(|candidate| {
+                candidate.first_row_id == key.first_row_id
+                    && candidate.row_signature == key.row_signature
+                    && candidate.theme_signature == key.theme_signature
+                    && candidate.folded_signature == key.folded_signature
+                    && candidate.scale_factor_x100 == key.scale_factor_x100
+            })
+            .or_else(|| {
+                // Folding changes row identity and fold signatures. Keep the image previously
+                // painted in the same tile slot until the replacement batch is ready, rather
+                // than exposing the empty canvas between the two frames.
+                self.order.iter().rev().find(|candidate| {
+                    candidate.tile_start == key.tile_start
+                        && candidate.width == key.width
+                        && candidate.theme_signature == key.theme_signature
+                        && candidate.scale_factor_x100 == key.scale_factor_x100
+                        && candidate.density == key.density
+                })
+            })
+            .and_then(|candidate| self.entries.get(candidate).cloned());
         (fallback, true)
     }
 
@@ -163,7 +182,7 @@ pub(in crate::preview) fn theme_signature() -> u64 {
 
 pub(in crate::preview) fn tile_key(
     rows: &[usize],
-    first_row: usize,
+    tile_start: usize,
     width: usize,
     folded_signature: u64,
     wrap_signature: u64,
@@ -173,7 +192,8 @@ pub(in crate::preview) fn tile_key(
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     rows.hash(&mut hasher);
     RasterTileKey {
-        first_row,
+        tile_start,
+        first_row_id: rows.first().copied().unwrap_or(0),
         row_signature: hasher.finish(),
         width: width.min(u16::MAX as usize) as u16,
         theme_signature: theme_signature(),
