@@ -79,6 +79,19 @@ pub(in crate::preview) enum DocumentFormat {
     Markdown,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::preview) enum CodeRowRole {
+    Open,
+    Body,
+    Close,
+}
+
+impl CodeRowRole {
+    pub(in crate::preview) const fn is_boundary(self) -> bool {
+        matches!(self, Self::Open | Self::Close)
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(super) struct PreviewRow {
     pub(super) block_id: BlockId,

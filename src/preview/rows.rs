@@ -132,4 +132,24 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(text.copy_range(rows[0].content.range), source.trim_end());
     }
+
+    #[test]
+    fn org_source_block_preserves_both_fences_and_their_line_numbers() {
+        let text = RopeSnapshot::from_utf8(
+            b"before\n#+begin_src rust\n    let value = 1;\n#+end_src\nafter\n".to_vec(),
+        )
+        .unwrap();
+        let blocks = parse(&text);
+        let rows = build_preview_rows(&text, &blocks);
+
+        assert_eq!(text.copy_range(rows[1].content.range), "#+begin_src rust");
+        assert_eq!(text.copy_range(rows[2].content.range), "    let value = 1;");
+        assert_eq!(text.copy_range(rows[3].content.range), "#+end_src");
+        assert_eq!(
+            rows.iter()
+                .map(|row| text.line_of_byte(row.content.range.start) + 1)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+    }
 }

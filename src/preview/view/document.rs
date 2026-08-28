@@ -1,8 +1,8 @@
 use super::{
     Arc, BlockId, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FoldTransition,
-    FontWeight, HashSet, Instant, ListState, PreviewApp, PreviewDocument, PreviewRow, StyledText,
-    accept_generation, current_theme, div, img, minimap, px, render_markdown_block,
-    render_table_row, resolve_image_path, rgb, styled_code_runs, styled_inline_runs,
+    FontWeight, HashSet, Instant, ListState, PreviewApp, PreviewDocument, PreviewRow,
+    accept_generation, current_theme, div, img, minimap, org_code_row_role, px, render_code_row,
+    render_markdown_block, render_table_row, resolve_image_path, rgb, styled_inline_runs,
 };
 use gpui::{list, prelude::*};
 
@@ -450,33 +450,8 @@ fn render_block(
                 .expect("table row projection must exist"),
         ),
         BlockKind::SourceBlock { .. } => {
-            let marker = text.trim_start().to_ascii_lowercase();
-            let is_boundary = marker.starts_with("#+begin_") || marker.starts_with("#+end_");
-            let content = if is_boundary {
-                StyledText::new(text.clone())
-            } else {
-                styled_code_runs(text.clone(), display_runs.code_spans.clone())
-            };
-            div()
-                .min_h(px(row_layout.min_height))
-                .pl(px(row_layout.padding_left))
-                .pr(px(row_layout.padding_right))
-                .pt(px(row_layout.padding_top))
-                .pb(px(row_layout.padding_bottom))
-                .bg(rgb(if is_boundary {
-                    theme.code_boundary_background
-                } else {
-                    theme.code_background
-                }))
-                .text_color(if is_boundary {
-                    rgb(theme.code_boundary)
-                } else {
-                    rgb(theme.code_foreground)
-                })
-                .font_family("Menlo")
-                .text_size(px(row_layout.font_size))
-                .line_height(px(row_layout.line_height))
-                .child(content)
+            let role = org_code_row_role(&text, row.continuation);
+            render_code_row(text, display_runs.code_spans, row_layout, role)
         }
         BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
             .min_h(px(row_layout.min_height))

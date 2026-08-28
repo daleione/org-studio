@@ -5,7 +5,7 @@ use crate::{
     org_syntax::inline::{InlineKind, InlineSpan, InlineText},
 };
 
-use super::PreviewRow;
+use super::{CodeRowRole, PreviewRow};
 
 #[derive(Clone, Debug)]
 pub(super) enum MarkdownKind {
@@ -18,7 +18,7 @@ pub(super) enum MarkdownKind {
     Quote,
     Code {
         language: Option<String>,
-        boundary: bool,
+        role: CodeRowRole,
     },
     TableRow,
     HorizontalRule,
@@ -45,23 +45,29 @@ pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Ve
         let leading = logical.len() - trimmed.len();
         let line_end = line.range.start.0 + logical.len() as u64;
         let (kind, content_start, content_end) = if let Some((marker, count, language)) = &fence {
-            let closes = trimmed.chars().take_while(|ch| ch == marker).count() >= *count;
+            let closes = leading <= 3 && is_closing_fence(trimmed, *marker, *count);
             let kind = MarkdownKind::Code {
                 language: language.clone(),
-                boundary: closes,
+                role: if closes {
+                    CodeRowRole::Close
+                } else {
+                    CodeRowRole::Body
+                },
             };
             if closes {
                 fence = None;
             }
-            (kind, line.range.start.0 + leading as u64, line_end)
-        } else if let Some((marker, count, language, marker_bytes)) = fence_start(trimmed) {
+            (kind, line.range.start.0, line_end)
+        } else if leading <= 3
+            && let Some((marker, count, language)) = fence_start(trimmed)
+        {
             fence = Some((marker, count, language.clone()));
             (
                 MarkdownKind::Code {
                     language,
-                    boundary: true,
+                    role: CodeRowRole::Open,
                 },
-                line.range.start.0 + leading as u64 + marker_bytes as u64,
+                line.range.start.0,
                 line_end,
             )
         } else if trimmed.is_empty() {
@@ -172,7 +178,7 @@ pub(super) fn parse_markdown_inline(source: &str) -> InlineText {
     result
 }
 
-fn fence_start(line: &str) -> Option<(char, usize, Option<String>, usize)> {
+fn fence_start(line: &str) -> Option<(char, usize, Option<String>)> {
     let marker = line.chars().next()?;
     if !matches!(marker, '`' | '~') {
         return None;
@@ -182,12 +188,21 @@ fn fence_start(line: &str) -> Option<(char, usize, Option<String>, usize)> {
         return None;
     }
     let marker_bytes = marker.len_utf8() * count;
-    let language = line[marker_bytes..]
+    let info = line[marker_bytes..].trim();
+    if marker == '`' && info.contains('`') {
+        return None;
+    }
+    let language = info
         .split_whitespace()
         .next()
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
-    Some((marker, count, language, marker_bytes))
+    Some((marker, count, language))
+}
+
+fn is_closing_fence(line: &str, marker: char, opening_count: usize) -> bool {
+    let count = line.chars().take_while(|ch| *ch == marker).count();
+    count >= opening_count && line[marker.len_utf8() * count..].trim().is_empty()
 }
 
 fn atx_heading(line: &str) -> Option<(u16, usize)> {
@@ -245,7 +260,7 @@ fn standalone_image(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::RopeSnapshot;
+    use crate::document::{RopeSnapshot, TextSnapshot};
 
     #[test]
     fn parses_markdown_blocks_and_inline_markup() {
@@ -275,5 +290,68 @@ mod tests {
             standalone_image("![diagram](images/a.png)"),
             Some("images/a.png".into())
         );
+    }
+
+    #[test]
+    fn fenced_code_preserves_fences_indentation_and_source_line_numbers() {
+        let text =
+            RopeSnapshot::from_utf8(b"before\n```rust\n    let value = 1;\n```\nafter\n".to_vec())
+                .unwrap();
+        let (blocks, rows) = parse_markdown(&text);
+
+        assert!(matches!(
+            blocks[1].kind,
+            MarkdownKind::Code {
+                role: CodeRowRole::Open,
+                ..
+            }
+        ));
+        assert!(matches!(
+            blocks[2].kind,
+            MarkdownKind::Code {
+                role: CodeRowRole::Body,
+                ..
+            }
+        ));
+        assert!(matches!(
+            blocks[3].kind,
+            MarkdownKind::Code {
+                role: CodeRowRole::Close,
+                ..
+            }
+        ));
+        assert_eq!(text.copy_range(rows[1].content.range), "```rust");
+        assert_eq!(text.copy_range(rows[2].content.range), "    let value = 1;");
+        assert_eq!(text.copy_range(rows[3].content.range), "```");
+        assert_eq!(
+            rows.iter()
+                .map(|row| text.line_of_byte(row.content.range.start) + 1)
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3, 4, 5]
+        );
+    }
+
+    #[test]
+    fn closing_fence_requires_only_marker_and_trailing_whitespace() {
+        let text =
+            RopeSnapshot::from_utf8(b"```rust\n```not-a-close\nvalue\n```   \nafter\n".to_vec())
+                .unwrap();
+        let (blocks, _) = parse_markdown(&text);
+
+        assert!(matches!(
+            blocks[1].kind,
+            MarkdownKind::Code {
+                role: CodeRowRole::Body,
+                ..
+            }
+        ));
+        assert!(matches!(
+            blocks[3].kind,
+            MarkdownKind::Code {
+                role: CodeRowRole::Close,
+                ..
+            }
+        ));
+        assert!(matches!(blocks[4].kind, MarkdownKind::Paragraph));
     }
 }

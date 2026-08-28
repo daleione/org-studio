@@ -10,18 +10,20 @@ use super::{
 };
 use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
 
+mod code_block;
 mod document;
 mod home;
 mod markdown_block;
 mod overlays;
 mod styled_text;
+use code_block::{org_code_row_role, render_code_row};
 pub(super) use document::render_document;
 pub(super) use home::{render_home, render_loading};
 pub(super) use markdown_block::parse_document_inline;
 use markdown_block::render_markdown_block;
 use overlays::{dired_help_window, which_key_window};
 pub(super) use styled_text::code_highlight_style;
-use styled_text::{styled_code_runs, styled_inline_runs};
+use styled_text::styled_inline_runs;
 
 impl Render for PreviewApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

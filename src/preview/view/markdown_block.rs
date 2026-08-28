@@ -1,6 +1,6 @@
 use super::{
-    Arc, DocumentFormat, FontWeight, InlineText, PreviewDocument, StyledText, current_theme, div,
-    img, markdown, parse_inline, px, render_table_row, resolve_image_path, rgb, styled_code_runs,
+    Arc, DocumentFormat, FontWeight, InlineText, PreviewDocument, current_theme, div, img,
+    markdown, parse_inline, px, render_code_row, render_table_row, resolve_image_path, rgb,
     styled_inline_runs,
 };
 use gpui::prelude::*;
@@ -93,32 +93,8 @@ pub(super) fn render_markdown_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .child(inline()),
-        MarkdownKind::Code { boundary, .. } => {
-            let content = if *boundary {
-                StyledText::new(text.clone())
-            } else {
-                styled_code_runs(text.clone(), display_runs.code_spans.clone())
-            };
-            div()
-                .min_h(px(row_layout.min_height))
-                .pl(px(row_layout.padding_left))
-                .pr(px(row_layout.padding_right))
-                .pt(px(row_layout.padding_top))
-                .pb(px(row_layout.padding_bottom))
-                .bg(rgb(if *boundary {
-                    theme.code_boundary_background
-                } else {
-                    theme.code_background
-                }))
-                .text_color(rgb(if *boundary {
-                    theme.code_boundary
-                } else {
-                    theme.code_foreground
-                }))
-                .font_family("Menlo")
-                .text_size(px(row_layout.font_size))
-                .line_height(px(row_layout.line_height))
-                .child(content)
+        MarkdownKind::Code { role, .. } => {
+            render_code_row(text, display_runs.code_spans, row_layout, *role)
         }
         MarkdownKind::TableRow => render_table_row(
             &text,

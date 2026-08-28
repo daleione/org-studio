@@ -11,6 +11,7 @@ use crate::theme::current_theme;
 pub(in crate::preview) enum PaintToken {
     BackgroundAlt,
     CodeBackground,
+    CodeBlockAccent,
     Border,
     Attribute,
     Heading(u8),
@@ -22,6 +23,7 @@ impl PaintToken {
         match self {
             Self::BackgroundAlt => theme.background_alt,
             Self::CodeBackground => theme.code_background,
+            Self::CodeBlockAccent => theme.code_block_accent,
             Self::Border => theme.border,
             Self::Attribute => theme.attribute,
             Self::Heading(level) => theme.heading[level.min(3) as usize],
@@ -105,6 +107,10 @@ pub(in crate::preview) fn resolve_visual_row(
                 x: 2.0,
                 width: PrimitiveWidth::Remaining { right_inset: 2.0 },
                 color: PaintToken::CodeBackground,
+            });
+            primitives.push(VisualPrimitive::VerticalLine {
+                x: 2.0,
+                color: PaintToken::CodeBlockAccent,
             });
             VisualContent::Text
         }
