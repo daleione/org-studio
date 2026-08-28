@@ -8,7 +8,7 @@ use super::{
     Window, accept_generation, current_theme, div, img, markdown, minimap, parse_inline, px,
     render_table_row, resolve_image_path, rgb,
 };
-use gpui::{ExternalPaths, prelude::*};
+use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
 
 mod document;
 mod home;
@@ -35,6 +35,7 @@ impl Render for PreviewApp {
             self.viewport_revision_key = Some(viewport_key);
             self.presentation_revision = self.presentation_revision.wrapping_add(1);
             self.cancel_minimap_interaction();
+            self.cancel_sidebar_resize();
         }
         let focus_handle = self
             .focus_handle
@@ -46,7 +47,7 @@ impl Render for PreviewApp {
             .clone();
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
-                if this.cancel_minimap_interaction() {
+                if this.cancel_minimap_interaction() || this.cancel_sidebar_resize() {
                     cx.notify();
                 }
             }));
@@ -123,6 +124,9 @@ impl Render for PreviewApp {
         let which_key_items = self.which_key_items.clone();
         let dired_help_visible = self.dired_help_visible;
         let command_window_width = f32::from(window.viewport_size().width);
+        let resizing_sidebar = self.sidebar_resize.is_some();
+        let resize_entity = entity.clone();
+        let finish_resize_entity = entity.clone();
         div()
             .relative()
             .track_focus(&focus_handle)
@@ -151,6 +155,33 @@ impl Render for PreviewApp {
                 }),
             )
             .child(self.workspace_body(entity, command_window_width))
+            .when(resizing_sidebar, |view| {
+                view.child(
+                    div()
+                        .id("file-sidebar-resize-overlay")
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .left_0()
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .on_mouse_move(move |event, _, cx| {
+                            if event.dragging() {
+                                resize_entity.update(cx, |this, cx| {
+                                    this.update_sidebar_resize(
+                                        f32::from(event.position.x),
+                                        command_window_width,
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                            finish_resize_entity
+                                .update(cx, |this, cx| this.finish_sidebar_resize(cx));
+                        }),
+                )
+            })
             .when(!which_key_items.is_empty(), |view| {
                 view.child(if dired_help_visible {
                     dired_help_window(which_key_items.clone(), command_window_width)

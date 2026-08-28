@@ -78,6 +78,12 @@ pub enum BuiltinCommand {
     DiredInvertMarks,
     DiredFlagDelete,
     DiredExecute,
+    DiredCreateFile,
+    DiredCreateDirectory,
+    DiredRename,
+    DiredCopy,
+    DiredMove,
+    DiredTrash,
     DiredHelp,
 }
 

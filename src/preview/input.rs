@@ -13,14 +13,15 @@ use crate::{
 };
 
 use super::{
-    BEGINNING_COMMAND, DIRED_BACK_COMMAND, DIRED_DELETE_COMMAND, DIRED_EXECUTE_COMMAND,
-    DIRED_FORWARD_COMMAND, DIRED_HELP_COMMAND, DIRED_INVERT_COMMAND, DIRED_MARK_COMMAND,
-    DIRED_NEXT_COMMAND, DIRED_OPEN_COMMAND, DIRED_PREVIOUS_COMMAND, DIRED_UNMARK_ALL_COMMAND,
-    DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
-    OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
-    QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
-    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND,
-    TOGGLE_SIDEBAR_COMMAND,
+    BEGINNING_COMMAND, DIRED_BACK_COMMAND, DIRED_COPY_COMMAND, DIRED_CREATE_DIRECTORY_COMMAND,
+    DIRED_CREATE_FILE_COMMAND, DIRED_DELETE_COMMAND, DIRED_EXECUTE_COMMAND, DIRED_FORWARD_COMMAND,
+    DIRED_HELP_COMMAND, DIRED_INVERT_COMMAND, DIRED_MARK_COMMAND, DIRED_MOVE_COMMAND,
+    DIRED_NEXT_COMMAND, DIRED_OPEN_COMMAND, DIRED_PREVIOUS_COMMAND, DIRED_RENAME_COMMAND,
+    DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND, DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND,
+    END_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, OPEN_DEFAULT_DIRED_COMMAND,
+    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, QUIT_APPLICATION_COMMAND,
+    RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
+    SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
 };
 
 pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
@@ -269,6 +270,46 @@ pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
             })
             .expect("valid built-in file manager command");
     }
+    for (name, title, command) in [
+        (
+            DIRED_CREATE_FILE_COMMAND,
+            "Create File",
+            BuiltinCommand::DiredCreateFile,
+        ),
+        (
+            DIRED_CREATE_DIRECTORY_COMMAND,
+            "Create Directory",
+            BuiltinCommand::DiredCreateDirectory,
+        ),
+        (DIRED_RENAME_COMMAND, "Rename", BuiltinCommand::DiredRename),
+        (DIRED_COPY_COMMAND, "Copy", BuiltinCommand::DiredCopy),
+        (DIRED_MOVE_COMMAND, "Move", BuiltinCommand::DiredMove),
+        (
+            DIRED_TRASH_COMMAND,
+            "Move to Trash",
+            BuiltinCommand::DiredTrash,
+        ),
+    ] {
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                // Filesystem undo is not journaled yet; do not advertise a
+                // transaction that the executor cannot actually reverse.
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::WriteFileSystem,
+                required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+                redaction: RedactionPolicy::RedactArguments,
+            })
+            .expect("valid built-in file operation command");
+    }
     let commands = Arc::new(builder.build());
     let contexts = built_in_contexts();
     let active_context = contexts
@@ -441,6 +482,30 @@ pub(super) fn dired_bindings() -> Vec<BindingSpec<'static>> {
             behavior: BindingBehavior::Command(DIRED_EXECUTE_COMMAND),
         },
         BindingSpec {
+            keys: "S-n",
+            behavior: BindingBehavior::Command(DIRED_CREATE_FILE_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-=",
+            behavior: BindingBehavior::Command(DIRED_CREATE_DIRECTORY_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-r",
+            behavior: BindingBehavior::Command(DIRED_RENAME_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-c",
+            behavior: BindingBehavior::Command(DIRED_COPY_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-m",
+            behavior: BindingBehavior::Command(DIRED_MOVE_COMMAND),
+        },
+        BindingSpec {
+            keys: "S-d",
+            behavior: BindingBehavior::Command(DIRED_TRASH_COMMAND),
+        },
+        BindingSpec {
             keys: "q",
             behavior: BindingBehavior::Command(RETURN_DOCUMENT_COMMAND),
         },
@@ -503,6 +568,12 @@ pub(super) fn display_dired_key(key: &str) -> &str {
         "S-u" => "U",
         "S-h" => "H",
         "S-l" => "L",
+        "S-n" => "N",
+        "S-=" => "+",
+        "S-r" => "R",
+        "S-c" => "C",
+        "S-m" => "M",
+        "S-d" => "D",
         key => key,
     }
 }

@@ -29,7 +29,10 @@ pub use loading::{
 use view::*;
 mod command_window;
 mod coordinates;
+mod file_manager_breadcrumb;
 mod file_manager_host;
+mod file_manager_operations;
+mod file_manager_watch;
 mod fold_transition;
 mod folding;
 mod markdown;
@@ -39,6 +42,7 @@ mod org_line;
 mod overlay;
 mod projection;
 mod rows;
+mod sidebar;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -97,9 +101,18 @@ const DIRED_UNMARK_ALL_COMMAND: &str = "org-studio.dired.unmark-all";
 const DIRED_INVERT_COMMAND: &str = "org-studio.dired.invert-marks";
 const DIRED_DELETE_COMMAND: &str = "org-studio.dired.flag-delete";
 const DIRED_EXECUTE_COMMAND: &str = "org-studio.dired.execute";
+const DIRED_CREATE_FILE_COMMAND: &str = "org-studio.dired.create-file";
+const DIRED_CREATE_DIRECTORY_COMMAND: &str = "org-studio.dired.create-directory";
+const DIRED_RENAME_COMMAND: &str = "org-studio.dired.rename";
+const DIRED_COPY_COMMAND: &str = "org-studio.dired.copy";
+const DIRED_MOVE_COMMAND: &str = "org-studio.dired.move";
+const DIRED_TRASH_COMMAND: &str = "org-studio.dired.trash";
 const DIRED_HELP_COMMAND: &str = "org-studio.dired.help";
 const KEY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
-const MAX_EXACT_SCROLL_LAYOUT_ROWS: usize = 4096;
+// `ListState::measure_all` renders every row during the first layout pass. Keep that useful for
+// genuinely small documents, but never let a file switch turn one UI frame into a full-document
+// layout. Larger documents converge as their visible rows are measured by GPUI's virtual list.
+const MAX_EAGER_LAYOUT_ROWS: usize = 128;
 const LOCAL_FOLD_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 
 actions!(
@@ -119,6 +132,23 @@ actions!(
 enum ContentRoute {
     Document,
     FileManager,
+}
+
+#[derive(Clone)]
+enum DiredStatus {
+    Working(Arc<str>),
+    Success(Arc<str>),
+    Error(Arc<str>),
+}
+
+impl DiredStatus {
+    fn message(&self) -> Arc<str> {
+        match self {
+            Self::Working(message) | Self::Success(message) | Self::Error(message) => {
+                message.clone()
+            }
+        }
+    }
 }
 
 enum PreviewLoadState {
@@ -149,6 +179,11 @@ pub struct PreviewApp {
     load_task: Option<Task<()>>,
     file_watch_task: Option<Task<()>>,
     file_watch_request: u64,
+    file_watch_directory: Option<PathBuf>,
+    file_watch_target: Option<crate::file_watcher::FileWatchTarget>,
+    dired_watch_task: Option<Task<()>>,
+    dired_watch_request: u64,
+    dired_watch_directory: Option<PathBuf>,
     picker_task: Option<Task<()>>,
     list_state: ListState,
     fold_markers: Arc<HashSet<BlockId>>,
@@ -165,6 +200,9 @@ pub struct PreviewApp {
     dired_help_visible: bool,
     content_route: ContentRoute,
     sidebar_visible: bool,
+    sidebar_focused: bool,
+    sidebar_width: u16,
+    sidebar_resize: Option<sidebar::ResizeSession>,
     minimap_visible: bool,
     minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
     minimap_width: Option<u16>,
@@ -179,8 +217,13 @@ pub struct PreviewApp {
     minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
     dired: Option<crate::file_manager::DiredSession>,
-    dired_error: Option<Arc<str>>,
+    dired_status: Option<DiredStatus>,
     dired_task: Option<Task<()>>,
+    dired_scan_transaction: Option<crate::navigation::TransactionId>,
+    dired_refresh_pending: bool,
+    dired_operation_task: Option<Task<()>>,
+    dired_operation_busy: bool,
+    dired_context_menu: Option<file_manager_host::DiredContextMenu>,
     dired_list_state: ListState,
     sidebar_list_state: ListState,
     dired_pending_presentation: Option<(
@@ -214,4 +257,8 @@ fn is_supported_document(path: &std::path::Path) -> bool {
 
 fn accept_generation(current: u64, completed: u64) -> bool {
     current == completed
+}
+
+fn should_eagerly_measure_rows(row_count: usize) -> bool {
+    row_count <= MAX_EAGER_LAYOUT_ROWS
 }

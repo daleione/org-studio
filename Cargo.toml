@@ -13,6 +13,7 @@ notify = "8"
 profiling = { version = "1", features = ["profile-with-tracing"] }
 pulldown-cmark = "0.13"
 ropey = "1.6.1"
+rustix = { version = "1.1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
@@ -27,6 +28,7 @@ tree-sitter-json = "0.24.8"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
 tree-sitter-typescript = "0.23.2"
+trash = { git = "https://github.com/zed-industries/trash-rs", rev = "41c6c800d884a89351f3b8856d12894cccee261d" }
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
 smallvec = "1.15"

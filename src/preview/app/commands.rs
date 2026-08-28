@@ -19,7 +19,9 @@ impl PreviewApp {
             &self.commands,
             name,
             InvocationOrigin::PlatformAction,
-            CapabilitySet::READ_FILE_SYSTEM.union(CapabilitySet::CONFIGURATION),
+            CapabilitySet::READ_FILE_SYSTEM
+                .union(CapabilitySet::WRITE_FILE_SYSTEM)
+                .union(CapabilitySet::CONFIGURATION),
         );
         let Ok(prepared) = prepared else {
             return;
@@ -43,7 +45,7 @@ impl PreviewApp {
             &self.commands,
             command,
             InvocationOrigin::Keyboard,
-            CapabilitySet::READ_FILE_SYSTEM,
+            CapabilitySet::READ_FILE_SYSTEM.union(CapabilitySet::WRITE_FILE_SYSTEM),
             prefix,
         ) else {
             return;
@@ -74,7 +76,7 @@ impl PreviewApp {
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
             CommandImplementation::Builtin(BuiltinCommand::ShowHome) => self.show_home(cx),
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
-                if self.content_route == ContentRoute::FileManager {
+                if self.content_route == ContentRoute::FileManager || self.sidebar_focused {
                     self.reload_file_manager(cx);
                 } else {
                     self.reload(cx);
@@ -150,7 +152,19 @@ impl PreviewApp {
                 self.dired_mark(crate::file_manager::Mark::Delete, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredExecute) => {
-                self.dired_prepare_execute(cx)
+                self.dired_prepare_execute(window, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredCreateFile) => {
+                self.dired_create_file(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredCreateDirectory) => {
+                self.dired_create_directory(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DiredRename) => self.dired_rename(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredCopy) => self.dired_copy(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredMove) => self.dired_move_to(cx),
+            CommandImplementation::Builtin(BuiltinCommand::DiredTrash) => {
+                self.dired_trash(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredHelp) => {
                 self.show_dired_shortcuts(cx)
@@ -164,7 +178,11 @@ impl PreviewApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if event.keystroke.key == "escape" && self.cancel_minimap_interaction() {
+        if event.keystroke.key == "escape"
+            && (self.dired_context_menu.take().is_some()
+                || self.cancel_minimap_interaction()
+                || self.cancel_sidebar_resize())
+        {
             cx.stop_propagation();
             cx.notify();
             return;
@@ -208,14 +226,18 @@ impl PreviewApp {
     }
 
     pub(in crate::preview) fn install_preview_keymap(&mut self) {
-        self.install_route_keymap(false);
+        self.install_route_keymap(false, false);
     }
 
     pub(in crate::preview) fn install_dired_keymap(&mut self) {
-        self.install_route_keymap(true);
+        self.install_route_keymap(true, false);
     }
 
-    pub(in crate::preview) fn install_route_keymap(&mut self, dired: bool) {
+    pub(in crate::preview) fn install_sidebar_keymap(&mut self) {
+        self.install_route_keymap(true, true);
+    }
+
+    pub(in crate::preview) fn install_route_keymap(&mut self, dired: bool, sidebar: bool) {
         let contexts = built_in_contexts();
         let generation = self.keyboard.generation().wrapping_add(1);
         let bindings = if dired {
@@ -224,18 +246,23 @@ impl PreviewApp {
             preview_bindings()
         };
         let route_context = if dired { "dired" } else { "preview" };
+        let active_contexts = if sidebar {
+            vec!["workspace", "dired", "sidebar"]
+        } else {
+            vec!["workspace", route_context]
+        };
         let Ok(configuration) = compile_input_profile(
             generation,
             &bindings,
             &self.commands,
             &contexts,
-            &["workspace", route_context],
+            &active_contexts,
             &["prompt"],
         ) else {
             return;
         };
         self.key_context = contexts
-            .set(["workspace", route_context])
+            .set(active_contexts)
             .expect("registered route contexts");
         self.keyboard.replace_configuration(configuration);
     }

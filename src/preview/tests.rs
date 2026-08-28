@@ -1,6 +1,6 @@
 use super::{
-    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, accept_generation, dired_command_items,
-    preview_input,
+    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, MAX_EAGER_LAYOUT_ROWS, accept_generation,
+    dired_command_items, preview_input, should_eagerly_measure_rows,
 };
 
 use crate::{input::EmacsOutcome, keymap::KeyStroke};
@@ -22,6 +22,12 @@ fn visible_source_lines(app: &super::PreviewApp, document: &super::PreviewDocume
             ) + 1
         })
         .collect()
+}
+
+#[test]
+fn eager_layout_is_limited_to_small_documents() {
+    assert!(should_eagerly_measure_rows(MAX_EAGER_LAYOUT_ROWS));
+    assert!(!should_eagerly_measure_rows(MAX_EAGER_LAYOUT_ROWS + 1));
 }
 
 fn simulate_next_frame<V: gpui::Render + 'static>(
@@ -90,6 +96,17 @@ fn shift_tab_dispatches_the_global_visibility_cycle() {
             prefix: crate::command::PrefixArgument::None,
         }
     );
+}
+
+#[test]
+fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
+    let mut app = super::PreviewApp::new();
+    app.install_sidebar_keymap();
+    let contexts = super::built_in_contexts();
+    assert!(app.key_context.contains(contexts.key("workspace").unwrap()));
+    assert!(app.key_context.contains(contexts.key("sidebar").unwrap()));
+    assert!(app.key_context.contains(contexts.key("dired").unwrap()));
+    assert!(!app.key_context.contains(contexts.key("preview").unwrap()));
 }
 
 #[test]
@@ -727,7 +744,7 @@ fn dired_help_lists_every_command_and_groups_alias_keys() {
         .map(|(keys, title)| (keys.as_ref(), title.as_ref()))
         .collect::<Vec<_>>();
 
-    assert_eq!(items.len(), 19);
+    assert_eq!(items.len(), 25);
     assert!(labels.contains(&("n / j", "Next Line")));
     assert!(labels.contains(&("p / k", "Previous Line")));
     assert!(labels.contains(&("^ / h", "Up Directory")));
@@ -739,6 +756,12 @@ fn dired_help_lists_every_command_and_groups_alias_keys() {
     assert!(labels.contains(&("C-x C-b", "Home")));
     assert!(labels.contains(&("C-x C-d", "Toggle Sidebar")));
     assert!(labels.contains(&("?", "Dired Help")));
+    assert!(labels.contains(&("N", "Create File")));
+    assert!(labels.contains(&("+", "Create Directory")));
+    assert!(labels.contains(&("R", "Rename")));
+    assert!(labels.contains(&("C", "Copy")));
+    assert!(labels.contains(&("M", "Move")));
+    assert!(labels.contains(&("D", "Move to Trash")));
     assert!(labels.contains(&("C-g", "Close command list")));
 }
 

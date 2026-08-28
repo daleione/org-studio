@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     ffi::OsString,
     path::{Path, PathBuf},
     sync::Arc,
@@ -12,7 +12,7 @@ use crate::navigation::{
     ViewSnapshot, ViewportAnchor, ViewportIntent,
 };
 
-use super::{EntryId, EntryKind, FileEntry, FileResourceId, Mark, ScanResult};
+use super::{EntryId, EntryKind, FileEntry, FileResourceId, Mark, OperationPlan, ScanResult};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SortDirection {
@@ -52,11 +52,6 @@ pub type FileAnchor = ItemAnchor<FileResourceId, FileFallback>;
 pub type DiredViewSnapshot = ViewSnapshot<FileAnchor, PresentationSignature>;
 
 #[derive(Clone, Debug)]
-pub struct OperationPlan {
-    pub delete: Arc<[Arc<Path>]>,
-}
-
-#[derive(Clone, Debug)]
 pub struct NavigationLoad {
     pub transaction_id: TransactionId,
     pub cancellation: CancellationToken,
@@ -77,7 +72,14 @@ pub struct NavigationCommit {
 #[derive(Clone, Debug)]
 struct MarkedOperation {
     path: Arc<Path>,
+    resource_id: Option<FileResourceId>,
     mark: Mark,
+}
+
+#[derive(Default)]
+struct OperationPresentation {
+    visible_marks: Arc<HashMap<EntryId, Mark>>,
+    sorted_targets: Arc<[Arc<Path>]>,
 }
 
 pub struct DiredSession {
@@ -93,6 +95,7 @@ pub struct DiredSession {
     location_memory: LocationMemory<PathBuf, DiredViewSnapshot>,
     history: HistoryTimeline<PathBuf, DiredViewSnapshot>,
     operations: HashMap<EntryId, MarkedOperation>,
+    operation_presentation: OperationPresentation,
 }
 
 impl DiredSession {
@@ -115,6 +118,7 @@ impl DiredSession {
             location_memory: LocationMemory::new(512),
             history: HistoryTimeline::default(),
             operations: HashMap::new(),
+            operation_presentation: OperationPresentation::default(),
         }
     }
 
@@ -140,11 +144,8 @@ impl DiredSession {
     pub fn mark(&self, id: EntryId) -> Option<Mark> {
         self.operations.get(&id).map(|operation| operation.mark)
     }
-    pub fn visible_marks(&self) -> HashMap<EntryId, Mark> {
-        self.entries()
-            .iter()
-            .filter_map(|entry| self.mark(entry.id).map(|mark| (entry.id, mark)))
-            .collect()
+    pub fn visible_marks(&self) -> Arc<HashMap<EntryId, Mark>> {
+        self.operation_presentation.visible_marks.clone()
     }
 
     pub fn selected(&self) -> Option<&FileEntry> {
@@ -245,6 +246,7 @@ impl DiredSession {
         {
             return None;
         }
+        self.reconcile_operations(&result.directory, &result.entries);
         sort_entries(&mut result.entries, self.sort);
         if !self.show_hidden {
             result.entries.retain(|entry| !entry.metadata.hidden);
@@ -258,6 +260,7 @@ impl DiredSession {
         .ok()?;
         self.snapshot = Arc::new(snapshot);
         self.directory = load.intent.target.clone();
+        self.rebuild_operation_presentation();
 
         let remembered_view = load
             .history_snapshot
@@ -443,24 +446,31 @@ impl DiredSession {
 
     pub fn mark_selected(&mut self, mark: Mark) {
         if let Some(entry) = self.selected().cloned() {
+            if matches!(entry.kind, EntryKind::Parent) {
+                return;
+            }
             self.operations.insert(
                 entry.id,
                 MarkedOperation {
                     path: entry.path,
+                    resource_id: entry.resource_id,
                     mark,
                 },
             );
+            self.rebuild_operation_presentation();
             self.move_cursor(1);
         }
     }
     pub fn unmark_selected(&mut self) {
         if let Some(id) = self.cursor {
             self.operations.remove(&id);
+            self.rebuild_operation_presentation();
             self.move_cursor(1);
         }
     }
     pub fn unmark_all(&mut self) {
         self.operations.clear();
+        self.rebuild_operation_presentation();
     }
     pub fn invert_marks(&mut self) {
         let entries = self.entries().clone();
@@ -473,22 +483,104 @@ impl DiredSession {
                     entry.id,
                     MarkedOperation {
                         path: entry.path.clone(),
+                        resource_id: entry.resource_id,
                         mark: Mark::Selected,
                     },
                 );
             }
         }
+        self.rebuild_operation_presentation();
     }
     pub fn deletion_plan(&self) -> OperationPlan {
-        OperationPlan {
-            delete: self
-                .operations
+        OperationPlan::trash(
+            self.operations
                 .values()
                 .filter(|operation| operation.mark == Mark::Delete)
                 .map(|operation| operation.path.clone())
                 .collect::<Vec<_>>()
                 .into(),
+        )
+    }
+
+    pub fn operation_targets(&self) -> Arc<[Arc<Path>]> {
+        if self.operations.is_empty() {
+            return self
+                .selected()
+                .filter(|entry| !matches!(entry.kind, EntryKind::Parent))
+                .map(|entry| vec![entry.path.clone()].into())
+                .unwrap_or_else(|| Arc::from([]));
         }
+        self.operation_presentation.sorted_targets.clone()
+    }
+
+    pub fn clear_completed_operations(
+        &mut self,
+        paths: &[Arc<Path>],
+        destinations: &[(Arc<Path>, Arc<Path>)],
+    ) {
+        let completed = paths
+            .iter()
+            .map(Arc::as_ref)
+            .chain(
+                destinations
+                    .iter()
+                    .map(|(_, destination)| destination.as_ref()),
+            )
+            .collect::<HashSet<_>>();
+        self.operations
+            .retain(|_, operation| !completed.contains(operation.path.as_ref()));
+        self.rebuild_operation_presentation();
+    }
+
+    fn reconcile_operations(&mut self, directory: &Path, entries: &[FileEntry]) {
+        let by_resource = entries
+            .iter()
+            .filter_map(|entry| entry.resource_id.map(|resource| (resource, entry)))
+            .collect::<HashMap<_, _>>();
+        let by_path = entries
+            .iter()
+            .map(|entry| (entry.path.as_ref(), entry))
+            .collect::<HashMap<_, _>>();
+        let old_operations = std::mem::take(&mut self.operations);
+        for (old_id, operation) in old_operations {
+            if operation.path.parent() != Some(directory) {
+                self.operations.insert(old_id, operation);
+                continue;
+            }
+            let entry = operation
+                .resource_id
+                .and_then(|resource| by_resource.get(&resource).copied())
+                .or_else(|| by_path.get(operation.path.as_ref()).copied());
+            if let Some(entry) = entry {
+                self.operations.insert(
+                    entry.id,
+                    MarkedOperation {
+                        path: entry.path.clone(),
+                        resource_id: entry.resource_id,
+                        mark: operation.mark,
+                    },
+                );
+            }
+        }
+    }
+
+    fn rebuild_operation_presentation(&mut self) {
+        let visible_marks = self
+            .operations
+            .iter()
+            .filter(|(id, _)| self.snapshot.rank_of(id).is_some())
+            .map(|(id, operation)| (*id, operation.mark))
+            .collect();
+        let mut sorted_targets = self
+            .operations
+            .values()
+            .map(|operation| operation.path.clone())
+            .collect::<Vec<_>>();
+        sorted_targets.sort();
+        self.operation_presentation = OperationPresentation {
+            visible_marks: Arc::new(visible_marks),
+            sorted_targets: sorted_targets.into(),
+        };
     }
 }
 
@@ -668,8 +760,10 @@ mod tests {
             SelectionIntent::FirstSelectable,
         );
         assert_eq!(
-            session.deletion_plan().delete.as_ref(),
-            &[Arc::<Path>::from(first)]
+            session.deletion_plan(),
+            OperationPlan::Trash {
+                sources: vec![Arc::<Path>::from(first)].into()
+            }
         );
     }
 
@@ -790,6 +884,7 @@ mod tests {
             NavigationCause::Enter,
             SelectionIntent::FirstSelectable,
         );
+        session.mark_selected(Mark::Delete);
 
         let mut renamed_entry = entry(2, &new_path, EntryKind::OrgFile);
         renamed_entry.resource_id = Some(FileResourceId(42));
@@ -808,5 +903,102 @@ mod tests {
             )
             .unwrap();
         assert_eq!(session.cursor(), Some(EntryId(2)));
+        assert_eq!(session.mark(EntryId(2)), Some(Mark::Delete));
+        assert_eq!(
+            session.deletion_plan(),
+            OperationPlan::Trash {
+                sources: vec![Arc::<Path>::from(new_path)].into()
+            }
+        );
+    }
+
+    #[test]
+    fn operation_completion_clears_a_mark_reconciled_to_its_destination() {
+        let directory = PathBuf::from("/tmp/test");
+        let old_path = directory.join("old.org");
+        let new_path = directory.join("new.org");
+        let mut old_entry = entry(1, &old_path, EntryKind::OrgFile);
+        old_entry.resource_id = Some(FileResourceId(42));
+        let mut session = DiredSession::empty(directory.clone());
+        navigate(
+            &mut session,
+            &directory,
+            vec![old_entry],
+            NavigationCause::Enter,
+            SelectionIntent::FirstSelectable,
+        );
+        session.mark_selected(Mark::Selected);
+
+        let mut renamed_entry = entry(2, &new_path, EntryKind::OrgFile);
+        renamed_entry.resource_id = Some(FileResourceId(42));
+        navigate(
+            &mut session,
+            &directory,
+            vec![renamed_entry],
+            NavigationCause::FileSystemDelta,
+            SelectionIntent::Preserve,
+        );
+        session.clear_completed_operations(
+            &[Arc::from(old_path.as_path())],
+            &[(Arc::from(old_path.as_path()), Arc::from(new_path.as_path()))],
+        );
+
+        assert_eq!(session.marked_count(), 0);
+        assert!(session.visible_marks().is_empty());
+    }
+
+    #[test]
+    fn refresh_drops_marks_for_files_that_disappeared_from_the_current_directory() {
+        let directory = PathBuf::from("/tmp/test");
+        let removed = directory.join("removed.org");
+        let mut session = DiredSession::empty(directory.clone());
+        navigate(
+            &mut session,
+            &directory,
+            vec![entry(1, &removed, EntryKind::OrgFile)],
+            NavigationCause::Enter,
+            SelectionIntent::FirstSelectable,
+        );
+        session.mark_selected(Mark::Delete);
+        navigate(
+            &mut session,
+            &directory,
+            Vec::new(),
+            NavigationCause::FileSystemDelta,
+            SelectionIntent::Preserve,
+        );
+        assert_eq!(session.marked_count(), 0);
+        assert_eq!(session.deletion_plan().item_count(), 0);
+    }
+
+    #[test]
+    fn operation_targets_use_marks_or_fall_back_to_the_cursor() {
+        let directory = PathBuf::from("/tmp/test");
+        let first = directory.join("a.org");
+        let second = directory.join("b.org");
+        let mut session = DiredSession::empty(directory.clone());
+        navigate(
+            &mut session,
+            &directory,
+            vec![
+                entry(1, &first, EntryKind::OrgFile),
+                entry(2, &second, EntryKind::OrgFile),
+            ],
+            NavigationCause::Enter,
+            SelectionIntent::FirstSelectable,
+        );
+
+        assert_eq!(
+            session.operation_targets().as_ref(),
+            &[first.clone().into()]
+        );
+        session.mark_selected(Mark::Selected);
+        assert_eq!(session.operation_targets().as_ref(), &[first.into()]);
+        let marks = session.visible_marks();
+        assert!(Arc::ptr_eq(&marks, &session.visible_marks()));
+        let targets = session.operation_targets();
+        assert!(Arc::ptr_eq(&targets, &session.operation_targets()));
+        session.unmark_all();
+        assert_eq!(session.operation_targets().as_ref(), &[second.into()]);
     }
 }

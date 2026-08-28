@@ -3,13 +3,13 @@ use super::{
     CommandKey, ContentRoute, Context, DocumentFormat, Duration, EmacsOutcome, FoldMeasurement,
     FoldTransitionInput, FoldTransitionPlan, HashMap, HashSet, InitialDocumentLoad, Instant,
     InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke,
-    LOCAL_FOLD_ANIMATION_DURATION, ListAlignment, ListState, LocalCycleProjection,
-    MAX_EXACT_SCROLL_LAYOUT_ROWS, PathBuf, PathPromptOptions, PrefixArgument, PreviewApp,
-    PreviewDocument, PreviewLoadState, Window, accept_generation, built_in_contexts, changed_range,
-    command_count, compile_input_profile, configured_minimap_visible, current_theme,
-    cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, dired_bindings,
-    global_markdown_visibility, global_org_visibility, load_document, minimap, preview_bindings,
-    preview_input, px, render_document, render_home, render_loading,
+    LOCAL_FOLD_ANIMATION_DURATION, ListAlignment, ListState, LocalCycleProjection, PathBuf,
+    PathPromptOptions, PrefixArgument, PreviewApp, PreviewDocument, PreviewLoadState, Window,
+    accept_generation, built_in_contexts, changed_range, command_count, compile_input_profile,
+    configured_minimap_visible, current_theme, cycle_markdown_subtree_visibility,
+    cycle_org_subtree_visibility, dired_bindings, global_markdown_visibility,
+    global_org_visibility, load_document, minimap, preview_bindings, preview_input, px,
+    render_document, render_home, render_loading, should_eagerly_measure_rows,
 };
 use gpui::{div, prelude::*, rgb};
 
@@ -53,6 +53,11 @@ impl PreviewApp {
             load_task: None,
             file_watch_task: None,
             file_watch_request: 0,
+            file_watch_directory: None,
+            file_watch_target: None,
+            dired_watch_task: None,
+            dired_watch_request: 0,
+            dired_watch_directory: None,
             picker_task: None,
             list_state: ListState::new(0, ListAlignment::Top, px(list_overdraw)),
             fold_markers: Arc::new(HashSet::new()),
@@ -86,6 +91,9 @@ impl PreviewApp {
             dired_help_visible: false,
             content_route: ContentRoute::Document,
             sidebar_visible: false,
+            sidebar_focused: false,
+            sidebar_width: crate::settings::initial_sidebar_width(preview_settings.sidebar_width),
+            sidebar_resize: None,
             minimap_visible,
             minimap_thumb_visibility: crate::settings::initial_minimap_thumb_visibility(
                 preview_settings.minimap_thumb_visibility,
@@ -102,8 +110,13 @@ impl PreviewApp {
             minimap_pending_seek: None,
             minimap_seek_scheduled: false,
             dired: None,
-            dired_error: None,
+            dired_status: None,
             dired_task: None,
+            dired_scan_transaction: None,
+            dired_refresh_pending: false,
+            dired_operation_task: None,
+            dired_operation_busy: false,
+            dired_context_menu: None,
             dired_list_state: ListState::new(0, ListAlignment::Top, px(80.0)),
             sidebar_list_state: ListState::new(0, ListAlignment::Top, px(60.0)),
             dired_pending_presentation: None,
@@ -119,6 +132,7 @@ impl PreviewApp {
             minimap_enabled: self.minimap_visible,
             minimap_thumb_visibility: self.minimap_thumb_visibility,
             minimap_width: self.minimap_width,
+            sidebar_width: self.sidebar_width,
         }
         .save_async();
     }
@@ -484,7 +498,10 @@ impl PreviewApp {
         let viewport = window.viewport_size();
         let viewport_width = f32::from(viewport.width);
         let editor_width = if self.sidebar_visible {
-            (viewport_width - 237.0).max(120.0)
+            (viewport_width
+                - self.rendered_sidebar_width(viewport_width)
+                - super::sidebar::RESIZE_HANDLE_PX)
+                .max(super::sidebar::MIN_DOCUMENT_WIDTH_PX)
         } else {
             viewport_width
         };
@@ -546,7 +563,7 @@ impl PreviewApp {
     fn apply_visible_rows(&mut self, new_visible: Arc<Vec<usize>>) {
         let (old_range, new_count) = changed_range(&self.visible_rows, &new_visible);
         self.list_state.splice(old_range, new_count);
-        if new_visible.len() <= MAX_EXACT_SCROLL_LAYOUT_ROWS {
+        if should_eagerly_measure_rows(new_visible.len()) {
             self.list_state.clone().measure_all();
         }
         self.visible_rows = new_visible;

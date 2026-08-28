@@ -13,6 +13,9 @@ pub struct PreviewSettings {
     /// `None` follows the adaptive width; `Some` is the user's preferred
     /// logical-pixel width before the current window's safety clamp.
     pub minimap_width: Option<u16>,
+    /// Preferred Sidebar width. Rendering applies the current window clamp
+    /// without overwriting this value.
+    pub sidebar_width: u16,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,6 +30,7 @@ impl Default for PreviewSettings {
             minimap_enabled: true,
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
             minimap_width: None,
+            sidebar_width: 240,
         }
     }
 }
@@ -79,6 +83,7 @@ impl PreviewSettings {
         let mut minimap_enabled = None;
         let mut minimap_thumb_visibility = None;
         let mut minimap_width = None;
+        let mut sidebar_width = None;
         for line in source.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -103,6 +108,13 @@ impl PreviewSettings {
                             .map(Some),
                     }
                 }
+                "sidebar_width" => {
+                    sidebar_width = value
+                        .trim()
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|width| (180..=420).contains(width));
+                }
                 _ => {}
             }
         }
@@ -111,12 +123,13 @@ impl PreviewSettings {
             minimap_thumb_visibility: minimap_thumb_visibility
                 .unwrap_or(MinimapThumbVisibility::Always),
             minimap_width: minimap_width.unwrap_or(None),
+            sidebar_width: sidebar_width.unwrap_or(240),
         })
     }
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\n",
+            "version={SETTINGS_VERSION}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\n",
             self.minimap_enabled,
             match self.minimap_thumb_visibility {
                 MinimapThumbVisibility::Always => "always",
@@ -125,6 +138,7 @@ impl PreviewSettings {
             self.minimap_width
                 .map(|width| width.to_string())
                 .unwrap_or_else(|| "auto".to_owned()),
+            self.sidebar_width,
         )
     }
 }
@@ -167,6 +181,14 @@ pub fn initial_minimap_width(fallback: Option<u16>) -> Option<u16> {
         .unwrap_or(fallback)
 }
 
+pub fn initial_sidebar_width(fallback: u16) -> u16 {
+    std::env::var("ORG_STUDIO_SIDEBAR_WIDTH")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|width| (180..=420).contains(width))
+        .unwrap_or(fallback)
+}
+
 fn settings_path() -> Option<PathBuf> {
     application_support_dir().map(|path| path.join("settings.conf"))
 }
@@ -205,6 +227,7 @@ mod tests {
             minimap_enabled: false,
             minimap_thumb_visibility: MinimapThumbVisibility::Hover,
             minimap_width: Some(176),
+            sidebar_width: 312,
         };
         assert_eq!(
             PreviewSettings::parse(&settings.serialize()),
@@ -240,6 +263,18 @@ mod tests {
                 .expect("invalid width falls back")
                 .minimap_width,
             None
+        );
+        assert_eq!(
+            PreviewSettings::parse("version=1\nsidebar_width=320\n")
+                .expect("manual sidebar width settings")
+                .sidebar_width,
+            320
+        );
+        assert_eq!(
+            PreviewSettings::parse("version=1\nsidebar_width=999\n")
+                .expect("invalid sidebar width falls back")
+                .sidebar_width,
+            240
         );
     }
 }
