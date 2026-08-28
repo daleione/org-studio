@@ -93,12 +93,13 @@ pub(in crate::preview) fn render_document(
                             .expect("preview display map must exist after loading");
                         let is_heading = display_map.is_heading(actual_index);
                         let is_table_row = display_map.is_table(actual_index);
-                        let is_collapsing_heading = fold_animation
-                            .as_ref()
-                            .is_some_and(|animation| animation.heading == row.block_id);
+                        let is_suppressed_marker =
+                            fold_animation.as_ref().is_some_and(|animation| {
+                                animation.suppressed_markers.contains(&row.block_id)
+                            });
                         let is_folded = is_heading
                             && fold_markers.contains(&row.block_id)
-                            && !is_collapsing_heading;
+                            && !is_suppressed_marker;
                         let document_for_click = document.clone();
                         let entity_for_click = entity.clone();
                         let row_element = render_preview_row(

@@ -131,17 +131,15 @@ impl Render for PreviewApp {
             .text_color(rgb(current_theme().foreground))
             .font_family("Menlo")
             .text_size(px(14.0))
-            .on_key_down(cx.listener(|this, event, _, cx| this.key_down(event, cx)))
-            .on_action(cx.listener(|this, _: &OpenDocument, _, cx| {
-                this.dispatch_command(OPEN_DOCUMENT_COMMAND, cx)
+            .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
+            .on_action(cx.listener(|this, _: &OpenDocument, window, cx| {
+                this.dispatch_command(OPEN_DOCUMENT_COMMAND, window, cx)
             }))
-            .on_action(
-                cx.listener(|this, _: &ShowHome, _, cx| {
-                    this.dispatch_command(SHOW_HOME_COMMAND, cx)
-                }),
-            )
-            .on_action(cx.listener(|this, _: &ReloadDocument, _, cx| {
-                this.dispatch_command(RELOAD_DOCUMENT_COMMAND, cx)
+            .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
+                this.dispatch_command(SHOW_HOME_COMMAND, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ReloadDocument, window, cx| {
+                this.dispatch_command(RELOAD_DOCUMENT_COMMAND, window, cx)
             }))
             .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))

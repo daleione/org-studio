@@ -4,12 +4,17 @@ use std::{sync::Arc, time::Duration};
 use super::{
     BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
     ContentRoute, Context, EmacsOutcome, InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent,
-    KeyStroke, PrefixArgument, PreviewApp, built_in_contexts, command_count, compile_input_profile,
-    dired_bindings, preview_bindings,
+    KeyStroke, PrefixArgument, PreviewApp, Window, built_in_contexts, command_count,
+    compile_input_profile, dired_bindings, preview_bindings,
 };
 
 impl PreviewApp {
-    pub(in crate::preview) fn dispatch_command(&mut self, name: &str, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dispatch_command(
+        &mut self,
+        name: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let prepared = CommandDispatcher::prepare(
             &self.commands,
             name,
@@ -19,13 +24,19 @@ impl PreviewApp {
         let Ok(prepared) = prepared else {
             return;
         };
-        self.execute_command(prepared.implementation, prepared.invocation.prefix, cx);
+        self.execute_command(
+            prepared.implementation,
+            prepared.invocation.prefix,
+            window,
+            cx,
+        );
     }
 
     pub(in crate::preview) fn dispatch_command_key(
         &mut self,
         command: CommandKey,
         prefix: PrefixArgument,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Ok(prepared) = CommandDispatcher::prepare_key(
@@ -37,13 +48,19 @@ impl PreviewApp {
         ) else {
             return;
         };
-        self.execute_command(prepared.implementation, prepared.invocation.prefix, cx);
+        self.execute_command(
+            prepared.implementation,
+            prepared.invocation.prefix,
+            window,
+            cx,
+        );
     }
 
     pub(in crate::preview) fn execute_command(
         &mut self,
         implementation: CommandImplementation,
         prefix: PrefixArgument,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         if !matches!(
@@ -100,7 +117,7 @@ impl PreviewApp {
                 self.toggle_minimap(cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle) => {
-                self.cycle_global_visibility();
+                self.cycle_global_visibility_animated(window, cx);
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredNext) => {
@@ -141,7 +158,12 @@ impl PreviewApp {
         }
     }
 
-    pub(in crate::preview) fn key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if event.keystroke.key == "escape" && self.cancel_minimap_interaction() {
             cx.stop_propagation();
             cx.notify();
@@ -175,7 +197,7 @@ impl PreviewApp {
         match outcome {
             EmacsOutcome::Command { command, prefix } => {
                 cx.stop_propagation();
-                self.dispatch_command_key(command, prefix, cx);
+                self.dispatch_command_key(command, prefix, window, cx);
             }
             EmacsOutcome::Pending | EmacsOutcome::Disabled | EmacsOutcome::Cancelled => {
                 cx.stop_propagation();

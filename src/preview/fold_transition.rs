@@ -1,4 +1,4 @@
-use std::{ops::Range, sync::Arc, time::Instant};
+use std::{collections::HashSet, ops::Range, sync::Arc, time::Instant};
 
 use crate::org_syntax::BlockId;
 use gpui::{ListState, Window};
@@ -43,7 +43,7 @@ pub(super) struct FoldSegment {
 #[derive(Clone)]
 pub(super) struct FoldTransition {
     pub(super) revision: u64,
-    pub(super) heading: BlockId,
+    pub(super) suppressed_markers: Arc<HashSet<BlockId>>,
     pub(super) direction: FoldDirection,
     pub(super) segments: Arc<[FoldSegment]>,
     pub(super) initial_edits: Arc<[FoldListEdit]>,
@@ -78,7 +78,7 @@ pub(super) struct FoldTransitionPlan {
 impl FoldTransition {
     pub(super) fn new(
         revision: u64,
-        heading: BlockId,
+        suppressed_markers: HashSet<BlockId>,
         direction: FoldDirection,
         segments: Vec<FoldSegment>,
         initial_edits: Vec<FoldListEdit>,
@@ -96,7 +96,7 @@ impl FoldTransition {
         }));
         Self {
             revision,
-            heading,
+            suppressed_markers: Arc::new(suppressed_markers),
             direction,
             segments: segments.into(),
             initial_edits: initial_edits.into(),
@@ -158,10 +158,14 @@ impl FoldTransitionPlan {
         }
     }
 
-    pub(super) fn into_transition(self, revision: u64, heading: BlockId) -> FoldTransition {
+    pub(super) fn into_transition(
+        self,
+        revision: u64,
+        suppressed_markers: HashSet<BlockId>,
+    ) -> FoldTransition {
         FoldTransition::new(
             revision,
-            heading,
+            suppressed_markers,
             self.direction,
             self.segments,
             self.initial_edits,
@@ -170,40 +174,56 @@ impl FoldTransitionPlan {
     }
 
     fn collapse(disappearing: &[usize], input: FoldTransitionInput<'_>) -> Option<Self> {
-        let first_position = input
-            .current_rows
-            .binary_search(disappearing.first()?)
-            .ok()?;
-        let last_position = input
-            .current_rows
-            .binary_search(disappearing.last()?)
-            .ok()?;
-        if last_position + 1 - first_position != disappearing.len() {
-            return None;
+        let source_segments = contiguous_segments(disappearing, input.current_rows)?;
+        let mut transition_segments = Vec::new();
+        let mut initial_edits = Vec::with_capacity(source_segments.len());
+        let mut disappeared_before = 0usize;
+        for (current_start, rows) in source_segments {
+            let target_start = current_start.checked_sub(disappeared_before)?;
+            let boundary = item_boundary(input.list_state, current_start);
+            let is_near_viewport = match (boundary, input.measurement) {
+                (Some(top), _) => top < input.viewport_height,
+                (None, FoldMeasurement::Estimated) => true,
+                (None, FoldMeasurement::Rendered(_)) => false,
+            };
+            let mut replacement_count = 0usize;
+            if is_near_viewport {
+                let (rendered_rows, distance) = collapse_geometry(
+                    &rows,
+                    current_start,
+                    input.document,
+                    input.list_state,
+                    input.viewport_height,
+                );
+                if distance > f32::EPSILON {
+                    let transition_index = target_start + transition_segments.len();
+                    transition_segments.push(FoldSegment {
+                        target_start,
+                        transition_index,
+                        target_len: 0,
+                        rendered_rows: rendered_rows.into(),
+                        distance,
+                    });
+                    replacement_count = 1;
+                }
+            }
+            initial_edits.push(FoldListEdit::replace(
+                current_start..current_start + rows.len(),
+                replacement_count,
+            ));
+            disappeared_before += rows.len();
         }
-        let (rendered_rows, distance) = collapse_geometry(
-            disappearing,
-            first_position,
-            input.document,
-            input.list_state,
-            input.viewport_height,
-        );
-        (distance > f32::EPSILON).then(|| Self {
+        initial_edits.reverse();
+        (!transition_segments.is_empty()).then_some(Self {
             direction: FoldDirection::Collapse,
-            segments: vec![FoldSegment {
-                target_start: first_position,
-                transition_index: first_position,
-                target_len: 0,
-                rendered_rows: rendered_rows.into(),
-                distance,
-            }],
-            initial_edits: vec![FoldListEdit::replace(first_position..last_position + 1, 1)],
+            segments: transition_segments,
+            initial_edits,
             target_item_count: input.target_rows.len(),
         })
     }
 
     fn expand(appearing: &[usize], input: FoldTransitionInput<'_>) -> Option<Self> {
-        let segments = contiguous_target_segments(appearing, input.target_rows)?;
+        let segments = contiguous_segments(appearing, input.target_rows)?;
         let mut transition_segments = Vec::new();
         let mut initial_edits = Vec::new();
         let mut appeared_before = 0usize;
@@ -260,13 +280,10 @@ fn difference(left: &[usize], right: &[usize]) -> Vec<usize> {
         .collect()
 }
 
-fn contiguous_target_segments(
-    appearing: &[usize],
-    target_rows: &[usize],
-) -> Option<Vec<(usize, Vec<usize>)>> {
+fn contiguous_segments(changed: &[usize], rows: &[usize]) -> Option<Vec<(usize, Vec<usize>)>> {
     let mut segments: Vec<(usize, Vec<usize>)> = Vec::new();
-    for row in appearing.iter().copied() {
-        let target_index = target_rows.binary_search(&row).ok()?;
+    for row in changed.iter().copied() {
+        let target_index = rows.binary_search(&row).ok()?;
         if let Some((start, rows)) = segments.last_mut()
             && *start + rows.len() == target_index
         {
@@ -391,10 +408,9 @@ fn estimated_row_height(document: &PreviewDocument, row: usize) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{
-        FoldDirection, FoldListEdit, FoldSegment, FoldTransition, contiguous_target_segments,
-        difference,
+        FoldDirection, FoldListEdit, FoldSegment, FoldTransition, contiguous_segments, difference,
     };
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
     fn segment(target_start: usize, transition_index: usize, target_len: usize) -> FoldSegment {
         FoldSegment {
@@ -410,7 +426,7 @@ mod tests {
     fn segmented_transition_owns_every_projection_mapping() {
         let transition = FoldTransition::new(
             1,
-            0,
+            HashSet::new(),
             FoldDirection::Expand,
             vec![segment(1, 1, 2), segment(4, 3, 2)],
             vec![FoldListEdit::insert(1, 1), FoldListEdit::insert(3, 1)],
@@ -435,7 +451,7 @@ mod tests {
         assert_eq!(difference(&[1, 2, 3, 5, 8], &[1, 5]), vec![2, 3, 8]);
         assert_eq!(difference(&[1, 5], &[1, 2, 3, 5, 8]), Vec::<usize>::new());
         assert_eq!(
-            contiguous_target_segments(&[2, 3, 8], &[1, 2, 3, 5, 8]),
+            contiguous_segments(&[2, 3, 8], &[1, 2, 3, 5, 8]),
             Some(vec![(1, vec![2, 3]), (4, vec![8])])
         );
     }

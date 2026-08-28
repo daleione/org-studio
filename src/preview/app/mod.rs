@@ -18,6 +18,13 @@ mod commands;
 mod document_lifecycle;
 pub(super) use benchmark::ScrollBenchmark;
 
+struct GlobalVisibilityProjection {
+    document: Arc<PreviewDocument>,
+    visibility: super::GlobalVisibility,
+    visible_rows: Vec<usize>,
+    fold_markers: HashSet<BlockId>,
+}
+
 impl Default for PreviewApp {
     fn default() -> Self {
         Self::new()
@@ -274,9 +281,30 @@ impl PreviewApp {
         if projection.visibility == super::LocalVisibility::Empty {
             return;
         }
+        self.apply_fold_projection_animated(
+            projection.visible_rows,
+            projection.fold_markers,
+            document,
+            viewport_height,
+            available_width,
+            window,
+            cx,
+        );
+    }
 
+    #[allow(clippy::too_many_arguments)]
+    fn apply_fold_projection_animated(
+        &mut self,
+        visible_rows: Vec<usize>,
+        fold_markers: HashSet<BlockId>,
+        document: &PreviewDocument,
+        viewport_height: f32,
+        available_width: f32,
+        window: Option<&mut Window>,
+        cx: &mut Context<Self>,
+    ) {
         if cx.reduce_motion() {
-            self.apply_local_fold_projection(projection);
+            self.apply_fold_projection(visible_rows, fold_markers);
             return;
         }
         let measurement = window
@@ -284,25 +312,29 @@ impl PreviewApp {
             .map_or(FoldMeasurement::Estimated, FoldMeasurement::Rendered);
         let Some(plan) = FoldTransitionPlan::build(FoldTransitionInput {
             current_rows: &self.visible_rows,
-            target_rows: &projection.visible_rows,
+            target_rows: &visible_rows,
             document,
             list_state: &self.list_state,
             viewport_height,
             available_width,
             measurement,
         }) else {
-            self.apply_local_fold_projection(projection);
+            self.apply_fold_projection(visible_rows, fold_markers);
             return;
         };
 
         self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
         let revision = self.fold_animation_revision;
-        let transition = plan.into_transition(revision, block_id);
+        let suppressed_markers = fold_markers
+            .difference(&self.fold_markers)
+            .copied()
+            .collect();
+        let transition = plan.into_transition(revision, suppressed_markers);
 
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
-        self.fold_markers = Arc::new(projection.fold_markers);
-        self.visible_rows = Arc::new(projection.visible_rows);
+        self.fold_markers = Arc::new(fold_markers);
+        self.visible_rows = Arc::new(visible_rows);
         for edit in transition.initial_edits.iter() {
             self.list_state.splice(edit.range.clone(), edit.new_count);
         }
@@ -347,11 +379,16 @@ impl PreviewApp {
         };
     }
 
+    #[cfg(test)]
     fn apply_local_fold_projection(&mut self, projection: LocalCycleProjection) {
+        self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
+    }
+
+    fn apply_fold_projection(&mut self, visible_rows: Vec<usize>, fold_markers: HashSet<BlockId>) {
         self.cancel_minimap_interaction();
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
-        self.fold_markers = Arc::new(projection.fold_markers);
-        self.apply_visible_rows(Arc::new(projection.visible_rows));
+        self.fold_markers = Arc::new(fold_markers);
+        self.apply_visible_rows(Arc::new(visible_rows));
     }
 
     pub(super) fn discard_fold_animation(&mut self) {
@@ -424,11 +461,55 @@ impl PreviewApp {
         });
     }
 
+    #[cfg(test)]
     pub(super) fn cycle_global_visibility(&mut self) {
         self.discard_fold_animation();
+        let Some(projection) = self.next_global_visibility_projection() else {
+            return;
+        };
+        self.remember_global_visibility(projection.visibility);
+        self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
+    }
+
+    pub(super) fn cycle_global_visibility_animated(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.discard_fold_animation();
+        let Some(projection) = self.next_global_visibility_projection() else {
+            return;
+        };
+        self.remember_global_visibility(projection.visibility);
+        let viewport = window.viewport_size();
+        let viewport_width = f32::from(viewport.width);
+        let editor_width = if self.sidebar_visible {
+            (viewport_width - 237.0).max(120.0)
+        } else {
+            viewport_width
+        };
+        let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);
+        let minimap_space = if self.minimap_visible {
+            minimap_width
+        } else {
+            0.0
+        };
+        let available_width = (editor_width - 110.0 - minimap_space).max(120.0);
+        self.apply_fold_projection_animated(
+            projection.visible_rows,
+            projection.fold_markers,
+            &projection.document,
+            f32::from(viewport.height),
+            available_width,
+            Some(window),
+            cx,
+        );
+    }
+
+    fn next_global_visibility_projection(&self) -> Option<GlobalVisibilityProjection> {
         let document = match &self.state {
             PreviewLoadState::Ready { document, .. } => document.clone(),
-            _ => return,
+            _ => return None,
         };
         let next = if self.global_cycle_contiguous {
             self.global_visibility.next()
@@ -446,16 +527,20 @@ impl PreviewApp {
             ),
         };
         if new_visible.is_empty() && next != super::GlobalVisibility::All {
-            return;
+            return None;
         }
+        Some(GlobalVisibilityProjection {
+            document,
+            visibility: next,
+            visible_rows: new_visible,
+            fold_markers: new_markers,
+        })
+    }
 
-        self.cancel_minimap_interaction();
+    fn remember_global_visibility(&mut self, next: super::GlobalVisibility) {
         self.global_visibility = next;
         self.global_cycle_contiguous = true;
         self.local_cycle_continuation = None;
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
-        self.fold_markers = Arc::new(new_markers);
-        self.apply_visible_rows(Arc::new(new_visible));
     }
 
     fn apply_visible_rows(&mut self, new_visible: Arc<Vec<usize>>) {

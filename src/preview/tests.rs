@@ -128,6 +128,63 @@ fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together
     assert_eq!(app.list_state.item_count(), app.visible_rows.len());
 }
 
+#[gpui::test]
+fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::TestAppContext) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-animated-global-visibility-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(
+        &path,
+        "preamble\n* One\nbody\n** Child\nchild body\n* Two\nvisible\n",
+    )
+    .unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
+        super::PreviewApp::new()
+    });
+    window
+        .update(cx, |app, _, cx| {
+            app.generation = 1;
+            assert!(app.apply_load_result(1, Ok(document)));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    for (visibility, direction) in [
+        (GlobalVisibility::Overview, super::FoldDirection::Collapse),
+        (GlobalVisibility::Contents, super::FoldDirection::Expand),
+        (GlobalVisibility::All, super::FoldDirection::Expand),
+    ] {
+        window
+            .update(cx, |app, window, cx| {
+                app.cycle_global_visibility_animated(window, cx);
+                assert_eq!(app.global_visibility, visibility);
+                let animation = app
+                    .fold_animation
+                    .as_ref()
+                    .expect("every Shift-Tab state should animate");
+                assert_eq!(animation.direction, direction);
+                if visibility == GlobalVisibility::Overview {
+                    assert!(animation.segments.len() > 1);
+                }
+                cx.notify();
+            })
+            .unwrap();
+        cx.run_until_parked();
+        assert!(simulate_next_frame(&window, cx) > 0);
+        finish_fold_animation(&window, cx);
+        window
+            .read_with(cx, |app, _| {
+                assert!(app.fold_animation.is_none());
+                assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+            })
+            .unwrap();
+    }
+}
+
 #[test]
 fn expanding_a_child_from_contents_does_not_collapse_its_parent() {
     let path = std::env::temp_dir().join(format!(
