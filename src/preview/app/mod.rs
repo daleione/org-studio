@@ -41,6 +41,7 @@ impl PreviewApp {
         let preview_settings = crate::settings::PreviewSettings::load();
         let minimap_visible = configured_minimap_visible();
         Self {
+            language: preview_settings.language,
             focus_handle: None,
             focus_lost_subscription: None,
             commands,
@@ -59,6 +60,11 @@ impl PreviewApp {
             dired_watch_request: 0,
             dired_watch_directory: None,
             picker_task: None,
+            export_task: None,
+            export_cancel: None,
+            export_request: 0,
+            export_panel: None,
+            export_status: None,
             list_state: ListState::new(0, ListAlignment::Top, px(list_overdraw)),
             fold_markers: Arc::new(HashSet::new()),
             visible_rows: Arc::new(Vec::new()),
@@ -129,12 +135,26 @@ impl PreviewApp {
 
     pub(super) fn save_preview_settings(&self) {
         crate::settings::PreviewSettings {
+            language: self.language,
             minimap_enabled: self.minimap_visible,
             minimap_thumb_visibility: self.minimap_thumb_visibility,
             minimap_width: self.minimap_width,
             sidebar_width: self.sidebar_width,
         }
         .save_async();
+    }
+
+    pub fn language(&self) -> crate::i18n::Language {
+        self.language
+    }
+
+    pub(super) fn set_language(&mut self, language: crate::i18n::Language, cx: &mut Context<Self>) {
+        if self.language != language {
+            self.language = language;
+            self.export_status = None;
+            self.save_preview_settings();
+            cx.notify();
+        }
     }
 
     pub(super) fn change_minimap_width(
@@ -199,8 +219,9 @@ impl PreviewApp {
                 &self.recent_documents,
                 self.home_error.as_deref(),
                 None,
+                self.language,
             ),
-            PreviewLoadState::Loading { path } => render_loading(path),
+            PreviewLoadState::Loading { path } => render_loading(path, self.language),
             PreviewLoadState::Failed { path, message } => {
                 let error = format!("{}: {message}", path.display());
                 if let Some((generation, document)) = &self.last_ready {
@@ -240,7 +261,13 @@ impl PreviewApp {
                             self.opened_at.unwrap_or_else(Instant::now),
                         ))
                 } else {
-                    render_home(entity, &self.recent_documents, Some(&error), None)
+                    render_home(
+                        entity,
+                        &self.recent_documents,
+                        Some(&error),
+                        None,
+                        self.language,
+                    )
                 }
             }
             PreviewLoadState::Ready {

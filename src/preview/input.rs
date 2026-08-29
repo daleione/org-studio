@@ -18,10 +18,11 @@ use super::{
     DIRED_HELP_COMMAND, DIRED_INVERT_COMMAND, DIRED_MARK_COMMAND, DIRED_MOVE_COMMAND,
     DIRED_NEXT_COMMAND, DIRED_OPEN_COMMAND, DIRED_PREVIOUS_COMMAND, DIRED_RENAME_COMMAND,
     DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND, DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND,
-    END_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, OPEN_DEFAULT_DIRED_COMMAND,
-    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, QUIT_APPLICATION_COMMAND,
-    RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
-    SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    END_COMMAND, EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
+    OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
+    QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
+    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND,
+    TOGGLE_SIDEBAR_COMMAND,
 };
 
 pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
@@ -77,6 +78,23 @@ pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
             redaction: RedactionPolicy::None,
         })
         .expect("valid built-in reload command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: EXPORT_DOCUMENT_COMMAND.into(),
+            aliases: &["export-document"],
+            title: "Export Document",
+            description: "Export the current document as PDF, PNG, or SVG",
+            command: BuiltinCommand::ExportDocument,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::WriteFileSystem,
+            required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in export command");
     for (name, title, command, argument_spec) in [
         (
             QUIT_APPLICATION_COMMAND,

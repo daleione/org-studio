@@ -276,7 +276,13 @@ fn find_closing_marker(source: &str, start: usize, marker: u8) -> Option<usize> 
                 || matches!(
                     bytes[index + 1],
                     b'.' | b',' | b';' | b':' | b'!' | b'?' | b')' | b']' | b'}'
-                ))
+                )
+                || source[index + 1..].chars().next().is_some_and(|character| {
+                    matches!(
+                        character,
+                        '、' | '，' | '。' | '；' | '：' | '！' | '？' | '）' | '】' | '》'
+                    )
+                }))
         {
             return Some(index);
         }
@@ -349,6 +355,24 @@ mod tests {
     fn leaves_unclosed_markup_unchanged() {
         let parsed = parse("This is *unfinished [[link");
         assert_eq!(parsed.text, "This is *unfinished [[link");
+    }
+
+    #[test]
+    fn closes_markup_before_cjk_punctuation() {
+        let parsed = parse("使用 =code=、*粗体*，继续。");
+        assert_eq!(parsed.text, "使用 code、粗体，继续。");
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|span| span.kind == InlineKind::Verbatim)
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .any(|span| span.kind == InlineKind::Bold)
+        );
     }
 
     #[test]

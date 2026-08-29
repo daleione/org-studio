@@ -1,4 +1,5 @@
 use super::{PreviewApp, div, img, px, rgb};
+use crate::i18n::Language;
 use crate::recent_documents::RecentDocument;
 use gpui::{Entity, ExternalPaths, FontWeight, SharedString, prelude::*};
 use std::{
@@ -11,6 +12,7 @@ pub(in crate::preview) fn render_home(
     recent_documents: &[RecentDocument],
     error: Option<&str>,
     opening: Option<&std::path::Path>,
+    language: Language,
 ) -> gpui::Div {
     let open_entity = entity.clone();
     let drop_entity = entity.clone();
@@ -63,7 +65,7 @@ pub(in crate::preview) fn render_home(
                                 .mt_2()
                                 .text_size(px(14.0))
                                 .text_color(rgb(0x7b7b83))
-                                .child("Your life in plain text."),
+                                .child(language.text("home.tagline")),
                         )
                         .child(
                             div()
@@ -92,12 +94,18 @@ pub(in crate::preview) fn render_home(
                                 .child(picker_copy(
                                     opening
                                         .and_then(|path| path.file_name())
-                                        .map(|name| format!("Opening {}", name.to_string_lossy()))
-                                        .unwrap_or_else(|| "Open Document".to_owned()),
+                                        .map(|name| {
+                                            format!(
+                                                "{} {}",
+                                                language.text("home.opening"),
+                                                name.to_string_lossy()
+                                            )
+                                        })
+                                        .unwrap_or_else(|| language.text("home.open").to_owned()),
                                     opening
                                         .map(|path| path.display().to_string())
                                         .unwrap_or_else(|| {
-                                            "Click to choose a file, or drop one here".to_owned()
+                                            language.text("home.open_hint").to_owned()
                                         }),
                                     0x242428,
                                     0x7b7b83,
@@ -118,8 +126,8 @@ pub(in crate::preview) fn render_home(
                                         .items_center()
                                         .justify_center()
                                         .child(picker_copy(
-                                            "Drop to Open",
-                                            "Release the file to open it",
+                                            language.text("home.drop"),
+                                            language.text("home.drop_hint"),
                                             0x2868a8,
                                             0x6684a3,
                                         )),
@@ -154,7 +162,7 @@ pub(in crate::preview) fn render_home(
                                 .text_size(px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(0x626268))
-                                .child("Recent"),
+                                .child(language.text("home.recent")),
                         )
                         .when(!recent_documents.is_empty(), |view| {
                             view.child(
@@ -173,15 +181,15 @@ pub(in crate::preview) fn render_home(
                                         clear_entity
                                             .update(cx, |this, cx| this.clear_recent_documents(cx));
                                     })
-                                    .child("Clear"),
+                                    .child(language.text("home.clear")),
                             )
                         }),
                 )
-                .child(render_recents(entity, recent_documents)),
+                .child(render_recents(entity, recent_documents, language)),
         )
 }
 
-pub(in crate::preview) fn render_loading(path: &std::path::Path) -> gpui::Div {
+pub(in crate::preview) fn render_loading(path: &std::path::Path, language: Language) -> gpui::Div {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -205,7 +213,7 @@ pub(in crate::preview) fn render_loading(path: &std::path::Path) -> gpui::Div {
                         .text_size(px(14.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(0x303034))
-                        .child(format!("Opening {name}")),
+                        .child(format!("{} {name}", language.text("home.opening"))),
                 )
                 .child(
                     div()
@@ -244,7 +252,11 @@ fn picker_copy(
         )
 }
 
-fn render_recents(entity: Entity<PreviewApp>, documents: &[RecentDocument]) -> gpui::Div {
+fn render_recents(
+    entity: Entity<PreviewApp>,
+    documents: &[RecentDocument],
+    language: Language,
+) -> gpui::Div {
     let list = div()
         .w_full()
         .rounded(px(13.0))
@@ -260,7 +272,7 @@ fn render_recents(entity: Entity<PreviewApp>, documents: &[RecentDocument]) -> g
                 .text_align(gpui::TextAlign::Center)
                 .text_size(px(13.0))
                 .text_color(rgb(0x8d8d94))
-                .child("Documents you open will appear here."),
+                .child(language.text("home.empty")),
         );
     }
     documents

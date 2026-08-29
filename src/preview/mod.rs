@@ -13,12 +13,14 @@ use gpui::{
 mod app;
 mod display_map;
 mod document;
+mod export_ui;
 mod highlighting;
 mod input;
 mod layout;
 mod loading;
 mod view;
-use document::{CodeRowRole, DocumentFormat, PreviewRow, configured_minimap_visible};
+pub(crate) use document::DocumentFormat;
+use document::{CodeRowRole, PreviewRow, configured_minimap_visible};
 pub use document::{InitialDocumentLoad, LoadMetrics, PreviewDocument, preload_initial_document};
 use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 use input::*;
@@ -78,6 +80,7 @@ use crate::{
 const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
 const SHOW_HOME_COMMAND: &str = "org-studio.workspace.show-home";
 const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
+const EXPORT_DOCUMENT_COMMAND: &str = "org-studio.document.export";
 const QUIT_APPLICATION_COMMAND: &str = "org-studio.application.quit";
 const SCROLL_FORWARD_COMMAND: &str = "org-studio.preview.scroll-forward";
 const SCROLL_BACKWARD_COMMAND: &str = "org-studio.preview.scroll-backward";
@@ -121,10 +124,13 @@ actions!(
         OpenDocument,
         ShowHome,
         ReloadDocument,
+        ExportDocument,
         OpenFileManager,
         ReturnToDocument,
         ToggleSidebar,
-        ToggleMinimap
+        ToggleMinimap,
+        UseEnglish,
+        UseChinese
     ]
 );
 
@@ -167,6 +173,7 @@ enum PreviewLoadState {
 }
 
 pub struct PreviewApp {
+    language: crate::i18n::Language,
     focus_handle: Option<FocusHandle>,
     focus_lost_subscription: Option<Subscription>,
     commands: Arc<CommandRegistry>,
@@ -185,6 +192,11 @@ pub struct PreviewApp {
     dired_watch_request: u64,
     dired_watch_directory: Option<PathBuf>,
     picker_task: Option<Task<()>>,
+    export_task: Option<Task<()>>,
+    export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
+    export_request: u64,
+    export_panel: Option<export_ui::ExportPanelState>,
+    export_status: Option<export_ui::ExportRunState>,
     list_state: ListState,
     fold_markers: Arc<HashSet<BlockId>>,
     visible_rows: Arc<Vec<usize>>,

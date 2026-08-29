@@ -1,0 +1,31 @@
+{
+  "export.title": "导出文档",
+  "export.subtitle": "选择输出规格与视觉主题",
+  "export.format": "文件格式",
+  "export.paper": "纸张规格",
+  "export.output": "输出规格",
+  "export.long_image": "连续长图",
+  "export.quality": "清晰度",
+  "export.standard": "标准",
+  "export.high": "高清",
+  "export.themes": "主题模板",
+  "export.snapshot_hint": "将基于当前文档生成文件",
+  "export.reveal": "在 Finder 中查看",
+  "export.cancel": "取消",
+  "export.action": "导出",
+  "export.working_action": "导出中",
+  "export.cancelled": "导出已取消",
+  "export.working": "正在排版与生成文件…",
+  "export.complete": "导出完成",
+  "export.files": "个文件",
+  "export.warnings": "个警告"
+  ,"home.tagline": "用纯文本记录你的生活。"
+  ,"home.open": "打开文档"
+  ,"home.open_hint": "点击选择文件，或者将文件拖放到这里"
+  ,"home.opening": "正在打开"
+  ,"home.drop": "松开以打开"
+  ,"home.drop_hint": "释放文件即可打开"
+  ,"home.recent": "最近打开"
+  ,"home.clear": "清除"
+  ,"home.empty": "打开过的文档会显示在这里。"
+}

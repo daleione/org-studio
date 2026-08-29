@@ -1,0 +1,19 @@
+#+TITLE: Org Mode
+#+AUTHOR: Org Mode Project
+
+* A system for structured plain text
+
+Org Mode is an authoring tool and TODO list manager built around a lightweight,
+human-readable plain-text format.
+
+Org Mode 是一套结构化纯文本系统，可用于写作、笔记、任务管理、项目规划与发布。
+
+** One file, many workflows
+
+- Foldable outlines and structured writing
+- TODO items, schedules, and Agenda views
+- Publishing and literate programming
+
+#+begin_quote
+Simple enough for a beginner, powerful enough for an expert.
+#+end_quote

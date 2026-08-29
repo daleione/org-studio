@@ -17,6 +17,12 @@ rustix = { version = "1.1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tracing = "0.1"
+typst = "=0.15.0"
+typst-assets = { version = "=0.15.0", features = ["fonts"] }
+typst-layout = "=0.15.0"
+typst-pdf = "=0.15.0"
+typst-render = "=0.15.0"
+typst-svg = "=0.15.0"
 tree-sitter-highlight = "0.26.7"
 tree-sitter-sequel = "0.3.11"
 tree-sitter-bash = "0.25.1"
@@ -34,6 +40,8 @@ unicode-segmentation = "1.13"
 smallvec = "1.15"
 url = "2"
 cosmic-text = { version = "0.19", features = ["monospace_fallback", "shape-run-cache"] }
+fontdb = "0.23"
+sys-locale = "0.3.2"
 
 [dev-dependencies]
 gpui = { path = "../zed/crates/gpui", features = ["test-support"] }

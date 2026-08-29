@@ -443,7 +443,7 @@ pub(in crate::preview) fn prewarm_text_rasterizer() {
         buffer.set_size(Some(480.0), Some(20.0));
         buffer.set_wrap(Wrap::None);
         buffer.set_text(
-            "Org Markdown 中文预览 AaZz 0123456789 +-*/_`#[](){} :=> ",
+            "Org Markdown CJK \u{4e2d}\u{6587} AaZz 0123456789 +-*/_`#[](){} :=> ",
             &attrs,
             Shaping::Advanced,
             None,

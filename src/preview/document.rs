@@ -74,7 +74,7 @@ pub(in crate::preview) fn configured_minimap_visible() -> bool {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum DocumentFormat {
+pub(crate) enum DocumentFormat {
     Org,
     Markdown,
 }

@@ -1,0 +1,31 @@
+{
+  "export.title": "Export Document",
+  "export.subtitle": "Choose an output format and visual theme",
+  "export.format": "File format",
+  "export.paper": "Paper size",
+  "export.output": "Output",
+  "export.long_image": "Long image",
+  "export.quality": "Quality",
+  "export.standard": "Standard",
+  "export.high": "High",
+  "export.themes": "Themes",
+  "export.snapshot_hint": "A file will be generated from the current document",
+  "export.reveal": "Show in Finder",
+  "export.cancel": "Cancel",
+  "export.action": "Export",
+  "export.working_action": "Exporting",
+  "export.cancelled": "Export cancelled",
+  "export.working": "Typesetting and generating the file…",
+  "export.complete": "Export complete",
+  "export.files": "files",
+  "export.warnings": "warnings"
+  ,"home.tagline": "Your life in plain text."
+  ,"home.open": "Open Document"
+  ,"home.open_hint": "Click to choose a file, or drop one here"
+  ,"home.opening": "Opening"
+  ,"home.drop": "Drop to Open"
+  ,"home.drop_hint": "Release the file to open it"
+  ,"home.recent": "Recent"
+  ,"home.clear": "Clear"
+  ,"home.empty": "Documents you open will appear here."
+}

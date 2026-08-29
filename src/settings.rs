@@ -1,3 +1,4 @@
+use crate::i18n::Language;
 use std::{
     fs, io,
     path::PathBuf,
@@ -8,6 +9,7 @@ const SETTINGS_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreviewSettings {
+    pub language: Language,
     pub minimap_enabled: bool,
     pub minimap_thumb_visibility: MinimapThumbVisibility,
     /// `None` follows the adaptive width; `Some` is the user's preferred
@@ -27,6 +29,7 @@ pub enum MinimapThumbVisibility {
 impl Default for PreviewSettings {
     fn default() -> Self {
         Self {
+            language: Language::system(),
             minimap_enabled: true,
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
             minimap_width: None,
@@ -81,6 +84,7 @@ impl PreviewSettings {
     fn parse(source: &str) -> Option<Self> {
         let mut version = None;
         let mut minimap_enabled = None;
+        let mut language = None;
         let mut minimap_thumb_visibility = None;
         let mut minimap_width = None;
         let mut sidebar_width = None;
@@ -90,6 +94,13 @@ impl PreviewSettings {
             };
             match key.trim() {
                 "version" => version = value.trim().parse::<u32>().ok(),
+                "language" => {
+                    language = match value.trim() {
+                        "en" => Some(Language::English),
+                        "zh-CN" => Some(Language::Chinese),
+                        _ => None,
+                    }
+                }
                 "minimap_enabled" => minimap_enabled = value.trim().parse::<bool>().ok(),
                 "minimap_thumb_visibility" => {
                     minimap_thumb_visibility = match value.trim() {
@@ -119,6 +130,7 @@ impl PreviewSettings {
             }
         }
         (version == Some(SETTINGS_VERSION)).then_some(Self {
+            language: language.unwrap_or_else(Language::system),
             minimap_enabled: minimap_enabled.unwrap_or(true),
             minimap_thumb_visibility: minimap_thumb_visibility
                 .unwrap_or(MinimapThumbVisibility::Always),
@@ -129,7 +141,11 @@ impl PreviewSettings {
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\n",
+            "version={SETTINGS_VERSION}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\n",
+            match self.language {
+                Language::English => "en",
+                Language::Chinese => "zh-CN",
+            },
             self.minimap_enabled,
             match self.minimap_thumb_visibility {
                 MinimapThumbVisibility::Always => "always",
@@ -224,6 +240,7 @@ mod tests {
     #[test]
     fn settings_round_trip_and_reject_unknown_versions() {
         let settings = PreviewSettings {
+            language: Language::English,
             minimap_enabled: false,
             minimap_thumb_visibility: MinimapThumbVisibility::Hover,
             minimap_width: Some(176),

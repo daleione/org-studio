@@ -7,8 +7,8 @@ use gpui::{
 use org_studio::{
     perf_tracing,
     preview::{
-        InitialDocumentLoad, OpenDocument, PreviewApp, ReloadDocument, ShowHome, ToggleMinimap,
-        ToggleSidebar, preload_initial_document,
+        ExportDocument, InitialDocumentLoad, OpenDocument, PreviewApp, ReloadDocument, ShowHome,
+        ToggleMinimap, ToggleSidebar, UseChinese, UseEnglish, preload_initial_document,
     },
 };
 
@@ -153,6 +153,7 @@ fn main() {
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenDocument, None),
             KeyBinding::new("cmd-r", ReloadDocument, None),
+            KeyBinding::new("cmd-shift-e", ExportDocument, None),
             KeyBinding::new("cmd-q", Quit, None),
         ]);
         cx.set_menus(app_menus());
@@ -217,11 +218,17 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Open...", OpenDocument),
             MenuItem::separator(),
+            MenuItem::action("Export...", ExportDocument),
+            MenuItem::separator(),
             MenuItem::action("Reload", ReloadDocument),
         ]),
         Menu::new("View").items([
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Toggle Minimap", ToggleMinimap),
+        ]),
+        Menu::new("Language").items([
+            MenuItem::action("English", UseEnglish),
+            MenuItem::action("Chinese (Simplified)", UseChinese),
         ]),
     ]
 }

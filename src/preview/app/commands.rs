@@ -82,6 +82,9 @@ impl PreviewApp {
                     self.reload(cx);
                 }
             }
+            CommandImplementation::Builtin(BuiltinCommand::ExportDocument) => {
+                self.show_export_panel(cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => cx.quit(),
             CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
                 self.list_state.scroll_by(px(640.0 * command_count(prefix)));
@@ -178,6 +181,13 @@ impl PreviewApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.export_panel.is_some() {
+            cx.stop_propagation();
+            if event.keystroke.key == "escape" {
+                self.close_export_panel(cx);
+            }
+            return;
+        }
         if event.keystroke.key == "escape"
             && (self.dired_context_menu.take().is_some()
                 || self.cancel_minimap_interaction()

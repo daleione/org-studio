@@ -5,9 +5,10 @@ use super::{
     ListState, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager, PreviewApp, PreviewDocument,
     PreviewLoadState, PreviewRow, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render,
     ReturnToDocument, SHOW_HOME_COMMAND, ShowHome, StyledText, ToggleMinimap, ToggleSidebar,
-    Window, accept_generation, current_theme, div, img, markdown, minimap, parse_inline, px,
-    render_table_row, resolve_image_path, rgb,
+    UseChinese, UseEnglish, Window, accept_generation, current_theme, div, img, markdown, minimap,
+    parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
+use super::{EXPORT_DOCUMENT_COMMAND, ExportDocument, export_ui::render_export_panel};
 use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
 
 mod code_block;
@@ -127,6 +128,8 @@ impl Render for PreviewApp {
         let dired_help_visible = self.dired_help_visible;
         let command_window_width = f32::from(window.viewport_size().width);
         let resizing_sidebar = self.sidebar_resize.is_some();
+        let export_panel = self.export_panel.clone();
+        let export_status = self.export_status.clone();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
         div()
@@ -147,16 +150,25 @@ impl Render for PreviewApp {
             .on_action(cx.listener(|this, _: &ReloadDocument, window, cx| {
                 this.dispatch_command(RELOAD_DOCUMENT_COMMAND, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &ExportDocument, window, cx| {
+                this.dispatch_command(EXPORT_DOCUMENT_COMMAND, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
+            .on_action(cx.listener(|this, _: &UseEnglish, _, cx| {
+                this.set_language(crate::i18n::Language::English, cx)
+            }))
+            .on_action(cx.listener(|this, _: &UseChinese, _, cx| {
+                this.set_language(crate::i18n::Language::Chinese, cx)
+            }))
             .on_drop(
                 cx.listener(|this, paths: &ExternalPaths, _, cx| {
                     this.open_dropped_paths(paths, cx)
                 }),
             )
-            .child(self.workspace_body(entity, command_window_width))
+            .child(self.workspace_body(entity.clone(), command_window_width))
             .when(resizing_sidebar, |view| {
                 view.child(
                     div()
@@ -213,5 +225,13 @@ impl Render for PreviewApp {
                     )
                 },
             )
+            .when_some(export_panel, |view, panel| {
+                view.child(render_export_panel(
+                    entity.clone(),
+                    panel,
+                    export_status,
+                    self.language,
+                ))
+            })
     }
 }

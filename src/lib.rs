@@ -1,7 +1,9 @@
 pub mod command;
 pub mod document;
+pub mod export;
 pub mod file_manager;
 pub mod file_watcher;
+pub mod i18n;
 pub mod input;
 pub mod keymap;
 pub mod navigation;
