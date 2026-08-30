@@ -21,8 +21,8 @@ use super::{
     END_COMMAND, EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
     OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
     QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
-    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND,
-    TOGGLE_SIDEBAR_COMMAND,
+    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
+    SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
 };
 
 #[cfg(test)]
@@ -34,6 +34,40 @@ pub(super) fn document_input(
     mode: crate::app::DocumentMode,
 ) -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: SAVE_DOCUMENT_COMMAND.into(),
+            aliases: &["save-buffer"],
+            title: "Save Document",
+            description: "Safely save the current document",
+            command: BuiltinCommand::SaveDocument,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::WriteFileSystem,
+            required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in save command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: SAVE_DOCUMENT_AS_COMMAND.into(),
+            aliases: &["write-file"],
+            title: "Save Document As",
+            description: "Safely save the current document at another path",
+            command: BuiltinCommand::SaveDocumentAs,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::WriteFileSystem,
+            required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in save-as command");
     builder
         .register_builtin(BuiltinCommandSpec {
             name: OPEN_DOCUMENT_COMMAND.into(),

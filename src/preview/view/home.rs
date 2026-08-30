@@ -84,12 +84,13 @@ pub(in crate::preview) fn render_home(
                                 .items_center()
                                 .justify_center()
                                 .hover(|style| style.border_color(rgb(0xb9cee5)).bg(rgb(0xfcfdff)))
-                                .on_click(move |_, _, cx| {
-                                    open_entity.update(cx, |this, cx| this.choose_file(cx));
+                                .on_click(move |_, window, cx| {
+                                    open_entity.update(cx, |this, cx| this.choose_file(window, cx));
                                 })
-                                .on_drop(move |paths: &ExternalPaths, _, cx| {
-                                    drop_entity
-                                        .update(cx, |this, cx| this.open_dropped_paths(paths, cx));
+                                .on_drop(move |paths: &ExternalPaths, window, cx| {
+                                    drop_entity.update(cx, |this, cx| {
+                                        this.open_dropped_paths(paths, window, cx)
+                                    });
                                 })
                                 .child(picker_copy(
                                     opening

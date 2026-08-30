@@ -2,18 +2,17 @@ use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gpui::{
     App, Bounds, KeyBinding, Menu, MenuItem, SharedString, SystemMenuType, TitlebarOptions,
-    WindowBounds, WindowHandle, WindowOptions, actions, prelude::*, px, size,
+    WindowBounds, WindowHandle, WindowOptions, prelude::*, px, size,
 };
 use org_studio::{
     app::WorkspaceWindow,
     perf_tracing,
     preview::{
-        ExportDocument, InitialDocumentLoad, OpenDocument, ReloadDocument, ShowHome, ToggleMinimap,
-        ToggleSidebar, UseChinese, UseEnglish, preload_initial_document,
+        ExportDocument, InitialDocumentLoad, OpenDocument, QuitApplication, ReloadDocument,
+        SaveDocument, SaveDocumentAs, ShowHome, ToggleMinimap, ToggleSidebar, UseChinese,
+        UseEnglish, preload_initial_document,
     },
 };
-
-actions!(org_studio, [Quit]);
 
 const DISABLE_INACTIVE_THROTTLE_ENV: &str = "ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE";
 
@@ -44,7 +43,7 @@ impl ApplicationController {
                 if let Some(path) = path.clone()
                     && preview.current_document_path(cx) != Some(path.as_path())
                 {
-                    preview.open(path, cx);
+                    preview.request_open(path, window, cx);
                 }
                 window.activate_window();
             });
@@ -150,13 +149,14 @@ fn main() {
         let initial_load = initial_path
             .clone()
             .map(|path| preload_initial_document(path, cx));
-        cx.on_action(|_: &Quit, cx| cx.quit());
         org_studio::editor::init(cx);
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenDocument, None),
+            KeyBinding::new("cmd-s", SaveDocument, None),
+            KeyBinding::new("cmd-shift-s", SaveDocumentAs, None),
             KeyBinding::new("cmd-r", ReloadDocument, None),
             KeyBinding::new("cmd-shift-e", ExportDocument, None),
-            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("cmd-q", QuitApplication, None),
         ]);
         cx.set_menus(app_menus());
         let displays = cx.displays();
@@ -213,12 +213,15 @@ fn app_menus() -> Vec<Menu> {
         Menu::new("Org Studio").items([
             MenuItem::os_submenu("Services", SystemMenuType::Services),
             MenuItem::separator(),
-            MenuItem::action("Quit Org Studio", Quit),
+            MenuItem::action("Quit Org Studio", QuitApplication),
         ]),
         Menu::new("File").items([
             MenuItem::action("Home", ShowHome),
             MenuItem::separator(),
             MenuItem::action("Open...", OpenDocument),
+            MenuItem::separator(),
+            MenuItem::action("Save", SaveDocument),
+            MenuItem::action("Save As...", SaveDocumentAs),
             MenuItem::separator(),
             MenuItem::action("Export...", ExportDocument),
             MenuItem::separator(),

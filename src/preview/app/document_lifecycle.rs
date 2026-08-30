@@ -7,13 +7,12 @@ use crate::preview::{ReadyDocument, WorkspaceReloadedDocument, reload_workspace_
 use gpui::AppContext;
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn show_home(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn show_home_now(&mut self, cx: &mut Context<Self>) {
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
-        self.file_watch_request = self.file_watch_request.wrapping_add(1);
-        self.file_watch_task = None;
-        self.file_watch_directory = None;
-        self.file_watch_target = None;
+        self.stop_document_watch();
+        self.save.status = None;
+        self.save.interaction = crate::preview::SaveInteraction::Idle;
         self.state = PreviewLoadState::Empty;
         self.opened_at = None;
         self.first_frame_scheduled = None;
@@ -26,12 +25,22 @@ impl WorkspaceWindow {
     }
 
     pub(in crate::preview) fn begin_open(&mut self, path: PathBuf, opened_at: Instant) -> u64 {
+        self.begin_open_with_previous(path, opened_at, true)
+    }
+
+    fn begin_open_with_previous(
+        &mut self,
+        path: PathBuf,
+        opened_at: Instant,
+        preserve_previous: bool,
+    ) -> u64 {
         self.home_error = None;
+        self.save.status = None;
         self.generation += 1;
         self.opened_at = Some(opened_at);
         self.first_frame_scheduled = None;
         let generation = self.generation;
-        let previous = self.state.take_ready();
+        let previous = preserve_previous.then(|| self.state.take_ready()).flatten();
         self.state = PreviewLoadState::Loading {
             path: path.clone(),
             previous,
@@ -46,11 +55,10 @@ impl WorkspaceWindow {
             receiver,
         } = load;
         let generation = self.begin_open(path.clone(), started_at);
-        self.watch_document_profiled(path.clone(), generation, cx);
-
         match receiver.try_recv() {
             Ok(result) => {
                 if self.apply_load_result(generation, result, cx) {
+                    self.sync_document_watch(cx);
                     cx.notify();
                 }
             }
@@ -61,6 +69,7 @@ impl WorkspaceWindow {
                     });
                     let _ = this.update(cx, |this, cx| {
                         if this.apply_load_result(generation, result, cx) {
+                            this.sync_document_watch(cx);
                             cx.notify();
                         }
                     });
@@ -70,6 +79,7 @@ impl WorkspaceWindow {
                 let result: Result<WorkspaceLoadedDocument, _> =
                     Err((path, "initial document loader stopped".to_owned()));
                 if self.apply_load_result(generation, result, cx) {
+                    self.sync_document_watch(cx);
                     cx.notify();
                 }
             }
@@ -77,14 +87,30 @@ impl WorkspaceWindow {
     }
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        let generation = self.begin_open(path.clone(), Instant::now());
+        self.open_with_previous(path, true, cx);
+    }
+
+    pub(super) fn open_discarding_current(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.open_with_previous(path, false, cx);
+    }
+
+    fn open_with_previous(
+        &mut self,
+        path: PathBuf,
+        preserve_previous: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if !preserve_previous {
+            self.stop_document_watch();
+        }
+        let generation =
+            self.begin_open_with_previous(path.clone(), Instant::now(), preserve_previous);
         let document_mode = self.document_mode;
 
         // Opening the requested document is user-visible latency. Submit it before synchronous
         // file-watcher setup and before one-time font startup work so a small local file is not
         // queued behind either of them.
         let opened_at = self.opened_at.unwrap_or_else(Instant::now);
-        let watch_path = path.clone();
         let background =
             cx.background_executor()
                 .spawn_with_priority(gpui::Priority::High, async move {
@@ -109,12 +135,11 @@ impl WorkspaceWindow {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
                 if this.apply_load_result(generation, result, cx) {
+                    this.sync_document_watch(cx);
                     cx.notify();
                 }
             });
         }));
-        self.watch_document_profiled(watch_path, generation, cx);
-
         cx.notify();
     }
 
@@ -125,7 +150,7 @@ impl WorkspaceWindow {
         let request = match session.read(cx).reload_request() {
             Ok(request) => request,
             Err(crate::document::ReloadError::Dirty) => {
-                self.set_reload_error(Some(
+                self.set_document_notice(Some(
                     "The file changed on disk, but the document has unsaved edits. Reload was not applied."
                         .into(),
                 ));
@@ -133,7 +158,9 @@ impl WorkspaceWindow {
                 return;
             }
             Err(error) => {
-                self.set_reload_error(Some(format!("Could not prepare reload: {error:?}").into()));
+                self.set_document_notice(Some(
+                    format!("Could not prepare reload: {error:?}").into(),
+                ));
                 cx.notify();
                 return;
             }
@@ -142,7 +169,7 @@ impl WorkspaceWindow {
         let generation = self.generation;
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
-        self.set_reload_error(None);
+        self.set_document_notice(None);
         let document_mode = self.document_mode;
         let background = cx
             .background_executor()
@@ -159,9 +186,9 @@ impl WorkspaceWindow {
         }));
     }
 
-    fn set_reload_error(&mut self, error: Option<Arc<str>>) {
+    pub(super) fn set_document_notice(&mut self, error: Option<Arc<str>>) {
         if let Some(document) = self.state.ready_mut() {
-            document.reload_error = error;
+            document.notice = error;
         }
     }
 
@@ -181,7 +208,7 @@ impl WorkspaceWindow {
         let reloaded = match result {
             Ok(reloaded) => reloaded,
             Err((path, message)) => {
-                self.set_reload_error(Some(
+                self.set_document_notice(Some(
                     format!("Could not reload {}: {message}", path.display()).into(),
                 ));
                 return true;
@@ -195,7 +222,7 @@ impl WorkspaceWindow {
             }
         };
         if let Err(error) = session.update(cx, |session, cx| session.apply_reload(prepared, cx)) {
-            self.set_reload_error(Some(format!("Reload was not applied: {error:?}").into()));
+            self.set_document_notice(Some(format!("Reload was not applied: {error:?}").into()));
             return true;
         }
         if let (Some(panel), Some(preview)) = (panel, preview) {
@@ -205,11 +232,16 @@ impl WorkspaceWindow {
                 panel.replace_document(document, list_overdraw, cx);
             });
         }
-        self.set_reload_error(None);
+        self.set_document_notice(None);
         true
     }
 
-    fn watch_document_profiled(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn watch_document_profiled(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        cx: &mut Context<Self>,
+    ) {
         let directory = path
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
@@ -242,18 +274,38 @@ impl WorkspaceWindow {
             self.file_watch_directory = None;
             self.file_watch_target = None;
             self.file_watch_task = None;
+            self.set_document_notice(Some("Could not start the file watcher thread.".into()));
+            cx.notify();
             return;
         }
         self.file_watch_task = Some(cx.spawn(async move |this, cx| {
-            let Ok(Ok(watch)) = setup_receiver.recv().await else {
-                let _ = this.update(cx, |this, _| {
-                    if this.file_watch_request == request {
-                        this.file_watch_task = None;
-                        this.file_watch_directory = None;
-                        this.file_watch_target = None;
-                    }
-                });
-                return;
+            let watch = match setup_receiver.recv().await {
+                Ok(Ok(watch)) => watch,
+                Ok(Err(error)) => {
+                    let message: Arc<str> = format!("Could not watch the document: {error}").into();
+                    let _ = this.update(cx, |this, cx| {
+                        if this.file_watch_request == request {
+                            this.file_watch_task = None;
+                            this.file_watch_directory = None;
+                            this.file_watch_target = None;
+                            this.set_document_notice(Some(message));
+                            cx.notify();
+                        }
+                    });
+                    return;
+                }
+                Err(_) => {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.file_watch_request == request {
+                            this.file_watch_task = None;
+                            this.file_watch_directory = None;
+                            this.file_watch_target = None;
+                            this.set_document_notice(Some("The file watcher stopped during setup.".into()));
+                            cx.notify();
+                        }
+                    });
+                    return;
+                }
             };
             if minimap::minimap_perf_enabled() {
                 eprintln!(
@@ -278,22 +330,76 @@ impl WorkspaceWindow {
                     .timer(Duration::from_millis(100))
                     .await;
                 watch.drain();
+                let observed = cx
+                    .background_executor()
+                    .spawn({
+                        let changed_path = changed_path.clone();
+                        async move {
+                            match crate::document::FileStamp::read(&changed_path) {
+                                Ok(stamp) => Ok(Some(stamp)),
+                                Err(error)
+                                    if error.kind() == std::io::ErrorKind::NotFound =>
+                                {
+                                    Ok(None)
+                                }
+                                Err(error) => Err(error.to_string()),
+                            }
+                        }
+                    })
+                    .await;
                 let keep_watching = this
                     .update(cx, |this, cx| {
                         if this.file_watch_request != request {
                             return false;
                         }
-                        let active_session = match &this.state {
-                            PreviewLoadState::Ready { document }
-                                if document.session.read(cx).path() == changed_path.as_path() =>
-                            {
-                                Some(document.session.clone())
-                            }
-                            _ => None,
-                        };
+                        let active_session = this
+                            .state
+                            .ready()
+                            .filter(|document| {
+                                document.session.read(cx).path() == changed_path.as_path()
+                            })
+                            .map(|document| document.session.clone());
                         if let Some(session) = active_session {
-                            session.update(cx, |session, cx| session.disk_changed(cx));
-                            this.reload_current(cx);
+                            match observed {
+                                Ok(observed) => {
+                                    let action = session.update(cx, |session, cx| {
+                                        session.disk_changed(cx);
+                                        session.observe_disk(observed)
+                                    });
+                                    match action {
+                                        crate::document::DiskChangeAction::Ignore
+                                        | crate::document::DiskChangeAction::Defer => {}
+                                        crate::document::DiskChangeAction::Recovered => {
+                                            this.set_document_notice(None);
+                                            cx.notify();
+                                        }
+                                        crate::document::DiskChangeAction::Reload => {
+                                            this.reload_current(cx)
+                                        }
+                                        crate::document::DiskChangeAction::Conflict => {
+                                            this.set_document_notice(Some(
+                                                "The file changed on disk while this document has unsaved edits. Your edits were kept; Save requires an explicit conflict choice."
+                                                    .into(),
+                                            ));
+                                            cx.notify();
+                                        }
+                                        crate::document::DiskChangeAction::Missing => {
+                                            this.set_document_notice(Some(
+                                                "The file was removed or renamed on disk. Your in-memory document is safe; Save will recreate it, or use Save As."
+                                                    .into(),
+                                            ));
+                                            cx.notify();
+                                        }
+                                    }
+                                }
+                                Err(message) => {
+                                    this.set_document_notice(Some(
+                                        format!("Could not inspect the changed file: {message}")
+                                            .into(),
+                                    ));
+                                    cx.notify();
+                                }
+                            }
                         }
                         true
                     })
@@ -303,6 +409,25 @@ impl WorkspaceWindow {
                 }
             }
         }));
+    }
+
+    fn stop_document_watch(&mut self) {
+        self.file_watch_request = self.file_watch_request.wrapping_add(1);
+        self.file_watch_task = None;
+        self.file_watch_directory = None;
+        self.file_watch_target = None;
+    }
+
+    fn sync_document_watch(&mut self, cx: &mut Context<Self>) {
+        if let Some(path) = self
+            .state
+            .ready()
+            .map(|document| document.session.read(cx).path().to_path_buf())
+        {
+            self.watch_document_profiled(path, self.generation, cx);
+        } else {
+            self.stop_document_watch();
+        }
     }
 
     pub(in crate::preview) fn apply_load_result<T>(
@@ -360,7 +485,7 @@ impl WorkspaceWindow {
                         session,
                         editor,
                         panel,
-                        reload_error: None,
+                        notice: None,
                     },
                 }
             }
@@ -373,7 +498,11 @@ impl WorkspaceWindow {
         true
     }
 
-    pub(in crate::preview) fn choose_file(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn choose_file(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut Context<Self>,
+    ) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -381,12 +510,12 @@ impl WorkspaceWindow {
             prompt: Some("Open Org document".into()),
         });
 
-        self.picker_task = Some(cx.spawn(async move |this, cx| {
+        self.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
             let selected = receiver.await;
             if let Ok(Ok(Some(paths))) = selected
                 && let Some(path) = paths.into_iter().next()
             {
-                let _ = this.update(cx, |this, cx| this.open(path, cx));
+                let _ = this.update_in(cx, |this, window, cx| this.request_open(path, window, cx));
             }
         }));
     }
@@ -416,6 +545,7 @@ impl WorkspaceWindow {
     pub(in crate::preview) fn open_dropped_paths(
         &mut self,
         paths: &gpui::ExternalPaths,
+        window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
         if let Some(path) = paths
@@ -423,17 +553,42 @@ impl WorkspaceWindow {
             .iter()
             .find(|path| super::super::is_supported_document(path))
         {
-            self.open(path.clone(), cx);
+            self.request_open(path.clone(), window, cx);
             return;
         }
         self.home_error = Some("Drop an Org or Markdown document to open it.".into());
         cx.notify();
     }
 
-    pub(in crate::preview) fn reload(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn reload(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let path = match &self.state {
             PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
                 Some(path.clone())
+            }
+            PreviewLoadState::Ready { document } if document.session.read(cx).is_dirty() => {
+                let path = document.session.read(cx).path().to_path_buf();
+                let answer = window.prompt(
+                    gpui::PromptLevel::Warning,
+                    "Discard local edits and reload from disk?",
+                    Some("Reloading will permanently discard the unsaved in-memory version."),
+                    &[
+                        gpui::PromptButton::ok("Reload from Disk"),
+                        gpui::PromptButton::new("Open Disk Version"),
+                        gpui::PromptButton::cancel("Cancel"),
+                    ],
+                    cx,
+                );
+                self.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
+                    let Ok(choice) = answer.await else {
+                        return;
+                    };
+                    let _ = this.update_in(cx, |this, _window, cx| match choice {
+                        0 => this.open_discarding_current(path.clone(), cx),
+                        1 => cx.open_with_system(&path),
+                        _ => {}
+                    });
+                }));
+                None
             }
             PreviewLoadState::Ready { .. } => {
                 self.reload_current(cx);
@@ -454,5 +609,60 @@ impl WorkspaceWindow {
         }
         self.save_preview_settings();
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[gpui::test]
+    fn failed_open_keeps_the_active_document_title_and_watch_target(cx: &mut gpui::TestAppContext) {
+        let root = std::env::temp_dir().join(format!(
+            "org-studio-failed-open-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let old_directory = root.join("old");
+        let new_directory = root.join("new");
+        std::fs::create_dir_all(&old_directory).unwrap();
+        std::fs::create_dir_all(&new_directory).unwrap();
+        let old_path = old_directory.join("old.org");
+        let failed_path = new_directory.join("missing.org");
+        std::fs::write(&old_path, b"* Active").unwrap();
+        let loaded =
+            load_workspace_document(old_path.clone(), crate::app::DocumentMode::Source).unwrap();
+        let active_path = old_path.clone();
+        let workspace =
+            cx.new(|_| WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source));
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.generation = 1;
+            assert!(workspace.apply_load_result(1, Ok(loaded), cx));
+            let generation = workspace.begin_open(failed_path.clone(), Instant::now());
+            assert!(workspace.apply_load_result(
+                generation,
+                Err::<WorkspaceLoadedDocument, _>((failed_path, "could not load".into())),
+                cx,
+            ));
+            workspace.sync_document_watch(cx);
+            assert_eq!(
+                workspace.document_session().unwrap().read(cx).path(),
+                active_path
+            );
+            assert_eq!(
+                workspace.file_watch_directory.as_deref(),
+                active_path.parent()
+            );
+        });
+        assert_eq!(
+            cx.read(|app| workspace.read(app).window_title(app)),
+            "old.org"
+        );
+        workspace.update(cx, |workspace, _| workspace.stop_document_watch());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -11,7 +11,7 @@ use crate::{
     command::CommandRegistry,
     input::{ContextSet, KeyboardRouter},
     preview::{
-        ContentRoute, ExportHost, FileManagerHost, PreviewLoadState, ScrollBenchmark,
+        ContentRoute, ExportHost, FileManagerHost, PreviewLoadState, SaveHost, ScrollBenchmark,
         StatusLineHost,
     },
 };
@@ -39,6 +39,8 @@ pub struct WorkspaceWindow {
     pub(crate) keyboard: KeyboardRouter,
     pub(crate) key_context: ContextSet,
     pub(crate) state: PreviewLoadState,
+    pub(crate) document_subscription: Option<Subscription>,
+    pub(crate) subscribed_document: Option<crate::document::DocumentId>,
     pub(crate) recent_documents: Vec<crate::recent_documents::RecentDocument>,
     pub(crate) home_error: Option<Arc<str>>,
     pub(crate) generation: u64,
@@ -50,6 +52,7 @@ pub struct WorkspaceWindow {
     pub(crate) file_manager: FileManagerHost,
     pub(crate) picker_task: Option<Task<()>>,
     pub(crate) export: ExportHost,
+    pub(crate) save: SaveHost,
     pub(crate) list_overdraw: f32,
     pub(crate) opened_at: Option<Instant>,
     pub(crate) first_frame_scheduled: Option<u64>,

@@ -89,6 +89,7 @@ pub(crate) fn load_workspace_document(
     path: PathBuf,
     mode: crate::app::DocumentMode,
 ) -> Result<super::WorkspaceLoadedDocument, (PathBuf, String)> {
+    let path = crate::document::resolve_symlink_target(&path);
     match mode {
         crate::app::DocumentMode::Source => {
             let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
@@ -120,6 +121,7 @@ fn load_document_profiled_impl(
     path: PathBuf,
     build_display_map: bool,
 ) -> Result<LoadedDocument, (PathBuf, String)> {
+    let path = crate::document::resolve_symlink_target(&path);
     let total_started = Instant::now();
     let read_started = Instant::now();
     let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;

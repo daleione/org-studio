@@ -73,21 +73,33 @@ impl WorkspaceWindow {
             panel.update(cx, |panel, _| panel.reset_cycle_continuation());
         }
         match implementation {
-            CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
-            CommandImplementation::Builtin(BuiltinCommand::ShowHome) => self.show_home(cx),
+            CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => {
+                self.choose_file(window, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ShowHome) => {
+                self.request_home(window, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
                 if self.content_route == ContentRoute::FileManager
                     || self.file_manager.sidebar_focused()
                 {
                     self.reload_file_manager(cx);
                 } else {
-                    self.reload(cx);
+                    self.reload(window, cx);
                 }
+            }
+            CommandImplementation::Builtin(BuiltinCommand::SaveDocument) => {
+                self.save_document(window, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::SaveDocumentAs) => {
+                self.save_document_as(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ExportDocument) => {
                 self.show_export_panel(cx)
             }
-            CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => cx.quit(),
+            CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => {
+                self.request_quit(window, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
                 if let Some(panel) = self.preview_panel() {
                     panel.update(cx, |panel, _| {
@@ -146,7 +158,7 @@ impl WorkspaceWindow {
                 self.dired_move(-(command_count(prefix) as i64), cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredOpen) => {
-                self.dired_open_selected(cx)
+                self.dired_open_selected(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredUp) => self.dired_up(cx),
             CommandImplementation::Builtin(BuiltinCommand::DiredBack) => {

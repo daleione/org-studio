@@ -49,6 +49,7 @@ mod overlay;
 mod panel;
 mod projection;
 mod rows;
+mod save;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -69,6 +70,7 @@ pub(crate) use panel::PreviewPanel;
 use panel::PreviewRenderState;
 use projection::build_projection_snapshot;
 use rows::build_preview_rows;
+pub(crate) use save::{PendingTransition, SaveHost, SaveInteraction, SaveStatus};
 pub(crate) use status_line::StatusLineHost;
 use table::{build_markdown_table_styles, build_table_styles, render_table_row};
 
@@ -90,6 +92,8 @@ use crate::{
 const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
 const SHOW_HOME_COMMAND: &str = "org-studio.workspace.show-home";
 const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
+const SAVE_DOCUMENT_COMMAND: &str = "org-studio.document.save";
+const SAVE_DOCUMENT_AS_COMMAND: &str = "org-studio.document.save-as";
 const EXPORT_DOCUMENT_COMMAND: &str = "org-studio.document.export";
 const QUIT_APPLICATION_COMMAND: &str = "org-studio.application.quit";
 const SCROLL_FORWARD_COMMAND: &str = "org-studio.preview.scroll-forward";
@@ -134,7 +138,10 @@ actions!(
         OpenDocument,
         ShowHome,
         ReloadDocument,
+        SaveDocument,
+        SaveDocumentAs,
         ExportDocument,
+        QuitApplication,
         OpenFileManager,
         ReturnToDocument,
         ToggleSidebar,
@@ -188,7 +195,7 @@ pub(crate) struct ReadyDocument {
     session: gpui::Entity<crate::document::DocumentSession>,
     editor: gpui::Entity<crate::editor::SourceEditor>,
     panel: Option<gpui::Entity<PreviewPanel>>,
-    reload_error: Option<Arc<str>>,
+    notice: Option<Arc<str>>,
 }
 
 impl ReadyDocument {

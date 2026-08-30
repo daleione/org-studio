@@ -4,7 +4,8 @@ use gpui::{Context, EventEmitter};
 
 use super::{
     ByteOffset, ByteRange, DocumentBuffer, DocumentId, DocumentSnapshot, EditError, EditOrigin,
-    EditTransaction, HistoryOutcome, Revision, RevisionDelta, Selection, TextEdit, TextEditSummary,
+    EditTransaction, FileMetadata, FileStamp, HistoryOutcome, Revision, RevisionDelta, SaveOutcome,
+    SaveRequest, SaveState, Selection, SyncState, TargetExpectation, TextEdit, TextEditSummary,
     TextSnapshot,
     transaction::PreparedText,
     undo::{HistoryStep, UndoHistory},
@@ -52,6 +53,10 @@ pub enum DocumentEvent {
         document_id: DocumentId,
         path: PathBuf,
     },
+    PathChanged {
+        document_id: DocumentId,
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -73,7 +78,25 @@ impl SavePoint {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SaveAckError {
     DifferentDocument,
+    NotSaving,
+    DifferentTarget,
     FutureRevision { current: Revision, saved: Revision },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SaveStartError {
+    AlreadySaving,
+    Conflict,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DiskChangeAction {
+    Ignore,
+    Recovered,
+    Defer,
+    Reload,
+    Conflict,
+    Missing,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -113,6 +136,9 @@ impl ReloadRequest {
             .base_revision
             .checked_next()
             .ok_or(ReloadError::RevisionExhausted)?;
+        let stamp = FileStamp::from_loaded(&self.path, &bytes)
+            .unwrap_or_else(|_| FileStamp::detached(&bytes));
+        let metadata = FileMetadata::from_loaded(&self.path, &bytes);
         let text = PreparedText::from_utf8(bytes)?;
         let delta = RevisionDelta::new(
             self.base_revision,
@@ -129,6 +155,8 @@ impl ReloadRequest {
             text,
             delta,
             snapshot,
+            stamp,
+            metadata,
         })
     }
 }
@@ -138,6 +166,8 @@ pub struct PreparedReload {
     text: PreparedText,
     delta: RevisionDelta,
     snapshot: DocumentSnapshot,
+    stamp: FileStamp,
+    metadata: FileMetadata,
 }
 
 impl PreparedReload {
@@ -159,18 +189,33 @@ pub struct DocumentSession {
     buffer: DocumentBuffer,
     saved_revision: Revision,
     history: UndoHistory,
+    file: Box<SessionFileState>,
+}
+
+struct SessionFileState {
+    metadata: FileMetadata,
+    sync_state: SyncState,
+    save_state: SaveState,
 }
 
 impl EventEmitter<DocumentEvent> for DocumentSession {}
 
 impl DocumentSession {
     pub fn from_utf8(path: PathBuf, bytes: Vec<u8>) -> Result<Self, EditError> {
+        let stamp =
+            FileStamp::from_loaded(&path, &bytes).unwrap_or_else(|_| FileStamp::detached(&bytes));
+        let metadata = FileMetadata::from_loaded(&path, &bytes);
         let buffer = DocumentBuffer::from_utf8(bytes)?;
         Ok(Self {
             path,
             saved_revision: buffer.revision(),
             buffer,
             history: UndoHistory::default(),
+            file: Box::new(SessionFileState {
+                metadata,
+                sync_state: SyncState::InSync { stamp },
+                save_state: SaveState::Idle,
+            }),
         })
     }
 
@@ -194,6 +239,14 @@ impl DocumentSession {
         self.revision() != self.saved_revision
     }
 
+    pub fn sync_state(&self) -> &SyncState {
+        &self.file.sync_state
+    }
+
+    pub fn save_state(&self) -> &SaveState {
+        &self.file.save_state
+    }
+
     pub fn snapshot(&self) -> DocumentSnapshot {
         self.buffer.snapshot()
     }
@@ -211,6 +264,7 @@ impl DocumentSession {
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
         let delta = self.buffer.commit(transaction)?;
+        self.note_edit();
         self.history.clear_redo();
         cx.emit(DocumentEvent::Edited {
             document_id: self.id(),
@@ -228,6 +282,7 @@ impl DocumentSession {
         let mut forward = edit.transaction.edits.clone();
         forward.sort_by_key(|text_edit| text_edit.range.start);
         let delta = self.buffer.commit(edit.transaction)?;
+        self.note_edit();
         let inverse = inverse_edits(&snapshot, &forward);
         self.history.record(
             HistoryStep { forward, inverse },
@@ -265,6 +320,7 @@ impl DocumentSession {
         };
         for transaction in transactions {
             let delta = self.buffer.commit(transaction)?;
+            self.note_edit();
             self.emit_edited(delta, cx);
         }
         self.history.complete_undo();
@@ -277,6 +333,7 @@ impl DocumentSession {
         };
         for transaction in transactions {
             let delta = self.buffer.commit(transaction)?;
+            self.note_edit();
             self.emit_edited(delta, cx);
         }
         self.history.complete_redo();
@@ -288,6 +345,208 @@ impl DocumentSession {
             document_id: self.id(),
             delta,
         });
+    }
+
+    fn note_edit(&mut self) {
+        match &self.file.sync_state {
+            SyncState::InSync { stamp } => {
+                self.file.sync_state = SyncState::Dirty {
+                    base: stamp.clone(),
+                };
+            }
+            SyncState::Dirty { .. } | SyncState::Conflict { .. } | SyncState::Missing { .. } => {}
+        }
+    }
+
+    pub fn save_request(&self, target: Option<PathBuf>) -> Result<SaveRequest, SaveStartError> {
+        if !matches!(self.file.save_state, SaveState::Idle) {
+            return Err(SaveStartError::AlreadySaving);
+        }
+        let target_path =
+            super::resolve_symlink_target(&target.unwrap_or_else(|| self.path.clone()));
+        let same_target = target_path == super::resolve_symlink_target(&self.path);
+        if same_target && matches!(self.file.sync_state, SyncState::Conflict { .. }) {
+            return Err(SaveStartError::Conflict);
+        }
+        let expected_target = if same_target {
+            match &self.file.sync_state {
+                SyncState::InSync { stamp }
+                | SyncState::Dirty { base: stamp }
+                | SyncState::Missing { base: stamp } => {
+                    if matches!(self.file.sync_state, SyncState::Missing { .. }) {
+                        TargetExpectation::Exact(None)
+                    } else {
+                        TargetExpectation::Exact(Some(stamp.clone()))
+                    }
+                }
+                SyncState::Conflict { .. } => unreachable!("conflict save requires explicit force"),
+            }
+        } else {
+            match std::fs::metadata(&target_path) {
+                Ok(_) => TargetExpectation::CaptureAtStart,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                    TargetExpectation::Exact(None)
+                }
+                Err(_) => TargetExpectation::CaptureAtStart,
+            }
+        };
+        Ok(SaveRequest {
+            document_id: self.id(),
+            save_point: self.save_point(),
+            snapshot: self.snapshot(),
+            source_path: self.path.clone(),
+            target_path,
+            expected_target,
+            metadata: self.file.metadata.clone(),
+        })
+    }
+
+    pub fn newline_sequence(&self) -> &'static str {
+        match self.file.metadata.newline {
+            super::OriginalNewline::CrLf => "\r\n",
+            super::OriginalNewline::None
+            | super::OriginalNewline::Lf
+            | super::OriginalNewline::Mixed => "\n",
+        }
+    }
+
+    pub fn begin_save(&mut self, target: Option<PathBuf>) -> Result<SaveRequest, SaveStartError> {
+        let request = self.save_request(target)?;
+        self.file.save_state = SaveState::Saving {
+            revision: request.revision(),
+            target: request.target_path.clone(),
+        };
+        Ok(request)
+    }
+
+    pub fn begin_force_save(&mut self) -> Result<SaveRequest, SaveStartError> {
+        if !matches!(self.file.save_state, SaveState::Idle) {
+            return Err(SaveStartError::AlreadySaving);
+        }
+        let SyncState::Conflict { external, .. } = &self.file.sync_state else {
+            return self.begin_save(None);
+        };
+        let request = SaveRequest {
+            document_id: self.id(),
+            save_point: self.save_point(),
+            snapshot: self.snapshot(),
+            source_path: self.path.clone(),
+            target_path: super::resolve_symlink_target(&self.path),
+            expected_target: TargetExpectation::Exact(Some(external.clone())),
+            metadata: self.file.metadata.clone(),
+        };
+        self.file.save_state = SaveState::Saving {
+            revision: request.revision(),
+            target: request.target_path.clone(),
+        };
+        Ok(request)
+    }
+
+    pub fn cancel_save(&mut self, revision: Revision) {
+        if matches!(
+            self.file.save_state,
+            SaveState::Saving {
+                revision: active,
+                ..
+            } if active == revision
+        ) {
+            self.file.save_state = SaveState::Idle;
+        }
+    }
+
+    pub fn finish_save(
+        &mut self,
+        outcome: SaveOutcome,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, SaveAckError> {
+        if outcome.document_id != self.id() {
+            return Err(SaveAckError::DifferentDocument);
+        }
+        let SaveState::Saving {
+            revision, target, ..
+        } = &self.file.save_state
+        else {
+            return Err(SaveAckError::NotSaving);
+        };
+        if *revision != outcome.save_point.revision() || *target != outcome.target_path {
+            return Err(SaveAckError::DifferentTarget);
+        }
+        if outcome.source_path != self.path {
+            return Err(SaveAckError::DifferentTarget);
+        }
+        self.path = outcome.target_path;
+        self.file.metadata = outcome.metadata;
+        self.file.save_state = SaveState::Idle;
+        self.file.sync_state = if self.revision() == outcome.save_point.revision() {
+            SyncState::InSync {
+                stamp: outcome.stamp,
+            }
+        } else {
+            SyncState::Dirty {
+                base: outcome.stamp,
+            }
+        };
+        self.mark_saved(outcome.save_point, cx)
+    }
+
+    pub fn observe_disk(&mut self, observed: Option<FileStamp>) -> DiskChangeAction {
+        if matches!(self.file.save_state, SaveState::Saving { .. }) {
+            return DiskChangeAction::Defer;
+        }
+        let base = self.file.sync_state.base().clone();
+        match observed {
+            Some(stamp) if &stamp == self.file.sync_state.base() => {
+                if matches!(
+                    self.file.sync_state,
+                    SyncState::Conflict { .. } | SyncState::Missing { .. }
+                ) {
+                    self.file.sync_state = if self.is_dirty() {
+                        SyncState::Dirty { base: stamp }
+                    } else {
+                        SyncState::InSync { stamp }
+                    };
+                    DiskChangeAction::Recovered
+                } else {
+                    DiskChangeAction::Ignore
+                }
+            }
+            None => {
+                self.file.sync_state = SyncState::Missing { base };
+                DiskChangeAction::Missing
+            }
+            Some(_) if !self.is_dirty() => DiskChangeAction::Reload,
+            Some(external) => {
+                self.file.sync_state = SyncState::Conflict { base, external };
+                DiskChangeAction::Conflict
+            }
+        }
+    }
+
+    pub fn retarget_moved_file(
+        &mut self,
+        destination: PathBuf,
+        stamp: FileStamp,
+        permissions: Option<std::fs::Permissions>,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
+        if !matches!(self.file.save_state, SaveState::Idle) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::WouldBlock,
+                "cannot move a document while it is being saved",
+            ));
+        }
+        self.file.metadata.permissions = permissions;
+        self.path = destination.clone();
+        self.file.sync_state = if self.is_dirty() {
+            SyncState::Dirty { base: stamp }
+        } else {
+            SyncState::InSync { stamp }
+        };
+        cx.emit(DocumentEvent::PathChanged {
+            document_id: self.id(),
+            path: destination,
+        });
+        Ok(())
     }
 
     pub fn mark_saved(
@@ -357,6 +616,11 @@ impl DocumentSession {
         let delta = prepared.delta;
         self.buffer.replace_prepared(prepared.text, delta.clone())?;
         self.saved_revision = delta.after;
+        self.file.metadata = prepared.metadata;
+        self.file.sync_state = SyncState::InSync {
+            stamp: prepared.stamp,
+        };
+        self.file.save_state = SaveState::Idle;
         self.history.clear();
         cx.emit(DocumentEvent::Reloaded {
             document_id: self.id(),
@@ -466,6 +730,164 @@ mod tests {
             assert_eq!(session.revision(), Revision(2));
             assert!(session.is_dirty());
         });
+    }
+
+    #[gpui::test]
+    fn editing_while_atomic_save_runs_keeps_newer_revision_dirty(cx: &mut gpui::TestAppContext) {
+        let directory = std::env::temp_dir().join(format!(
+            "org-studio-save-race-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let path = directory.join("notes.org");
+        std::fs::write(&path, b"one").unwrap();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(path.clone(), std::fs::read(&path).unwrap()).unwrap()
+        });
+        let request = session.update(cx, |session, cx| {
+            session
+                .apply_transient_edit(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(3, 3), " two")],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            session.begin_save(None).unwrap()
+        });
+        let outcome = crate::document::write_atomic(request).unwrap();
+        session.update(cx, |session, cx| {
+            session
+                .apply_transient_edit(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(7, 7), " three")],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            session.finish_save(outcome, cx).unwrap();
+            assert_eq!(session.saved_revision(), Revision(1));
+            assert_eq!(session.revision(), Revision(2));
+            assert!(session.is_dirty());
+            assert!(matches!(session.sync_state(), SyncState::Dirty { .. }));
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), b"one two");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[gpui::test]
+    fn save_as_retargets_the_session_and_keeps_it_editable(cx: &mut gpui::TestAppContext) {
+        let directory = std::env::temp_dir().join(format!(
+            "org-studio-save-as-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let source = directory.join("source.org");
+        let destination = directory.join("destination.org");
+        std::fs::write(&source, b"base").unwrap();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(source.clone(), std::fs::read(&source).unwrap()).unwrap()
+        });
+        let request = session.update(cx, |session, cx| {
+            session
+                .apply_transient_edit(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(4, 4), " saved")],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            session.begin_save(Some(destination.clone())).unwrap()
+        });
+        let outcome = crate::document::write_atomic(request).unwrap();
+        session.update(cx, |session, cx| {
+            session.finish_save(outcome, cx).unwrap();
+            assert_eq!(session.path(), destination);
+            assert!(!session.is_dirty());
+            session
+                .apply_transient_edit(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(10, 10), " again")],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            assert!(session.is_dirty());
+        });
+        assert_eq!(std::fs::read(&destination).unwrap(), b"base saved");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[gpui::test]
+    fn disk_observations_suppress_self_writes_and_preserve_dirty_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("notes.org"), b"base".to_vec()).unwrap()
+        });
+        session.update(cx, |session, cx| {
+            let base = session.sync_state().base().clone();
+            assert_eq!(
+                session.observe_disk(Some(base.clone())),
+                DiskChangeAction::Ignore
+            );
+            session
+                .apply_transient_edit(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(4, 4), " local")],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            let mut external = base.clone();
+            external.content_hash ^= 1;
+            assert_eq!(
+                session.observe_disk(Some(external)),
+                DiskChangeAction::Conflict
+            );
+            assert!(matches!(session.sync_state(), SyncState::Conflict { .. }));
+            assert_eq!(contents(session), "base local");
+            assert_eq!(
+                session.observe_disk(Some(base.clone())),
+                DiskChangeAction::Recovered
+            );
+            assert!(matches!(session.sync_state(), SyncState::Dirty { .. }));
+            assert_eq!(session.observe_disk(None), DiskChangeAction::Missing);
+            assert!(matches!(session.sync_state(), SyncState::Missing { .. }));
+            assert_eq!(
+                session.observe_disk(Some(base)),
+                DiskChangeAction::Recovered
+            );
+            assert!(matches!(session.sync_state(), SyncState::Dirty { .. }));
+        });
+    }
+
+    #[test]
+    fn newline_sequence_follows_the_loaded_document_style() {
+        let crlf = DocumentSession::from_utf8(
+            PathBuf::from("windows.org"),
+            b"first\r\nsecond\r\n".to_vec(),
+        )
+        .unwrap();
+        let mixed =
+            DocumentSession::from_utf8(PathBuf::from("mixed.org"), b"first\r\nsecond\n".to_vec())
+                .unwrap();
+
+        assert_eq!(crlf.newline_sequence(), "\r\n");
+        assert_eq!(mixed.newline_sequence(), "\n");
     }
 
     #[gpui::test]

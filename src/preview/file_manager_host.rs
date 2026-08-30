@@ -485,7 +485,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn dired_open_selected(&mut self, cx: &mut Context<Self>) {
+    pub(super) fn dired_open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let opened_from_full_page = self.content_route == ContentRoute::FileManager;
         let current_directory = self
             .file_manager
@@ -537,7 +537,7 @@ impl WorkspaceWindow {
                 if already_open {
                     cx.notify();
                 } else {
-                    self.open(path, cx);
+                    self.request_open(path, window, cx);
                 }
             }
             _ => {}
@@ -1021,7 +1021,7 @@ fn dired_context_menu(entity: Entity<WorkspaceWindow>, menu: DiredContextMenu) -
                     entity.update(cx, |this, cx| {
                         this.file_manager.context_menu = None;
                         match action {
-                            DiredContextAction::Open => this.dired_open_selected(cx),
+                            DiredContextAction::Open => this.dired_open_selected(window, cx),
                             DiredContextAction::Rename => this.dired_rename(cx),
                             DiredContextAction::Copy => this.dired_copy(cx),
                             DiredContextAction::Move => this.dired_move_to(cx),
@@ -1257,7 +1257,7 @@ fn with_dired_row_interactions(
     let menu_entity = entity.clone();
     let drop_entity = entity;
     let can_drag = !drag_sources.is_empty();
-    row.on_click(move |event, _, cx| {
+    row.on_click(move |event, window, cx| {
         if event.is_right_click() {
             return;
         }
@@ -1270,7 +1270,7 @@ fn with_dired_row_interactions(
                 session.set_cursor(id);
             }
             if surface == DiredRowSurface::Sidebar || event.click_count() >= 2 {
-                this.dired_open_selected(cx);
+                this.dired_open_selected(window, cx);
             } else {
                 cx.notify();
             }

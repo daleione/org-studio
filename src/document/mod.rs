@@ -9,6 +9,7 @@ use std::{
 use ropey::Rope;
 
 mod coordinates;
+mod file;
 mod revision;
 mod selection;
 mod session;
@@ -16,13 +17,18 @@ mod transaction;
 mod undo;
 
 pub use coordinates::{Bias, CoordinateError, LineIndex, Utf16Offset};
+pub use file::{
+    FileMetadata, FileResourceId, FileStamp, OriginalNewline, SaveError, SaveOutcome, SaveRequest,
+    SaveState, SyncState, write_atomic,
+};
+pub(crate) use file::{TargetExpectation, resolve_symlink_target};
 pub use revision::{
     EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
 };
 pub use selection::Selection;
 pub use session::{
-    DocumentEvent, DocumentSession, PreparedReload, ReloadError, ReloadRequest, SaveAckError,
-    SavePoint, SessionEdit,
+    DiskChangeAction, DocumentEvent, DocumentSession, PreparedReload, ReloadError, ReloadRequest,
+    SaveAckError, SavePoint, SaveStartError, SessionEdit,
 };
 pub use transaction::{DocumentBuffer, EditError, EditTransaction, TextEdit};
 pub use undo::{EditOrigin, HistoryOutcome};

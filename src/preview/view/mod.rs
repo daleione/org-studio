@@ -2,10 +2,11 @@ use super::{
     Arc, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context, DocumentFormat,
     FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
     InlineText, Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager,
-    PreviewLoadState, PreviewRow, PreviewSnapshot, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render,
-    ReturnToDocument, SHOW_HOME_COMMAND, ShowHome, StyledText, ToggleMinimap, ToggleSidebar,
-    UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme, div, img, markdown, minimap,
-    parse_inline, px, render_table_row, resolve_image_path, rgb,
+    PreviewLoadState, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
+    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
+    SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowHome, StyledText,
+    ToggleMinimap, ToggleSidebar, UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme,
+    div, img, markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
 use super::{EXPORT_DOCUMENT_COMMAND, ExportDocument, export_ui::render_export_panel};
 use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
@@ -28,6 +29,8 @@ use styled_text::styled_inline_runs;
 impl Render for WorkspaceWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         profiling::scope!("WorkspaceWindow::render");
+        self.install_close_guard(window, cx);
+        self.ensure_document_subscription(cx);
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),
@@ -128,8 +131,17 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ReloadDocument, window, cx| {
                 this.dispatch_command(RELOAD_DOCUMENT_COMMAND, window, cx)
             }))
+            .on_action(cx.listener(|this, _: &SaveDocument, window, cx| {
+                this.dispatch_command(SAVE_DOCUMENT_COMMAND, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SaveDocumentAs, window, cx| {
+                this.dispatch_command(SAVE_DOCUMENT_AS_COMMAND, window, cx)
+            }))
             .on_action(cx.listener(|this, _: &ExportDocument, window, cx| {
                 this.dispatch_command(EXPORT_DOCUMENT_COMMAND, window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &QuitApplication, window, cx| {
+                this.dispatch_command(QUIT_APPLICATION_COMMAND, window, cx)
             }))
             .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
@@ -141,11 +153,9 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &UseChinese, _, cx| {
                 this.set_language(crate::i18n::Language::Chinese, cx)
             }))
-            .on_drop(
-                cx.listener(|this, paths: &ExternalPaths, _, cx| {
-                    this.open_dropped_paths(paths, cx)
-                }),
-            )
+            .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                this.open_dropped_paths(paths, window, cx)
+            }))
             .child(self.workspace_body(entity.clone(), command_window_width, window, cx))
             .when(resizing_sidebar, |view| {
                 view.child(
@@ -189,5 +199,25 @@ impl Render for WorkspaceWindow {
                     self.language,
                 ))
             })
+    }
+}
+
+impl WorkspaceWindow {
+    fn ensure_document_subscription(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.document_session().cloned() else {
+            self.document_subscription = None;
+            self.subscribed_document = None;
+            return;
+        };
+        let document_id = session.read(cx).id();
+        if self.subscribed_document == Some(document_id) {
+            return;
+        }
+        self.subscribed_document = Some(document_id);
+        self.document_subscription = Some(
+            cx.subscribe(&session, |_, _, _: &crate::document::DocumentEvent, cx| {
+                cx.notify()
+            }),
+        );
     }
 }

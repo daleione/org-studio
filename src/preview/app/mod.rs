@@ -14,6 +14,7 @@ use gpui::{div, prelude::*, rgb};
 mod benchmark;
 mod commands;
 mod document_lifecycle;
+mod save;
 pub(crate) use benchmark::ScrollBenchmark;
 
 impl Default for WorkspaceWindow {
@@ -43,6 +44,8 @@ impl WorkspaceWindow {
             keyboard,
             key_context,
             state: PreviewLoadState::Empty,
+            document_subscription: None,
+            subscribed_document: None,
             recent_documents: crate::recent_documents::load(),
             home_error: None,
             generation: 0,
@@ -56,6 +59,7 @@ impl WorkspaceWindow {
             ),
             picker_task: None,
             export: super::export_ui::ExportHost::default(),
+            save: super::SaveHost::default(),
             list_overdraw,
             opened_at: None,
             first_frame_scheduled: None,
@@ -281,7 +285,7 @@ impl WorkspaceWindow {
                 }
             }
             PreviewLoadState::Ready { document: ready } => {
-                let reload_error = &ready.reload_error;
+                let notice = &ready.notice;
                 let document = match self.document_mode {
                     DocumentMode::Source => div().size_full().child(ready.editor.clone()),
                     DocumentMode::Preview => {
@@ -302,7 +306,7 @@ impl WorkspaceWindow {
                         )
                     }
                 };
-                if let Some(error) = reload_error {
+                if let Some(error) = notice {
                     div()
                         .size_full()
                         .flex()
@@ -403,15 +407,35 @@ impl WorkspaceWindow {
             );
         }
         let path: Option<&std::path::Path> = match &self.state {
-            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
-                Some(path.as_path())
-            }
+            PreviewLoadState::Loading { path, .. } => Some(path.as_path()),
+            PreviewLoadState::Failed {
+                previous: Some(document),
+                ..
+            } => Some(document.session.read(cx).path()),
+            PreviewLoadState::Failed {
+                path,
+                previous: None,
+                ..
+            } => Some(path.as_path()),
             PreviewLoadState::Ready { document } => Some(document.session.read(cx).path()),
             PreviewLoadState::Empty => None,
         };
-        path.and_then(|path| path.file_name())
+        let title = path
+            .and_then(|path| path.file_name())
             .and_then(|name| name.to_str())
             .unwrap_or("Org Studio")
-            .to_owned()
+            .to_owned();
+        let Some(session) = self.document_session() else {
+            return title;
+        };
+        let session = session.read(cx);
+        let marker = match session.sync_state() {
+            crate::document::SyncState::Conflict { .. } => " ⚠",
+            crate::document::SyncState::Missing { .. } => " ?",
+            _ if !matches!(session.save_state(), crate::document::SaveState::Idle) => " ↻",
+            _ if session.is_dirty() => " •",
+            _ => "",
+        };
+        format!("{title}{marker}")
     }
 }

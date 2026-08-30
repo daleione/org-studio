@@ -226,12 +226,43 @@ impl WorkspaceWindow {
             format!("Working on {} item(s)…", plan.item_count()).into(),
         ));
         cx.notify();
-        let operation = cx.background_spawn(async move { execute_operation(&plan) });
+        let retarget_current_document = matches!(
+            &plan,
+            OperationPlan::Rename { .. } | OperationPlan::Move { .. }
+        );
+        let current_document = retarget_current_document
+            .then(|| {
+                self.document_session().map(|session| {
+                    let session = session.read(cx);
+                    (session.id(), session.path().to_path_buf())
+                })
+            })
+            .flatten();
+        let operation = cx.background_spawn(async move {
+            let report = execute_operation(&plan);
+            let retarget = current_document.and_then(|(document_id, current_path)| {
+                report
+                    .destinations
+                    .iter()
+                    .find(|(source, _)| source.as_ref() == current_path)
+                    .map(|(_, destination)| {
+                        let destination = destination.to_path_buf();
+                        let file_state =
+                            crate::document::FileStamp::read(&destination).map(|stamp| {
+                                let permissions = std::fs::metadata(&destination)
+                                    .ok()
+                                    .map(|metadata| metadata.permissions());
+                                (stamp, permissions)
+                            });
+                        (document_id, destination, file_state)
+                    })
+            });
+            (report, retarget)
+        });
         self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
-            let report = operation.await;
+            let (report, retarget) = operation.await;
             let _ = this.update(cx, |this, cx| {
                 this.file_manager.operation_busy = false;
-                let current_document = this.document_path(cx).map(PathBuf::from);
                 if let Some(session) = this.file_manager.session.as_mut() {
                     session.clear_completed_operations(&report.completed, &report.destinations);
                 }
@@ -242,14 +273,45 @@ impl WorkspaceWindow {
                     DiredStatus::Error(report.summary())
                 });
                 if this.content_route == ContentRoute::Document
-                    && let Some(current_document) = current_document
-                    && let Some((_, destination)) = report
-                        .destinations
-                        .iter()
-                        .find(|(source, _)| source.as_ref() == current_document)
-                    && crate::preview::is_supported_document(destination)
+                    && let Some((document_id, destination, file_state)) = retarget
+                    && crate::preview::is_supported_document(&destination)
+                    && let Some(document) = this.document_session().cloned()
+                    && document.read(cx).id() == document_id
                 {
-                    this.open(destination.to_path_buf(), cx);
+                    match file_state {
+                        Ok((stamp, permissions)) => match document.update(cx, |session, cx| {
+                            session.retarget_moved_file(
+                                destination.clone(),
+                                stamp,
+                                permissions,
+                                cx,
+                            )
+                        }) {
+                            Ok(()) => {
+                                crate::recent_documents::record_success(
+                                    &mut this.recent_documents,
+                                    destination.clone(),
+                                );
+                                this.watch_document_profiled(
+                                    destination,
+                                    this.generation,
+                                    cx,
+                                );
+                            }
+                            Err(error) => {
+                                this.file_manager.status = Some(DiredStatus::Error(
+                                    format!("The file moved, but the open document could not follow it: {error}")
+                                        .into(),
+                                ));
+                            }
+                        },
+                        Err(error) => {
+                            this.file_manager.status = Some(DiredStatus::Error(
+                                format!("The file moved, but its new state could not be read: {error}")
+                                    .into(),
+                            ));
+                        }
+                    }
                 }
                 cx.notify();
             });
@@ -264,6 +326,14 @@ impl WorkspaceWindow {
     fn dired_operation_available(&mut self, cx: &mut Context<Self>) -> bool {
         if self.file_manager.operation_busy {
             self.show_dired_operation_error("A file operation is already in progress", cx);
+            false
+        } else if self.document_session().is_some_and(|session| {
+            !matches!(
+                session.read(cx).save_state(),
+                crate::document::SaveState::Idle
+            )
+        }) {
+            self.show_dired_operation_error("Wait for the document save to finish", cx);
             false
         } else {
             true

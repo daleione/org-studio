@@ -3,6 +3,7 @@ use std::sync::Arc;
 use gpui::{ListState, px};
 
 use crate::app::DocumentMode;
+use crate::preview::SaveStatus;
 use crate::preview::export_ui::ExportRunState;
 use crate::{document::ByteOffset, i18n::Language, navigation::PaneId};
 
@@ -70,7 +71,7 @@ impl WorkspaceWindow {
             format: Some(super::super::DocumentFormat::from_path(
                 ready.session.read(cx).path(),
             )),
-            transient: self.document_transient_status(),
+            transient: self.document_transient_status(cx),
         }
     }
 
@@ -122,7 +123,7 @@ impl WorkspaceWindow {
             statistics: Some(statistics),
             document_statistics: Some(document_statistics),
             format: Some(document.format),
-            transient: self.document_transient_status(),
+            transient: self.document_transient_status(cx),
         }
     }
 
@@ -167,7 +168,7 @@ impl WorkspaceWindow {
         })
     }
 
-    fn document_transient_status(&self) -> Option<StatusMessage> {
+    fn document_transient_status(&self, cx: &gpui::App) -> Option<StatusMessage> {
         if self.which_key_items.is_empty()
             && let Some(status) = self.keyboard.status()
         {
@@ -176,20 +177,58 @@ impl WorkspaceWindow {
                 tone: StatusTone::Working,
             });
         }
-        self.export.status().map(|status| match status {
-            ExportRunState::Working(message) => StatusMessage {
+        if let Some(SaveStatus::Saving(message)) = &self.save.status {
+            return Some(StatusMessage {
                 text: message.clone(),
                 tone: StatusTone::Working,
-            },
-            ExportRunState::Success { message, .. } => StatusMessage {
-                text: message.clone(),
-                tone: StatusTone::Success,
-            },
-            ExportRunState::Error(message) => StatusMessage {
+            });
+        }
+        let session = self.document_session().map(|session| session.read(cx));
+        if let Some(session) = session {
+            match session.sync_state() {
+                crate::document::SyncState::Conflict { .. } => {
+                    return Some(StatusMessage {
+                        text: "Conflict: file changed on disk".into(),
+                        tone: StatusTone::Error,
+                    });
+                }
+                crate::document::SyncState::Missing { .. } => {
+                    return Some(StatusMessage {
+                        text: "File is missing on disk; Save will recreate it".into(),
+                        tone: StatusTone::Error,
+                    });
+                }
+                _ => {}
+            }
+        }
+        if let Some(status) = self.export.status() {
+            return Some(match status {
+                ExportRunState::Working(message) => StatusMessage {
+                    text: message.clone(),
+                    tone: StatusTone::Working,
+                },
+                ExportRunState::Success { message, .. } => StatusMessage {
+                    text: message.clone(),
+                    tone: StatusTone::Success,
+                },
+                ExportRunState::Error(message) => StatusMessage {
+                    text: message.clone(),
+                    tone: StatusTone::Error,
+                },
+            });
+        }
+        if let Some(SaveStatus::Error(message)) = &self.save.status {
+            return Some(StatusMessage {
                 text: message.clone(),
                 tone: StatusTone::Error,
-            },
-        })
+            });
+        }
+        session
+            .filter(|session| session.is_dirty())
+            .map(|_| StatusMessage {
+                text: "Modified".into(),
+                tone: StatusTone::Working,
+            })
     }
 }
 

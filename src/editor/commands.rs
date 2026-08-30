@@ -249,7 +249,8 @@ impl SourceEditor {
     }
 
     fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
-        self.replace_selection("\n", EditOrigin::Newline, cx);
+        let newline = self.session.read(cx).newline_sequence();
+        self.replace_selection(newline, EditOrigin::Newline, cx);
     }
 
     fn insert_tab(&mut self, _: &InsertTab, _: &mut Window, cx: &mut Context<Self>) {
