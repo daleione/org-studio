@@ -11,6 +11,7 @@ pub(super) const DIRED_PANE_ID: PaneId = PaneId(2);
 pub(super) enum StatusHost {
     Preview,
     Editor,
+    Split,
     Dired,
 }
 

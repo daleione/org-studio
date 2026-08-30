@@ -328,6 +328,26 @@ pub(in crate::preview) enum ProjectionPatchError {
 }
 
 impl PreviewProjectionSnapshot {
+    pub(in crate::preview) fn visual_row_for_source_offset(
+        &self,
+        offset: crate::document::ByteOffset,
+    ) -> Option<usize> {
+        if self.rows.len() == 0 {
+            return None;
+        }
+        let (mut low, mut high) = (0usize, self.rows.len());
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let row = self.source_row(middle)?;
+            if row.content.range.end <= offset {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        Some(low.min(self.rows.len() - 1))
+    }
+
     #[allow(dead_code)] // Theme hot-reload is not wired by the current read-only host yet.
     pub(in crate::preview) fn with_theme_revision(&self, theme: u64) -> Self {
         let mut snapshot = self.clone();

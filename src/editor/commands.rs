@@ -19,6 +19,7 @@ impl SourceEditor {
         cx: &mut Context<Self>,
     ) {
         self.finish_composition(cx);
+        self.vertical_goal_x = None;
         let range = self.selection.range();
         let after = Selection::caret(ByteOffset(range.start.0 + text.len() as u64));
         let after_utf16 = self.selection_utf16.start + text.encode_utf16().count();
@@ -126,6 +127,7 @@ impl SourceEditor {
         cx: &mut Context<Self>,
     ) {
         self.finish_composition(cx);
+        self.vertical_goal_x = None;
         let snapshot = self.snapshot(cx);
         let target = if !extend && !self.selection.is_empty() {
             if forward {
@@ -174,6 +176,35 @@ impl SourceEditor {
         self.finish_composition(cx);
         let snapshot = self.snapshot(cx);
         let head = self.selection.head();
+        if let Some(row) = self
+            .hit_rows
+            .iter()
+            .find(|row| head >= row.range.start && head <= row.range.end)
+        {
+            let source_local = (head.0 - row.range.start.0).min(row.range.len()) as usize;
+            let display_local = row.display.source_to_display(source_local);
+            if let Some(position) = row
+                .layout
+                .position_for_index(display_local, px(LINE_HEIGHT))
+            {
+                let goal_x = *self
+                    .vertical_goal_x
+                    .get_or_insert_with(|| f32::from(position.x));
+                let target = self.hit_test(gpui::point(
+                    row.text_origin_x + px(goal_x),
+                    row.origin_y + position.y + px(delta as f32 * LINE_HEIGHT + LINE_HEIGHT / 2.0),
+                ));
+                self.selection = if extend {
+                    self.selection.with_head(target)
+                } else {
+                    Selection::caret(target)
+                };
+                self.sync_selection_utf16(&snapshot);
+                self.reveal_caret(&snapshot);
+                cx.notify();
+                return;
+            }
+        }
         let Ok(line) = snapshot.line_index_at(head) else {
             return;
         };
@@ -316,6 +347,7 @@ impl SourceEditor {
     ) {
         window.focus(&self.focus_handle, cx);
         self.finish_composition(cx);
+        self.vertical_goal_x = None;
         self.is_selecting = true;
         self.drag_position = Some(event.position);
         let target = self.hit_test(event.position);
@@ -383,8 +415,7 @@ impl SourceEditor {
             0.0
         };
         if distance != 0.0 {
-            let snapshot = self.snapshot(cx);
-            let max_scroll = (snapshot.len_lines() as f32 * LINE_HEIGHT
+            let max_scroll = (self.display_map.total_visual_rows() as f32 * LINE_HEIGHT
                 - f32::from(viewport.size.height))
             .max(0.0);
             let speed = distance.signum() * (distance.abs() / 8.0).clamp(4.0, 64.0);
@@ -405,7 +436,8 @@ impl SourceEditor {
             .iter()
             .find(|row| {
                 let top = row.origin_y;
-                position.y >= top && position.y < top + px(LINE_HEIGHT)
+                let height = px((row.layout.wrap_boundaries().len() + 1) as f32 * LINE_HEIGHT);
+                position.y >= top && position.y < top + height
             })
             .unwrap_or_else(|| {
                 if position.y < first.origin_y {
@@ -414,19 +446,31 @@ impl SourceEditor {
                     self.hit_rows.last().expect("visible row exists")
                 }
             });
-        let local = row
+        let display = row
             .layout
-            .closest_index_for_x(position.x - row.text_origin_x);
+            .closest_index_for_position(
+                gpui::point(position.x - row.text_origin_x, position.y - row.origin_y),
+                px(LINE_HEIGHT),
+            )
+            .unwrap_or_else(|index| index);
+        let local = row.display.display_to_source(display);
         ByteOffset(row.range.start.0 + local.min(row.range.len() as usize) as u64)
     }
 
-    fn scroll(&mut self, delta_y: f32, cx: &mut Context<Self>) {
-        let snapshot = self.snapshot(cx);
+    fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
         let viewport_height = self
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
-        let max_scroll = (snapshot.len_lines() as f32 * LINE_HEIGHT - viewport_height).max(0.0);
+        let max_scroll =
+            (self.display_map.total_visual_rows() as f32 * LINE_HEIGHT - viewport_height).max(0.0);
+        let previous_y = self.scroll_y;
         self.scroll_y = (self.scroll_y - delta_y).clamp(0.0, max_scroll);
+        if !self.display_map.soft_wrap() {
+            self.scroll_x = (self.scroll_x - delta_x).max(0.0);
+        }
+        if (self.scroll_y - previous_y).abs() > 0.5 {
+            cx.emit(super::SourceScrollEvent);
+        }
         cx.notify();
     }
 
@@ -437,13 +481,89 @@ impl SourceEditor {
         let Ok(line) = snapshot.line_index_at(self.selection.head()) else {
             return;
         };
-        let top = line.0 as f32 * LINE_HEIGHT;
+        let top = self
+            .hit_rows
+            .iter()
+            .find(|row| {
+                self.selection.head() >= row.range.start && self.selection.head() <= row.range.end
+            })
+            .and_then(|row| {
+                let local =
+                    (self.selection.head().0 - row.range.start.0).min(row.range.len()) as usize;
+                row.layout
+                    .position_for_index(row.display.source_to_display(local), px(LINE_HEIGHT))
+                    .map(|position| {
+                        self.scroll_y
+                            + f32::from(row.origin_y - viewport.top())
+                            + f32::from(position.y)
+                    })
+            })
+            .unwrap_or_else(|| self.display_map.line_start_visual_row(line.0) as f32 * LINE_HEIGHT);
         let bottom = top + LINE_HEIGHT;
         let height = f32::from(viewport.size.height);
         if top < self.scroll_y {
             self.scroll_y = top;
         } else if bottom > self.scroll_y + height {
             self.scroll_y = (bottom - height).max(0.0);
+        }
+        if !self.display_map.soft_wrap()
+            && let Some(row) = self.hit_rows.iter().find(|row| {
+                self.selection.head() >= row.range.start && self.selection.head() <= row.range.end
+            })
+        {
+            let source_local =
+                (self.selection.head().0 - row.range.start.0).min(row.range.len()) as usize;
+            let display_local = row.display.source_to_display(source_local);
+            if let Some(position) = row
+                .layout
+                .position_for_index(display_local, px(LINE_HEIGHT))
+            {
+                let caret_x = row.text_origin_x + position.x;
+                let text_left = row.text_origin_x + px(self.scroll_x);
+                if caret_x > viewport.right() - px(12.0) {
+                    self.scroll_x += f32::from(caret_x - viewport.right() + px(12.0));
+                } else if caret_x < text_left {
+                    self.scroll_x = (self.scroll_x - f32::from(text_left - caret_x)).max(0.0);
+                }
+            }
+        }
+    }
+
+    pub(crate) fn top_source_anchor(&self, snapshot: &DocumentSnapshot) -> (ByteOffset, f32) {
+        let visual_row = (self.scroll_y.max(0.0) / LINE_HEIGHT).floor() as u64;
+        let line = self.display_map.line_at_visual_row(visual_row);
+        let line_start = self.display_map.line_start_visual_row(line);
+        let line_end = self
+            .display_map
+            .line_start_visual_row(line.saturating_add(1));
+        let rows = line_end.saturating_sub(line_start).max(1);
+        let fraction = (visual_row.saturating_sub(line_start) as f32 / rows as f32).clamp(0.0, 1.0);
+        let source = snapshot
+            .line_content_range(LineIndex(line))
+            .map_or(ByteOffset(0), |range| range.start);
+        (source, fraction)
+    }
+
+    pub(crate) fn scroll_to_source_anchor(
+        &mut self,
+        offset: ByteOffset,
+        fraction: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot(cx);
+        let Ok(line) = snapshot.line_index_at(offset) else {
+            return;
+        };
+        let start = self.display_map.line_start_visual_row(line.0);
+        let end = self
+            .display_map
+            .line_start_visual_row(line.0.saturating_add(1));
+        let within =
+            ((end.saturating_sub(start).max(1) as f32) * fraction.clamp(0.0, 1.0)).floor() as u64;
+        let target = start.saturating_add(within) as f32 * LINE_HEIGHT;
+        if (self.scroll_y - target).abs() > 0.5 {
+            self.scroll_y = target;
+            cx.notify();
         }
     }
 
@@ -529,8 +649,10 @@ impl Render for SourceEditor {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(move |event, _, cx| {
-                let delta = f32::from(event.delta.pixel_delta(px(LINE_HEIGHT)).y);
-                scroll_entity.update(cx, |this, cx| this.scroll(delta, cx));
+                let delta = event.delta.pixel_delta(px(LINE_HEIGHT));
+                scroll_entity.update(cx, |this, cx| {
+                    this.scroll(f32::from(delta.x), f32::from(delta.y), cx)
+                });
                 cx.stop_propagation();
             })
             .child(EditorElement::new(entity))

@@ -20,9 +20,10 @@ use super::{
     DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND, DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND,
     END_COMMAND, EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
     OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
-    QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
-    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
-    SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    PREVIEW_MODE_COMMAND, QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND,
+    RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
+    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, SOURCE_MODE_COMMAND,
+    SPLIT_MODE_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
 };
 
 #[cfg(test)]
@@ -119,6 +120,46 @@ pub(super) fn document_input(
             redaction: RedactionPolicy::None,
         })
         .expect("valid built-in reload command");
+    for (name, title, command) in [
+        (
+            SOURCE_MODE_COMMAND,
+            "Source Mode",
+            BuiltinCommand::SetSourceMode,
+        ),
+        (
+            SPLIT_MODE_COMMAND,
+            "Split Mode",
+            BuiltinCommand::SetSplitMode,
+        ),
+        (
+            PREVIEW_MODE_COMMAND,
+            "Preview Mode",
+            BuiltinCommand::SetPreviewMode,
+        ),
+        (
+            TOGGLE_SOFT_WRAP_COMMAND,
+            "Toggle Soft Wrap",
+            BuiltinCommand::ToggleSoftWrap,
+        ),
+    ] {
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::Configuration,
+                required_capabilities: CapabilitySet::CONFIGURATION,
+                redaction: RedactionPolicy::None,
+            })
+            .expect("valid document view command");
+    }
     builder
         .register_builtin(BuiltinCommandSpec {
             name: EXPORT_DOCUMENT_COMMAND.into(),
@@ -370,18 +411,29 @@ pub(super) fn document_input(
             .expect("valid built-in file operation command");
     }
     let commands = Arc::new(builder.build());
+    let (keyboard, active_context) = document_keymap(mode, &commands);
+    (commands, keyboard, active_context)
+}
+
+pub(super) fn document_keymap(
+    mode: crate::app::DocumentMode,
+    commands: &Arc<CommandRegistry>,
+) -> (KeyboardRouter, ContextSet) {
     let contexts = built_in_contexts();
-    let (bindings, active_contexts) = match mode {
-        crate::app::DocumentMode::Source => (workspace_bindings(), ["workspace", "editor"]),
-        crate::app::DocumentMode::Preview => (preview_bindings(), ["workspace", "preview"]),
+    let (bindings, active_contexts): (_, Vec<&str>) = match mode {
+        crate::app::DocumentMode::Source => (workspace_bindings(), vec!["workspace", "editor"]),
+        crate::app::DocumentMode::Split => {
+            (workspace_bindings(), vec!["workspace", "editor", "preview"])
+        }
+        crate::app::DocumentMode::Preview => (preview_bindings(), vec!["workspace", "preview"]),
     };
     let active_context = contexts
-        .set(active_contexts)
+        .set(active_contexts.clone())
         .expect("registered built-in contexts");
     let configuration = compile_input_profile(
         1,
         &bindings,
-        &commands,
+        commands,
         &contexts,
         &active_contexts,
         &["prompt"],
@@ -393,7 +445,7 @@ pub(super) fn document_input(
         configuration.grammar,
         configuration.enabled_when,
     );
-    (commands, keyboard, active_context)
+    (keyboard, active_context)
 }
 
 pub(super) fn built_in_contexts() -> crate::input::ContextRegistry {
@@ -473,6 +525,22 @@ pub(super) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec {
             keys: "C-x C-d",
             behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-c v s",
+            behavior: BindingBehavior::Command(SOURCE_MODE_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-c v d",
+            behavior: BindingBehavior::Command(SPLIT_MODE_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-c v p",
+            behavior: BindingBehavior::Command(PREVIEW_MODE_COMMAND),
+        },
+        BindingSpec {
+            keys: "M-z",
+            behavior: BindingBehavior::Command(TOGGLE_SOFT_WRAP_COMMAND),
         },
     ]
 }

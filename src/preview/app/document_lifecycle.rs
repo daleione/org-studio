@@ -476,6 +476,10 @@ impl WorkspaceWindow {
                 self.home_error = None;
                 let session = cx.new(|_| session);
                 let editor = cx.new(|cx| crate::editor::SourceEditor::new(session.clone(), cx));
+                editor.update(cx, |editor, cx| editor.set_soft_wrap(self.soft_wrap, cx));
+                self.derived.published = preview
+                    .as_ref()
+                    .map(|preview| (preview.document_id, preview.revision));
                 let panel = preview.map(|preview| {
                     let document = Arc::new(preview);
                     cx.new(|_| super::super::PreviewPanel::new(document, self.list_overdraw))

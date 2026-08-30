@@ -165,6 +165,7 @@ impl StatusLineSnapshot {
         match self.host {
             StatusHost::Preview => "PREVIEW",
             StatusHost::Editor => "EDIT",
+            StatusHost::Split => "SPLIT",
             StatusHost::Dired => "FILES",
         }
     }
@@ -906,6 +907,18 @@ fn info_text(
             }
         };
     }
+    if segment == StatusSegment::Mode
+        && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Split)
+    {
+        return match language {
+            Language::Chinese => {
+                "当前为 Split：左侧编辑源文本，右侧显示同一 revision 的预览。".to_owned()
+            }
+            Language::English => {
+                "Split shows editable source and the coherent preview side by side.".to_owned()
+            }
+        };
+    }
     if segment == StatusSegment::Position
         && let Some(StatusPosition::PreviewSource { line, .. }) =
             snapshot.and_then(|snapshot| snapshot.position)
@@ -1087,6 +1100,7 @@ mod tests {
         });
         let editor = window
             .update(cx, |app, _, cx| {
+                app.language = Language::Chinese;
                 app.document_mode = crate::app::DocumentMode::Source;
                 app.generation = 1;
                 assert!(app.apply_load_result(1, Ok(loaded), cx));

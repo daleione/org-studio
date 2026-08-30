@@ -2,11 +2,12 @@ use super::{
     Arc, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context, DocumentFormat,
     FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
     InlineText, Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager,
-    PreviewLoadState, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
-    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
-    SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowHome, StyledText,
-    ToggleMinimap, ToggleSidebar, UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme,
-    div, img, markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
+    PreviewLoadState, PreviewMode, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND,
+    QuitApplication, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument,
+    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument,
+    SaveDocumentAs, ShowHome, SourceMode, SplitMode, StyledText, ToggleMinimap, ToggleSidebar,
+    ToggleSoftWrap, UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme, div, img,
+    markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
 use super::{EXPORT_DOCUMENT_COMMAND, ExportDocument, export_ui::render_export_panel};
 use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
@@ -31,6 +32,7 @@ impl Render for WorkspaceWindow {
         profiling::scope!("WorkspaceWindow::render");
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
+        self.ensure_split_scroll_sync(cx);
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),
@@ -50,6 +52,10 @@ impl Render for WorkspaceWindow {
                 handle
             })
             .clone();
+        if self.focus_workspace_on_render {
+            self.focus_workspace_on_render = false;
+            window.focus(&focus_handle, cx);
+        }
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
                 if this.cancel_minimap_interaction(cx) || this.cancel_sidebar_resize() {
@@ -147,6 +153,16 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
+            .on_action(cx.listener(|this, _: &SourceMode, _, cx| {
+                this.set_document_mode(crate::app::DocumentMode::Source, cx)
+            }))
+            .on_action(cx.listener(|this, _: &SplitMode, _, cx| {
+                this.set_document_mode(crate::app::DocumentMode::Split, cx)
+            }))
+            .on_action(cx.listener(|this, _: &PreviewMode, _, cx| {
+                this.set_document_mode(crate::app::DocumentMode::Preview, cx)
+            }))
+            .on_action(cx.listener(|this, _: &ToggleSoftWrap, _, cx| this.toggle_soft_wrap(cx)))
             .on_action(cx.listener(|this, _: &UseEnglish, _, cx| {
                 this.set_language(crate::i18n::Language::English, cx)
             }))
@@ -214,10 +230,19 @@ impl WorkspaceWindow {
             return;
         }
         self.subscribed_document = Some(document_id);
-        self.document_subscription = Some(
-            cx.subscribe(&session, |_, _, _: &crate::document::DocumentEvent, cx| {
-                cx.notify()
-            }),
-        );
+        self.document_subscription = Some(cx.subscribe(
+            &session,
+            |this, _, event: &crate::document::DocumentEvent, cx| {
+                if matches!(
+                    event,
+                    crate::document::DocumentEvent::Edited { .. }
+                        | crate::document::DocumentEvent::Reloaded { .. }
+                        | crate::document::DocumentEvent::PathChanged { .. }
+                ) {
+                    this.schedule_derived_update(cx);
+                }
+                cx.notify();
+            },
+        ));
     }
 }

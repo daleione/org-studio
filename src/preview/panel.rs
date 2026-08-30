@@ -146,10 +146,174 @@ impl PreviewPanel {
         list_overdraw: f32,
         cx: &mut Context<Self>,
     ) {
+        let source_anchor = self.top_source_anchor();
+        let global_visibility = self.global_visibility;
+        let global_cycle_contiguous = self.global_cycle_contiguous;
+        let folded_sources = self
+            .fold_markers
+            .iter()
+            .filter_map(|block_id| self.block_source_start(*block_id))
+            .collect::<Vec<_>>();
         let event = document.derived_event();
         *self = Self::new(document, list_overdraw);
+        if global_visibility != GlobalVisibility::All {
+            if let Some(projection) = self.global_visibility_projection(global_visibility) {
+                self.global_visibility = global_visibility;
+                self.global_cycle_contiguous = global_cycle_contiguous;
+                self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
+            }
+        } else {
+            for source in folded_sources {
+                let Some(block_id) = self.closest_block_at(source) else {
+                    continue;
+                };
+                let Some(projection) = self.local_fold_projection(block_id) else {
+                    continue;
+                };
+                if projection.visibility == LocalVisibility::Folded {
+                    self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
+                }
+            }
+        }
+        if let Some((anchor, offset_in_item)) = source_anchor {
+            self.scroll_to_source_offset_with_offset(anchor, offset_in_item);
+        }
         cx.emit(event);
         cx.notify();
+    }
+
+    fn block_source_start(&self, block_id: BlockId) -> Option<crate::document::ByteOffset> {
+        match self.document.format {
+            DocumentFormat::Org => self
+                .document
+                .blocks
+                .nodes()
+                .get(block_id as usize)
+                .map(|block| block.source.start),
+            DocumentFormat::Markdown => self
+                .document
+                .markdown_blocks
+                .get(block_id as usize)
+                .map(|block| block.source.start),
+        }
+    }
+
+    fn closest_block_at(&self, source: crate::document::ByteOffset) -> Option<BlockId> {
+        let starts: Box<dyn Iterator<Item = (BlockId, crate::document::ByteOffset)> + '_> =
+            match self.document.format {
+                DocumentFormat::Org => Box::new(
+                    self.document
+                        .blocks
+                        .nodes()
+                        .iter()
+                        .enumerate()
+                        .map(|(id, block)| (id as BlockId, block.source.start)),
+                ),
+                DocumentFormat::Markdown => Box::new(
+                    self.document
+                        .markdown_blocks
+                        .iter()
+                        .enumerate()
+                        .map(|(id, block)| (id as BlockId, block.source.start)),
+                ),
+            };
+        starts
+            .min_by_key(|(_, start)| start.0.abs_diff(source.0))
+            .map(|(id, _)| id)
+    }
+
+    pub(in crate::preview) fn top_source_offset(&self) -> Option<crate::document::ByteOffset> {
+        self.top_source_anchor().map(|(offset, _)| offset)
+    }
+
+    pub(in crate::preview) fn split_anchor(&self) -> Option<(crate::document::ByteOffset, f32)> {
+        let scroll_top = self.list_state.logical_scroll_top();
+        let source = self.top_source_offset()?;
+        let height = self
+            .list_state
+            .bounds_for_item(scroll_top.item_ix)
+            .map(|bounds| f32::from(bounds.size.height))
+            .filter(|height| *height > 0.0)
+            .unwrap_or(1.0);
+        Some((
+            source,
+            (f32::from(scroll_top.offset_in_item) / height).clamp(0.0, 1.0),
+        ))
+    }
+
+    fn top_source_anchor(&self) -> Option<(crate::document::ByteOffset, gpui::Pixels)> {
+        let scroll_top = self.list_state.logical_scroll_top();
+        let item = self
+            .list_state
+            .logical_scroll_top()
+            .item_ix
+            .min(self.visible_rows.len().saturating_sub(1));
+        let visual = *self.visible_rows.get(item)?;
+        self.document
+            .projection
+            .source_row(visual)
+            .map(|row| (row.content.range.start, scroll_top.offset_in_item))
+    }
+
+    pub(in crate::preview) fn scroll_to_split_anchor(
+        &mut self,
+        offset: crate::document::ByteOffset,
+        fraction: f32,
+    ) {
+        let Some(visual) = self
+            .document
+            .projection
+            .visual_row_for_source_offset(offset)
+        else {
+            return;
+        };
+        let item = self
+            .visible_rows
+            .binary_search(&visual)
+            .unwrap_or_else(|index| index)
+            .min(self.visible_rows.len().saturating_sub(1));
+        let height = self
+            .list_state
+            .bounds_for_item(item)
+            .map(|bounds| f32::from(bounds.size.height))
+            .filter(|height| *height > 0.0)
+            .unwrap_or_else(|| {
+                self.document
+                    .display_map
+                    .as_ref()
+                    .map(|map| {
+                        let layout = map.layout(visual);
+                        layout.fixed_height.unwrap_or(layout.min_height).max(24.0)
+                    })
+                    .unwrap_or(24.0)
+            });
+        self.list_state.scroll_to(ListOffset {
+            item_ix: item,
+            offset_in_item: px(height * fraction.clamp(0.0, 1.0)),
+        });
+    }
+
+    fn scroll_to_source_offset_with_offset(
+        &mut self,
+        offset: crate::document::ByteOffset,
+        offset_in_item: gpui::Pixels,
+    ) {
+        let Some(visual) = self
+            .document
+            .projection
+            .visual_row_for_source_offset(offset)
+        else {
+            return;
+        };
+        let item = self
+            .visible_rows
+            .binary_search(&visual)
+            .unwrap_or_else(|index| index)
+            .min(self.visible_rows.len().saturating_sub(1));
+        self.list_state.scroll_to(ListOffset {
+            item_ix: item,
+            offset_in_item,
+        });
     }
 
     pub(in crate::preview) fn note_viewport(&mut self, viewport: (u32, u32)) -> bool {
@@ -389,6 +553,13 @@ impl PreviewPanel {
         } else {
             GlobalVisibility::Overview
         };
+        self.global_visibility_projection(next)
+    }
+
+    fn global_visibility_projection(
+        &self,
+        next: GlobalVisibility,
+    ) -> Option<GlobalVisibilityProjection> {
         let (visible_rows, fold_markers) = match self.document.format {
             DocumentFormat::Org => {
                 global_org_visibility(&self.document.projection.rows, &self.document.blocks, next)

@@ -17,7 +17,7 @@ use super::{
 };
 
 impl WorkspaceWindow {
-    pub(super) fn document_status_snapshot(
+    pub(in crate::preview) fn document_status_snapshot(
         &self,
         pane: PaneId,
         cx: &gpui::App,
@@ -33,8 +33,14 @@ impl WorkspaceWindow {
             | PreviewLoadState::Failed { previous: None, .. } => return None,
         };
         match self.document_mode {
-            DocumentMode::Source => Some(self.source_status_snapshot(pane, document, cx)),
-            DocumentMode::Preview => Some(self.preview_status_snapshot(pane, document, cx)),
+            DocumentMode::Source | DocumentMode::Split => {
+                Some(self.source_status_snapshot(pane, document, cx))
+            }
+            DocumentMode::Preview => document
+                .panel
+                .as_ref()
+                .map(|panel| self.preview_status_snapshot(pane, panel, cx))
+                .or_else(|| Some(self.source_status_snapshot(pane, document, cx))),
         }
     }
 
@@ -53,7 +59,11 @@ impl WorkspaceWindow {
         StatusLineSnapshot {
             pane,
             language: self.language,
-            host: StatusHost::Editor,
+            host: if self.document_mode == DocumentMode::Split {
+                StatusHost::Split
+            } else {
+                StatusHost::Editor
+            },
             outline: None,
             position: Some(StatusPosition::EditorCaret {
                 line: status.caret_line,
@@ -78,10 +88,10 @@ impl WorkspaceWindow {
     fn preview_status_snapshot(
         &self,
         pane: PaneId,
-        ready: &super::super::ReadyDocument,
+        panel: &gpui::Entity<super::super::PreviewPanel>,
         cx: &gpui::App,
     ) -> StatusLineSnapshot {
-        let panel = ready.panel().read(cx);
+        let panel = panel.read(cx);
         let document = panel.document();
         let visible_rows = panel.visible_rows();
         let list_state = panel.list_state();
@@ -199,6 +209,14 @@ impl WorkspaceWindow {
                     });
                 }
                 _ => {}
+            }
+            if self.document_mode != DocumentMode::Source
+                && self.derived.published != Some((session.id(), session.revision()))
+            {
+                return Some(StatusMessage {
+                    text: "Updating Preview…".into(),
+                    tone: StatusTone::Working,
+                });
             }
         }
         if let Some(status) = self.export.status() {

@@ -41,13 +41,16 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Ok(prepared) = CommandDispatcher::prepare_key(
+        let prepared = CommandDispatcher::prepare_key(
             &self.commands,
             command,
             InvocationOrigin::Keyboard,
-            CapabilitySet::READ_FILE_SYSTEM.union(CapabilitySet::WRITE_FILE_SYSTEM),
+            CapabilitySet::READ_FILE_SYSTEM
+                .union(CapabilitySet::WRITE_FILE_SYSTEM)
+                .union(CapabilitySet::CONFIGURATION),
             prefix,
-        ) else {
+        );
+        let Ok(prepared) = prepared else {
             return;
         };
         self.execute_command(
@@ -147,6 +150,18 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ToggleMinimap) => {
                 self.toggle_minimap(cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::SetSourceMode) => {
+                self.set_document_mode(crate::app::DocumentMode::Source, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::SetSplitMode) => {
+                self.set_document_mode(crate::app::DocumentMode::Split, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::SetPreviewMode) => {
+                self.set_document_mode(crate::app::DocumentMode::Preview, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ToggleSoftWrap) => {
+                self.toggle_soft_wrap(cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle) => {
                 self.cycle_global_visibility_animated(window, cx);
                 cx.notify();
@@ -199,6 +214,48 @@ impl WorkspaceWindow {
                 self.show_dired_shortcuts(cx)
             }
         }
+    }
+
+    pub(in crate::preview) fn set_document_mode(
+        &mut self,
+        mode: crate::app::DocumentMode,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_mode == mode {
+            return;
+        }
+        if let Some(ready) = self.state.ready() {
+            ready
+                .editor
+                .update(cx, |editor, cx| editor.finish_composition(cx));
+        }
+        self.document_mode = mode;
+        self.split_scroll.source_anchor = None;
+        self.split_scroll.preview_anchor = None;
+        let (keyboard, key_context) = super::document_keymap(mode, &self.commands);
+        self.keyboard = keyboard;
+        self.key_context = key_context;
+        if mode != crate::app::DocumentMode::Source {
+            self.schedule_derived_update(cx);
+        }
+        if mode != crate::app::DocumentMode::Preview {
+            self.request_editor_focus(cx);
+        } else {
+            self.focus_workspace_on_render = true;
+        }
+        self.save_preview_settings();
+        cx.notify();
+    }
+
+    pub(in crate::preview) fn toggle_soft_wrap(&mut self, cx: &mut Context<Self>) {
+        self.soft_wrap = !self.soft_wrap;
+        if let Some(ready) = self.state.ready() {
+            ready
+                .editor
+                .update(cx, |editor, cx| editor.set_soft_wrap(self.soft_wrap, cx));
+        }
+        self.save_preview_settings();
+        cx.notify();
     }
 
     pub(in crate::preview) fn key_down(
@@ -266,7 +323,7 @@ impl WorkspaceWindow {
     }
 
     pub(in crate::preview) fn install_document_keymap(&mut self) {
-        if self.document_mode == crate::app::DocumentMode::Source {
+        if self.document_mode != crate::app::DocumentMode::Preview {
             self.install_source_keymap();
         } else {
             self.install_preview_keymap();

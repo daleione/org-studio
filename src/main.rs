@@ -6,11 +6,13 @@ use gpui::{
 };
 use org_studio::{
     app::WorkspaceWindow,
+    editor::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     perf_tracing,
     preview::{
-        ExportDocument, InitialDocumentLoad, OpenDocument, QuitApplication, ReloadDocument,
-        SaveDocument, SaveDocumentAs, ShowHome, ToggleMinimap, ToggleSidebar, UseChinese,
-        UseEnglish, preload_initial_document,
+        ExportDocument, InitialDocumentLoad, OpenDocument, PreviewMode, QuitApplication,
+        ReloadDocument, SaveDocument, SaveDocumentAs, ShowHome, SourceMode, SplitMode,
+        ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish,
+        preload_initial_document,
     },
 };
 
@@ -157,6 +159,10 @@ fn main() {
             KeyBinding::new("cmd-r", ReloadDocument, None),
             KeyBinding::new("cmd-shift-e", ExportDocument, None),
             KeyBinding::new("cmd-q", QuitApplication, None),
+            KeyBinding::new("cmd-1", SourceMode, None),
+            KeyBinding::new("cmd-2", SplitMode, None),
+            KeyBinding::new("cmd-3", PreviewMode, None),
+            KeyBinding::new("alt-z", ToggleSoftWrap, None),
         ]);
         cx.set_menus(app_menus());
         let displays = cx.displays();
@@ -227,7 +233,23 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action("Reload", ReloadDocument),
         ]),
+        Menu::new("Edit").items([
+            MenuItem::action("Undo", Undo),
+            MenuItem::action("Redo", Redo),
+            MenuItem::separator(),
+            MenuItem::action("Cut", Cut),
+            MenuItem::action("Copy", Copy),
+            MenuItem::action("Paste", Paste),
+            MenuItem::separator(),
+            MenuItem::action("Select All", SelectAll),
+        ]),
         Menu::new("View").items([
+            MenuItem::action("Source", SourceMode),
+            MenuItem::action("Split", SplitMode),
+            MenuItem::action("Preview", PreviewMode),
+            MenuItem::separator(),
+            MenuItem::action("Toggle Soft Wrap", ToggleSoftWrap),
+            MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Toggle Minimap", ToggleMinimap),
         ]),

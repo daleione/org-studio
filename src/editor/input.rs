@@ -101,7 +101,7 @@ impl SourceEditor {
         cx.notify();
     }
 
-    pub(super) fn finish_composition(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn finish_composition(&mut self, cx: &mut Context<Self>) {
         let Some(composition) = self.composition.take() else {
             self.marked = None;
             return;
@@ -247,19 +247,26 @@ impl EntityInputHandler for SourceEditor {
             .hit_rows
             .iter()
             .find(|row| range.start >= row.range.start && range.start <= row.range.end)?;
-        let start = (range.start.0 - row.range.start.0).min(row.layout.len() as u64) as usize;
+        let start = row
+            .display
+            .source_to_display((range.start.0 - row.range.start.0).min(row.range.len()) as usize);
         let end = range
             .end
             .0
             .saturating_sub(row.range.start.0)
-            .min(row.layout.len() as u64) as usize;
+            .min(row.range.len()) as usize;
+        let end = row.display.source_to_display(end);
+        let start_position = row
+            .layout
+            .position_for_index(start, gpui::px(LINE_HEIGHT))?;
+        let end_position = row.layout.position_for_index(end, gpui::px(LINE_HEIGHT))?;
         Some(Bounds::new(
             point(
-                row.text_origin_x + row.layout.x_for_index(start),
-                row.origin_y,
+                row.text_origin_x + start_position.x,
+                row.origin_y + start_position.y,
             ),
             size(
-                row.layout.x_for_index(end) - row.layout.x_for_index(start),
+                (end_position.x - start_position.x).max(gpui::px(1.0)),
                 gpui::px(LINE_HEIGHT),
             ),
         ))

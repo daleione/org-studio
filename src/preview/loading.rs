@@ -101,7 +101,7 @@ pub(crate) fn load_workspace_document(
                 .expect("document end is a valid coordinate");
             Ok(super::WorkspaceLoadedDocument::Source(session))
         }
-        crate::app::DocumentMode::Preview => load_document(path)
+        crate::app::DocumentMode::Split | crate::app::DocumentMode::Preview => load_document(path)
             .map(Box::new)
             .map(super::WorkspaceLoadedDocument::Preview),
     }
@@ -191,9 +191,11 @@ pub(in crate::preview) fn reload_workspace_document(
                 .expect("document end is a valid coordinate");
             Ok(super::WorkspaceReloadedDocument::Source(prepared))
         }
-        crate::app::DocumentMode::Preview => reload_document_profiled(request)
-            .map(Box::new)
-            .map(super::WorkspaceReloadedDocument::Preview),
+        crate::app::DocumentMode::Split | crate::app::DocumentMode::Preview => {
+            reload_document_profiled(request)
+                .map(Box::new)
+                .map(super::WorkspaceReloadedDocument::Preview)
+        }
     }
 }
 
@@ -276,6 +278,22 @@ fn build_preview(
     }
     document.metrics.total = total_started.elapsed();
     document
+}
+
+pub(in crate::preview) fn derive_preview(
+    path: PathBuf,
+    snapshot: DocumentSnapshot,
+) -> PreviewSnapshot {
+    let bytes = snapshot.len_bytes();
+    build_preview(
+        path,
+        snapshot,
+        bytes,
+        Duration::ZERO,
+        Duration::ZERO,
+        Instant::now(),
+        true,
+    )
 }
 
 fn build_outline_paths(

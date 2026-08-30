@@ -4,8 +4,8 @@ use std::time::Instant;
 
 use gpui::{
     App, Bounds, ContentMask, Element, ElementId, ElementInputHandler, GlobalElementId, LayoutId,
-    PaintQuad, Pixels, ShapedLine, Style, TextAlign, TextRun, UnderlineStyle, Window, fill, point,
-    px, relative, rgba, size,
+    PaintQuad, Pixels, ShapedLine, Style, TextAlign, TextRun, Window, WrappedLine, fill, point, px,
+    relative, rgba, size,
 };
 
 use crate::{
@@ -15,7 +15,7 @@ use crate::{
 
 #[cfg(feature = "benchmarks")]
 use super::FrameBenchmarkAction;
-use super::{HitRow, LINE_HEIGHT, ShapeKey, SourceEditor};
+use super::{HitRow, LINE_HEIGHT, ShapeKey, SourceEditor, syntax};
 
 const GUTTER_PADDING: f32 = 16.0;
 
@@ -50,6 +50,7 @@ struct PaintRow {
     hit: HitRow,
     gutter_layout: ShapedLine,
     shape_key: ShapeKey,
+    visual_rows: usize,
 }
 
 impl Element for EditorElement {
@@ -88,8 +89,16 @@ impl Element for EditorElement {
     ) -> Self::PrepaintState {
         #[cfg(feature = "benchmarks")]
         let started_at = Instant::now();
+        let snapshot = self.editor.read(cx).snapshot(cx);
+        let digits = snapshot.len_lines().max(1).ilog10() + 1;
+        let gutter_width = digits as f32 * 9.0 + GUTTER_PADDING * 2.0;
+        let wrap_width = (f32::from(bounds.size.width) - gutter_width).max(1.0);
+        self.editor.update(cx, |editor, _| {
+            editor
+                .display_map
+                .configure(snapshot.len_lines(), wrap_width);
+        });
         let editor = self.editor.read(cx);
-        let snapshot = editor.snapshot(cx);
         let selection = editor.selection;
         let marked = editor.marked.as_ref().map(|range| range.bytes);
         let scroll_y = editor.scroll_y;
@@ -99,17 +108,23 @@ impl Element for EditorElement {
             f32::from(bounds.size.height),
         );
         let first_line = visible_lines.start;
-        let line_offset = scroll_y - first_line as f32 * LINE_HEIGHT;
+        let first_visual_row = editor.display_map.line_start_visual_row(first_line);
+        let line_offset = scroll_y - first_visual_row as f32 * LINE_HEIGHT;
         let last_line = visible_lines.end;
-        let digits = snapshot.len_lines().max(1).ilog10() + 1;
-        let gutter_width = digits as f32 * 9.0 + GUTTER_PADDING * 2.0;
-        let text_origin_x = bounds.left() + px(gutter_width);
+        let text_origin_x = bounds.left()
+            + px(gutter_width
+                - if editor.display_map.soft_wrap() {
+                    0.0
+                } else {
+                    editor.scroll_x
+                });
         let theme = current_theme();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
         let mut rows = Vec::with_capacity((last_line - first_line) as usize);
         let mut selection_quads = Vec::new();
         let mut caret = None;
+        let mut next_visual_row = first_visual_row;
 
         for line_number in first_line..last_line {
             let line = LineIndex(line_number);
@@ -126,7 +141,8 @@ impl Element for EditorElement {
             };
             let source_content_range = source_line.source_range;
             let content_range = source_line.visible_range;
-            let text: gpui::SharedString = source_line.text.into();
+            let display = source_line.display;
+            let text: gpui::SharedString = display.text.clone().into();
             let base_run = TextRun {
                 len: text.len(),
                 font: style.font(),
@@ -135,8 +151,22 @@ impl Element for EditorElement {
                 underline: None,
                 strikethrough: None,
             };
-            let runs = marked_runs(base_run, marked, content_range, text.len());
-            let shape_key = shape_key(&text, font_size, marked, content_range);
+            let marked_display = local_marked(marked, content_range, &display);
+            let runs = syntax::runs(
+                editor.session.read(cx).path(),
+                &text,
+                base_run,
+                marked_display.clone(),
+                theme,
+            );
+            let effective_wrap_width = editor.display_map.soft_wrap().then_some(px(wrap_width));
+            let shape_key = shape_key(
+                &text,
+                font_size,
+                marked_display,
+                effective_wrap_width,
+                syntax::cache_key(editor.session.read(cx).path()),
+            );
             let layout = editor
                 .shape_cache
                 .get(&shape_key)
@@ -144,8 +174,13 @@ impl Element for EditorElement {
                 .unwrap_or_else(|| {
                     window
                         .text_system()
-                        .shape_line(text, font_size, &runs, None)
+                        .shape_text(text, font_size, &runs, effective_wrap_width, None)
+                        .ok()
+                        .and_then(|lines| lines.into_iter().next())
+                        .map(Arc::new)
+                        .unwrap_or_else(|| Arc::new(WrappedLine::default()))
                 });
+            let visual_rows = layout.wrap_boundaries().len() + 1;
             let number: gpui::SharedString = (line_number + 1).to_string().into();
             let gutter_run = TextRun {
                 len: number.len(),
@@ -159,12 +194,14 @@ impl Element for EditorElement {
                 window
                     .text_system()
                     .shape_line(number, font_size, &[gutter_run], None);
-            let origin_y =
-                bounds.top() + px((line_number - first_line) as f32 * LINE_HEIGHT - line_offset);
+            let origin_y = bounds.top()
+                + px((next_visual_row - first_visual_row) as f32 * LINE_HEIGHT - line_offset);
             let hit = HitRow {
                 range: source_line.visible_range,
+                line,
                 origin_y,
                 text_origin_x,
+                display,
                 layout,
             };
 
@@ -172,44 +209,41 @@ impl Element for EditorElement {
             let selected_start = selected.start.0.max(full_range.start.0);
             let selected_end = selected.end.0.min(full_range.end.0);
             if selected_start < selected_end {
-                let local_start = selected_start
+                let source_local_start = selected_start
                     .saturating_sub(content_range.start.0)
                     .min(hit.layout.len() as u64) as usize;
-                let local_end = selected_end
+                let source_local_end = selected_end
                     .saturating_sub(content_range.start.0)
                     .min(hit.layout.len() as u64) as usize;
-                let end_x = if selected_end > source_content_range.end.0 {
-                    hit.layout.x_for_index(local_end) + px(8.0)
-                } else {
-                    hit.layout.x_for_index(local_end)
-                };
-                selection_quads.push(fill(
-                    Bounds::from_corners(
-                        point(
-                            text_origin_x + hit.layout.x_for_index(local_start),
-                            origin_y,
-                        ),
-                        point(text_origin_x + end_x, origin_y + px(LINE_HEIGHT)),
-                    ),
-                    rgba(0x3a81c34a),
-                ));
+                let local_start = hit.display.source_to_display(source_local_start);
+                let local_end = hit.display.source_to_display(source_local_end);
+                push_selection_quads(
+                    &mut selection_quads,
+                    &hit,
+                    local_start,
+                    local_end,
+                    selected_end > source_content_range.end.0,
+                    px(wrap_width),
+                );
             }
 
             if selection.is_empty()
                 && selection.head() >= content_range.start
                 && selection.head() <= content_range.end
             {
-                let local = selection
+                let source_local = selection
                     .head()
                     .0
                     .saturating_sub(content_range.start.0)
                     .min(hit.layout.len() as u64) as usize;
+                let local = hit.display.source_to_display(source_local);
+                let position = hit
+                    .layout
+                    .position_for_index(local, px(LINE_HEIGHT))
+                    .unwrap_or_default();
                 caret = Some(fill(
                     Bounds::new(
-                        point(
-                            text_origin_x + hit.layout.x_for_index(local),
-                            origin_y + px(2.0),
-                        ),
+                        point(text_origin_x + position.x, origin_y + position.y + px(2.0)),
                         size(px(1.5), px(LINE_HEIGHT - 4.0)),
                     ),
                     gpui::rgb(theme.foreground),
@@ -219,7 +253,9 @@ impl Element for EditorElement {
                 hit,
                 gutter_layout,
                 shape_key,
+                visual_rows,
             });
+            next_visual_row = next_visual_row.saturating_add(visual_rows as u64);
         }
 
         PrepaintState {
@@ -267,12 +303,9 @@ impl Element for EditorElement {
         let gutter = state.gutter.clone();
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
             window.paint_quad(gutter);
-            for selection in state.selection.drain(..) {
-                window.paint_quad(selection);
-            }
+            let text_left = state.gutter.bounds.right() + px(1.0);
             for row in &state.rows {
-                let number_x =
-                    row.hit.text_origin_x - px(GUTTER_PADDING) - row.gutter_layout.width();
+                let number_x = text_left - px(GUTTER_PADDING) - row.gutter_layout.width();
                 let _ = row.gutter_layout.paint(
                     point(number_x, row.hit.origin_y),
                     px(LINE_HEIGHT),
@@ -281,24 +314,43 @@ impl Element for EditorElement {
                     window,
                     cx,
                 );
-                let _ = row.hit.layout.paint(
-                    point(row.hit.text_origin_x, row.hit.origin_y),
-                    px(LINE_HEIGHT),
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
             }
-            if focus_handle.is_focused(window)
-                && let Some(caret) = state.caret.take()
-            {
-                window.paint_quad(caret);
-            }
+            let text_bounds =
+                Bounds::from_corners(point(text_left, bounds.top()), bounds.bottom_right());
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: text_bounds,
+                }),
+                |window| {
+                    for selection in state.selection.drain(..) {
+                        window.paint_quad(selection);
+                    }
+                    for row in &state.rows {
+                        let _ = row.hit.layout.paint(
+                            point(row.hit.text_origin_x, row.hit.origin_y),
+                            px(LINE_HEIGHT),
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
+                    if focus_handle.is_focused(window)
+                        && let Some(caret) = state.caret.take()
+                    {
+                        window.paint_quad(caret);
+                    }
+                },
+            );
         });
         #[cfg(feature = "benchmarks")]
         let elapsed = state.started_at.elapsed();
-        let benchmark = self.editor.update(cx, |editor, cx| {
+        let measured_rows = state
+            .rows
+            .iter()
+            .map(|row| (row.hit.line.0, row.visual_rows))
+            .collect::<Vec<_>>();
+        let _benchmark = self.editor.update(cx, |editor, cx| {
             let viewport_changed = editor.viewport != Some(bounds);
             editor.viewport = Some(bounds);
             editor.hit_rows = hits;
@@ -306,16 +358,21 @@ impl Element for EditorElement {
                 editor.shape_cache.clear();
             }
             editor.shape_cache.extend(shaped);
-            if viewport_changed {
+            let layout_changed = measured_rows
+                .into_iter()
+                .fold(false, |changed, (line, rows)| {
+                    editor.display_map.update_line_rows(line, rows) || changed
+                });
+            if viewport_changed || layout_changed {
                 cx.notify();
             }
             #[cfg(feature = "benchmarks")]
-            return editor.record_frame_benchmark(elapsed, cx);
+            return Some(editor.record_frame_benchmark(elapsed, cx));
+            #[cfg(not(feature = "benchmarks"))]
+            None::<()>
         });
-        #[cfg(not(feature = "benchmarks"))]
-        let _ = benchmark;
         #[cfg(feature = "benchmarks")]
-        match benchmark {
+        match _benchmark.expect("benchmark builds always return a frame action") {
             FrameBenchmarkAction::Inactive => {}
             FrameBenchmarkAction::Continue => window.request_animation_frame(),
             FrameBenchmarkAction::Complete => {
@@ -330,60 +387,83 @@ impl Element for EditorElement {
 fn shape_key(
     text: &gpui::SharedString,
     font_size: Pixels,
-    marked: Option<ByteRange>,
-    line: ByteRange,
+    marked: Option<std::ops::Range<usize>>,
+    wrap_width: Option<Pixels>,
+    syntax_key: u8,
 ) -> ShapeKey {
-    let marked = marked.and_then(|marked| {
-        let start = marked.start.0.max(line.start.0);
-        let end = marked.end.0.min(line.end.0);
-        (start < end).then_some((
-            (start - line.start.0) as usize,
-            (end - line.start.0) as usize,
-        ))
-    });
     ShapeKey {
         text: text.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
-        marked,
+        wrap_width_bits: wrap_width.map_or(0, |width| f32::from(width).to_bits()),
+        syntax_key,
+        marked: marked.map(|range| (range.start, range.end)),
     }
 }
 
-fn marked_runs(
-    base: TextRun,
+fn local_marked(
     marked: Option<ByteRange>,
     line: ByteRange,
-    visible_len: usize,
-) -> Vec<TextRun> {
-    let Some(marked) = marked else {
-        return vec![base];
-    };
+    display: &super::display_map::DisplayLineText,
+) -> Option<std::ops::Range<usize>> {
+    let marked = marked?;
     let start = marked.start.0.max(line.start.0);
     let end = marked.end.0.min(line.end.0);
     if start >= end {
-        return vec![base];
+        return None;
     }
-    let local_start = (start - line.start.0).min(visible_len as u64) as usize;
-    let local_end = (end - line.start.0).min(visible_len as u64) as usize;
-    [
-        TextRun {
-            len: local_start,
-            ..base.clone()
-        },
-        TextRun {
-            len: local_end.saturating_sub(local_start),
-            underline: Some(UnderlineStyle {
-                color: Some(base.color),
-                thickness: px(1.0),
-                wavy: false,
-            }),
-            ..base.clone()
-        },
-        TextRun {
-            len: visible_len.saturating_sub(local_end),
-            ..base
-        },
-    ]
-    .into_iter()
-    .filter(|run| run.len > 0)
-    .collect()
+    Some(
+        display.source_to_display((start - line.start.0) as usize)
+            ..display.source_to_display((end - line.start.0) as usize),
+    )
+}
+
+fn push_selection_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    start: usize,
+    end: usize,
+    include_newline: bool,
+    wrap_width: Pixels,
+) {
+    let line_height = px(LINE_HEIGHT);
+    let start_position = hit
+        .layout
+        .position_for_index(start, line_height)
+        .unwrap_or_default();
+    let end_position = hit
+        .layout
+        .position_for_index(end, line_height)
+        .unwrap_or(start_position);
+    let first_row = (f32::from(start_position.y) / LINE_HEIGHT).round() as usize;
+    let last_row = (f32::from(end_position.y) / LINE_HEIGHT).round() as usize;
+    for row in first_row..=last_row {
+        let left = if row == first_row {
+            start_position.x
+        } else {
+            Pixels::ZERO
+        };
+        let mut right = if row == last_row {
+            end_position.x
+        } else {
+            wrap_width
+        };
+        if include_newline && row == last_row {
+            right += px(8.0);
+        }
+        if right > left {
+            quads.push(fill(
+                Bounds::from_corners(
+                    point(
+                        hit.text_origin_x + left,
+                        hit.origin_y + px(row as f32 * LINE_HEIGHT),
+                    ),
+                    point(
+                        hit.text_origin_x + right,
+                        hit.origin_y + px((row + 1) as f32 * LINE_HEIGHT),
+                    ),
+                ),
+                rgba(0x3a81c34a),
+            ));
+        }
+    }
 }

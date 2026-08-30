@@ -5,10 +5,12 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 1;
+const SETTINGS_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreviewSettings {
+    pub document_mode: crate::app::DocumentMode,
+    pub soft_wrap: bool,
     pub language: Language,
     pub minimap_enabled: bool,
     pub minimap_thumb_visibility: MinimapThumbVisibility,
@@ -51,6 +53,8 @@ pub enum MinimapThumbVisibility {
 impl Default for PreviewSettings {
     fn default() -> Self {
         Self {
+            document_mode: crate::app::DocumentMode::Source,
+            soft_wrap: true,
             language: Language::system(),
             minimap_enabled: true,
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
@@ -107,6 +111,8 @@ impl PreviewSettings {
     fn parse(source: &str) -> Option<Self> {
         let mut version = None;
         let mut minimap_enabled = None;
+        let mut document_mode = None;
+        let mut soft_wrap = None;
         let mut language = None;
         let mut minimap_thumb_visibility = None;
         let mut minimap_width = None;
@@ -129,6 +135,15 @@ impl PreviewSettings {
                         _ => None,
                     }
                 }
+                "document_mode" => {
+                    document_mode = match value.trim() {
+                        "source" => Some(crate::app::DocumentMode::Source),
+                        "split" => Some(crate::app::DocumentMode::Split),
+                        "preview" => Some(crate::app::DocumentMode::Preview),
+                        _ => None,
+                    }
+                }
+                "soft_wrap" => soft_wrap = value.trim().parse::<bool>().ok(),
                 "minimap_enabled" => minimap_enabled = value.trim().parse::<bool>().ok(),
                 "minimap_thumb_visibility" => {
                     minimap_thumb_visibility = match value.trim() {
@@ -163,6 +178,8 @@ impl PreviewSettings {
             }
         }
         (version == Some(SETTINGS_VERSION)).then_some(Self {
+            document_mode: document_mode.unwrap_or_default(),
+            soft_wrap: soft_wrap.unwrap_or(true),
             language: language.unwrap_or_else(Language::system),
             minimap_enabled: minimap_enabled.unwrap_or(true),
             minimap_thumb_visibility: minimap_thumb_visibility
@@ -181,7 +198,13 @@ impl PreviewSettings {
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
+            "version={SETTINGS_VERSION}\ndocument_mode={}\nsoft_wrap={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
+            match self.document_mode {
+                crate::app::DocumentMode::Source => "source",
+                crate::app::DocumentMode::Split => "split",
+                crate::app::DocumentMode::Preview => "preview",
+            },
+            self.soft_wrap,
             match self.language {
                 Language::English => "en",
                 Language::Chinese => "zh-CN",
@@ -285,6 +308,8 @@ mod tests {
     #[test]
     fn settings_round_trip_and_reject_unknown_versions() {
         let settings = PreviewSettings {
+            document_mode: crate::app::DocumentMode::Split,
+            soft_wrap: false,
             language: Language::English,
             minimap_enabled: false,
             minimap_thumb_visibility: MinimapThumbVisibility::Hover,
@@ -311,36 +336,36 @@ mod tests {
     #[test]
     fn missing_field_uses_product_default() {
         assert_eq!(
-            PreviewSettings::parse("version=1\n"),
+            PreviewSettings::parse("version=2\n"),
             Some(PreviewSettings::default())
         );
         assert_eq!(
             PreviewSettings::parse(
-                "version=1\nminimap_width=auto\nminimap_thumb_visibility=always\n"
+                "version=2\nminimap_width=auto\nminimap_thumb_visibility=always\n"
             )
             .expect("auto width settings"),
             PreviewSettings::default()
         );
         assert_eq!(
-            PreviewSettings::parse("version=1\nminimap_width=480\n")
+            PreviewSettings::parse("version=2\nminimap_width=480\n")
                 .expect("manual width settings")
                 .minimap_width,
             Some(480)
         );
         assert_eq!(
-            PreviewSettings::parse("version=1\nminimap_width=999\n")
+            PreviewSettings::parse("version=2\nminimap_width=999\n")
                 .expect("invalid width falls back")
                 .minimap_width,
             None
         );
         assert_eq!(
-            PreviewSettings::parse("version=1\nsidebar_width=320\n")
+            PreviewSettings::parse("version=2\nsidebar_width=320\n")
                 .expect("manual sidebar width settings")
                 .sidebar_width,
             320
         );
         assert_eq!(
-            PreviewSettings::parse("version=1\nsidebar_width=999\n")
+            PreviewSettings::parse("version=2\nsidebar_width=999\n")
                 .expect("invalid sidebar width falls back")
                 .sidebar_width,
             240

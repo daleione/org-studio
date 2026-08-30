@@ -2,14 +2,15 @@ mod commands;
 mod display_map;
 mod element;
 mod input;
+mod syntax;
 
 use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
 use display_map::SourceDisplayMap;
 use gpui::{
-    App, Bounds, ClipboardItem, Context, Entity, FocusHandle, Focusable, KeyBinding, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, ShapedLine, SharedString,
-    Subscription, Task, Window, actions, div, prelude::*, px, rgb,
+    App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, SharedString,
+    Subscription, Task, Window, WrappedLine, actions, div, prelude::*, px, rgb,
 };
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -91,9 +92,11 @@ pub fn init(cx: &mut App) {
 #[derive(Clone)]
 pub(super) struct HitRow {
     pub(super) range: ByteRange,
+    pub(super) line: LineIndex,
     pub(super) origin_y: Pixels,
     pub(super) text_origin_x: Pixels,
-    pub(super) layout: ShapedLine,
+    pub(super) display: display_map::DisplayLineText,
+    pub(super) layout: Arc<WrappedLine>,
 }
 
 #[derive(Clone)]
@@ -114,6 +117,8 @@ pub(super) struct PlatformRange {
 pub(super) struct ShapeKey {
     pub(super) text: SharedString,
     pub(super) font_size_bits: u32,
+    pub(super) wrap_width_bits: u32,
+    pub(super) syntax_key: u8,
     pub(super) marked: Option<(usize, usize)>,
 }
 
@@ -196,8 +201,10 @@ pub struct SourceEditor {
     marked: Option<PlatformRange>,
     composition: Option<Composition>,
     display_map: SourceDisplayMap,
-    shape_cache: HashMap<ShapeKey, ShapedLine>,
+    shape_cache: HashMap<ShapeKey, Arc<WrappedLine>>,
     scroll_y: f32,
+    scroll_x: f32,
+    vertical_goal_x: Option<f32>,
     viewport: Option<Bounds<Pixels>>,
     hit_rows: Arc<[HitRow]>,
     is_selecting: bool,
@@ -210,9 +217,35 @@ pub struct SourceEditor {
     _session_subscription: Subscription,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SourceScrollEvent;
+
+impl EventEmitter<SourceScrollEvent> for SourceEditor {}
+
 impl SourceEditor {
     pub fn new(session: Entity<DocumentSession>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
+            if let DocumentEvent::Edited { delta, .. } = event {
+                let snapshot = this.snapshot(cx);
+                let first_line = delta
+                    .edits
+                    .iter()
+                    .filter_map(|edit| {
+                        snapshot
+                            .line_index_at(ByteOffset(edit.old.start.0.min(snapshot.len_bytes())))
+                            .ok()
+                    })
+                    .map(|line| line.0)
+                    .min()
+                    .unwrap_or(0);
+                let wrap_width = this.display_map.wrap_width();
+                this.display_map.configure(snapshot.len_lines(), wrap_width);
+                this.display_map.invalidate_layout_from(first_line);
+                this.shape_cache.clear();
+                this.vertical_goal_x = None;
+            } else if matches!(event, DocumentEvent::Reloaded { .. }) {
+                this.display_map.invalidate_layout();
+            }
             if matches!(event, DocumentEvent::Reloaded { .. }) {
                 let snapshot = this.snapshot(cx);
                 this.selection = this.selection.clamp(&snapshot);
@@ -221,9 +254,12 @@ impl SourceEditor {
                 this.composition = None;
                 this.shape_cache.clear();
                 this.scroll_y = 0.0;
+                this.scroll_x = 0.0;
             }
             cx.notify();
         });
+        let mut display_map = SourceDisplayMap::default();
+        display_map.configure(session.read(cx).snapshot().len_lines(), 1.0);
         Self {
             session,
             focus_handle: cx.focus_handle(),
@@ -232,9 +268,11 @@ impl SourceEditor {
             selection_utf16_reversed: false,
             marked: None,
             composition: None,
-            display_map: SourceDisplayMap::default(),
+            display_map,
             shape_cache: HashMap::with_capacity(128),
             scroll_y: 0.0,
+            scroll_x: 0.0,
+            vertical_goal_x: None,
             viewport: None,
             hit_rows: Arc::from([]),
             is_selecting: false,
@@ -261,8 +299,24 @@ impl SourceEditor {
         cx.notify();
     }
 
+    pub(crate) fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
+        if self.display_map.set_soft_wrap(soft_wrap) {
+            if soft_wrap {
+                self.scroll_x = 0.0;
+            }
+            self.shape_cache.clear();
+            cx.notify();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn soft_wrap(&self) -> bool {
+        self.display_map.soft_wrap()
+    }
+
     pub fn set_selection(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.vertical_goal_x = None;
         let snapshot = self.snapshot(cx);
         self.selection = selection.clamp(&snapshot);
         self.sync_selection_utf16(&snapshot);
@@ -284,14 +338,16 @@ impl SourceEditor {
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
         let visible_bottom_line = if viewport_height > 0.0 {
-            ((self.scroll_y + viewport_height) / LINE_HEIGHT)
-                .ceil()
-                .max(0.0) as u64
+            self.display_map
+                .line_at_visual_row(
+                    ((self.scroll_y + viewport_height - 0.5).max(0.0) / LINE_HEIGHT).floor() as u64,
+                )
+                .saturating_add(1)
         } else {
             0
         }
         .min(total_lines);
-        let document_height = total_lines as f32 * LINE_HEIGHT;
+        let document_height = self.display_map.total_visual_rows() as f32 * LINE_HEIGHT;
         let reached_end =
             viewport_height > 0.0 && self.scroll_y + viewport_height + 0.5 >= document_height;
         SourceEditorStatus {

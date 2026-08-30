@@ -9,6 +9,7 @@ use gpui::{
     PathPromptOptions, Render, StyledText, Window, actions, div, img, px, rgb,
 };
 mod app;
+pub(crate) mod derived;
 mod display_map;
 mod document;
 mod export_ui;
@@ -30,7 +31,8 @@ pub use document::{
 use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 use input::*;
 use loading::{
-    fitted_image_size, load_workspace_document, reload_workspace_document, resolve_image_path,
+    derive_preview, fitted_image_size, load_workspace_document, reload_workspace_document,
+    resolve_image_path,
 };
 pub use loading::{
     load_document, load_document_profiled, load_document_profiled_without_display_map,
@@ -105,6 +107,10 @@ const OPEN_DEFAULT_DIRED_COMMAND: &str = "org-studio.dired.open-default";
 const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
 const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
 const TOGGLE_MINIMAP_COMMAND: &str = "org-studio.preview.toggle-minimap";
+const SOURCE_MODE_COMMAND: &str = "org-studio.document.mode-source";
+const SPLIT_MODE_COMMAND: &str = "org-studio.document.mode-split";
+const PREVIEW_MODE_COMMAND: &str = "org-studio.document.mode-preview";
+const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
 const GLOBAL_VISIBILITY_CYCLE_COMMAND: &str = "org-studio.preview.global-visibility-cycle";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
 const DIRED_PREVIOUS_COMMAND: &str = "org-studio.dired.previous-line";
@@ -146,6 +152,10 @@ actions!(
         ReturnToDocument,
         ToggleSidebar,
         ToggleMinimap,
+        SourceMode,
+        SplitMode,
+        PreviewMode,
+        ToggleSoftWrap,
         UseEnglish,
         UseChinese
     ]
@@ -196,14 +206,6 @@ pub(crate) struct ReadyDocument {
     editor: gpui::Entity<crate::editor::SourceEditor>,
     panel: Option<gpui::Entity<PreviewPanel>>,
     notice: Option<Arc<str>>,
-}
-
-impl ReadyDocument {
-    fn panel(&self) -> &gpui::Entity<PreviewPanel> {
-        self.panel
-            .as_ref()
-            .expect("preview mode publishes a preview panel")
-    }
 }
 
 impl PreviewLoadState {

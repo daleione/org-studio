@@ -44,6 +44,107 @@ fn eager_layout_is_limited_to_small_documents() {
     assert!(!should_eagerly_measure_rows(MAX_EAGER_LAYOUT_ROWS + 1));
 }
 
+#[gpui::test]
+fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
+    cx: &mut gpui::TestAppContext,
+) {
+    let session = crate::document::DocumentSession::from_utf8(
+        std::path::PathBuf::from("phase-d.org"),
+        b"* Heading\nbody\n".to_vec(),
+    )
+    .unwrap();
+    let workspace =
+        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(super::WorkspaceLoadedDocument::Source(session)),
+            cx,
+        ));
+    });
+    let (session, editor) = cx.read(|cx| {
+        let ready = workspace.read(cx).state.ready().unwrap();
+        (ready.session.clone(), ready.editor.clone())
+    });
+    editor.update(cx, |editor, cx| {
+        editor.set_selection(Selection::caret(ByteOffset(2)), cx)
+    });
+    let original = session.read_with(cx, |session, _| session.snapshot());
+
+    workspace.update(cx, |workspace, cx| {
+        workspace.set_document_mode(crate::app::DocumentMode::Preview, cx);
+        assert!(workspace.preview_panel().is_none());
+        assert!(
+            workspace
+                .document_status_snapshot(crate::navigation::PaneId(1), cx)
+                .is_some()
+        );
+        workspace.set_document_mode(crate::app::DocumentMode::Source, cx);
+    });
+
+    workspace.update(cx, |workspace, cx| {
+        workspace.set_document_mode(crate::app::DocumentMode::Split, cx);
+        workspace.toggle_soft_wrap(cx);
+    });
+    assert!(!cx.read(|cx| editor.read(cx).soft_wrap()));
+    assert_eq!(
+        session.read_with(cx, |session, _| session.revision()),
+        original.revision()
+    );
+    assert_eq!(
+        cx.read(|cx| editor.read(cx).selection()),
+        Selection::caret(ByteOffset(2))
+    );
+
+    let revision = session.read_with(cx, |session, _| session.revision());
+    let end = original.len_bytes();
+    session.update(cx, |session, cx| {
+        session
+            .edit(
+                SessionEdit::new(
+                    EditTransaction::new(
+                        revision,
+                        vec![TextEdit::new(ByteRange::new(end, end), "latest")],
+                    ),
+                    Selection::caret(ByteOffset(end)),
+                    Selection::caret(ByteOffset(end + 6)),
+                    EditOrigin::Typing,
+                ),
+                cx,
+            )
+            .unwrap();
+    });
+    workspace.update(cx, |workspace, cx| workspace.schedule_derived_update(cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(25));
+    cx.run_until_parked();
+
+    let latest_revision = session.read_with(cx, |session, _| session.revision());
+    let panel_revision = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .preview_panel()
+            .unwrap()
+            .read(cx)
+            .document()
+            .revision
+    });
+    assert_eq!(panel_revision, latest_revision);
+
+    workspace.update(cx, |workspace, cx| {
+        workspace.set_document_mode(crate::app::DocumentMode::Preview, cx);
+        workspace.set_document_mode(crate::app::DocumentMode::Source, cx);
+    });
+    assert_eq!(
+        session.read_with(cx, |session, _| session.revision()),
+        latest_revision
+    );
+    assert_eq!(
+        cx.read(|cx| editor.read(cx).selection()),
+        Selection::caret(ByteOffset(2))
+    );
+}
+
 fn simulate_next_frame<V: gpui::Render + 'static>(
     window: &gpui::WindowHandle<V>,
     cx: &mut gpui::TestAppContext,
@@ -73,7 +174,13 @@ fn ready_document(
     cx: &gpui::App,
 ) -> std::sync::Arc<super::PreviewSnapshot> {
     match &app.state {
-        super::PreviewLoadState::Ready { document } => document.panel().read(cx).document().clone(),
+        super::PreviewLoadState::Ready { document } => document
+            .panel
+            .as_ref()
+            .expect("preview panel should be published")
+            .read(cx)
+            .document()
+            .clone(),
         _ => panic!("document should be ready"),
     }
 }
