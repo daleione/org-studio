@@ -25,7 +25,14 @@ use super::{
     TOGGLE_SIDEBAR_COMMAND,
 };
 
+#[cfg(test)]
 pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
+    document_input(crate::app::DocumentMode::Preview)
+}
+
+pub(super) fn document_input(
+    mode: crate::app::DocumentMode,
+) -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
     builder
         .register_builtin(BuiltinCommandSpec {
@@ -330,15 +337,19 @@ pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
     }
     let commands = Arc::new(builder.build());
     let contexts = built_in_contexts();
+    let (bindings, active_contexts) = match mode {
+        crate::app::DocumentMode::Source => (workspace_bindings(), ["workspace", "editor"]),
+        crate::app::DocumentMode::Preview => (preview_bindings(), ["workspace", "preview"]),
+    };
     let active_context = contexts
-        .set(["workspace", "preview"])
+        .set(active_contexts)
         .expect("registered built-in contexts");
     let configuration = compile_input_profile(
         1,
-        &preview_bindings(),
+        &bindings,
         &commands,
         &contexts,
-        &["workspace", "preview"],
+        &active_contexts,
         &["prompt"],
     )
     .expect("built-in input profile is valid");
@@ -369,29 +380,14 @@ pub(super) fn built_in_contexts() -> crate::input::ContextRegistry {
 }
 
 pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
-    vec![
-        BindingSpec {
-            keys: "C-x C-f",
-            behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND),
-        },
-        BindingSpec {
-            keys: "C-x C-b",
-            behavior: BindingBehavior::Command(SHOW_HOME_COMMAND),
-        },
-        BindingSpec {
-            keys: "C-x C-r",
-            behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
-        },
+    let mut bindings = workspace_bindings();
+    bindings.extend([
         BindingSpec {
             keys: "g",
             behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
         },
         BindingSpec {
             keys: "q",
-            behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND),
-        },
-        BindingSpec {
-            keys: "C-x C-c",
             behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND),
         },
         BindingSpec {
@@ -411,16 +407,38 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
             behavior: BindingBehavior::Command(END_COMMAND),
         },
         BindingSpec {
+            keys: "S-tab",
+            behavior: BindingBehavior::Command(GLOBAL_VISIBILITY_CYCLE_COMMAND),
+        },
+    ]);
+    bindings
+}
+
+pub(super) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
+    vec![
+        BindingSpec {
+            keys: "C-x C-f",
+            behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-b",
+            behavior: BindingBehavior::Command(SHOW_HOME_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-r",
+            behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-c",
+            behavior: BindingBehavior::Command(QUIT_APPLICATION_COMMAND),
+        },
+        BindingSpec {
             keys: "C-x d",
             behavior: BindingBehavior::Command(OPEN_DEFAULT_DIRED_COMMAND),
         },
         BindingSpec {
             keys: "C-x C-d",
             behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND),
-        },
-        BindingSpec {
-            keys: "S-tab",
-            behavior: BindingBehavior::Command(GLOBAL_VISIBILITY_CYCLE_COMMAND),
         },
     ]
 }

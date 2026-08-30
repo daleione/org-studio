@@ -1,25 +1,31 @@
 use std::{
     ops::Range,
     sync::{
-        Arc,
+        Arc, OnceLock,
         atomic::{AtomicU64, Ordering},
     },
 };
 
 use ropey::Rope;
 
+mod coordinates;
 mod revision;
+mod selection;
 mod session;
 mod transaction;
+mod undo;
 
+pub use coordinates::{Bias, CoordinateError, LineIndex, Utf16Offset};
 pub use revision::{
     EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
 };
+pub use selection::Selection;
 pub use session::{
     DocumentEvent, DocumentSession, PreparedReload, ReloadError, ReloadRequest, SaveAckError,
-    SavePoint,
+    SavePoint, SessionEdit,
 };
 pub use transaction::{DocumentBuffer, EditError, EditTransaction, TextEdit};
+pub use undo::{EditOrigin, HistoryOutcome};
 
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -53,6 +59,14 @@ impl ByteRange {
 
     pub fn as_usize(self) -> Range<usize> {
         self.start.0 as usize..self.end.0 as usize
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.start == self.end
+    }
+
+    pub fn len(self) -> u64 {
+        self.end.0.saturating_sub(self.start.0)
     }
 }
 
@@ -104,6 +118,14 @@ pub struct DocumentSnapshot {
     document_id: DocumentId,
     rope: Rope,
     revision: Revision,
+    coordinate_index: Arc<OnceLock<Arc<[CoordinateCheckpoint]>>>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct CoordinateCheckpoint {
+    pub(super) byte: u64,
+    pub(super) character: usize,
+    pub(super) utf16: u64,
 }
 
 impl DocumentSnapshot {
@@ -120,6 +142,7 @@ impl DocumentSnapshot {
             document_id: DocumentId::next(),
             rope: Rope::from_str(&text),
             revision: Revision::INITIAL,
+            coordinate_index: Arc::default(),
         })
     }
 
@@ -127,11 +150,17 @@ impl DocumentSnapshot {
         self.document_id
     }
 
-    pub(super) fn from_rope(document_id: DocumentId, rope: Rope, revision: Revision) -> Self {
+    pub(super) fn from_rope(
+        document_id: DocumentId,
+        rope: Rope,
+        revision: Revision,
+        coordinate_index: Arc<OnceLock<Arc<[CoordinateCheckpoint]>>>,
+    ) -> Self {
         Self {
             document_id,
             rope,
             revision,
+            coordinate_index,
         }
     }
 }

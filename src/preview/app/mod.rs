@@ -1,12 +1,14 @@
 use super::{
     Arc, BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
     ContentRoute, Context, Duration, EmacsOutcome, InitialDocumentLoad, Instant, InvocationOrigin,
-    KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, LoadedDocument, PathBuf, PathPromptOptions,
-    PrefixArgument, PreviewLoadState, PreviewRenderOptions, Window, WorkspaceWindow,
+    KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, PathBuf, PathPromptOptions, PrefixArgument,
+    PreviewLoadState, PreviewRenderOptions, Window, WorkspaceLoadedDocument, WorkspaceWindow,
     accept_generation, built_in_contexts, command_count, compile_input_profile,
-    configured_minimap_visible, current_theme, dired_bindings, load_document, minimap,
-    preview_bindings, preview_input, px, render_document, render_home, render_loading,
+    configured_minimap_visible, current_theme, dired_bindings, document_input,
+    load_workspace_document, minimap, preview_bindings, px, render_document, render_home,
+    render_loading, workspace_bindings,
 };
+use crate::app::DocumentMode;
 use gpui::{div, prelude::*, rgb};
 
 mod benchmark;
@@ -22,11 +24,15 @@ impl Default for WorkspaceWindow {
 
 impl WorkspaceWindow {
     pub fn new() -> Self {
+        Self::with_document_mode(DocumentMode::from_environment())
+    }
+
+    pub(crate) fn with_document_mode(document_mode: DocumentMode) -> Self {
         let list_overdraw = std::env::var("ORG_STUDIO_LIST_OVERDRAW")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(80.0);
-        let (commands, keyboard, key_context) = preview_input();
+        let (commands, keyboard, key_context) = document_input(document_mode);
         let preview_settings = crate::settings::PreviewSettings::load();
         let minimap_visible = configured_minimap_visible();
         Self {
@@ -77,6 +83,7 @@ impl WorkspaceWindow {
             key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
             content_route: ContentRoute::Document,
+            document_mode,
             minimap_visible,
             minimap_thumb_visibility: crate::settings::initial_minimap_thumb_visibility(
                 preview_settings.minimap_thumb_visibility,
@@ -91,8 +98,21 @@ impl WorkspaceWindow {
         self.state.ready().map(|document| &document.session)
     }
 
+    pub(super) fn request_editor_focus(&self, cx: &mut Context<Self>) {
+        if self.document_mode != DocumentMode::Source {
+            return;
+        }
+        if let Some(document) = self.state.ready() {
+            document
+                .editor
+                .update(cx, |editor, cx| editor.request_focus(cx));
+        }
+    }
+
     pub(super) fn preview_panel(&self) -> Option<gpui::Entity<super::PreviewPanel>> {
-        self.state.ready().map(|document| document.panel.clone())
+        self.state
+            .ready()
+            .and_then(|document| document.panel.clone())
     }
 
     pub(super) fn bump_preview_revision(&self, cx: &mut Context<Self>) {
@@ -209,8 +229,27 @@ impl WorkspaceWindow {
                 previous,
             } => {
                 let error = format!("{}: {message}", path.display());
-                if let Some(panel_entity) = previous.as_ref().map(|document| &document.panel) {
-                    let panel = panel_entity.read(cx);
+                if let Some(previous) = previous.as_ref() {
+                    let document = match self.document_mode {
+                        DocumentMode::Source => div().size_full().child(previous.editor.clone()),
+                        DocumentMode::Preview => {
+                            let panel = previous.panel().read(cx);
+                            render_document(
+                                panel.render_state(),
+                                previous.panel().clone(),
+                                entity.clone(),
+                                PreviewRenderOptions {
+                                    minimap_visible: self.minimap_visible,
+                                    editor_width,
+                                    minimap_width,
+                                    minimap_resize_preview: self.minimap_resize_preview,
+                                    minimap_thumb_visibility: self.minimap_thumb_visibility,
+                                    generation: self.generation,
+                                    opened_at: self.opened_at.unwrap_or_else(Instant::now),
+                                },
+                            )
+                        }
+                    };
                     div()
                         .size_full()
                         .flex()
@@ -230,20 +269,7 @@ impl WorkspaceWindow {
                                     "Could not open document. Showing the previous file. {error}"
                                 )),
                         )
-                        .child(render_document(
-                            panel.render_state(),
-                            panel_entity.clone(),
-                            entity.clone(),
-                            PreviewRenderOptions {
-                                minimap_visible: self.minimap_visible,
-                                editor_width,
-                                minimap_width,
-                                minimap_resize_preview: self.minimap_resize_preview,
-                                minimap_thumb_visibility: self.minimap_thumb_visibility,
-                                generation: self.generation,
-                                opened_at: self.opened_at.unwrap_or_else(Instant::now),
-                            },
-                        ))
+                        .child(document)
                 } else {
                     render_home(
                         entity.clone(),
@@ -255,23 +281,27 @@ impl WorkspaceWindow {
                 }
             }
             PreviewLoadState::Ready { document: ready } => {
-                let panel_entity = &ready.panel;
                 let reload_error = &ready.reload_error;
-                let panel = panel_entity.read(cx);
-                let document = render_document(
-                    panel.render_state(),
-                    panel_entity.clone(),
-                    entity.clone(),
-                    PreviewRenderOptions {
-                        minimap_visible: self.minimap_visible,
-                        editor_width,
-                        minimap_width,
-                        minimap_resize_preview: self.minimap_resize_preview,
-                        minimap_thumb_visibility: self.minimap_thumb_visibility,
-                        generation: self.generation,
-                        opened_at: self.opened_at.unwrap_or_else(Instant::now),
-                    },
-                );
+                let document = match self.document_mode {
+                    DocumentMode::Source => div().size_full().child(ready.editor.clone()),
+                    DocumentMode::Preview => {
+                        let panel = ready.panel().read(cx);
+                        render_document(
+                            panel.render_state(),
+                            ready.panel().clone(),
+                            entity.clone(),
+                            PreviewRenderOptions {
+                                minimap_visible: self.minimap_visible,
+                                editor_width,
+                                minimap_width,
+                                minimap_resize_preview: self.minimap_resize_preview,
+                                minimap_thumb_visibility: self.minimap_thumb_visibility,
+                                generation: self.generation,
+                                opened_at: self.opened_at.unwrap_or_else(Instant::now),
+                            },
+                        )
+                    }
+                };
                 if let Some(error) = reload_error {
                     div()
                         .size_full()

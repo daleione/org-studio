@@ -151,6 +151,7 @@ fn main() {
             .clone()
             .map(|path| preload_initial_document(path, cx));
         cx.on_action(|_: &Quit, cx| cx.quit());
+        org_studio::editor::init(cx);
         cx.bind_keys([
             KeyBinding::new("cmd-o", OpenDocument, None),
             KeyBinding::new("cmd-r", ReloadDocument, None),

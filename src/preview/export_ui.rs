@@ -72,6 +72,18 @@ pub(super) enum ExportRunState {
 }
 
 impl WorkspaceWindow {
+    pub(super) fn current_export_source(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<(crate::document::DocumentSnapshot, PathBuf, DocumentFormat)> {
+        self.state.ready().map(|document| {
+            let session = document.session.read(cx);
+            let path = session.path().to_path_buf();
+            let format = DocumentFormat::from_path(&path);
+            (session.snapshot(), path, format)
+        })
+    }
+
     pub(super) fn show_export_panel(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.state, PreviewLoadState::Ready { .. }) {
             return;
@@ -152,25 +164,16 @@ impl WorkspaceWindow {
         let Some(panel) = self.export.panel.as_ref() else {
             return;
         };
-        let Some(document) = (match &self.state {
-            PreviewLoadState::Ready { document } => {
-                Some(document.panel.read(cx).document().clone())
-            }
-            _ => None,
-        }) else {
+        let Some((_, path, _)) = self.current_export_source(cx) else {
             return;
         };
         let extension = panel.options.format.extension();
-        let stem = document
-            .path
+        let stem = path
             .file_stem()
             .and_then(|stem| stem.to_str())
             .unwrap_or("document");
         let suggested = format!("{stem}.{extension}");
-        let directory = document
-            .path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."));
+        let directory = path.parent().unwrap_or_else(|| std::path::Path::new("."));
         let receiver = cx.prompt_for_new_path(directory, Some(&suggested));
         self.picker_task = Some(cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut path))) = receiver.await {
@@ -188,17 +191,12 @@ impl WorkspaceWindow {
         let Some(panel) = self.export.panel.as_ref() else {
             return;
         };
-        let Some(document) = (match &self.state {
-            PreviewLoadState::Ready { document } => {
-                Some(document.panel.read(cx).document().clone())
-            }
-            _ => None,
-        }) else {
+        let Some((snapshot, path, source_document_format)) = self.current_export_source(cx) else {
             return;
         };
         let options = panel.options.clone();
         let language = self.language;
-        let source_format = match document.format {
+        let source_format = match source_document_format {
             DocumentFormat::Org => ExportSourceFormat::Org,
             DocumentFormat::Markdown => ExportSourceFormat::Markdown,
         };
@@ -213,14 +211,9 @@ impl WorkspaceWindow {
 
         let background: Task<Result<(Vec<PathBuf>, usize), String>> =
             cx.background_spawn(async move {
-                let artifacts = export_snapshot(
-                    shared_engine(),
-                    document.text.as_ref(),
-                    source_format,
-                    &document.path,
-                    &options,
-                )
-                .map_err(|error| error.to_string())?;
+                let artifacts =
+                    export_snapshot(shared_engine(), &snapshot, source_format, &path, &options)
+                        .map_err(|error| error.to_string())?;
                 if cancel.load(Ordering::Acquire) {
                     return Err("export cancelled".into());
                 }

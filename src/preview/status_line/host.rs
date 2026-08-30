@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use gpui::{ListState, px};
 
+use crate::app::DocumentMode;
 use crate::preview::export_ui::ExportRunState;
 use crate::{document::ByteOffset, i18n::Language, navigation::PaneId};
 
@@ -20,17 +21,66 @@ impl WorkspaceWindow {
         pane: PaneId,
         cx: &gpui::App,
     ) -> Option<StatusLineSnapshot> {
-        let panel = match &self.state {
-            PreviewLoadState::Ready { document } => &document.panel,
-            PreviewLoadState::Failed {
+        let document = match &self.state {
+            PreviewLoadState::Ready { document }
+            | PreviewLoadState::Failed {
                 previous: Some(document),
                 ..
-            } => &document.panel,
+            } => document,
             PreviewLoadState::Empty
             | PreviewLoadState::Loading { .. }
             | PreviewLoadState::Failed { previous: None, .. } => return None,
         };
-        let panel = panel.read(cx);
+        match self.document_mode {
+            DocumentMode::Source => Some(self.source_status_snapshot(pane, document, cx)),
+            DocumentMode::Preview => Some(self.preview_status_snapshot(pane, document, cx)),
+        }
+    }
+
+    fn source_status_snapshot(
+        &self,
+        pane: PaneId,
+        ready: &super::super::ReadyDocument,
+        cx: &gpui::App,
+    ) -> StatusLineSnapshot {
+        let status = ready.editor.read(cx).status(cx);
+        let document_statistics = DocumentStatistics {
+            characters: status.characters,
+            lines: status.total_lines,
+            bytes: status.bytes,
+        };
+        StatusLineSnapshot {
+            pane,
+            language: self.language,
+            host: StatusHost::Editor,
+            outline: None,
+            position: Some(StatusPosition::EditorCaret {
+                line: status.caret_line,
+                column: status.caret_column,
+            }),
+            progress: Some(reading_progress(
+                status.visible_bottom_line,
+                status.total_lines,
+                status.reached_end,
+            )),
+            statistics: Some(
+                format_character_count(document_statistics.characters, self.language).into(),
+            ),
+            document_statistics: Some(document_statistics),
+            format: Some(super::super::DocumentFormat::from_path(
+                ready.session.read(cx).path(),
+            )),
+            transient: self.document_transient_status(),
+        }
+    }
+
+    fn preview_status_snapshot(
+        &self,
+        pane: PaneId,
+        ready: &super::super::ReadyDocument,
+        cx: &gpui::App,
+    ) -> StatusLineSnapshot {
+        let panel = ready.panel().read(cx);
         let document = panel.document();
         let visible_rows = panel.visible_rows();
         let list_state = panel.list_state();
@@ -59,7 +109,7 @@ impl WorkspaceWindow {
         };
         let statistics: Arc<str> =
             format_character_count(document_statistics.characters, self.language).into();
-        Some(StatusLineSnapshot {
+        StatusLineSnapshot {
             pane,
             language: self.language,
             host: StatusHost::Preview,
@@ -73,7 +123,7 @@ impl WorkspaceWindow {
             document_statistics: Some(document_statistics),
             format: Some(document.format),
             transient: self.document_transient_status(),
-        })
+        }
     }
 
     pub(super) fn dired_status_snapshot(&self, pane: PaneId) -> Option<StatusLineSnapshot> {

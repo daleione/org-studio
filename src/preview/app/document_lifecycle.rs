@@ -1,9 +1,9 @@
 use super::{
-    Arc, Context, Duration, InitialDocumentLoad, Instant, LoadedDocument, PathBuf,
-    PathPromptOptions, PreviewLoadState, WorkspaceWindow, accept_generation, load_document,
-    minimap,
+    Arc, Context, Duration, InitialDocumentLoad, Instant, PathBuf, PathPromptOptions,
+    PreviewLoadState, WorkspaceLoadedDocument, WorkspaceWindow, accept_generation,
+    load_workspace_document, minimap,
 };
-use crate::preview::{ReadyDocument, ReloadedDocument, loading::reload_document_profiled};
+use crate::preview::{ReadyDocument, WorkspaceReloadedDocument, reload_workspace_document};
 use gpui::AppContext;
 
 impl WorkspaceWindow {
@@ -21,7 +21,7 @@ impl WorkspaceWindow {
         self.content_route = super::super::ContentRoute::Document;
         self.file_manager.reset_for_document();
         self.stop_dired_directory_watch();
-        self.install_preview_keymap();
+        self.install_document_keymap();
         cx.notify();
     }
 
@@ -67,7 +67,8 @@ impl WorkspaceWindow {
                 }));
             }
             Err(async_channel::TryRecvError::Closed) => {
-                let result = Err((path, "initial document loader stopped".to_owned()));
+                let result: Result<WorkspaceLoadedDocument, _> =
+                    Err((path, "initial document loader stopped".to_owned()));
                 if self.apply_load_result(generation, result, cx) {
                     cx.notify();
                 }
@@ -77,6 +78,7 @@ impl WorkspaceWindow {
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         let generation = self.begin_open(path.clone(), Instant::now());
+        let document_mode = self.document_mode;
 
         // Opening the requested document is user-visible latency. Submit it before synchronous
         // file-watcher setup and before one-time font startup work so a small local file is not
@@ -93,7 +95,7 @@ impl WorkspaceWindow {
                             opened_at.elapsed().as_secs_f64() * 1000.0,
                         );
                     }
-                    let result = load_document(path);
+                    let result = load_workspace_document(path, document_mode);
                     if minimap::minimap_perf_enabled() {
                         eprintln!(
                             "org_preview_document_load_complete generation={} since_open_ms={:.3}",
@@ -141,10 +143,11 @@ impl WorkspaceWindow {
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
         self.set_reload_error(None);
+        let document_mode = self.document_mode;
         let background = cx
             .background_executor()
             .spawn_with_priority(gpui::Priority::High, async move {
-                reload_document_profiled(request)
+                reload_workspace_document(request, document_mode)
             });
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
@@ -165,7 +168,7 @@ impl WorkspaceWindow {
     fn apply_reload_result(
         &mut self,
         generation: u64,
-        result: Result<ReloadedDocument, (PathBuf, String)>,
+        result: Result<WorkspaceReloadedDocument, (PathBuf, String)>,
         cx: &mut Context<Self>,
     ) -> bool {
         if !accept_generation(self.generation, generation) {
@@ -184,16 +187,24 @@ impl WorkspaceWindow {
                 return true;
             }
         };
-        let (prepared, preview) = reloaded.into_parts();
+        let (prepared, preview) = match reloaded {
+            WorkspaceReloadedDocument::Source(prepared) => (prepared, None),
+            WorkspaceReloadedDocument::Preview(reloaded) => {
+                let (prepared, preview) = reloaded.into_parts();
+                (prepared, Some(preview))
+            }
+        };
         if let Err(error) = session.update(cx, |session, cx| session.apply_reload(prepared, cx)) {
             self.set_reload_error(Some(format!("Reload was not applied: {error:?}").into()));
             return true;
         }
-        let document = Arc::new(preview);
-        let list_overdraw = self.list_overdraw;
-        panel.update(cx, |panel, cx| {
-            panel.replace_document(document, list_overdraw, cx);
-        });
+        if let (Some(panel), Some(preview)) = (panel, preview) {
+            let document = Arc::new(preview);
+            let list_overdraw = self.list_overdraw;
+            panel.update(cx, |panel, cx| {
+                panel.replace_document(document, list_overdraw, cx);
+            });
+        }
         self.set_reload_error(None);
         true
     }
@@ -294,20 +305,31 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn apply_load_result(
+    pub(in crate::preview) fn apply_load_result<T>(
         &mut self,
         generation: u64,
-        result: Result<LoadedDocument, (PathBuf, String)>,
+        result: Result<T, (PathBuf, String)>,
         cx: &mut impl AppContext,
-    ) -> bool {
+    ) -> bool
+    where
+        T: Into<WorkspaceLoadedDocument>,
+    {
         if !accept_generation(self.generation, generation) {
             return false;
         }
         let previous = self.state.take_ready();
         self.state = match result {
             Ok(loaded) => {
-                let (session, preview) = loaded.into_parts();
-                if minimap::minimap_perf_enabled() {
+                let (session, preview) = match loaded.into() {
+                    WorkspaceLoadedDocument::Source(session) => (session, None),
+                    WorkspaceLoadedDocument::Preview(loaded) => {
+                        let (session, preview) = loaded.into_parts();
+                        (session, Some(preview))
+                    }
+                };
+                if minimap::minimap_perf_enabled()
+                    && let Some(preview) = preview.as_ref()
+                {
                     eprintln!(
                         "org_preview_document_ready generation={} bytes={} rows={} read_ms={:.3} rope_ms={:.3} parse_ms={:.3} display_map_ms={:.3} load_total_ms={:.3} since_open_ms={:.3}",
                         generation,
@@ -324,16 +346,19 @@ impl WorkspaceWindow {
                 }
                 crate::recent_documents::record_success(
                     &mut self.recent_documents,
-                    preview.path.clone(),
+                    session.path().to_path_buf(),
                 );
                 self.home_error = None;
                 let session = cx.new(|_| session);
-                let document = Arc::new(preview);
-                let panel =
-                    cx.new(|_| super::super::PreviewPanel::new(document, self.list_overdraw));
+                let editor = cx.new(|cx| crate::editor::SourceEditor::new(session.clone(), cx));
+                let panel = preview.map(|preview| {
+                    let document = Arc::new(preview);
+                    cx.new(|_| super::super::PreviewPanel::new(document, self.list_overdraw))
+                });
                 PreviewLoadState::Ready {
                     document: ReadyDocument {
                         session,
+                        editor,
                         panel,
                         reload_error: None,
                     },

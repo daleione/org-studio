@@ -721,7 +721,10 @@ impl WorkspaceWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         match segment {
-            StatusSegment::Progress if self.content_route == ContentRoute::Document => {
+            StatusSegment::Progress
+                if self.content_route == ContentRoute::Document
+                    && self.document_mode == crate::app::DocumentMode::Preview =>
+            {
                 if !self.minimap_visible {
                     self.minimap_visible = true;
                     self.bump_preview_revision(cx);
@@ -881,14 +884,25 @@ fn info_text(
     language: Language,
 ) -> String {
     if segment == StatusSegment::Mode
+        && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Editor)
+    {
+        return match language {
+            Language::Chinese => "当前为 Source 编辑模式。位置和进度来自编辑器的实时光标与 viewport。".to_owned(),
+            Language::English => {
+                "Source editing is active. Position and progress use the editor's live caret and viewport.".to_owned()
+            }
+        };
+    }
+    if segment == StatusSegment::Mode
         && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Preview)
     {
         return match language {
             Language::Chinese => {
-                "当前为 Preview。状态协议已区分 PreviewSource 与 EditorCaret；编辑 Host 接入后，此入口直接切换模式。".to_owned()
+                "当前为 Preview。位置和进度来自预览内容映射与 viewport。".to_owned()
             }
             Language::English => {
-                "Preview is active. The status protocol already separates PreviewSource from EditorCaret; this entry will switch modes when the editor host lands.".to_owned()
+                "Preview is active. Position and progress use the preview mapping and viewport."
+                    .to_owned()
             }
         };
     }
@@ -992,7 +1006,9 @@ mod tests {
     fn clicking_the_rendered_more_segment_opens_its_pane_overflow(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
-        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::new()));
+        let app = cx.update(|cx| {
+            cx.new(|_| WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview))
+        });
         let snapshot = snapshot();
         let pane = snapshot.pane;
         struct StatusHarness {
@@ -1053,6 +1069,59 @@ mod tests {
             ),
             "259:4"
         );
+    }
+
+    #[gpui::test]
+    fn source_mode_status_reads_the_editor_instead_of_the_hidden_preview(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let path = std::env::temp_dir().join(format!(
+            "org-studio-source-status-{}.org",
+            std::process::id()
+        ));
+        std::fs::write(&path, "first\nsecond\n").unwrap();
+        let loaded = crate::preview::load_document(path.clone()).unwrap();
+        let _ = std::fs::remove_file(path);
+        let window = cx.open_window(gpui::size(px(900.0), px(700.0)), |_, _| {
+            WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview)
+        });
+        let editor = window
+            .update(cx, |app, _, cx| {
+                app.document_mode = crate::app::DocumentMode::Source;
+                app.generation = 1;
+                assert!(app.apply_load_result(1, Ok(loaded), cx));
+                app.state.ready().unwrap().editor.clone()
+            })
+            .unwrap();
+        cx.run_until_parked();
+        let root = window.entity(cx).unwrap();
+        let callback_count = cx.update(|cx| {
+            cx.with_window(root.entity_id(), |window, cx| {
+                window.simulate_next_frame(cx)
+            })
+            .unwrap()
+        });
+        assert!(callback_count > 0);
+        cx.run_until_parked();
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(
+                crate::document::Selection::caret(crate::document::ByteOffset(8)),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+
+        let snapshot = window
+            .update(cx, |app, _, cx| app.status_snapshot(cx).unwrap())
+            .unwrap();
+        assert_eq!(snapshot.host, StatusHost::Editor);
+        assert_eq!(
+            snapshot.position,
+            Some(StatusPosition::EditorCaret { line: 2, column: 3 })
+        );
+        assert_eq!(snapshot.progress, Some(100));
+        assert_eq!(snapshot.statistics.as_deref(), Some("13 字"));
+        assert!(snapshot.outline.is_none());
     }
 
     #[test]

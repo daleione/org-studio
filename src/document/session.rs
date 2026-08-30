@@ -3,9 +3,36 @@ use std::path::{Path, PathBuf};
 use gpui::{Context, EventEmitter};
 
 use super::{
-    ByteRange, DocumentBuffer, DocumentId, DocumentSnapshot, EditError, EditTransaction, Revision,
-    RevisionDelta, TextEditSummary, TextSnapshot, transaction::PreparedText,
+    ByteOffset, ByteRange, DocumentBuffer, DocumentId, DocumentSnapshot, EditError, EditOrigin,
+    EditTransaction, HistoryOutcome, Revision, RevisionDelta, Selection, TextEdit, TextEditSummary,
+    TextSnapshot,
+    transaction::PreparedText,
+    undo::{HistoryStep, UndoHistory},
 };
+
+#[derive(Clone, Debug)]
+pub struct SessionEdit {
+    transaction: EditTransaction,
+    before: Selection,
+    after: Selection,
+    origin: EditOrigin,
+}
+
+impl SessionEdit {
+    pub fn new(
+        transaction: EditTransaction,
+        before: Selection,
+        after: Selection,
+        origin: EditOrigin,
+    ) -> Self {
+        Self {
+            transaction,
+            before,
+            after,
+            origin,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentEvent {
@@ -131,6 +158,7 @@ pub struct DocumentSession {
     path: PathBuf,
     buffer: DocumentBuffer,
     saved_revision: Revision,
+    history: UndoHistory,
 }
 
 impl EventEmitter<DocumentEvent> for DocumentSession {}
@@ -142,6 +170,7 @@ impl DocumentSession {
             path,
             saved_revision: buffer.revision(),
             buffer,
+            history: UndoHistory::default(),
         })
     }
 
@@ -176,17 +205,89 @@ impl DocumentSession {
         }
     }
 
-    pub fn commit(
+    pub(crate) fn apply_transient_edit(
         &mut self,
         transaction: EditTransaction,
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
         let delta = self.buffer.commit(transaction)?;
+        self.history.clear_redo();
         cx.emit(DocumentEvent::Edited {
             document_id: self.id(),
             delta: delta.clone(),
         });
         Ok(delta)
+    }
+
+    pub fn edit(
+        &mut self,
+        edit: SessionEdit,
+        cx: &mut Context<Self>,
+    ) -> Result<RevisionDelta, EditError> {
+        let snapshot = self.buffer.snapshot();
+        let mut forward = edit.transaction.edits.clone();
+        forward.sort_by_key(|text_edit| text_edit.range.start);
+        let delta = self.buffer.commit(edit.transaction)?;
+        let inverse = inverse_edits(&snapshot, &forward);
+        self.history.record(
+            HistoryStep { forward, inverse },
+            edit.before,
+            edit.after,
+            edit.origin,
+        );
+        self.emit_edited(delta.clone(), cx);
+        Ok(delta)
+    }
+
+    pub(crate) fn finalize_transient_edit(
+        &mut self,
+        expected_revision: Revision,
+        forward: Vec<TextEdit>,
+        inverse: Vec<TextEdit>,
+        before: Selection,
+        after: Selection,
+        origin: EditOrigin,
+    ) -> Result<(), EditError> {
+        if self.revision() != expected_revision {
+            return Err(EditError::StaleRevision {
+                expected: self.revision(),
+                actual: expected_revision,
+            });
+        }
+        self.history
+            .record(HistoryStep { forward, inverse }, before, after, origin);
+        Ok(())
+    }
+
+    pub fn undo(&mut self, cx: &mut Context<Self>) -> Result<HistoryOutcome, EditError> {
+        let Some((transactions, selection)) = self.history.prepare_undo(self.revision())? else {
+            return Ok(HistoryOutcome::Empty);
+        };
+        for transaction in transactions {
+            let delta = self.buffer.commit(transaction)?;
+            self.emit_edited(delta, cx);
+        }
+        self.history.complete_undo();
+        Ok(HistoryOutcome::Applied(selection))
+    }
+
+    pub fn redo(&mut self, cx: &mut Context<Self>) -> Result<HistoryOutcome, EditError> {
+        let Some((transactions, selection)) = self.history.prepare_redo(self.revision())? else {
+            return Ok(HistoryOutcome::Empty);
+        };
+        for transaction in transactions {
+            let delta = self.buffer.commit(transaction)?;
+            self.emit_edited(delta, cx);
+        }
+        self.history.complete_redo();
+        Ok(HistoryOutcome::Applied(selection))
+    }
+
+    fn emit_edited(&self, delta: RevisionDelta, cx: &mut Context<Self>) {
+        cx.emit(DocumentEvent::Edited {
+            document_id: self.id(),
+            delta,
+        });
     }
 
     pub fn mark_saved(
@@ -256,12 +357,34 @@ impl DocumentSession {
         let delta = prepared.delta;
         self.buffer.replace_prepared(prepared.text, delta.clone())?;
         self.saved_revision = delta.after;
+        self.history.clear();
         cx.emit(DocumentEvent::Reloaded {
             document_id: self.id(),
             delta: delta.clone(),
         });
         Ok(delta)
     }
+}
+
+fn inverse_edits(snapshot: &DocumentSnapshot, forward: &[TextEdit]) -> Vec<TextEdit> {
+    let mut shift = 0_i128;
+    forward
+        .iter()
+        .map(|edit| {
+            let start = u64::try_from(i128::from(edit.range.start.0) + shift)
+                .expect("validated edit shift remains in document bounds");
+            let replacement_len = edit.replacement.len() as u64;
+            let original = snapshot.copy_range(edit.range);
+            shift += i128::from(replacement_len) - i128::from(edit.range.len());
+            TextEdit::new(
+                ByteRange {
+                    start: ByteOffset(start),
+                    end: ByteOffset(start + replacement_len),
+                },
+                original,
+            )
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -291,7 +414,7 @@ mod tests {
         let before = cx.read(|cx| session.read(cx).snapshot());
         session.update(cx, |session, cx| {
             session
-                .commit(
+                .apply_transient_edit(
                     EditTransaction::new(
                         session.revision(),
                         vec![TextEdit::new(ByteRange::new(7, 7), "\nthree")],
@@ -318,7 +441,7 @@ mod tests {
         });
         let saved = session.update(cx, |session, cx| {
             session
-                .commit(
+                .apply_transient_edit(
                     EditTransaction::new(
                         session.revision(),
                         vec![TextEdit::new(ByteRange::new(3, 3), " two")],
@@ -330,7 +453,7 @@ mod tests {
         });
         session.update(cx, |session, cx| {
             session
-                .commit(
+                .apply_transient_edit(
                     EditTransaction::new(
                         session.revision(),
                         vec![TextEdit::new(ByteRange::new(7, 7), " three")],
@@ -371,7 +494,7 @@ mod tests {
             .unwrap();
         session.update(cx, |session, cx| {
             session
-                .commit(
+                .apply_transient_edit(
                     EditTransaction::new(
                         session.revision(),
                         vec![TextEdit::new(ByteRange::new(8, 8), " local")],
@@ -382,5 +505,47 @@ mod tests {
             assert_eq!(session.apply_reload(stale, cx), Err(ReloadError::Dirty));
         });
         assert_eq!(cx.read(|cx| contents(session.read(cx))), "new text local");
+    }
+
+    #[gpui::test]
+    fn edit_history_coalesces_typing_and_restores_selection(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("notes.org"), b"x".to_vec()).unwrap()
+        });
+        for (offset, text) in [(1, "a"), (2, "🙂")] {
+            session.update(cx, |session, cx| {
+                let before = Selection::caret(ByteOffset(offset));
+                let after = Selection::caret(ByteOffset(offset + text.len() as u64));
+                session
+                    .edit(
+                        SessionEdit::new(
+                            EditTransaction::new(
+                                session.revision(),
+                                vec![TextEdit::new(ByteRange::new(offset, offset), text)],
+                            ),
+                            before,
+                            after,
+                            EditOrigin::Typing,
+                        ),
+                        cx,
+                    )
+                    .unwrap();
+            });
+        }
+        assert_eq!(cx.read(|cx| contents(session.read(cx))), "xa🙂");
+        session.update(cx, |session, cx| {
+            assert_eq!(
+                session.undo(cx).unwrap(),
+                HistoryOutcome::Applied(Selection::caret(ByteOffset(1)))
+            );
+        });
+        assert_eq!(cx.read(|cx| contents(session.read(cx))), "x");
+        session.update(cx, |session, cx| {
+            assert_eq!(
+                session.redo(cx).unwrap(),
+                HistoryOutcome::Applied(Selection::caret(ByteOffset(6)))
+            );
+        });
+        assert_eq!(cx.read(|cx| contents(session.read(cx))), "xa🙂");
     }
 }

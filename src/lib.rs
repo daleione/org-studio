@@ -1,6 +1,7 @@
 pub mod app;
 pub mod command;
 pub mod document;
+pub mod editor;
 pub mod export;
 pub mod file_manager;
 pub mod file_watcher;

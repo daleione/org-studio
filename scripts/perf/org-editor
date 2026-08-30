@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+FIXTURE_DIR="${ORG_STUDIO_PERF_FIXTURE_DIR:-$ROOT_DIR/target/perf-fixtures}"
+RESULT_ROOT="${ORG_STUDIO_PERF_RESULT_DIR:-$ROOT_DIR/target/perf-results}"
+DEFAULT_MIB="${ORG_STUDIO_PERF_MIB:-50}"
+
+usage() {
+    cat <<'EOF'
+Usage: scripts/perf/org-editor COMMAND [MIB]
+
+Commands:
+  prepare [MIB]       Generate an editor fixture (default: 50).
+  build               Build release binaries.
+  typing [MIB]        Measure edits plus UTF-16 caret mapping without parsing.
+  frame [MIB]         Measure visible SourceEditor prepaint+paint CPU while typing.
+  first-frame [MIB]   Measure the first readable SourceEditor frame.
+  suite [MIB]         Build, prepare, typing, and first-frame.
+EOF
+}
+
+die() {
+    printf 'org-editor-perf: %s\n' "$*" >&2
+    exit 2
+}
+
+fixture_path() {
+    printf '%s/org-preview-%sm.org' "$FIXTURE_DIR" "$1"
+}
+
+validate_mib() {
+    [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "MiB must be a positive integer: $1"
+}
+
+prepare() {
+    local mib="${1:-$DEFAULT_MIB}"
+    validate_mib "$mib"
+    mkdir -p "$FIXTURE_DIR"
+    cargo run --quiet --release --bin generate-org-fixture -- "$(fixture_path "$mib")" "$mib"
+}
+
+ensure_fixture() {
+    local mib="$1"
+    [[ -f "$(fixture_path "$mib")" ]] || prepare "$mib"
+}
+
+new_run_dir() {
+    local label="$1"
+    RUN_DIR="$RESULT_ROOT/$(date '+%Y%m%d-%H%M%S')-$label"
+    mkdir -p "$RUN_DIR"
+    printf 'org_editor_perf_results path=%s\n' "$RUN_DIR"
+}
+
+build_release() {
+    cargo build --release --bins --features benchmarks
+}
+
+typing() {
+    local mib="${1:-$DEFAULT_MIB}"
+    validate_mib "$mib"
+    ensure_fixture "$mib"
+    [[ -x "$ROOT_DIR/target/release/org-editor-bench" ]] || build_release
+    new_run_dir "editor-typing-${mib}m"
+    "$ROOT_DIR/target/release/org-editor-bench" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/typing.log"
+}
+
+first_frame() {
+    local mib="${1:-$DEFAULT_MIB}"
+    validate_mib "$mib"
+    ensure_fixture "$mib"
+    [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
+    new_run_dir "editor-first-frame-${mib}m"
+    ORG_STUDIO_DOCUMENT_MODE=source \
+    ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
+    ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=1 \
+        "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/first-frame.log"
+}
+
+frame() {
+    local mib="${1:-$DEFAULT_MIB}"
+    validate_mib "$mib"
+    ensure_fixture "$mib"
+    [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
+    new_run_dir "editor-frame-${mib}m"
+    ORG_STUDIO_DOCUMENT_MODE=source \
+    ORG_STUDIO_EDITOR_BENCH_WARMUP_FRAMES="${ORG_STUDIO_EDITOR_BENCH_WARMUP_FRAMES:-120}" \
+    ORG_STUDIO_EDITOR_BENCH_FRAMES="${ORG_STUDIO_EDITOR_BENCH_FRAMES:-500}" \
+    ORG_STUDIO_EXIT_AFTER_EDITOR_BENCH=1 \
+    ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=1 \
+        "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/frame.log"
+}
+
+suite() {
+    local mib="${1:-$DEFAULT_MIB}"
+    build_release
+    prepare "$mib"
+    typing "$mib"
+    frame "$mib"
+    first_frame "$mib"
+}
+
+cd "$ROOT_DIR"
+command="${1:-help}"
+shift || true
+case "$command" in
+    prepare) prepare "$@" ;;
+    build) build_release ;;
+    typing) typing "$@" ;;
+    frame) frame "$@" ;;
+    first-frame) first_frame "$@" ;;
+    suite) suite "$@" ;;
+    help|-h|--help) usage ;;
+    *) usage >&2; die "unknown command: $command" ;;
+esac

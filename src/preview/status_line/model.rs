@@ -10,26 +10,15 @@ pub(super) const DIRED_PANE_ID: PaneId = PaneId(2);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StatusHost {
     Preview,
-    #[allow(dead_code)]
     Editor,
     Dired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StatusPosition {
-    PreviewSource {
-        line: u64,
-        total_lines: u64,
-    },
-    #[allow(dead_code)]
-    EditorCaret {
-        line: u64,
-        column: u64,
-    },
-    DiredSelection {
-        selected: usize,
-        total: usize,
-    },
+    PreviewSource { line: u64, total_lines: u64 },
+    EditorCaret { line: u64, column: u64 },
+    DiredSelection { selected: usize, total: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

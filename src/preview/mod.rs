@@ -19,14 +19,19 @@ mod loading;
 mod status_line;
 mod view;
 pub(crate) use document::DocumentFormat;
-use document::{CodeRowRole, PreviewRow, ReloadedDocument, configured_minimap_visible};
+use document::{
+    CodeRowRole, PreviewRow, ReloadedDocument, WorkspaceLoadedDocument, WorkspaceReloadedDocument,
+    configured_minimap_visible,
+};
 pub use document::{
     DerivedEvent, InitialDocumentLoad, LoadMetrics, LoadedDocument, PreviewSnapshot,
     preload_initial_document,
 };
 use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 use input::*;
-use loading::{fitted_image_size, resolve_image_path};
+use loading::{
+    fitted_image_size, load_workspace_document, reload_workspace_document, resolve_image_path,
+};
 pub use loading::{
     load_document, load_document_profiled, load_document_profiled_without_display_map,
 };
@@ -181,8 +186,17 @@ pub(crate) enum PreviewLoadState {
 #[derive(Clone)]
 pub(crate) struct ReadyDocument {
     session: gpui::Entity<crate::document::DocumentSession>,
-    panel: gpui::Entity<PreviewPanel>,
+    editor: gpui::Entity<crate::editor::SourceEditor>,
+    panel: Option<gpui::Entity<PreviewPanel>>,
     reload_error: Option<Arc<str>>,
+}
+
+impl ReadyDocument {
+    fn panel(&self) -> &gpui::Entity<PreviewPanel> {
+        self.panel
+            .as_ref()
+            .expect("preview mode publishes a preview panel")
+    }
 }
 
 impl PreviewLoadState {

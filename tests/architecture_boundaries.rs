@@ -170,6 +170,7 @@ fn entity_and_load_boundaries_keep_their_fields_private() {
         ("src/preview/file_manager_host.rs", "FileManagerHost"),
         ("src/preview/export_ui.rs", "ExportHost"),
         ("src/preview/status_line.rs", "StatusLineHost"),
+        ("src/editor/mod.rs", "SourceEditor"),
     ] {
         for field in fields_of(&root.join(relative), name) {
             assert!(

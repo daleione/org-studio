@@ -16,6 +16,21 @@ use crate::{
     },
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DocumentMode {
+    Source,
+    Preview,
+}
+
+impl DocumentMode {
+    pub(crate) fn from_environment() -> Self {
+        std::env::var("ORG_STUDIO_DOCUMENT_MODE")
+            .ok()
+            .filter(|mode| mode.eq_ignore_ascii_case("preview"))
+            .map_or(Self::Source, |_| Self::Preview)
+    }
+}
+
 pub struct WorkspaceWindow {
     pub(crate) language: crate::i18n::Language,
     pub(crate) focus_handle: Option<FocusHandle>,
@@ -45,6 +60,7 @@ pub struct WorkspaceWindow {
     pub(crate) key_feedback_request: u64,
     pub(crate) which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
     pub(crate) content_route: ContentRoute,
+    pub(crate) document_mode: DocumentMode,
     pub(crate) minimap_visible: bool,
     pub(crate) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
     pub(crate) minimap_width: Option<u16>,

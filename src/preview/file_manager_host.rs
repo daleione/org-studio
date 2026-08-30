@@ -437,7 +437,8 @@ impl WorkspaceWindow {
         if !self.file_manager.sidebar_visible {
             self.stop_dired_directory_watch();
         }
-        self.install_preview_keymap();
+        self.install_document_keymap();
+        self.request_editor_focus(cx);
         cx.notify();
     }
 
@@ -527,7 +528,8 @@ impl WorkspaceWindow {
                 self.content_route = ContentRoute::Document;
                 if opened_from_full_page {
                     self.file_manager.sidebar_focused = false;
-                    self.install_preview_keymap();
+                    self.install_document_keymap();
+                    self.request_editor_focus(cx);
                 }
                 if !self.file_manager.sidebar_visible {
                     self.stop_dired_directory_watch();

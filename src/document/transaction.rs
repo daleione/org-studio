@@ -1,10 +1,10 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ropey::Rope;
 
 use super::{
-    ByteRange, DocumentId, DocumentSnapshot, EditLog, EditLogError, Revision, RevisionDelta,
-    TextEditSummary,
+    ByteRange, CoordinateCheckpoint, DocumentId, DocumentSnapshot, EditLog, EditLogError, Revision,
+    RevisionDelta, TextEditSummary,
 };
 
 const DEFAULT_EDIT_LOG_CAPACITY: usize = 256;
@@ -89,10 +89,12 @@ pub struct DocumentBuffer {
     rope: Rope,
     revision: Revision,
     edit_log: EditLog,
+    coordinate_index: Arc<OnceLock<Arc<[CoordinateCheckpoint]>>>,
 }
 
 pub(super) struct PreparedText {
     rope: Rope,
+    coordinate_index: Arc<OnceLock<Arc<[CoordinateCheckpoint]>>>,
 }
 
 impl PreparedText {
@@ -102,6 +104,7 @@ impl PreparedText {
         })?;
         Ok(Self {
             rope: Rope::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text)),
+            coordinate_index: Arc::default(),
         })
     }
 
@@ -110,7 +113,12 @@ impl PreparedText {
     }
 
     pub(super) fn snapshot(&self, document_id: DocumentId, revision: Revision) -> DocumentSnapshot {
-        DocumentSnapshot::from_rope(document_id, self.rope.clone(), revision)
+        DocumentSnapshot::from_rope(
+            document_id,
+            self.rope.clone(),
+            revision,
+            self.coordinate_index.clone(),
+        )
     }
 }
 
@@ -126,6 +134,7 @@ impl DocumentBuffer {
             rope: prepared.rope,
             revision: Revision::INITIAL,
             edit_log: EditLog::new(capacity).map_err(EditError::EditLog)?,
+            coordinate_index: Arc::default(),
         })
     }
 
@@ -138,7 +147,12 @@ impl DocumentBuffer {
     }
 
     pub fn snapshot(&self) -> DocumentSnapshot {
-        DocumentSnapshot::from_rope(self.id, self.rope.clone(), self.revision)
+        DocumentSnapshot::from_rope(
+            self.id,
+            self.rope.clone(),
+            self.revision,
+            self.coordinate_index.clone(),
+        )
     }
 
     pub fn edit_log(&self) -> &EditLog {
@@ -161,6 +175,15 @@ impl DocumentBuffer {
             .ok_or(EditError::RevisionExhausted)?;
         transaction.edits.sort_by_key(|edit| edit.range.start);
         self.validate_edits(&transaction.edits)?;
+        let coordinate_index = self.coordinate_index.get().map(|checkpoints| {
+            transform_coordinate_index(
+                self.id,
+                self.revision,
+                &self.rope,
+                checkpoints,
+                &transaction.edits,
+            )
+        });
 
         let summaries = transaction
             .edits
@@ -184,6 +207,11 @@ impl DocumentBuffer {
             .push(delta.clone())
             .map_err(EditError::EditLog)?;
         self.revision = after;
+        self.coordinate_index = coordinate_index.map_or_else(Arc::default, |checkpoints| {
+            let index = Arc::new(OnceLock::new());
+            let _ = index.set(Arc::from(checkpoints));
+            index
+        });
         Ok(delta)
     }
 
@@ -203,6 +231,7 @@ impl DocumentBuffer {
             .map_err(EditError::EditLog)?;
         self.rope = prepared.rope;
         self.revision = delta.after;
+        self.coordinate_index = prepared.coordinate_index;
         Ok(())
     }
 
@@ -230,6 +259,119 @@ impl DocumentBuffer {
         }
         Ok(())
     }
+}
+
+fn transform_coordinate_index(
+    document_id: DocumentId,
+    revision: Revision,
+    rope: &Rope,
+    checkpoints: &[CoordinateCheckpoint],
+    edits: &[TextEdit],
+) -> Vec<CoordinateCheckpoint> {
+    struct CoordinateEdit<'a> {
+        edit: &'a TextEdit,
+        start_character: usize,
+        start_utf16: u64,
+        byte_delta: i128,
+        character_delta: i128,
+        utf16_delta: i128,
+    }
+
+    let snapshot = DocumentSnapshot::from_rope(document_id, rope.clone(), revision, {
+        let index = Arc::new(OnceLock::new());
+        let _ = index.set(Arc::from(checkpoints));
+        index
+    });
+    let coordinate_edits = edits
+        .iter()
+        .map(|edit| {
+            let start_character = rope.byte_to_char(edit.range.start.0 as usize);
+            let end_character = rope.byte_to_char(edit.range.end.0 as usize);
+            let start_utf16 = snapshot
+                .byte_to_utf16(edit.range.start)
+                .expect("validated edit boundary")
+                .0;
+            let end_utf16 = snapshot
+                .byte_to_utf16(edit.range.end)
+                .expect("validated edit boundary")
+                .0;
+            CoordinateEdit {
+                edit,
+                start_character,
+                start_utf16,
+                byte_delta: edit.replacement.len() as i128 - edit.range.len() as i128,
+                character_delta: edit.replacement.chars().count() as i128
+                    - (end_character - start_character) as i128,
+                utf16_delta: edit.replacement.encode_utf16().count() as i128
+                    - (end_utf16 - start_utf16) as i128,
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut transformed = Vec::with_capacity(checkpoints.len() + edits.len());
+    for checkpoint in checkpoints.iter().copied() {
+        let mut byte_shift = 0_i128;
+        let mut character_shift = 0_i128;
+        let mut utf16_shift = 0_i128;
+        let mut retained = true;
+        for edit in &coordinate_edits {
+            if checkpoint.byte <= edit.edit.range.start.0 {
+                break;
+            }
+            if checkpoint.byte < edit.edit.range.end.0 {
+                retained = false;
+                break;
+            }
+            byte_shift += edit.byte_delta;
+            character_shift += edit.character_delta;
+            utf16_shift += edit.utf16_delta;
+        }
+        if retained {
+            transformed.push(CoordinateCheckpoint {
+                byte: (checkpoint.byte as i128 + byte_shift) as u64,
+                character: (checkpoint.character as i128 + character_shift) as usize,
+                utf16: (checkpoint.utf16 as i128 + utf16_shift) as u64,
+            });
+        }
+    }
+
+    let mut byte_shift = 0_i128;
+    let mut character_shift = 0_i128;
+    let mut utf16_shift = 0_i128;
+    for edit in &coordinate_edits {
+        let new_start_byte = (edit.edit.range.start.0 as i128 + byte_shift) as u64;
+        let new_start_character = (edit.start_character as i128 + character_shift) as usize;
+        let new_start_utf16 = (edit.start_utf16 as i128 + utf16_shift) as u64;
+        let mut local_byte = 0_u64;
+        let mut local_character = 0_usize;
+        let mut local_utf16 = 0_u64;
+        let mut last_checkpoint = 0_u64;
+        for scalar in edit.edit.replacement.chars() {
+            if local_byte - last_checkpoint >= 64 * 1024 {
+                transformed.push(CoordinateCheckpoint {
+                    byte: new_start_byte + local_byte,
+                    character: new_start_character + local_character,
+                    utf16: new_start_utf16 + local_utf16,
+                });
+                last_checkpoint = local_byte;
+            }
+            local_byte += scalar.len_utf8() as u64;
+            local_character += 1;
+            local_utf16 += scalar.len_utf16() as u64;
+        }
+        if local_byte > 0 {
+            transformed.push(CoordinateCheckpoint {
+                byte: new_start_byte + local_byte,
+                character: new_start_character + local_character,
+                utf16: new_start_utf16 + local_utf16,
+            });
+        }
+        byte_shift += edit.byte_delta;
+        character_shift += edit.character_delta;
+        utf16_shift += edit.utf16_delta;
+    }
+    transformed.sort_unstable_by_key(|checkpoint| checkpoint.byte);
+    transformed.dedup_by_key(|checkpoint| checkpoint.byte);
+    transformed
 }
 
 fn is_char_boundary(rope: &Rope, offset: u64) -> bool {

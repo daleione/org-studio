@@ -5,7 +5,7 @@ use super::{
     BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
     ContentRoute, Context, EmacsOutcome, InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent,
     KeyStroke, PrefixArgument, Window, WorkspaceWindow, built_in_contexts, command_count,
-    compile_input_profile, dired_bindings, preview_bindings,
+    compile_input_profile, dired_bindings, preview_bindings, workspace_bindings,
 };
 
 impl WorkspaceWindow {
@@ -251,6 +251,34 @@ impl WorkspaceWindow {
 
     pub(in crate::preview) fn install_preview_keymap(&mut self) {
         self.install_route_keymap(false, false);
+    }
+
+    pub(in crate::preview) fn install_document_keymap(&mut self) {
+        if self.document_mode == crate::app::DocumentMode::Source {
+            self.install_source_keymap();
+        } else {
+            self.install_preview_keymap();
+        }
+    }
+
+    fn install_source_keymap(&mut self) {
+        let contexts = built_in_contexts();
+        let generation = self.keyboard.generation().wrapping_add(1);
+        let active_contexts = vec!["workspace", "editor"];
+        let Ok(configuration) = compile_input_profile(
+            generation,
+            &workspace_bindings(),
+            &self.commands,
+            &contexts,
+            &active_contexts,
+            &["prompt"],
+        ) else {
+            return;
+        };
+        self.key_context = contexts
+            .set(active_contexts)
+            .expect("registered source editor contexts");
+        self.keyboard.replace_configuration(configuration);
     }
 
     pub(in crate::preview) fn install_dired_keymap(&mut self) {

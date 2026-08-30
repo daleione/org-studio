@@ -7,7 +7,8 @@ use std::{
 
 use crate::{
     document::{
-        DocumentSession, DocumentSnapshot, ReloadRequest, SharedTextSnapshot, TextStatistics,
+        DocumentSession, DocumentSnapshot, ReloadRequest, SharedTextSnapshot, TextSnapshot,
+        TextStatistics,
     },
     org_syntax::{BlockArena, BlockId, BlockKind, parse},
 };
@@ -84,6 +85,27 @@ pub fn load_document(path: PathBuf) -> Result<LoadedDocument, (PathBuf, String)>
     load_document_profiled(path)
 }
 
+pub(crate) fn load_workspace_document(
+    path: PathBuf,
+    mode: crate::app::DocumentMode,
+) -> Result<super::WorkspaceLoadedDocument, (PathBuf, String)> {
+    match mode {
+        crate::app::DocumentMode::Source => {
+            let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
+            let session = DocumentSession::from_utf8(path.clone(), bytes)
+                .map_err(|error| (path, error.to_string()))?;
+            let snapshot = session.snapshot();
+            snapshot
+                .byte_to_utf16(crate::document::ByteOffset(snapshot.len_bytes()))
+                .expect("document end is a valid coordinate");
+            Ok(super::WorkspaceLoadedDocument::Source(session))
+        }
+        crate::app::DocumentMode::Preview => load_document(path)
+            .map(Box::new)
+            .map(super::WorkspaceLoadedDocument::Preview),
+    }
+}
+
 pub fn load_document_profiled(path: PathBuf) -> Result<LoadedDocument, (PathBuf, String)> {
     load_document_profiled_impl(path, true)
 }
@@ -150,6 +172,29 @@ pub(in crate::preview) fn reload_document_profiled(
     ReloadedDocument::new(prepared, preview).map_err(|error| (path, error))
 }
 
+pub(in crate::preview) fn reload_workspace_document(
+    request: ReloadRequest,
+    mode: crate::app::DocumentMode,
+) -> Result<super::WorkspaceReloadedDocument, (PathBuf, String)> {
+    match mode {
+        crate::app::DocumentMode::Source => {
+            let path = request.path().to_path_buf();
+            let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
+            let prepared = request
+                .prepare(bytes)
+                .map_err(|error| (path, format!("reload preparation failed: {error:?}")))?;
+            prepared
+                .snapshot()
+                .byte_to_utf16(crate::document::ByteOffset(prepared.snapshot().len_bytes()))
+                .expect("document end is a valid coordinate");
+            Ok(super::WorkspaceReloadedDocument::Source(prepared))
+        }
+        crate::app::DocumentMode::Preview => reload_document_profiled(request)
+            .map(Box::new)
+            .map(super::WorkspaceReloadedDocument::Preview),
+    }
+}
+
 fn build_preview(
     path: PathBuf,
     snapshot: DocumentSnapshot,
@@ -162,15 +207,7 @@ fn build_preview(
     let statistics = TextStatistics::from_snapshot(&snapshot);
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let parse_started = Instant::now();
-    let format = match path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
-        Some("md" | "markdown") => DocumentFormat::Markdown,
-        _ => DocumentFormat::Org,
-    };
+    let format = DocumentFormat::from_path(&path);
     let (blocks, markdown_blocks, rows) = match format {
         DocumentFormat::Org => {
             let blocks = Arc::new(parse(text.as_ref()));

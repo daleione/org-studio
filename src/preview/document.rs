@@ -1,6 +1,4 @@
-use super::{
-    display_map, loading::load_document, markdown, minimap, projection::PreviewProjectionSnapshot,
-};
+use super::{display_map, markdown, minimap, projection::PreviewProjectionSnapshot};
 use crate::{
     document::{
         DocumentId, DocumentSession, PreparedReload, Revision, RevisionRange, SharedTextSnapshot,
@@ -36,6 +34,17 @@ pub struct LoadedDocument {
     preview: PreviewSnapshot,
 }
 
+pub(crate) enum WorkspaceLoadedDocument {
+    Source(DocumentSession),
+    Preview(Box<LoadedDocument>),
+}
+
+impl From<LoadedDocument> for WorkspaceLoadedDocument {
+    fn from(document: LoadedDocument) -> Self {
+        Self::Preview(Box::new(document))
+    }
+}
+
 impl LoadedDocument {
     pub(in crate::preview) fn new(
         session: DocumentSession,
@@ -67,6 +76,17 @@ impl LoadedDocument {
 pub(in crate::preview) struct ReloadedDocument {
     prepared: PreparedReload,
     preview: PreviewSnapshot,
+}
+
+pub(in crate::preview) enum WorkspaceReloadedDocument {
+    Source(PreparedReload),
+    Preview(Box<ReloadedDocument>),
+}
+
+impl From<ReloadedDocument> for WorkspaceReloadedDocument {
+    fn from(document: ReloadedDocument) -> Self {
+        Self::Preview(Box::new(document))
+    }
 }
 
 impl ReloadedDocument {
@@ -109,7 +129,7 @@ pub struct InitialDocumentLoad {
     pub(in crate::preview) path: PathBuf,
     pub(in crate::preview) started_at: Instant,
     pub(in crate::preview) receiver:
-        async_channel::Receiver<Result<LoadedDocument, (PathBuf, String)>>,
+        async_channel::Receiver<Result<WorkspaceLoadedDocument, (PathBuf, String)>>,
 }
 
 /// Starts loading the command-line document before the native window is created. Small documents
@@ -124,7 +144,10 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
             if minimap::minimap_perf_enabled() {
                 eprintln!("org_preview_initial_prefetch_start since_open_ms=0.000");
             }
-            let result = load_document(load_path);
+            let result = super::loading::load_workspace_document(
+                load_path,
+                crate::app::DocumentMode::from_environment(),
+            );
             if minimap::minimap_perf_enabled() {
                 eprintln!(
                     "org_preview_initial_prefetch_complete since_open_ms={:.3}",
@@ -157,6 +180,20 @@ pub(in crate::preview) fn configured_minimap_visible() -> bool {
 pub(crate) enum DocumentFormat {
     Org,
     Markdown,
+}
+
+impl DocumentFormat {
+    pub(crate) fn from_path(path: &std::path::Path) -> Self {
+        match path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("md" | "markdown") => Self::Markdown,
+            _ => Self::Org,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
