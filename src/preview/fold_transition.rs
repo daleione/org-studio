@@ -3,7 +3,7 @@ use std::{collections::HashSet, ops::Range, sync::Arc, time::Instant};
 use crate::org_syntax::BlockId;
 use gpui::{ListState, Window};
 
-use super::PreviewDocument;
+use super::PreviewSnapshot;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FoldDirection {
@@ -61,7 +61,7 @@ pub(super) enum FoldMeasurement<'a> {
 pub(super) struct FoldTransitionInput<'a> {
     pub(super) current_rows: &'a [usize],
     pub(super) target_rows: &'a [usize],
-    pub(super) document: &'a PreviewDocument,
+    pub(super) document: &'a PreviewSnapshot,
     pub(super) list_state: &'a ListState,
     pub(super) viewport_height: f32,
     pub(super) available_width: f32,
@@ -311,7 +311,7 @@ fn item_boundary(list_state: &ListState, index: usize) -> Option<f32> {
 fn collapse_geometry(
     changed: &[usize],
     first_position: usize,
-    document: &PreviewDocument,
+    document: &PreviewSnapshot,
     list_state: &ListState,
     viewport_height: f32,
 ) -> (Vec<usize>, f32) {
@@ -394,7 +394,7 @@ fn expansion_geometry(
     (rendered_rows, cursor.min(distance_limit))
 }
 
-fn estimated_row_height(document: &PreviewDocument, row: usize) -> f32 {
+fn estimated_row_height(document: &PreviewSnapshot, row: usize) -> f32 {
     document
         .display_map
         .as_ref()

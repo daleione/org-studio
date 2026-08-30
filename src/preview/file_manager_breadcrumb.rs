@@ -7,7 +7,7 @@ use gpui::{
     AnyElement, Entity, InteractiveElement, ParentElement, Styled, div, prelude::*, px, rgb,
 };
 
-use super::PreviewApp;
+use super::WorkspaceWindow;
 use crate::theme::current_theme;
 
 const MAX_VISIBLE_SEGMENTS: usize = 5;
@@ -24,7 +24,10 @@ enum BreadcrumbItem {
     },
 }
 
-pub(super) fn file_manager_breadcrumb(entity: Entity<PreviewApp>, directory: &Path) -> gpui::Div {
+pub(super) fn file_manager_breadcrumb(
+    entity: Entity<WorkspaceWindow>,
+    directory: &Path,
+) -> gpui::Div {
     let items = directory_breadcrumbs(directory, home_directory().as_deref(), MAX_VISIBLE_SEGMENTS);
     div()
         .min_w(px(0.0))
@@ -53,7 +56,7 @@ pub(super) fn file_manager_breadcrumb(entity: Entity<PreviewApp>, directory: &Pa
 }
 
 fn render_breadcrumb_item(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     index: usize,
     item: BreadcrumbItem,
 ) -> AnyElement {
@@ -70,7 +73,7 @@ fn render_breadcrumb_item(
             .hover(|style| style.bg(rgb(current_theme().background_alt)))
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
-                    this.dired_context_menu = None;
+                    this.file_manager.context_menu = None;
                     this.open_file_manager(path.to_path_buf(), cx);
                 });
             })
@@ -105,9 +108,10 @@ fn render_breadcrumb_item(
             .hover(|style| style.bg(rgb(current_theme().background_alt)))
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
-                    this.dired_context_menu = None;
+                    this.file_manager.context_menu = None;
                     if this
-                        .dired
+                        .file_manager
+                        .session
                         .as_ref()
                         .is_some_and(|session| session.directory() == path.as_ref())
                     {

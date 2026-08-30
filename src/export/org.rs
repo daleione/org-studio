@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use crate::{
-    document::{RopeSnapshot, TextSnapshot},
+    document::{DocumentSnapshot, TextSnapshot},
     org_syntax::{self, BlockKind},
 };
 
@@ -14,7 +14,7 @@ pub(super) fn parse(
     source: &str,
     include_task_metadata: bool,
 ) -> (Result<ExportDocument, String>, Vec<ExportDiagnostic>) {
-    let snapshot = match RopeSnapshot::from_utf8(source.as_bytes().to_vec()) {
+    let snapshot = match DocumentSnapshot::from_utf8(source.as_bytes().to_vec()) {
         Ok(snapshot) => snapshot,
         Err(error) => return (Err(error.to_string()), Vec::new()),
     };

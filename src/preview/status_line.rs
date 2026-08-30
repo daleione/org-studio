@@ -8,7 +8,7 @@ use gpui::{
 #[cfg(test)]
 use unicode_width::UnicodeWidthStr;
 
-use super::{ContentRoute, DocumentFormat, PreviewApp, current_theme};
+use super::{ContentRoute, DocumentFormat, WorkspaceWindow, current_theme};
 use crate::{i18n::Language, navigation::PaneId, settings::StatusLineSettings};
 
 mod host;
@@ -19,6 +19,37 @@ use host::reading_progress;
 use model::*;
 pub(super) use model::{CachedStatusLayout, StatusLineLayout, StatusLineSnapshot, StatusPopover};
 pub(super) use popover::render_status_popover;
+
+pub(crate) struct StatusLineHost {
+    settings: StatusLineSettings,
+    popover: Option<StatusPopover>,
+    layout_cache: std::cell::RefCell<std::collections::HashMap<PaneId, CachedStatusLayout>>,
+}
+
+impl StatusLineHost {
+    pub(super) fn new(settings: StatusLineSettings) -> Self {
+        Self {
+            settings,
+            popover: None,
+            layout_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
+        }
+    }
+
+    pub(super) fn settings(&self) -> StatusLineSettings {
+        self.settings
+    }
+
+    pub(super) fn dismiss_popover(&mut self) -> bool {
+        self.popover.take().is_some()
+    }
+
+    pub(super) fn popover_for(&self, pane: PaneId) -> Option<StatusPopover> {
+        self.popover
+            .as_ref()
+            .filter(|popover| popover.pane == pane)
+            .cloned()
+    }
+}
 
 pub(super) const STATUS_LINE_HEIGHT: f32 = 30.0;
 const OUTLINE_FULL_RESERVE: f32 = 260.0;
@@ -362,7 +393,7 @@ fn progress_slot_width(compact: bool, measure: &impl Fn(&str) -> f32) -> f32 {
 pub(super) fn render_status_line(
     snapshot: &StatusLineSnapshot,
     layout: StatusLineLayout,
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     window: &Window,
 ) -> gpui::AnyElement {
     let theme = current_theme();
@@ -537,7 +568,7 @@ pub(super) fn render_status_line(
         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
             cx.stop_propagation();
             customize_entity.update(cx, |this, cx| {
-                this.status_popover = Some(StatusPopover {
+                this.status.popover = Some(StatusPopover {
                     pane: PaneId(pane_id),
                     content: StatusPopoverContent::Customize,
                 });
@@ -551,7 +582,7 @@ pub(super) fn render_status_line(
 }
 
 fn status_button(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     pane_id: u64,
     segment: StatusSegment,
 ) -> gpui::Stateful<gpui::Div> {
@@ -651,10 +682,10 @@ fn progress_ring(progress: u8) -> impl gpui::IntoElement {
     .size(px(15.0))
 }
 
-impl PreviewApp {
-    pub(super) fn status_snapshot(&self) -> Option<StatusLineSnapshot> {
+impl WorkspaceWindow {
+    pub(super) fn status_snapshot(&self, cx: &gpui::App) -> Option<StatusLineSnapshot> {
         match self.content_route {
-            ContentRoute::Document => self.document_status_snapshot(DOCUMENT_PANE_ID),
+            ContentRoute::Document => self.document_status_snapshot(DOCUMENT_PANE_ID, cx),
             ContentRoute::FileManager => self.dired_status_snapshot(DIRED_PANE_ID),
         }
     }
@@ -665,14 +696,14 @@ impl PreviewApp {
         width: f32,
         window: &Window,
     ) -> StatusLineLayout {
-        let key = snapshot.layout_key(width, self.status_line_settings);
-        if let Some(cached) = self.status_layout_cache.borrow().get(&snapshot.pane)
+        let key = snapshot.layout_key(width, self.status.settings);
+        if let Some(cached) = self.status.layout_cache.borrow().get(&snapshot.pane)
             && cached.key == key
         {
             return cached.layout.clone();
         }
-        let layout = snapshot.layout_in_window(width, self.status_line_settings, window);
-        self.status_layout_cache.borrow_mut().insert(
+        let layout = snapshot.layout_in_window(width, self.status.settings, window);
+        self.status.layout_cache.borrow_mut().insert(
             snapshot.pane,
             CachedStatusLayout {
                 key,
@@ -693,22 +724,22 @@ impl PreviewApp {
             StatusSegment::Progress if self.content_route == ContentRoute::Document => {
                 if !self.minimap_visible {
                     self.minimap_visible = true;
-                    self.presentation_revision = self.presentation_revision.wrapping_add(1);
+                    self.bump_preview_revision(cx);
                     self.save_preview_settings();
                 }
-                self.status_popover = Some(StatusPopover {
+                self.status.popover = Some(StatusPopover {
                     pane,
                     content: StatusPopoverContent::Info(segment),
                 });
             }
             StatusSegment::More => {
-                self.status_popover = Some(StatusPopover {
+                self.status.popover = Some(StatusPopover {
                     pane,
                     content: more_popover_content(overflow),
                 });
             }
             _ => {
-                self.status_popover = Some(StatusPopover {
+                self.status.popover = Some(StatusPopover {
                     pane,
                     content: StatusPopoverContent::Info(segment),
                 });
@@ -719,21 +750,17 @@ impl PreviewApp {
 
     fn toggle_status_segment(&mut self, segment: StatusSegment, cx: &mut gpui::Context<Self>) {
         match segment {
-            StatusSegment::Outline => {
-                self.status_line_settings.outline = !self.status_line_settings.outline
-            }
+            StatusSegment::Outline => self.status.settings.outline = !self.status.settings.outline,
             StatusSegment::Position => {
-                self.status_line_settings.position = !self.status_line_settings.position
+                self.status.settings.position = !self.status.settings.position
             }
             StatusSegment::Progress => {
-                self.status_line_settings.progress = !self.status_line_settings.progress
+                self.status.settings.progress = !self.status.settings.progress
             }
             StatusSegment::Statistics => {
-                self.status_line_settings.statistics = !self.status_line_settings.statistics
+                self.status.settings.statistics = !self.status.settings.statistics
             }
-            StatusSegment::Format => {
-                self.status_line_settings.format = !self.status_line_settings.format
-            }
+            StatusSegment::Format => self.status.settings.format = !self.status.settings.format,
             StatusSegment::Mode | StatusSegment::More => return,
         }
         self.save_preview_settings();
@@ -965,11 +992,11 @@ mod tests {
     fn clicking_the_rendered_more_segment_opens_its_pane_overflow(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
-        let app = cx.update(|cx| cx.new(|_| PreviewApp::new()));
+        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::new()));
         let snapshot = snapshot();
         let pane = snapshot.pane;
         struct StatusHarness {
-            app: Entity<PreviewApp>,
+            app: Entity<WorkspaceWindow>,
             snapshot: StatusLineSnapshot,
         }
         impl Render for StatusHarness {
@@ -994,7 +1021,7 @@ mod tests {
         cx.simulate_mouse_move(center, None, Modifiers::default());
         cx.simulate_click(center, Modifiers::default());
 
-        let popover = cx.update(|_, cx| app.read(cx).status_popover.clone().unwrap());
+        let popover = cx.update(|_, cx| app.read(cx).status.popover.clone().unwrap());
         assert_eq!(popover.pane, pane);
         assert!(matches!(
             popover.content,

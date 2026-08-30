@@ -109,7 +109,7 @@ mod tests {
             std::process::id()
         ));
         std::fs::write(&path, "alpha\nbeta\n").unwrap();
-        let document = load_document(path.clone()).unwrap();
+        let document = load_document(path.clone()).unwrap().into_preview();
         let _ = std::fs::remove_file(path);
         let snapshot = &document.projection;
         let source = SourcePoint {

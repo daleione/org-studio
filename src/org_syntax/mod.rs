@@ -350,12 +350,12 @@ fn content_end(line: &crate::document::TextLine<'_>) -> u64 {
 mod tests {
     use std::sync::Arc;
 
-    use crate::document::{RopeSnapshot, SharedTextSnapshot};
+    use crate::document::{DocumentSnapshot, SharedTextSnapshot};
 
     use super::{BlockKind, parse};
 
     fn snapshot(text: &str) -> SharedTextSnapshot {
-        Arc::new(RopeSnapshot::from_utf8(text.as_bytes().to_vec()).unwrap())
+        Arc::new(DocumentSnapshot::from_utf8(text.as_bytes().to_vec()).unwrap())
     }
 
     #[test]

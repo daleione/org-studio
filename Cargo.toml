@@ -45,6 +45,7 @@ sys-locale = "0.3.2"
 
 [dev-dependencies]
 gpui = { path = "../zed/crates/gpui", features = ["test-support"] }
+syn = { version = "2", features = ["full", "visit"] }
 
 [build-dependencies]
 # gpui_apple compiles gpui as a macOS build dependency. Keep the profiling

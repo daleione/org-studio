@@ -388,7 +388,7 @@ mod tests {
     use std::collections::HashSet;
 
     use crate::{
-        document::{RopeSnapshot, TextSnapshot},
+        document::{DocumentSnapshot, TextSnapshot},
         org_syntax::{BlockId, BlockKind, parse},
         preview::{markdown, rows::build_preview_rows},
     };
@@ -400,7 +400,7 @@ mod tests {
     };
 
     fn source_lines(
-        text: &RopeSnapshot,
+        text: &DocumentSnapshot,
         rows: &crate::preview::projection::VisualRowTree,
         visible: &[usize],
     ) -> Vec<u64> {
@@ -412,7 +412,7 @@ mod tests {
 
     #[test]
     fn folding_hides_only_heading_descendants() {
-        let text = RopeSnapshot::from_utf8(
+        let text = DocumentSnapshot::from_utf8(
             b"* One\nbody\n** Child\nchild body\n* Two\nvisible\n".to_vec(),
         )
         .unwrap();
@@ -451,7 +451,7 @@ mod tests {
 
     #[test]
     fn org_global_cycle_projects_overview_contents_and_all() {
-        let text = RopeSnapshot::from_utf8(
+        let text = DocumentSnapshot::from_utf8(
             b"preamble\n** One\nbody\n*** Child\nchild body\n**** Grandchild\ndeep\n** Two\nvisible\n"
                 .to_vec(),
         )
@@ -550,7 +550,7 @@ mod tests {
 
     #[test]
     fn markdown_global_cycle_uses_the_same_heading_projection() {
-        let text = RopeSnapshot::from_utf8(
+        let text = DocumentSnapshot::from_utf8(
             b"preamble\n## One\nbody\n### Child\nchild body\n## Two\nvisible\n".to_vec(),
         )
         .unwrap();
@@ -593,7 +593,7 @@ mod tests {
 
     #[test]
     fn markdown_folding_uses_heading_sections_and_preserves_nested_folds() {
-        let text = RopeSnapshot::from_utf8(
+        let text = DocumentSnapshot::from_utf8(
             b"# One\nbody\n## Child\nchild body\n### Grandchild\ndeep\n# Two\nvisible\n".to_vec(),
         )
         .unwrap();

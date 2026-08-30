@@ -483,7 +483,7 @@ fn parse_separator_alignments(source: &str) -> Vec<Alignment> {
 
 #[cfg(test)]
 mod tests {
-    use crate::{document::RopeSnapshot, preview::markdown::parse_markdown};
+    use crate::{document::DocumentSnapshot, preview::markdown::parse_markdown};
 
     use super::{
         Alignment, CELL_PADDING_PX, CELL_WIDTH_PX, PIPE_WIDTH_PX, build_markdown_table_styles,
@@ -546,7 +546,7 @@ mod tests {
 
     #[test]
     fn rows_share_one_table_projection_but_separate_groups_do_not() {
-        let snapshot = RopeSnapshot::from_utf8(
+        let snapshot = DocumentSnapshot::from_utf8(
             b"| name | value |\n| --- | ---: |\n| a | 42 |\n\n| x | y |\n| --- | --- |\n".to_vec(),
         )
         .expect("valid fixture");

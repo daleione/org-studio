@@ -1,33 +1,51 @@
 use super::{
-    Arc, BlockId, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FoldTransition,
-    FontWeight, HashSet, Instant, ListState, PreviewApp, PreviewDocument, PreviewRow,
-    accept_generation, current_theme, div, img, minimap, org_code_row_role, px, render_code_row,
-    render_markdown_block, render_table_row, resolve_image_path, rgb, styled_inline_runs,
+    Arc, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FontWeight, Instant,
+    PreviewRow, PreviewSnapshot, WorkspaceWindow, current_theme, div, img, minimap,
+    org_code_row_role, px, render_code_row, render_markdown_block, render_table_row,
+    resolve_image_path, rgb, styled_inline_runs,
 };
+use crate::preview::{PreviewPanel, PreviewRenderState};
 use gpui::{list, prelude::*};
 
-#[allow(clippy::too_many_arguments)]
+pub(in crate::preview) struct PreviewRenderOptions {
+    pub(in crate::preview) minimap_visible: bool,
+    pub(in crate::preview) editor_width: f32,
+    pub(in crate::preview) minimap_width: f32,
+    pub(in crate::preview) minimap_resize_preview: Option<f32>,
+    pub(in crate::preview) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
+    pub(in crate::preview) generation: u64,
+    pub(in crate::preview) opened_at: Instant,
+}
+
 pub(in crate::preview) fn render_document(
-    document: Arc<PreviewDocument>,
-    list_state: ListState,
-    visible_rows: Arc<Vec<usize>>,
-    fold_markers: Arc<HashSet<BlockId>>,
-    fold_animation: Option<FoldTransition>,
-    entity: gpui::Entity<PreviewApp>,
-    minimap_visible: bool,
-    editor_width: f32,
-    minimap_width: f32,
-    minimap_resize_preview: Option<f32>,
-    minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
-    generation: u64,
-    presentation_revision: u64,
-    opened_at: Instant,
+    state: PreviewRenderState,
+    panel_entity: gpui::Entity<PreviewPanel>,
+    workspace_entity: gpui::Entity<WorkspaceWindow>,
+    options: PreviewRenderOptions,
 ) -> gpui::Div {
+    let PreviewRenderState {
+        document,
+        minimap_state,
+        list_state,
+        visible_rows,
+        fold_markers,
+        fold_animation,
+        presentation_revision,
+    } = state;
+    let PreviewRenderOptions {
+        minimap_visible,
+        editor_width,
+        minimap_width,
+        minimap_resize_preview,
+        minimap_thumb_visibility,
+        generation,
+        opened_at,
+    } = options;
     let theme = current_theme();
     let preview_display_map = document.display_map.clone();
     let minimap_list_state = list_state.clone();
-    let minimap_entity = entity.clone();
-    let minimap_resize_entity = entity.clone();
+    let minimap_entity = panel_entity.clone();
+    let minimap_resize_entity = workspace_entity.clone();
     let rendered_item_count = list_state.item_count();
     // The minimap represents the final semantic projection. The temporary flow segments belong
     // only to the main list; exposing them here causes a second tile refresh when the animation
@@ -100,8 +118,7 @@ pub(in crate::preview) fn render_document(
                         let is_folded = is_heading
                             && fold_markers.contains(&row.block_id)
                             && !is_suppressed_marker;
-                        let document_for_click = document.clone();
-                        let entity_for_click = entity.clone();
+                        let entity_for_click = panel_entity.clone();
                         let row_element = render_preview_row(
                             &document,
                             actual_index,
@@ -119,7 +136,6 @@ pub(in crate::preview) fn render_document(
                                 entity_for_click.update(cx, |this, cx| {
                                     this.toggle_fold_animated(
                                         row.block_id,
-                                        &document_for_click,
                                         viewport_height,
                                         available_width,
                                         Some(window),
@@ -141,7 +157,7 @@ pub(in crate::preview) fn render_document(
             |layout, display_map| {
                 layout.child(minimap::render(
                     display_map,
-                    document.minimap.clone(),
+                    minimap_state.clone(),
                     minimap_rows.clone(),
                     fold_markers.clone(),
                     minimap_list_state,
@@ -153,20 +169,7 @@ pub(in crate::preview) fn render_document(
                     opened_at,
                     move |_source_target, offset, window, cx| {
                         minimap_entity.update(cx, |this, cx| {
-                            this.minimap_pending_seek = Some((presentation_revision, offset));
-                            if this.minimap_seek_scheduled {
-                                return;
-                            }
-                            this.minimap_seek_scheduled = true;
-                            cx.on_next_frame(window, |this, _, cx| {
-                                this.minimap_seek_scheduled = false;
-                                if let Some((revision, offset)) = this.minimap_pending_seek.take()
-                                    && accept_generation(this.presentation_revision, revision)
-                                {
-                                    this.list_state.scroll_to(offset);
-                                    cx.notify();
-                                }
-                            });
+                            this.seek_minimap(presentation_revision, offset, window, cx);
                         });
                     },
                     move |change, _, cx| {
@@ -191,7 +194,7 @@ pub(in crate::preview) fn render_document(
 }
 
 fn render_fold_shell(
-    document: Arc<PreviewDocument>,
+    document: Arc<PreviewSnapshot>,
     direction: FoldDirection,
     progress: f32,
     shell: FoldSegment,
@@ -228,7 +231,7 @@ fn fold_shell_geometry(direction: FoldDirection, delta: f32, distance: f32) -> (
 }
 
 fn render_fold_shell_row(
-    document: &Arc<PreviewDocument>,
+    document: &Arc<PreviewSnapshot>,
     actual_index: usize,
     available_width: f32,
 ) -> gpui::Div {
@@ -252,7 +255,7 @@ fn render_fold_shell_row(
 }
 
 fn render_preview_row(
-    document: &Arc<PreviewDocument>,
+    document: &Arc<PreviewSnapshot>,
     actual_index: usize,
     row: PreviewRow,
     is_table_row: bool,
@@ -322,7 +325,7 @@ fn render_preview_row(
 }
 
 fn render_block(
-    document: &Arc<PreviewDocument>,
+    document: &Arc<PreviewSnapshot>,
     display_row: usize,
     row: PreviewRow,
     block: &BlockNode,

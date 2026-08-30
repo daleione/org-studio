@@ -260,11 +260,11 @@ fn standalone_image(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{RopeSnapshot, TextSnapshot};
+    use crate::document::{DocumentSnapshot, TextSnapshot};
 
     #[test]
     fn parses_markdown_blocks_and_inline_markup() {
-        let text = RopeSnapshot::from_utf8(
+        let text = DocumentSnapshot::from_utf8(
             b"# Title\n\n- **bold** and [link](a.md)\n```rust\nfn main() {}\n```\n".to_vec(),
         )
         .unwrap();
@@ -294,9 +294,10 @@ mod tests {
 
     #[test]
     fn fenced_code_preserves_fences_indentation_and_source_line_numbers() {
-        let text =
-            RopeSnapshot::from_utf8(b"before\n```rust\n    let value = 1;\n```\nafter\n".to_vec())
-                .unwrap();
+        let text = DocumentSnapshot::from_utf8(
+            b"before\n```rust\n    let value = 1;\n```\nafter\n".to_vec(),
+        )
+        .unwrap();
         let (blocks, rows) = parse_markdown(&text);
 
         assert!(matches!(
@@ -333,9 +334,10 @@ mod tests {
 
     #[test]
     fn closing_fence_requires_only_marker_and_trailing_whitespace() {
-        let text =
-            RopeSnapshot::from_utf8(b"```rust\n```not-a-close\nvalue\n```   \nafter\n".to_vec())
-                .unwrap();
+        let text = DocumentSnapshot::from_utf8(
+            b"```rust\n```not-a-close\nvalue\n```   \nafter\n".to_vec(),
+        )
+        .unwrap();
         let (blocks, _) = parse_markdown(&text);
 
         assert!(matches!(

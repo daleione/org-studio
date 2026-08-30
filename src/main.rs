@@ -5,10 +5,11 @@ use gpui::{
     WindowBounds, WindowHandle, WindowOptions, actions, prelude::*, px, size,
 };
 use org_studio::{
+    app::WorkspaceWindow,
     perf_tracing,
     preview::{
-        ExportDocument, InitialDocumentLoad, OpenDocument, PreviewApp, ReloadDocument, ShowHome,
-        ToggleMinimap, ToggleSidebar, UseChinese, UseEnglish, preload_initial_document,
+        ExportDocument, InitialDocumentLoad, OpenDocument, ReloadDocument, ShowHome, ToggleMinimap,
+        ToggleSidebar, UseChinese, UseEnglish, preload_initial_document,
     },
 };
 
@@ -24,7 +25,7 @@ fn benchmark_disables_inactive_throttle() -> bool {
 
 #[derive(Default)]
 struct ApplicationController {
-    main_window: Option<WindowHandle<PreviewApp>>,
+    main_window: Option<WindowHandle<WorkspaceWindow>>,
 }
 
 impl ApplicationController {
@@ -40,10 +41,10 @@ impl ApplicationController {
     ) {
         if let Some(handle) = self.main_window {
             let update = handle.update(cx, |preview, window, cx| {
-                if let Some(path) = path.clone() {
-                    if preview.current_document_path() != Some(path.as_path()) {
-                        preview.open(path, cx);
-                    }
+                if let Some(path) = path.clone()
+                    && preview.current_document_path(cx) != Some(path.as_path())
+                {
+                    preview.open(path, cx);
                 }
                 window.activate_window();
             });
@@ -58,7 +59,7 @@ impl ApplicationController {
         let handle = cx
             .open_window(options, move |window, cx| {
                 let preview = cx.new(|cx| {
-                    let mut preview = PreviewApp::new();
+                    let mut preview = WorkspaceWindow::new();
                     if let Some(load) = initial_load {
                         preview.open_initial(load, cx);
                     } else if let Some(path) = path {
@@ -189,7 +190,7 @@ fn main() {
         cx.spawn(async move |cx| {
             while let Ok(urls) = open_receiver.recv().await {
                 for path in paths_from_urls(urls) {
-                    let _ = cx.update(|cx| {
+                    cx.update(|cx| {
                         open_controller
                             .borrow_mut()
                             .open_or_activate(Some(path), None, cx);

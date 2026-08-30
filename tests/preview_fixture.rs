@@ -5,7 +5,9 @@ use org_studio::{org_syntax::BlockKind, preview::load_document};
 #[test]
 fn loads_representative_preview_fixture() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preview-basics.org");
-    let document = load_document(path).expect("fixture should load");
+    let document = load_document(path)
+        .expect("fixture should load")
+        .into_preview();
     let nodes = document.blocks.nodes();
 
     assert!(nodes.len() > 10);

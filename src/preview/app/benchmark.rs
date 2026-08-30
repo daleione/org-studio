@@ -1,6 +1,6 @@
-use super::{Context, Duration, Instant, PreviewApp, Window, px};
+use super::{Context, Duration, Instant, Window, WorkspaceWindow, px};
 
-pub(in crate::preview) struct ScrollBenchmark {
+pub(crate) struct ScrollBenchmark {
     pub(in crate::preview) target_frames: usize,
     pub(in crate::preview) warmup_remaining: usize,
     pub(in crate::preview) sampling_started: bool,
@@ -9,7 +9,7 @@ pub(in crate::preview) struct ScrollBenchmark {
     pub(in crate::preview) last_frame: Instant,
 }
 
-impl PreviewApp {
+impl WorkspaceWindow {
     pub(in crate::preview) fn schedule_scroll_sample(
         &mut self,
         window: &mut Window,
@@ -44,7 +44,10 @@ impl PreviewApp {
                 benchmark.sampling_started = true;
                 crate::perf_tracing::reset_samples();
                 benchmark.last_frame = now;
-                this.list_state.scroll_by(px(benchmark.scroll_pixels));
+                let scroll_pixels = benchmark.scroll_pixels;
+                if let Some(panel) = this.preview_panel() {
+                    panel.update(cx, |panel, _| panel.scroll_by(px(scroll_pixels)));
+                }
                 this.schedule_scroll_sample(window, cx);
                 cx.notify();
                 return;
@@ -103,7 +106,10 @@ impl PreviewApp {
                 this.scroll_benchmark = None;
                 cx.quit();
             } else {
-                this.list_state.scroll_by(px(benchmark.scroll_pixels));
+                let scroll_pixels = benchmark.scroll_pixels;
+                if let Some(panel) = this.preview_panel() {
+                    panel.update(cx, |panel, _| panel.scroll_by(px(scroll_pixels)));
+                }
                 this.schedule_scroll_sample(window, cx);
                 cx.notify();
             }

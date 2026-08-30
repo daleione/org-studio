@@ -23,7 +23,8 @@ fn main() {
             load_document_profiled
         };
         match load(path.clone()) {
-            Ok(document) => {
+            Ok(loaded) => {
+                let document = loaded.into_preview();
                 let elapsed = started.elapsed();
                 let mib = bytes as f64 / (1024.0 * 1024.0);
                 let throughput = if elapsed.as_secs_f64() > 0.0 {

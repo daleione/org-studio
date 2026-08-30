@@ -1,14 +1,38 @@
-use std::{ops::Range, sync::Arc};
+use std::{
+    ops::Range,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 use ropey::Rope;
 
 mod revision;
+mod session;
 mod transaction;
 
 pub use revision::{
     EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
 };
+pub use session::{
+    DocumentEvent, DocumentSession, PreparedReload, ReloadError, ReloadRequest, SaveAckError,
+    SavePoint,
+};
 pub use transaction::{DocumentBuffer, EditError, EditTransaction, TextEdit};
+
+static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct DocumentId(u64);
+
+impl DocumentId {
+    fn next() -> Self {
+        let id = NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed);
+        assert_ne!(id, 0, "document id space exhausted");
+        Self(id)
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub struct ByteOffset(pub u64);
@@ -38,6 +62,8 @@ pub struct TextChunk<'a> {
 }
 
 pub trait TextSnapshot: Send + Sync {
+    fn document_id(&self) -> DocumentId;
+
     fn revision(&self) -> Revision {
         Revision::INITIAL
     }
@@ -74,12 +100,13 @@ impl TextStatistics {
 pub type SharedTextSnapshot = Arc<dyn TextSnapshot>;
 
 #[derive(Clone)]
-pub struct RopeSnapshot {
+pub struct DocumentSnapshot {
+    document_id: DocumentId,
     rope: Rope,
     revision: Revision,
 }
 
-impl RopeSnapshot {
+impl DocumentSnapshot {
     pub fn from_utf8(mut bytes: Vec<u8>) -> Result<Self, TextLoadError> {
         if bytes.starts_with(&[0xef, 0xbb, 0xbf]) {
             bytes.drain(..3);
@@ -90,22 +117,30 @@ impl RopeSnapshot {
         })?;
 
         Ok(Self {
+            document_id: DocumentId::next(),
             rope: Rope::from_str(&text),
             revision: Revision::INITIAL,
         })
     }
 
-    pub fn with_revision(mut self, revision: Revision) -> Self {
-        self.revision = revision;
-        self
+    pub fn document_id(&self) -> DocumentId {
+        self.document_id
     }
 
-    pub(super) fn from_rope(rope: Rope, revision: Revision) -> Self {
-        Self { rope, revision }
+    pub(super) fn from_rope(document_id: DocumentId, rope: Rope, revision: Revision) -> Self {
+        Self {
+            document_id,
+            rope,
+            revision,
+        }
     }
 }
 
-impl TextSnapshot for RopeSnapshot {
+impl TextSnapshot for DocumentSnapshot {
+    fn document_id(&self) -> DocumentId {
+        self.document_id
+    }
+
     fn revision(&self) -> Revision {
         self.revision
     }
@@ -232,13 +267,13 @@ impl<'a> LineCursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ByteRange, DocumentBuffer, EditTransaction, RopeSnapshot, TextEdit, TextSnapshot,
+        ByteRange, DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit, TextSnapshot,
         TextStatistics,
     };
 
     #[test]
     fn snapshot_reports_unicode_characters_and_physical_lines() {
-        let snapshot = RopeSnapshot::from_utf8("一a\n二🙂".as_bytes().to_vec()).unwrap();
+        let snapshot = DocumentSnapshot::from_utf8("一a\n二🙂".as_bytes().to_vec()).unwrap();
         assert_eq!(snapshot.len_bytes(), 12);
         assert_eq!(snapshot.len_chars(), 5);
         assert_eq!(snapshot.len_lines(), 2);

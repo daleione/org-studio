@@ -17,8 +17,9 @@ fn main() {
         .nth(1)
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/private/tmp/org-preview-50m.org"));
-    let document = load_document(path.clone())
+    let loaded = load_document(path.clone())
         .unwrap_or_else(|(_, error)| panic!("{}: {error}", path.display()));
+    let document = loaded.into_preview();
     let nodes = document.blocks.nodes();
     assert!(!nodes.is_empty(), "benchmark document must contain blocks");
 

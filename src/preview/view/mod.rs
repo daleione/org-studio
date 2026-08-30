@@ -1,11 +1,10 @@
 use super::{
-    Arc, BlockId, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context,
-    DocumentFormat, FoldDirection, FoldSegment, FoldTransition, FontStyle, FontWeight, HashSet,
-    HighlightStyle, InlineKind, InlineSpan, InlineText, Instant, IntoElement, ListOffset,
-    ListState, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager, PreviewApp, PreviewDocument,
-    PreviewLoadState, PreviewRow, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render,
+    Arc, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context, DocumentFormat,
+    FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
+    InlineText, Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager,
+    PreviewLoadState, PreviewRow, PreviewSnapshot, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render,
     ReturnToDocument, SHOW_HOME_COMMAND, ShowHome, StyledText, ToggleMinimap, ToggleSidebar,
-    UseChinese, UseEnglish, Window, accept_generation, current_theme, div, img, markdown, minimap,
+    UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme, div, img, markdown, minimap,
     parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
 use super::{EXPORT_DOCUMENT_COMMAND, ExportDocument, export_ui::render_export_panel};
@@ -18,7 +17,7 @@ mod markdown_block;
 mod overlays;
 mod styled_text;
 use code_block::{org_code_row_role, render_code_row};
-pub(super) use document::render_document;
+pub(super) use document::{PreviewRenderOptions, render_document};
 pub(super) use home::{render_home, render_loading};
 pub(super) use markdown_block::parse_document_inline;
 use markdown_block::render_markdown_block;
@@ -26,19 +25,19 @@ use overlays::{dired_help_window, which_key_window};
 pub(super) use styled_text::code_highlight_style;
 use styled_text::styled_inline_runs;
 
-impl Render for PreviewApp {
+impl Render for WorkspaceWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        profiling::scope!("PreviewApp::render");
+        profiling::scope!("WorkspaceWindow::render");
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),
             f32::from(viewport.height).to_bits(),
         );
-        if self.viewport_revision_key != Some(viewport_key) {
-            self.viewport_revision_key = Some(viewport_key);
-            self.presentation_revision = self.presentation_revision.wrapping_add(1);
-            self.cancel_minimap_interaction();
-            self.cancel_sidebar_resize();
+        if let Some(panel) = self.preview_panel() {
+            let viewport_changed = panel.update(cx, |panel, _| panel.note_viewport(viewport_key));
+            if viewport_changed {
+                self.cancel_sidebar_resize();
+            }
         }
         let focus_handle = self
             .focus_handle
@@ -50,51 +49,20 @@ impl Render for PreviewApp {
             .clone();
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
-                if this.cancel_minimap_interaction() || this.cancel_sidebar_resize() {
+                if this.cancel_minimap_interaction(cx) || this.cancel_sidebar_resize() {
                     cx.notify();
                 }
             }));
         }
-        window.set_window_title(&self.window_title());
-        if (self.dired_pending_presentation.is_some()
-            || self.sidebar_pending_presentation.is_some())
-            && !self.dired_presentation_scheduled
-        {
-            self.dired_presentation_scheduled = true;
-            cx.on_next_frame(window, |this, _, cx| {
-                this.dired_presentation_scheduled = false;
-                if let Some((transaction, view_revision, rank, offset)) =
-                    this.dired_pending_presentation.take()
-                    && this.dired.as_ref().is_some_and(|session| {
-                        session.presentation_is_current(transaction, view_revision)
-                    })
-                {
-                    this.dired_list_state.scroll_to(ListOffset {
-                        item_ix: rank,
-                        offset_in_item: px(offset),
-                    });
-                }
-                if let Some((transaction, view_revision, rank, offset)) =
-                    this.sidebar_pending_presentation.take()
-                    && this.dired.as_ref().is_some_and(|session| {
-                        session.presentation_is_current(transaction, view_revision)
-                    })
-                {
-                    this.sidebar_list_state.scroll_to(ListOffset {
-                        item_ix: rank,
-                        offset_in_item: px(offset),
-                    });
-                }
-                cx.notify();
-            });
-        }
+        window.set_window_title(&self.window_title(cx));
+        self.schedule_file_manager_presentation(window, cx);
         if self.scroll_benchmark.is_some() && !self.minimap_visible {
             window.request_animation_frame();
         }
-        if let PreviewLoadState::Ready { generation, .. } = &self.state
-            && self.first_frame_scheduled != Some(*generation)
+        if matches!(self.state, PreviewLoadState::Ready { .. })
+            && self.first_frame_scheduled != Some(self.generation)
         {
-            let generation = *generation;
+            let generation = self.generation;
             let opened_at = self.opened_at.unwrap_or_else(Instant::now);
             self.first_frame_scheduled = Some(generation);
             cx.on_next_frame(window, move |this, window, cx| {
@@ -109,9 +77,9 @@ impl Render for PreviewApp {
                 cx.notify();
                 if generation == 1
                     && std::env::var_os("ORG_STUDIO_RELOAD_BENCH").is_some()
-                    && let PreviewLoadState::Ready { document, .. } = &this.state
+                    && matches!(this.state, PreviewLoadState::Ready { .. })
                 {
-                    this.open(document.path.clone(), cx);
+                    this.reload_current(cx);
                     return;
                 }
                 if this.scroll_benchmark.is_some() {
@@ -127,11 +95,11 @@ impl Render for PreviewApp {
         }
         let entity = cx.entity();
         let which_key_items = self.which_key_items.clone();
-        let dired_help_visible = self.dired_help_visible;
+        let dired_help_visible = self.file_manager.help_visible();
         let command_window_width = f32::from(window.viewport_size().width);
-        let resizing_sidebar = self.sidebar_resize.is_some();
-        let export_panel = self.export_panel.clone();
-        let export_status = self.export_status.clone();
+        let resizing_sidebar = self.file_manager.is_resizing_sidebar();
+        let export_panel = self.export.panel().cloned();
+        let export_status = self.export.status().cloned();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
         div()
@@ -145,7 +113,7 @@ impl Render for PreviewApp {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
-                    if this.status_popover.take().is_some() {
+                    if this.status.dismiss_popover() {
                         cx.notify();
                     }
                 }),
@@ -178,7 +146,7 @@ impl Render for PreviewApp {
                     this.open_dropped_paths(paths, cx)
                 }),
             )
-            .child(self.workspace_body(entity.clone(), command_window_width, window))
+            .child(self.workspace_body(entity.clone(), command_window_width, window, cx))
             .when(resizing_sidebar, |view| {
                 view.child(
                     div()

@@ -2,7 +2,10 @@ use super::{
     display_map, loading::load_document, markdown, minimap, projection::PreviewProjectionSnapshot,
 };
 use crate::{
-    document::{Revision, RevisionRange, SharedTextSnapshot, TextStatistics},
+    document::{
+        DocumentId, DocumentSession, PreparedReload, Revision, RevisionRange, SharedTextSnapshot,
+        TextSnapshot, TextStatistics,
+    },
     org_syntax::{BlockArena, BlockId},
 };
 use gpui::App;
@@ -12,7 +15,8 @@ use std::{
     time::{Duration, Instant},
 };
 
-pub struct PreviewDocument {
+pub struct PreviewSnapshot {
+    pub document_id: DocumentId,
     pub path: PathBuf,
     pub revision: Revision,
     pub text: SharedTextSnapshot,
@@ -21,17 +25,91 @@ pub struct PreviewDocument {
     pub(in crate::preview) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     pub(in crate::preview) outline_paths: Arc<Vec<Option<Arc<str>>>>,
     pub(in crate::preview) projection: Arc<PreviewProjectionSnapshot>,
-    pub(in crate::preview) minimap: Arc<minimap::MinimapState>,
     pub(in crate::preview) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
     pub statistics: TextStatistics,
     pub metrics: LoadMetrics,
+}
+
+/// A newly opened mutable document together with its first coherent preview projection.
+pub struct LoadedDocument {
+    session: DocumentSession,
+    preview: PreviewSnapshot,
+}
+
+impl LoadedDocument {
+    pub(in crate::preview) fn new(
+        session: DocumentSession,
+        preview: PreviewSnapshot,
+    ) -> Result<Self, String> {
+        if session.id() != preview.document_id || session.revision() != preview.revision {
+            return Err("loaded session and preview refer to different document versions".into());
+        }
+        Ok(Self { session, preview })
+    }
+
+    pub(in crate::preview) fn into_parts(self) -> (DocumentSession, PreviewSnapshot) {
+        (self.session, self.preview)
+    }
+
+    pub fn session(&self) -> &DocumentSession {
+        &self.session
+    }
+
+    pub fn preview(&self) -> &PreviewSnapshot {
+        &self.preview
+    }
+
+    pub fn into_preview(self) -> PreviewSnapshot {
+        self.preview
+    }
+}
+
+pub(in crate::preview) struct ReloadedDocument {
+    prepared: PreparedReload,
+    preview: PreviewSnapshot,
+}
+
+impl ReloadedDocument {
+    pub(in crate::preview) fn new(
+        prepared: PreparedReload,
+        preview: PreviewSnapshot,
+    ) -> Result<Self, String> {
+        let snapshot = prepared.snapshot();
+        if snapshot.document_id() != preview.document_id || snapshot.revision() != preview.revision
+        {
+            return Err("prepared reload and preview refer to different document versions".into());
+        }
+        Ok(Self { prepared, preview })
+    }
+
+    pub(in crate::preview) fn into_parts(self) -> (PreparedReload, PreviewSnapshot) {
+        (self.prepared, self.preview)
+    }
+}
+
+/// A small publication boundary from background derivation into the UI layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DerivedEvent {
+    Published {
+        document_id: DocumentId,
+        revision: Revision,
+    },
+}
+
+impl PreviewSnapshot {
+    pub fn derived_event(&self) -> DerivedEvent {
+        DerivedEvent::Published {
+            document_id: self.document_id,
+            revision: self.revision,
+        }
+    }
 }
 
 pub struct InitialDocumentLoad {
     pub(in crate::preview) path: PathBuf,
     pub(in crate::preview) started_at: Instant,
     pub(in crate::preview) receiver:
-        async_channel::Receiver<Result<PreviewDocument, (PathBuf, String)>>,
+        async_channel::Receiver<Result<LoadedDocument, (PathBuf, String)>>,
 }
 
 /// Starts loading the command-line document before the native window is created. Small documents

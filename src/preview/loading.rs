@@ -6,13 +6,16 @@ use std::{
 };
 
 use crate::{
-    document::{RopeSnapshot, SharedTextSnapshot, TextStatistics},
+    document::{
+        DocumentSession, DocumentSnapshot, ReloadRequest, SharedTextSnapshot, TextStatistics,
+    },
     org_syntax::{BlockArena, BlockId, BlockKind, parse},
 };
 
 use super::{
-    DocumentFormat, LoadMetrics, PreviewDocument, build_markdown_table_styles, build_preview_rows,
-    build_projection_snapshot, build_table_styles, markdown,
+    DocumentFormat, LoadMetrics, LoadedDocument, PreviewSnapshot, ReloadedDocument,
+    build_markdown_table_styles, build_preview_rows, build_projection_snapshot, build_table_styles,
+    markdown,
 };
 
 pub(super) fn resolve_image_path(document_path: &Path, source: &str) -> PathBuf {
@@ -77,34 +80,86 @@ pub(super) fn fitted_image_size(
     (source_width as f32 * scale, source_height as f32 * scale)
 }
 
-pub fn load_document(path: PathBuf) -> Result<PreviewDocument, (PathBuf, String)> {
+pub fn load_document(path: PathBuf) -> Result<LoadedDocument, (PathBuf, String)> {
     load_document_profiled(path)
 }
 
-pub fn load_document_profiled(path: PathBuf) -> Result<PreviewDocument, (PathBuf, String)> {
+pub fn load_document_profiled(path: PathBuf) -> Result<LoadedDocument, (PathBuf, String)> {
     load_document_profiled_impl(path, true)
 }
 
 pub fn load_document_profiled_without_display_map(
     path: PathBuf,
-) -> Result<PreviewDocument, (PathBuf, String)> {
+) -> Result<LoadedDocument, (PathBuf, String)> {
     load_document_profiled_impl(path, false)
 }
 
 fn load_document_profiled_impl(
     path: PathBuf,
     build_display_map: bool,
-) -> Result<PreviewDocument, (PathBuf, String)> {
+) -> Result<LoadedDocument, (PathBuf, String)> {
     let total_started = Instant::now();
     let read_started = Instant::now();
     let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
     let read = read_started.elapsed();
     let byte_count = bytes.len() as u64;
     let rope_started = Instant::now();
-    let snapshot =
-        RopeSnapshot::from_utf8(bytes).map_err(|error| (path.clone(), error.to_string()))?;
-    let statistics = TextStatistics::from_snapshot(&snapshot);
+    let session = DocumentSession::from_utf8(path.clone(), bytes)
+        .map_err(|error| (path.clone(), error.to_string()))?;
+    let snapshot = session.snapshot();
     let rope = rope_started.elapsed();
+    let preview = build_preview(
+        path.clone(),
+        snapshot,
+        byte_count,
+        read,
+        rope,
+        total_started,
+        build_display_map,
+    );
+    LoadedDocument::new(session, preview).map_err(|error| (path, error))
+}
+
+pub(in crate::preview) fn reload_document_profiled(
+    request: ReloadRequest,
+) -> Result<ReloadedDocument, (PathBuf, String)> {
+    let total_started = Instant::now();
+    let path = request.path().to_path_buf();
+    let read_started = Instant::now();
+    let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
+    let read = read_started.elapsed();
+    let byte_count = bytes.len() as u64;
+    let rope_started = Instant::now();
+    let prepared = request.prepare(bytes).map_err(|error| {
+        (
+            path.clone(),
+            format!("reload preparation failed: {error:?}"),
+        )
+    })?;
+    let snapshot = prepared.snapshot().clone();
+    let rope = rope_started.elapsed();
+    let preview = build_preview(
+        path.clone(),
+        snapshot,
+        byte_count,
+        read,
+        rope,
+        total_started,
+        true,
+    );
+    ReloadedDocument::new(prepared, preview).map_err(|error| (path, error))
+}
+
+fn build_preview(
+    path: PathBuf,
+    snapshot: DocumentSnapshot,
+    byte_count: u64,
+    read: Duration,
+    rope: Duration,
+    total_started: Instant,
+    build_display_map: bool,
+) -> PreviewSnapshot {
+    let statistics = TextStatistics::from_snapshot(&snapshot);
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let parse_started = Instant::now();
     let format = match path
@@ -154,7 +209,8 @@ fn load_document_profiled_impl(
         &image_sizes,
     );
 
-    let mut document = PreviewDocument {
+    let mut document = PreviewSnapshot {
+        document_id: text.document_id(),
         path,
         revision: text.revision(),
         text,
@@ -163,7 +219,6 @@ fn load_document_profiled_impl(
         markdown_blocks,
         outline_paths,
         projection,
-        minimap: Arc::new(super::minimap::MinimapState::new()),
         display_map: None,
         statistics,
         metrics: LoadMetrics {
@@ -181,7 +236,7 @@ fn load_document_profiled_impl(
         document.metrics.display_map = display_map_started.elapsed();
     }
     document.metrics.total = total_started.elapsed();
-    Ok(document)
+    document
 }
 
 fn build_outline_paths(
@@ -238,12 +293,12 @@ fn build_outline_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::RopeSnapshot;
+    use crate::document::DocumentSnapshot;
 
     #[test]
     fn markdown_outline_lookup_has_no_scrollback_limit() {
         let source = format!("# Long-lived heading\n{}", "body\n".repeat(700));
-        let text = RopeSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let text = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
         let (markdown_blocks, rows) = markdown::parse_markdown(&text);
         let paths = build_outline_paths(
             &text,
@@ -260,7 +315,8 @@ mod tests {
 
     #[test]
     fn org_outline_lookup_preserves_the_heading_path() {
-        let text = RopeSnapshot::from_utf8(b"* Parent\nbody\n** Child\nbody\n".to_vec()).unwrap();
+        let text =
+            DocumentSnapshot::from_utf8(b"* Parent\nbody\n** Child\nbody\n".to_vec()).unwrap();
         let blocks = parse(&text);
         let rows = build_preview_rows(&text, &blocks);
         let paths = build_outline_paths(&text, DocumentFormat::Org, &blocks, &[], &rows);

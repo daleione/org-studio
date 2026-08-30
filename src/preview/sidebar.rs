@@ -1,6 +1,6 @@
 use gpui::Context;
 
-use super::PreviewApp;
+use super::WorkspaceWindow;
 
 pub(in crate::preview) const DEFAULT_WIDTH_PX: f32 = 240.0;
 pub(in crate::preview) const MIN_WIDTH_PX: f32 = 180.0;
@@ -35,39 +35,40 @@ pub(in crate::preview) fn width_from_resize(
     )
 }
 
-impl PreviewApp {
-    pub(super) fn focus_sidebar(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_visible && !self.sidebar_focused {
-            self.sidebar_focused = true;
+impl WorkspaceWindow {
+    pub(in crate::preview) fn focus_sidebar(&mut self, cx: &mut Context<Self>) {
+        if self.file_manager.sidebar_visible && !self.file_manager.sidebar_focused {
+            self.file_manager.sidebar_focused = true;
             self.install_sidebar_keymap();
             cx.notify();
         }
     }
 
-    pub(super) fn focus_document(&mut self, cx: &mut Context<Self>) {
-        if self.sidebar_focused {
-            self.sidebar_focused = false;
+    pub(in crate::preview) fn focus_document(&mut self, cx: &mut Context<Self>) {
+        if self.file_manager.sidebar_focused {
+            self.file_manager.sidebar_focused = false;
             self.install_preview_keymap();
             cx.notify();
         }
     }
 
-    pub(super) fn rendered_sidebar_width(&self, viewport_width: f32) -> f32 {
+    pub(in crate::preview) fn rendered_sidebar_width(&self, viewport_width: f32) -> f32 {
         let desired = self
+            .file_manager
             .sidebar_resize
             .map(|resize| resize.current_width)
-            .unwrap_or(f32::from(self.sidebar_width));
+            .unwrap_or(f32::from(self.file_manager.sidebar_width));
         width_for_viewport(viewport_width, desired)
     }
 
-    pub(super) fn begin_sidebar_resize(
+    pub(in crate::preview) fn begin_sidebar_resize(
         &mut self,
         pointer_x: f32,
         viewport_width: f32,
         cx: &mut Context<Self>,
     ) {
         let width = self.rendered_sidebar_width(viewport_width);
-        self.sidebar_resize = Some(ResizeSession {
+        self.file_manager.sidebar_resize = Some(ResizeSession {
             start_pointer_x: pointer_x,
             start_width: width,
             current_width: width,
@@ -75,59 +76,60 @@ impl PreviewApp {
         cx.notify();
     }
 
-    pub(super) fn update_sidebar_resize(
+    pub(in crate::preview) fn update_sidebar_resize(
         &mut self,
         pointer_x: f32,
         viewport_width: f32,
         cx: &mut Context<Self>,
     ) {
-        let Some(resize) = self.sidebar_resize else {
+        let Some(resize) = self.file_manager.sidebar_resize else {
             return;
         };
         let width = width_from_resize(viewport_width, resize, pointer_x);
         if self
+            .file_manager
             .sidebar_resize
             .as_ref()
             .is_some_and(|current| current.current_width != width)
         {
-            self.sidebar_resize = Some(ResizeSession {
+            self.file_manager.sidebar_resize = Some(ResizeSession {
                 current_width: width,
                 ..resize
             });
-            self.presentation_revision = self.presentation_revision.wrapping_add(1);
+            self.bump_preview_revision(cx);
             cx.notify();
         }
     }
 
-    pub(super) fn finish_sidebar_resize(&mut self, cx: &mut Context<Self>) {
-        let Some(resize) = self.sidebar_resize.take() else {
+    pub(in crate::preview) fn finish_sidebar_resize(&mut self, cx: &mut Context<Self>) {
+        let Some(resize) = self.file_manager.sidebar_resize.take() else {
             return;
         };
         let width = resize
             .current_width
             .round()
             .clamp(MIN_WIDTH_PX, MAX_WIDTH_PX) as u16;
-        if self.sidebar_width != width {
-            self.sidebar_width = width;
+        if self.file_manager.sidebar_width != width {
+            self.file_manager.sidebar_width = width;
             self.save_preview_settings();
         }
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.bump_preview_revision(cx);
         cx.notify();
     }
 
-    pub(super) fn reset_sidebar_width(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_resize = None;
+    pub(in crate::preview) fn reset_sidebar_width(&mut self, cx: &mut Context<Self>) {
+        self.file_manager.sidebar_resize = None;
         let width = DEFAULT_WIDTH_PX as u16;
-        if self.sidebar_width != width {
-            self.sidebar_width = width;
+        if self.file_manager.sidebar_width != width {
+            self.file_manager.sidebar_width = width;
             self.save_preview_settings();
         }
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.bump_preview_revision(cx);
         cx.notify();
     }
 
-    pub(super) fn cancel_sidebar_resize(&mut self) -> bool {
-        self.sidebar_resize.take().is_some()
+    pub(in crate::preview) fn cancel_sidebar_resize(&mut self) -> bool {
+        self.file_manager.sidebar_resize.take().is_some()
     }
 }
 

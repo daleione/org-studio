@@ -2,18 +2,27 @@ use std::{path::PathBuf, sync::Arc};
 
 use gpui::{AppContext, Context, PathPromptOptions, PromptLevel, Window};
 
-use super::{ContentRoute, DiredStatus, PreviewApp};
+use super::{ContentRoute, DiredStatus, WorkspaceWindow};
 use crate::{
     file_manager::{ConflictPolicy, DiredSession, OperationPlan, execute_operation},
     navigation::NavigationCause,
 };
 
-impl PreviewApp {
-    pub(super) fn dired_prepare_execute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+impl WorkspaceWindow {
+    pub(in crate::preview) fn dired_prepare_execute(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.dired_operation_available(cx) {
             return;
         }
-        let Some(plan) = self.dired.as_ref().map(DiredSession::deletion_plan) else {
+        let Some(plan) = self
+            .file_manager
+            .session
+            .as_ref()
+            .map(DiredSession::deletion_plan)
+        else {
             return;
         };
         if plan.item_count() == 0 {
@@ -23,14 +32,14 @@ impl PreviewApp {
         self.confirm_dired_trash(plan, window, cx);
     }
 
-    pub(super) fn dired_create_file(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dired_create_file(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
         self.prompt_dired_creation(false, cx);
     }
 
-    pub(super) fn dired_create_directory(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dired_create_directory(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -39,7 +48,8 @@ impl PreviewApp {
 
     fn prompt_dired_creation(&mut self, directory: bool, cx: &mut Context<Self>) {
         let Some(parent) = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf())
         else {
@@ -51,7 +61,7 @@ impl PreviewApp {
             "untitled.org"
         };
         let prompt = cx.prompt_for_new_path(&parent, Some(suggested_name));
-        self.dired_operation_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(path))) = prompt.await else {
                 return;
             };
@@ -64,11 +74,16 @@ impl PreviewApp {
         }));
     }
 
-    pub(super) fn dired_rename(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dired_rename(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
-        let Some(targets) = self.dired.as_ref().map(DiredSession::operation_targets) else {
+        let Some(targets) = self
+            .file_manager
+            .session
+            .as_ref()
+            .map(DiredSession::operation_targets)
+        else {
             return;
         };
         if targets.len() != 1 {
@@ -81,7 +96,7 @@ impl PreviewApp {
         };
         let prompt =
             cx.prompt_for_new_path(&parent, source.file_name().and_then(|name| name.to_str()));
-        self.dired_operation_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(destination))) = prompt.await else {
                 return;
             };
@@ -90,14 +105,14 @@ impl PreviewApp {
         }));
     }
 
-    pub(super) fn dired_copy(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dired_copy(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
         self.prompt_dired_transfer(false, cx);
     }
 
-    pub(super) fn dired_move_to(&mut self, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dired_move_to(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -105,7 +120,12 @@ impl PreviewApp {
     }
 
     fn prompt_dired_transfer(&mut self, move_items: bool, cx: &mut Context<Self>) {
-        let Some(targets) = self.dired.as_ref().map(DiredSession::operation_targets) else {
+        let Some(targets) = self
+            .file_manager
+            .session
+            .as_ref()
+            .map(DiredSession::operation_targets)
+        else {
             return;
         };
         if targets.is_empty() {
@@ -122,7 +142,7 @@ impl PreviewApp {
                 "Copy to Folder".into()
             }),
         });
-        self.dired_operation_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = prompt.await else {
                 return;
             };
@@ -138,11 +158,16 @@ impl PreviewApp {
         }));
     }
 
-    pub(super) fn dired_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn dired_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
-        let Some(targets) = self.dired.as_ref().map(DiredSession::operation_targets) else {
+        let Some(targets) = self
+            .file_manager
+            .session
+            .as_ref()
+            .map(DiredSession::operation_targets)
+        else {
             return;
         };
         if targets.is_empty() {
@@ -178,7 +203,7 @@ impl PreviewApp {
             &["Move to Trash", "Cancel"],
             cx,
         );
-        self.dired_operation_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
             let Ok(answer) = prompt.await else {
                 return;
             };
@@ -188,26 +213,30 @@ impl PreviewApp {
         }));
     }
 
-    pub(super) fn execute_dired_operation(&mut self, plan: OperationPlan, cx: &mut Context<Self>) {
+    pub(in crate::preview) fn execute_dired_operation(
+        &mut self,
+        plan: OperationPlan,
+        cx: &mut Context<Self>,
+    ) {
         if !self.dired_operation_available(cx) {
             return;
         }
-        self.dired_operation_busy = true;
-        self.dired_status = Some(DiredStatus::Working(
+        self.file_manager.operation_busy = true;
+        self.file_manager.status = Some(DiredStatus::Working(
             format!("Working on {} item(s)…", plan.item_count()).into(),
         ));
         cx.notify();
         let operation = cx.background_spawn(async move { execute_operation(&plan) });
-        self.dired_operation_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
             let report = operation.await;
             let _ = this.update(cx, |this, cx| {
-                this.dired_operation_busy = false;
-                let current_document = this.document_path().map(PathBuf::from);
-                if let Some(session) = this.dired.as_mut() {
+                this.file_manager.operation_busy = false;
+                let current_document = this.document_path(cx).map(PathBuf::from);
+                if let Some(session) = this.file_manager.session.as_mut() {
                     session.clear_completed_operations(&report.completed, &report.destinations);
                 }
                 this.refresh_file_manager(NavigationCause::FileSystemDelta, cx);
-                this.dired_status = Some(if report.succeeded() {
+                this.file_manager.status = Some(if report.succeeded() {
                     DiredStatus::Success(report.summary())
                 } else {
                     DiredStatus::Error(report.summary())
@@ -218,7 +247,7 @@ impl PreviewApp {
                         .destinations
                         .iter()
                         .find(|(source, _)| source.as_ref() == current_document)
-                    && super::is_supported_document(destination)
+                    && crate::preview::is_supported_document(destination)
                 {
                     this.open(destination.to_path_buf(), cx);
                 }
@@ -228,12 +257,12 @@ impl PreviewApp {
     }
 
     fn show_dired_operation_error(&mut self, message: impl Into<Arc<str>>, cx: &mut Context<Self>) {
-        self.dired_status = Some(DiredStatus::Error(message.into()));
+        self.file_manager.status = Some(DiredStatus::Error(message.into()));
         cx.notify();
     }
 
     fn dired_operation_available(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.dired_operation_busy {
+        if self.file_manager.operation_busy {
             self.show_dired_operation_error("A file operation is already in progress", cx);
             false
         } else {

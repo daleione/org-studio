@@ -6,6 +6,33 @@ use std::{
     },
 };
 
+#[derive(Default)]
+pub(crate) struct ExportHost {
+    task: Option<gpui::Task<()>>,
+    cancel: Option<Arc<AtomicBool>>,
+    request: u64,
+    panel: Option<ExportPanelState>,
+    status: Option<ExportRunState>,
+}
+
+impl ExportHost {
+    pub(super) fn panel(&self) -> Option<&ExportPanelState> {
+        self.panel.as_ref()
+    }
+
+    pub(super) fn status(&self) -> Option<&ExportRunState> {
+        self.status.as_ref()
+    }
+
+    pub(super) fn is_open(&self) -> bool {
+        self.panel.is_some()
+    }
+
+    pub(super) fn clear_status(&mut self) {
+        self.status = None;
+    }
+}
+
 use gpui::{
     Context, Entity, Image, ImageFormat, IntoElement, MouseButton, ObjectFit, Task, div, img,
     prelude::*, px, rgb, rgba,
@@ -17,7 +44,7 @@ use crate::export::{
 };
 use crate::i18n::Language;
 
-use super::{DocumentFormat, PreviewApp, PreviewLoadState, current_theme};
+use super::{DocumentFormat, PreviewLoadState, WorkspaceWindow, current_theme};
 
 #[derive(Clone)]
 pub(super) struct ExportPanelState {
@@ -44,34 +71,34 @@ pub(super) enum ExportRunState {
     Error(Arc<str>),
 }
 
-impl PreviewApp {
+impl WorkspaceWindow {
     pub(super) fn show_export_panel(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.state, PreviewLoadState::Ready { .. }) {
             return;
         }
-        self.export_panel = Some(ExportPanelState::default());
-        self.export_status = None;
+        self.export.panel = Some(ExportPanelState::default());
+        self.export.status = None;
         cx.notify();
     }
 
     pub(super) fn close_export_panel(&mut self, cx: &mut Context<Self>) {
-        if matches!(self.export_status, Some(ExportRunState::Working(_))) {
-            if let Some(cancel) = self.export_cancel.take() {
+        if matches!(self.export.status, Some(ExportRunState::Working(_))) {
+            if let Some(cancel) = self.export.cancel.take() {
                 cancel.store(true, Ordering::Release);
             }
-            self.export_request = self.export_request.wrapping_add(1);
-            self.export_task.take();
+            self.export.request = self.export.request.wrapping_add(1);
+            self.export.task.take();
             let message = self.language.text("export.cancelled");
-            self.export_status = Some(ExportRunState::Error(message.into()));
+            self.export.status = Some(ExportRunState::Error(message.into()));
         } else {
-            self.export_panel = None;
-            self.export_status = None;
+            self.export.panel = None;
+            self.export.status = None;
         }
         cx.notify();
     }
 
     pub(super) fn select_export_format(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
-        let Some(panel) = self.export_panel.as_mut() else {
+        let Some(panel) = self.export.panel.as_mut() else {
             return;
         };
         panel.options.format = format;
@@ -86,12 +113,12 @@ impl PreviewApp {
             PaperSize::Theme
         };
         panel.options.per_page = false;
-        self.export_status = None;
+        self.export.status = None;
         cx.notify();
     }
 
     pub(super) fn select_export_theme(&mut self, index: usize, cx: &mut Context<Self>) {
-        let Some(panel) = self.export_panel.as_mut() else {
+        let Some(panel) = self.export.panel.as_mut() else {
             return;
         };
         if index >= themes().len() {
@@ -99,34 +126,36 @@ impl PreviewApp {
         }
         panel.theme_index = index;
         panel.options.theme_id = themes()[panel.theme_index].id.into();
-        self.export_status = None;
+        self.export.status = None;
         cx.notify();
     }
 
     pub(super) fn select_export_paper(&mut self, paper: PaperSize, cx: &mut Context<Self>) {
-        if let Some(panel) = self.export_panel.as_mut() {
+        if let Some(panel) = self.export.panel.as_mut() {
             panel.options.paper = paper;
             panel.options.layout = LayoutMode::Paged;
             panel.options.per_page = false;
-            self.export_status = None;
+            self.export.status = None;
             cx.notify();
         }
     }
 
     pub(super) fn select_export_ppi(&mut self, ppi: f32, cx: &mut Context<Self>) {
-        if let Some(panel) = self.export_panel.as_mut() {
+        if let Some(panel) = self.export.panel.as_mut() {
             panel.options.png_ppi = ppi;
-            self.export_status = None;
+            self.export.status = None;
             cx.notify();
         }
     }
 
     pub(super) fn choose_export_destination(&mut self, cx: &mut Context<Self>) {
-        let Some(panel) = self.export_panel.as_ref() else {
+        let Some(panel) = self.export.panel.as_ref() else {
             return;
         };
         let Some(document) = (match &self.state {
-            PreviewLoadState::Ready { document, .. } => Some(document.clone()),
+            PreviewLoadState::Ready { document } => {
+                Some(document.panel.read(cx).document().clone())
+            }
             _ => None,
         }) else {
             return;
@@ -146,7 +175,7 @@ impl PreviewApp {
         self.picker_task = Some(cx.spawn(async move |this, cx| {
             if let Ok(Ok(Some(mut path))) = receiver.await {
                 let _ = this.update(cx, |this, cx| {
-                    if let Some(panel) = &this.export_panel {
+                    if let Some(panel) = &this.export.panel {
                         path.set_extension(panel.options.format.extension());
                     }
                     this.start_export(path, cx)
@@ -156,11 +185,13 @@ impl PreviewApp {
     }
 
     fn start_export(&mut self, destination: PathBuf, cx: &mut Context<Self>) {
-        let Some(panel) = self.export_panel.as_ref() else {
+        let Some(panel) = self.export.panel.as_ref() else {
             return;
         };
         let Some(document) = (match &self.state {
-            PreviewLoadState::Ready { document, .. } => Some(document.clone()),
+            PreviewLoadState::Ready { document } => {
+                Some(document.panel.read(cx).document().clone())
+            }
             _ => None,
         }) else {
             return;
@@ -171,11 +202,11 @@ impl PreviewApp {
             DocumentFormat::Org => ExportSourceFormat::Org,
             DocumentFormat::Markdown => ExportSourceFormat::Markdown,
         };
-        self.export_request = self.export_request.wrapping_add(1);
-        let request = self.export_request;
+        self.export.request = self.export.request.wrapping_add(1);
+        let request = self.export.request;
         let cancel = Arc::new(AtomicBool::new(false));
-        self.export_cancel = Some(cancel.clone());
-        self.export_status = Some(ExportRunState::Working(
+        self.export.cancel = Some(cancel.clone());
+        self.export.status = Some(ExportRunState::Working(
             language.text("export.working").into(),
         ));
         cx.notify();
@@ -198,15 +229,15 @@ impl PreviewApp {
                     .map_err(|error| error.to_string())?;
                 Ok((paths, warning_count))
             });
-        self.export_task = Some(cx.spawn(async move |this, cx| {
+        self.export.task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
-                if this.export_request != request {
+                if this.export.request != request {
                     return;
                 }
-                this.export_task = None;
-                this.export_cancel = None;
-                this.export_status = Some(match result {
+                this.export.task = None;
+                this.export.cancel = None;
+                this.export.status = Some(match result {
                     Ok((paths, warnings)) => {
                         let path = paths[0].clone();
                         ExportRunState::Success {
@@ -222,7 +253,7 @@ impl PreviewApp {
     }
 
     pub(super) fn reveal_export(&self, cx: &mut Context<Self>) {
-        if let Some(ExportRunState::Success { path, .. }) = &self.export_status {
+        if let Some(ExportRunState::Success { path, .. }) = &self.export.status {
             cx.reveal_path(path);
         }
     }
@@ -245,7 +276,7 @@ fn export_success_message(language: Language, files: usize, warnings: usize) -> 
 }
 
 pub(super) fn render_export_panel(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     panel: ExportPanelState,
     status: Option<ExportRunState>,
     language: Language,

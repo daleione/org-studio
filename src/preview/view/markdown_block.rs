@@ -1,5 +1,5 @@
 use super::{
-    Arc, DocumentFormat, FontWeight, InlineText, PreviewDocument, current_theme, div, img,
+    Arc, DocumentFormat, FontWeight, InlineText, PreviewSnapshot, current_theme, div, img,
     markdown, parse_inline, px, render_code_row, render_table_row, resolve_image_path, rgb,
     styled_inline_runs,
 };
@@ -16,7 +16,7 @@ pub(in crate::preview) fn parse_document_inline(
 }
 
 pub(super) fn render_markdown_block(
-    document: &Arc<PreviewDocument>,
+    document: &Arc<PreviewSnapshot>,
     display_row: usize,
     block: &markdown::MarkdownBlock,
     is_folded: bool,

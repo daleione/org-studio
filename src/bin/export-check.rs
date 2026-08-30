@@ -1,7 +1,7 @@
 use std::{env, fs, path::PathBuf};
 
 use org_studio::{
-    document::RopeSnapshot,
+    document::DocumentSnapshot,
     export::{ExportOptions, ExportSourceFormat, export_snapshot, shared_engine},
 };
 
@@ -13,7 +13,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Some("md" | "markdown") => ExportSourceFormat::Markdown,
             _ => continue,
         };
-        let snapshot = RopeSnapshot::from_utf8(fs::read(&path)?)?;
+        let snapshot = DocumentSnapshot::from_utf8(fs::read(&path)?)?;
         match export_snapshot(
             shared_engine(),
             &snapshot,

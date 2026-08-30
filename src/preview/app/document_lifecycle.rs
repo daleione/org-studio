@@ -1,45 +1,41 @@
 use super::{
-    Arc, Context, Duration, HashSet, InitialDocumentLoad, Instant, PathBuf, PathPromptOptions,
-    PreviewApp, PreviewDocument, PreviewLoadState, accept_generation, load_document, minimap,
-    should_eagerly_measure_rows,
+    Arc, Context, Duration, InitialDocumentLoad, Instant, LoadedDocument, PathBuf,
+    PathPromptOptions, PreviewLoadState, WorkspaceWindow, accept_generation, load_document,
+    minimap,
 };
+use crate::preview::{ReadyDocument, ReloadedDocument, loading::reload_document_profiled};
 use gpui::AppContext;
 
-impl PreviewApp {
+impl WorkspaceWindow {
     pub(in crate::preview) fn show_home(&mut self, cx: &mut Context<Self>) {
-        self.discard_fold_animation();
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
         self.file_watch_request = self.file_watch_request.wrapping_add(1);
         self.file_watch_task = None;
         self.file_watch_directory = None;
         self.file_watch_target = None;
-        self.cancel_minimap_interaction();
         self.state = PreviewLoadState::Empty;
-        self.last_ready = None;
         self.opened_at = None;
         self.first_frame_scheduled = None;
         self.home_error = None;
         self.content_route = super::super::ContentRoute::Document;
-        self.sidebar_focused = false;
-        self.dired_task = None;
-        self.dired_scan_transaction = None;
-        self.dired_refresh_pending = false;
+        self.file_manager.reset_for_document();
         self.stop_dired_directory_watch();
         self.install_preview_keymap();
         cx.notify();
     }
 
     pub(in crate::preview) fn begin_open(&mut self, path: PathBuf, opened_at: Instant) -> u64 {
-        self.discard_fold_animation();
         self.home_error = None;
-        self.cancel_minimap_interaction();
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.generation += 1;
         self.opened_at = Some(opened_at);
         self.first_frame_scheduled = None;
         let generation = self.generation;
-        self.state = PreviewLoadState::Loading { path: path.clone() };
+        let previous = self.state.take_ready();
+        self.state = PreviewLoadState::Loading {
+            path: path.clone(),
+            previous,
+        };
         generation
     }
 
@@ -54,7 +50,7 @@ impl PreviewApp {
 
         match receiver.try_recv() {
             Ok(result) => {
-                if self.apply_load_result(generation, result) {
+                if self.apply_load_result(generation, result, cx) {
                     cx.notify();
                 }
             }
@@ -64,7 +60,7 @@ impl PreviewApp {
                         Err((path, "initial document loader stopped".to_owned()))
                     });
                     let _ = this.update(cx, |this, cx| {
-                        if this.apply_load_result(generation, result) {
+                        if this.apply_load_result(generation, result, cx) {
                             cx.notify();
                         }
                     });
@@ -72,7 +68,7 @@ impl PreviewApp {
             }
             Err(async_channel::TryRecvError::Closed) => {
                 let result = Err((path, "initial document loader stopped".to_owned()));
-                if self.apply_load_result(generation, result) {
+                if self.apply_load_result(generation, result, cx) {
                     cx.notify();
                 }
             }
@@ -110,7 +106,7 @@ impl PreviewApp {
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
-                if this.apply_load_result(generation, result) {
+                if this.apply_load_result(generation, result, cx) {
                     cx.notify();
                 }
             });
@@ -118,6 +114,88 @@ impl PreviewApp {
         self.watch_document_profiled(watch_path, generation, cx);
 
         cx.notify();
+    }
+
+    pub(in crate::preview) fn reload_current(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.document_session().cloned() else {
+            return;
+        };
+        let request = match session.read(cx).reload_request() {
+            Ok(request) => request,
+            Err(crate::document::ReloadError::Dirty) => {
+                self.set_reload_error(Some(
+                    "The file changed on disk, but the document has unsaved edits. Reload was not applied."
+                        .into(),
+                ));
+                cx.notify();
+                return;
+            }
+            Err(error) => {
+                self.set_reload_error(Some(format!("Could not prepare reload: {error:?}").into()));
+                cx.notify();
+                return;
+            }
+        };
+        self.generation = self.generation.wrapping_add(1);
+        let generation = self.generation;
+        self.opened_at = Some(Instant::now());
+        self.first_frame_scheduled = None;
+        self.set_reload_error(None);
+        let background = cx
+            .background_executor()
+            .spawn_with_priority(gpui::Priority::High, async move {
+                reload_document_profiled(request)
+            });
+        self.load_task = Some(cx.spawn(async move |this, cx| {
+            let result = background.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.apply_reload_result(generation, result, cx) {
+                    cx.notify();
+                }
+            });
+        }));
+    }
+
+    fn set_reload_error(&mut self, error: Option<Arc<str>>) {
+        if let Some(document) = self.state.ready_mut() {
+            document.reload_error = error;
+        }
+    }
+
+    fn apply_reload_result(
+        &mut self,
+        generation: u64,
+        result: Result<ReloadedDocument, (PathBuf, String)>,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !accept_generation(self.generation, generation) {
+            return false;
+        }
+        let (session, panel) = match self.state.ready() {
+            Some(document) => (document.session.clone(), document.panel.clone()),
+            None => return false,
+        };
+        let reloaded = match result {
+            Ok(reloaded) => reloaded,
+            Err((path, message)) => {
+                self.set_reload_error(Some(
+                    format!("Could not reload {}: {message}", path.display()).into(),
+                ));
+                return true;
+            }
+        };
+        let (prepared, preview) = reloaded.into_parts();
+        if let Err(error) = session.update(cx, |session, cx| session.apply_reload(prepared, cx)) {
+            self.set_reload_error(Some(format!("Reload was not applied: {error:?}").into()));
+            return true;
+        }
+        let document = Arc::new(preview);
+        let list_overdraw = self.list_overdraw;
+        panel.update(cx, |panel, cx| {
+            panel.replace_document(document, list_overdraw, cx);
+        });
+        self.set_reload_error(None);
+        true
     }
 
     fn watch_document_profiled(&mut self, path: PathBuf, generation: u64, cx: &mut Context<Self>) {
@@ -194,8 +272,17 @@ impl PreviewApp {
                         if this.file_watch_request != request {
                             return false;
                         }
-                        if this.current_document_path() == Some(changed_path.as_path()) {
-                            this.open(changed_path, cx);
+                        let active_session = match &this.state {
+                            PreviewLoadState::Ready { document }
+                                if document.session.read(cx).path() == changed_path.as_path() =>
+                            {
+                                Some(document.session.clone())
+                            }
+                            _ => None,
+                        };
+                        if let Some(session) = active_session {
+                            session.update(cx, |session, cx| session.disk_changed(cx));
+                            this.reload_current(cx);
                         }
                         true
                     })
@@ -210,51 +297,53 @@ impl PreviewApp {
     pub(in crate::preview) fn apply_load_result(
         &mut self,
         generation: u64,
-        result: Result<PreviewDocument, (PathBuf, String)>,
+        result: Result<LoadedDocument, (PathBuf, String)>,
+        cx: &mut impl AppContext,
     ) -> bool {
         if !accept_generation(self.generation, generation) {
             return false;
         }
+        let previous = self.state.take_ready();
         self.state = match result {
-            Ok(document) => {
+            Ok(loaded) => {
+                let (session, preview) = loaded.into_parts();
                 if minimap::minimap_perf_enabled() {
                     eprintln!(
                         "org_preview_document_ready generation={} bytes={} rows={} read_ms={:.3} rope_ms={:.3} parse_ms={:.3} display_map_ms={:.3} load_total_ms={:.3} since_open_ms={:.3}",
                         generation,
-                        document.metrics.bytes,
-                        document.projection.presentation.len(),
-                        document.metrics.read.as_secs_f64() * 1000.0,
-                        document.metrics.rope.as_secs_f64() * 1000.0,
-                        document.metrics.parse.as_secs_f64() * 1000.0,
-                        document.metrics.display_map.as_secs_f64() * 1000.0,
-                        document.metrics.total.as_secs_f64() * 1000.0,
+                        preview.metrics.bytes,
+                        preview.projection.presentation.len(),
+                        preview.metrics.read.as_secs_f64() * 1000.0,
+                        preview.metrics.rope.as_secs_f64() * 1000.0,
+                        preview.metrics.parse.as_secs_f64() * 1000.0,
+                        preview.metrics.display_map.as_secs_f64() * 1000.0,
+                        preview.metrics.total.as_secs_f64() * 1000.0,
                         self.opened_at
                             .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
                     );
                 }
                 crate::recent_documents::record_success(
                     &mut self.recent_documents,
-                    document.path.clone(),
+                    preview.path.clone(),
                 );
                 self.home_error = None;
-                let document = Arc::new(document);
-                self.fold_markers = Arc::new(HashSet::new());
-                self.global_visibility = super::super::GlobalVisibility::All;
-                self.global_cycle_contiguous = false;
-                self.local_cycle_continuation = None;
-                self.discard_fold_animation();
-                self.visible_rows = Arc::new((0..document.projection.rows.len()).collect());
-                self.list_state.reset(self.visible_rows.len());
-                if should_eagerly_measure_rows(self.visible_rows.len()) {
-                    self.list_state.clone().measure_all();
-                }
-                self.last_ready = Some((generation, document.clone()));
+                let session = cx.new(|_| session);
+                let document = Arc::new(preview);
+                let panel =
+                    cx.new(|_| super::super::PreviewPanel::new(document, self.list_overdraw));
                 PreviewLoadState::Ready {
-                    generation,
-                    document,
+                    document: ReadyDocument {
+                        session,
+                        panel,
+                        reload_error: None,
+                    },
                 }
             }
-            Err((path, message)) => PreviewLoadState::Failed { path, message },
+            Err((path, message)) => PreviewLoadState::Failed {
+                path,
+                message,
+                previous,
+            },
         };
         true
     }
@@ -318,10 +407,13 @@ impl PreviewApp {
 
     pub(in crate::preview) fn reload(&mut self, cx: &mut Context<Self>) {
         let path = match &self.state {
-            PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
+            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
                 Some(path.clone())
             }
-            PreviewLoadState::Ready { document, .. } => Some(document.path.clone()),
+            PreviewLoadState::Ready { .. } => {
+                self.reload_current(cx);
+                None
+            }
             PreviewLoadState::Empty => None,
         };
         if let Some(path) = path {

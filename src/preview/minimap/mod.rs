@@ -46,7 +46,7 @@ use super::code_highlight_style;
 #[cfg(test)]
 #[allow(unused_imports)]
 use super::{
-    CodeHighlightSpan, DocumentFormat, PreviewDocument, PreviewRow, highlight_code,
+    CodeHighlightSpan, DocumentFormat, PreviewRow, PreviewSnapshot, highlight_code,
     markdown::{MarkdownBlock, MarkdownKind},
     parse_document_inline,
 };

@@ -1,15 +1,12 @@
 use std::{
-    cell::RefCell,
-    collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use gpui::{
-    Context, FocusHandle, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent,
-    ListAlignment, ListOffset, ListState, PathPromptOptions, Render, StyledText, Subscription,
-    Task, Window, actions, div, img, px, rgb,
+    Context, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, ListAlignment,
+    PathPromptOptions, Render, StyledText, Window, actions, div, img, px, rgb,
 };
 mod app;
 mod display_map;
@@ -21,10 +18,12 @@ mod layout;
 mod loading;
 mod status_line;
 mod view;
-use crate::navigation::PaneId;
 pub(crate) use document::DocumentFormat;
-use document::{CodeRowRole, PreviewRow, configured_minimap_visible};
-pub use document::{InitialDocumentLoad, LoadMetrics, PreviewDocument, preload_initial_document};
+use document::{CodeRowRole, PreviewRow, ReloadedDocument, configured_minimap_visible};
+pub use document::{
+    DerivedEvent, InitialDocumentLoad, LoadMetrics, LoadedDocument, PreviewSnapshot,
+    preload_initial_document,
+};
 use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 use input::*;
 use loading::{fitted_image_size, resolve_image_path};
@@ -34,10 +33,7 @@ pub use loading::{
 use view::*;
 mod command_window;
 mod coordinates;
-mod file_manager_breadcrumb;
 mod file_manager_host;
-mod file_manager_operations;
-mod file_manager_watch;
 mod fold_transition;
 mod folding;
 mod markdown;
@@ -45,14 +41,16 @@ mod minimap;
 #[cfg(test)]
 mod org_line;
 mod overlay;
+mod panel;
 mod projection;
 mod rows;
-mod sidebar;
 mod table;
 #[cfg(test)]
 mod tests;
 mod visual_recipe;
-use app::ScrollBenchmark;
+pub(crate) use app::ScrollBenchmark;
+pub(crate) use export_ui::ExportHost;
+pub(crate) use file_manager_host::FileManagerHost;
 use fold_transition::{
     FoldDirection, FoldMeasurement, FoldSegment, FoldTransition, FoldTransitionInput,
     FoldTransitionPlan,
@@ -62,16 +60,20 @@ use folding::{
     cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
     global_org_visibility,
 };
+pub(crate) use panel::PreviewPanel;
+use panel::PreviewRenderState;
 use projection::build_projection_snapshot;
 use rows::build_preview_rows;
+pub(crate) use status_line::StatusLineHost;
 use table::{build_markdown_table_styles, build_table_styles, render_table_row};
 
 use crate::{
+    app::WorkspaceWindow,
     command::{
         BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
-        CommandRegistry, InvocationOrigin, PrefixArgument,
+        InvocationOrigin, PrefixArgument,
     },
-    input::{ContextSet, EmacsOutcome, KeyboardRouter, compile_input_profile},
+    input::{EmacsOutcome, compile_input_profile},
     keymap::KeyStroke,
     org_syntax::{
         BlockId, BlockKind, BlockNode,
@@ -138,7 +140,7 @@ actions!(
 );
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ContentRoute {
+pub(crate) enum ContentRoute {
     Document,
     FileManager,
 }
@@ -160,105 +162,53 @@ impl DiredStatus {
     }
 }
 
-enum PreviewLoadState {
+pub(crate) enum PreviewLoadState {
     Empty,
     Loading {
         path: PathBuf,
+        previous: Option<ReadyDocument>,
     },
     Ready {
-        generation: u64,
-        document: Arc<PreviewDocument>,
+        document: ReadyDocument,
     },
     Failed {
         path: PathBuf,
         message: String,
+        previous: Option<ReadyDocument>,
     },
 }
 
-pub struct PreviewApp {
-    language: crate::i18n::Language,
-    focus_handle: Option<FocusHandle>,
-    focus_lost_subscription: Option<Subscription>,
-    commands: Arc<CommandRegistry>,
-    keyboard: KeyboardRouter,
-    key_context: ContextSet,
-    state: PreviewLoadState,
-    recent_documents: Vec<crate::recent_documents::RecentDocument>,
-    home_error: Option<Arc<str>>,
-    generation: u64,
-    load_task: Option<Task<()>>,
-    file_watch_task: Option<Task<()>>,
-    file_watch_request: u64,
-    file_watch_directory: Option<PathBuf>,
-    file_watch_target: Option<crate::file_watcher::FileWatchTarget>,
-    dired_watch_task: Option<Task<()>>,
-    dired_watch_request: u64,
-    dired_watch_directory: Option<PathBuf>,
-    picker_task: Option<Task<()>>,
-    export_task: Option<Task<()>>,
-    export_cancel: Option<Arc<std::sync::atomic::AtomicBool>>,
-    export_request: u64,
-    export_panel: Option<export_ui::ExportPanelState>,
-    export_status: Option<export_ui::ExportRunState>,
-    list_state: ListState,
-    fold_markers: Arc<HashSet<BlockId>>,
-    visible_rows: Arc<Vec<usize>>,
-    last_ready: Option<(u64, Arc<PreviewDocument>)>,
-    opened_at: Option<Instant>,
-    first_frame_scheduled: Option<u64>,
-    scroll_benchmark: Option<ScrollBenchmark>,
-    which_key_task: Option<Task<()>>,
-    which_key_request: u64,
-    key_feedback_task: Option<Task<()>>,
-    key_feedback_request: u64,
-    which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
-    dired_help_visible: bool,
-    content_route: ContentRoute,
-    sidebar_visible: bool,
-    sidebar_focused: bool,
-    sidebar_width: u16,
-    sidebar_resize: Option<sidebar::ResizeSession>,
-    minimap_visible: bool,
-    minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
-    minimap_width: Option<u16>,
-    minimap_resize_preview: Option<f32>,
-    global_visibility: GlobalVisibility,
-    global_cycle_contiguous: bool,
-    local_cycle_continuation: Option<(BlockId, LocalVisibility)>,
-    fold_animation_revision: u64,
-    fold_animation: Option<FoldTransition>,
-    presentation_revision: u64,
-    viewport_revision_key: Option<(u32, u32)>,
-    minimap_pending_seek: Option<(u64, ListOffset)>,
-    minimap_seek_scheduled: bool,
-    dired: Option<crate::file_manager::DiredSession>,
-    dired_status: Option<DiredStatus>,
-    dired_task: Option<Task<()>>,
-    dired_scan_transaction: Option<crate::navigation::TransactionId>,
-    dired_refresh_pending: bool,
-    dired_operation_task: Option<Task<()>>,
-    dired_operation_busy: bool,
-    dired_context_menu: Option<file_manager_host::DiredContextMenu>,
-    dired_list_state: ListState,
-    sidebar_list_state: ListState,
-    dired_pending_presentation: Option<(
-        crate::navigation::TransactionId,
-        crate::navigation::ViewRevision,
-        usize,
-        f32,
-    )>,
-    sidebar_pending_presentation: Option<(
-        crate::navigation::TransactionId,
-        crate::navigation::ViewRevision,
-        usize,
-        f32,
-    )>,
-    dired_presentation_scheduled: bool,
-    dired_viewport_memory: HashMap<PathBuf, (usize, f32)>,
-    sidebar_viewport_memory: HashMap<PathBuf, (usize, f32)>,
-    status_line_settings: crate::settings::StatusLineSettings,
-    status_popover: Option<status_line::StatusPopover>,
-    status_layout_cache: RefCell<HashMap<PaneId, status_line::CachedStatusLayout>>,
+#[derive(Clone)]
+pub(crate) struct ReadyDocument {
+    session: gpui::Entity<crate::document::DocumentSession>,
+    panel: gpui::Entity<PreviewPanel>,
+    reload_error: Option<Arc<str>>,
+}
+
+impl PreviewLoadState {
+    fn ready(&self) -> Option<&ReadyDocument> {
+        match self {
+            Self::Ready { document } => Some(document),
+            Self::Loading { previous, .. } | Self::Failed { previous, .. } => previous.as_ref(),
+            Self::Empty => None,
+        }
+    }
+
+    fn take_ready(&mut self) -> Option<ReadyDocument> {
+        match std::mem::replace(self, Self::Empty) {
+            Self::Ready { document } => Some(document),
+            Self::Loading { previous, .. } | Self::Failed { previous, .. } => previous,
+            Self::Empty => None,
+        }
+    }
+
+    fn ready_mut(&mut self) -> Option<&mut ReadyDocument> {
+        match self {
+            Self::Ready { document } => Some(document),
+            Self::Loading { previous, .. } | Self::Failed { previous, .. } => previous.as_mut(),
+            Self::Empty => None,
+        }
+    }
 }
 
 fn is_supported_document(path: &std::path::Path) -> bool {

@@ -1,22 +1,32 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use gpui::{
-    Context, CursorStyle, Entity, InteractiveElement, MouseButton, ParentElement,
-    PathPromptOptions, Styled, Window, div, list, prelude::*, px, rgb,
+    Context, CursorStyle, Entity, InteractiveElement, ListAlignment, ListOffset, ListState,
+    MouseButton, ParentElement, PathPromptOptions, Styled, Window, div, list, prelude::*, px, rgb,
 };
 
-use super::{ContentRoute, DiredStatus, PreviewApp, PreviewLoadState};
+use super::{ContentRoute, DiredStatus, PreviewLoadState, WorkspaceWindow};
 use crate::{
     file_manager::{
         ConflictPolicy, DiredSession, EntryKind, Mark, OperationPlan, scan_directory_cancellable,
     },
-    navigation::{NavigationCause, SelectionIntent},
+    navigation::{NavigationCause, SelectionIntent, TransactionId, ViewRevision},
     theme::current_theme,
 };
+
+#[path = "file_manager_breadcrumb.rs"]
+mod breadcrumb;
+#[path = "file_manager_operations.rs"]
+mod operations;
+#[path = "sidebar.rs"]
+pub(super) mod sidebar;
+#[path = "file_manager_watch.rs"]
+mod watch;
 
 #[derive(Clone, Copy)]
 pub(super) struct DiredContextMenu {
@@ -43,13 +53,151 @@ enum DiredRowSurface {
     Sidebar,
 }
 
-impl PreviewApp {
-    pub(super) fn document_path(&self) -> Option<&std::path::Path> {
+pub(crate) struct FileManagerHost {
+    watch_task: Option<gpui::Task<()>>,
+    watch_request: u64,
+    watch_directory: Option<PathBuf>,
+    help_visible: bool,
+    sidebar_visible: bool,
+    sidebar_focused: bool,
+    sidebar_width: u16,
+    sidebar_resize: Option<sidebar::ResizeSession>,
+    session: Option<DiredSession>,
+    status: Option<super::DiredStatus>,
+    task: Option<gpui::Task<()>>,
+    scan_transaction: Option<TransactionId>,
+    refresh_pending: bool,
+    operation_task: Option<gpui::Task<()>>,
+    operation_busy: bool,
+    context_menu: Option<DiredContextMenu>,
+    list_state: ListState,
+    sidebar_list_state: ListState,
+    pending_presentation: Option<(TransactionId, ViewRevision, usize, f32)>,
+    sidebar_pending_presentation: Option<(TransactionId, ViewRevision, usize, f32)>,
+    presentation_scheduled: bool,
+    viewport_memory: HashMap<PathBuf, (usize, f32)>,
+    sidebar_viewport_memory: HashMap<PathBuf, (usize, f32)>,
+}
+
+impl FileManagerHost {
+    pub(super) fn new(sidebar_width: u16) -> Self {
+        Self {
+            watch_task: None,
+            watch_request: 0,
+            watch_directory: None,
+            help_visible: false,
+            sidebar_visible: false,
+            sidebar_focused: false,
+            sidebar_width: crate::settings::initial_sidebar_width(sidebar_width),
+            sidebar_resize: None,
+            session: None,
+            status: None,
+            task: None,
+            scan_transaction: None,
+            refresh_pending: false,
+            operation_task: None,
+            operation_busy: false,
+            context_menu: None,
+            list_state: ListState::new(0, ListAlignment::Top, px(80.0)),
+            sidebar_list_state: ListState::new(0, ListAlignment::Top, px(60.0)),
+            pending_presentation: None,
+            sidebar_pending_presentation: None,
+            presentation_scheduled: false,
+            viewport_memory: HashMap::new(),
+            sidebar_viewport_memory: HashMap::new(),
+        }
+    }
+
+    pub(super) fn reset_for_document(&mut self) {
+        self.sidebar_focused = false;
+        self.task = None;
+        self.scan_transaction = None;
+        self.refresh_pending = false;
+    }
+
+    pub(super) fn sidebar_width(&self) -> u16 {
+        self.sidebar_width
+    }
+
+    pub(super) fn sidebar_visible(&self) -> bool {
+        self.sidebar_visible
+    }
+
+    pub(super) fn sidebar_focused(&self) -> bool {
+        self.sidebar_focused
+    }
+
+    pub(super) fn session(&self) -> Option<&DiredSession> {
+        self.session.as_ref()
+    }
+
+    pub(super) fn status(&self) -> Option<&DiredStatus> {
+        self.status.as_ref()
+    }
+
+    pub(super) fn dismiss_context_menu(&mut self) -> bool {
+        self.context_menu.take().is_some()
+    }
+
+    pub(super) fn set_help_visible(&mut self, visible: bool) {
+        self.help_visible = visible;
+    }
+
+    pub(super) fn help_visible(&self) -> bool {
+        self.help_visible
+    }
+
+    pub(super) fn is_resizing_sidebar(&self) -> bool {
+        self.sidebar_resize.is_some()
+    }
+}
+
+impl WorkspaceWindow {
+    pub(super) fn schedule_file_manager_presentation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if (self.file_manager.pending_presentation.is_some()
+            || self.file_manager.sidebar_pending_presentation.is_some())
+            && !self.file_manager.presentation_scheduled
+        {
+            self.file_manager.presentation_scheduled = true;
+            cx.on_next_frame(window, |this, _, cx| {
+                this.file_manager.presentation_scheduled = false;
+                if let Some((transaction, view_revision, rank, offset)) =
+                    this.file_manager.pending_presentation.take()
+                    && this.file_manager.session.as_ref().is_some_and(|session| {
+                        session.presentation_is_current(transaction, view_revision)
+                    })
+                {
+                    this.file_manager.list_state.scroll_to(ListOffset {
+                        item_ix: rank,
+                        offset_in_item: px(offset),
+                    });
+                }
+                if let Some((transaction, view_revision, rank, offset)) =
+                    this.file_manager.sidebar_pending_presentation.take()
+                    && this.file_manager.session.as_ref().is_some_and(|session| {
+                        session.presentation_is_current(transaction, view_revision)
+                    })
+                {
+                    this.file_manager.sidebar_list_state.scroll_to(ListOffset {
+                        item_ix: rank,
+                        offset_in_item: px(offset),
+                    });
+                }
+                cx.notify();
+            });
+        }
+    }
+
+    pub(super) fn document_path<'a>(&'a self, cx: &'a gpui::App) -> Option<&'a std::path::Path> {
         match &self.state {
-            PreviewLoadState::Loading { path } | PreviewLoadState::Failed { path, .. } => {
+            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
                 Some(path)
             }
-            PreviewLoadState::Ready { document, .. } => Some(&document.path),
+            PreviewLoadState::Ready { document } => Some(document.session.read(cx).path()),
             PreviewLoadState::Empty => None,
         }
     }
@@ -61,7 +209,7 @@ impl PreviewApp {
             multiple: false,
             prompt: Some("Open File Manager".into()),
         });
-        self.dired_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.task = Some(cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = prompt.await else {
                 return;
             };
@@ -74,11 +222,12 @@ impl PreviewApp {
 
     pub(super) fn open_default_dired(&mut self, cx: &mut Context<Self>) {
         let directory = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf())
             .or_else(|| {
-                self.document_path()
+                self.document_path(cx)
                     .and_then(|path| path.parent().map(PathBuf::from))
             })
             .or_else(|| std::env::current_dir().ok());
@@ -90,7 +239,7 @@ impl PreviewApp {
     pub(super) fn open_file_manager(&mut self, directory: PathBuf, cx: &mut Context<Self>) {
         let directory = absolute_directory(directory);
         self.content_route = ContentRoute::FileManager;
-        self.sidebar_focused = false;
+        self.file_manager.sidebar_focused = false;
         self.install_dired_keymap();
         let intent =
             DiredSession::intent_for(directory, NavigationCause::Enter, SelectionIntent::Restore);
@@ -111,39 +260,43 @@ impl PreviewApp {
     ) {
         let directory = intent.target.clone();
         if self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .is_some_and(|session| session.directory() != directory)
         {
-            self.dired_refresh_pending = false;
+            self.file_manager.refresh_pending = false;
         }
         if self
-            .dired_watch_directory
+            .file_manager
+            .watch_directory
             .as_ref()
             .is_some_and(|watched| watched != &directory)
         {
             self.stop_dired_directory_watch();
         }
         if let Some(current) = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf())
         {
-            let full = self.dired_list_state.logical_scroll_top();
-            let sidebar = self.sidebar_list_state.logical_scroll_top();
-            self.dired_viewport_memory.insert(
+            let full = self.file_manager.list_state.logical_scroll_top();
+            let sidebar = self.file_manager.sidebar_list_state.logical_scroll_top();
+            self.file_manager.viewport_memory.insert(
                 current.clone(),
                 (full.item_ix, full.offset_in_item.to_f64() as f32),
             );
-            self.sidebar_viewport_memory.insert(
+            self.file_manager.sidebar_viewport_memory.insert(
                 current,
                 (sidebar.item_ix, sidebar.offset_in_item.to_f64() as f32),
             );
         }
         let session = self
-            .dired
+            .file_manager
+            .session
             .get_or_insert_with(|| DiredSession::empty(directory.clone()));
-        let viewport = self.dired_list_state.logical_scroll_top();
+        let viewport = self.file_manager.list_state.logical_scroll_top();
         session.capture_viewport(viewport.item_ix, viewport.offset_in_item.to_f64() as f32);
         let load = session.begin_navigation(intent);
         self.start_file_manager_load(load, cx);
@@ -155,28 +308,30 @@ impl PreviewApp {
         cx: &mut Context<Self>,
     ) {
         let directory = load.intent.target.clone();
-        self.dired_status = None;
-        self.dired_scan_transaction = Some(load.transaction_id);
+        self.file_manager.status = None;
+        self.file_manager.scan_transaction = Some(load.transaction_id);
         let scan_directory = directory.clone();
         let cancellation = load.cancellation.clone();
         let scan = cx.background_spawn(async move {
             scan_directory_cancellable(scan_directory, &cancellation)
         });
-        self.dired_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.task = Some(cx.spawn(async move |this, cx| {
             let result = scan.await;
             let _ = this.update(cx, |this, cx| {
-                if this.dired_scan_transaction != Some(load.transaction_id) {
+                if this.file_manager.scan_transaction != Some(load.transaction_id) {
                     return;
                 }
-                this.dired_scan_transaction = None;
+                this.file_manager.scan_transaction = None;
                 match result {
                     Ok(result) => {
-                        if let Some(session) = this.dired.as_mut()
+                        if let Some(session) = this.file_manager.session.as_mut()
                             && let Some(commit) = session.apply_scan(&load, result)
                         {
-                            this.dired_list_state.reset(commit.item_count);
-                            this.sidebar_list_state.reset(commit.item_count);
-                            this.dired_pending_presentation =
+                            this.file_manager.list_state.reset(commit.item_count);
+                            this.file_manager
+                                .sidebar_list_state
+                                .reset(commit.item_count);
+                            this.file_manager.pending_presentation =
                                 commit.presentation_rank.map(|rank| {
                                     (
                                         commit.transaction_id,
@@ -185,7 +340,8 @@ impl PreviewApp {
                                         commit.presentation_offset,
                                     )
                                 });
-                            this.sidebar_pending_presentation = this
+                            this.file_manager.sidebar_pending_presentation = this
+                                .file_manager
                                 .sidebar_viewport_memory
                                 .get(&directory)
                                 .copied()
@@ -197,35 +353,40 @@ impl PreviewApp {
                                 .map(|(rank, offset)| {
                                     (commit.transaction_id, commit.view_revision, rank, offset)
                                 });
-                            if let Some((_, _, rank, offset)) = this.dired_pending_presentation {
-                                this.dired_list_state.scroll_to(gpui::ListOffset {
+                            if let Some((_, _, rank, offset)) =
+                                this.file_manager.pending_presentation
+                            {
+                                this.file_manager.list_state.scroll_to(gpui::ListOffset {
                                     item_ix: rank,
                                     offset_in_item: px(offset),
                                 });
                             }
-                            if let Some((_, _, rank, offset)) = this.sidebar_pending_presentation {
-                                this.sidebar_list_state.scroll_to(gpui::ListOffset {
-                                    item_ix: rank,
-                                    offset_in_item: px(offset),
-                                });
+                            if let Some((_, _, rank, offset)) =
+                                this.file_manager.sidebar_pending_presentation
+                            {
+                                this.file_manager
+                                    .sidebar_list_state
+                                    .scroll_to(gpui::ListOffset {
+                                        item_ix: rank,
+                                        offset_in_item: px(offset),
+                                    });
                             }
-                            this.dired_presentation_scheduled = false;
+                            this.file_manager.presentation_scheduled = false;
                             this.ensure_dired_directory_watch(directory.clone(), cx);
                         }
                     }
                     Err(error) => {
                         if error.source.kind() != std::io::ErrorKind::Interrupted
-                            && this.dired.as_ref().is_some_and(|session| {
+                            && this.file_manager.session.as_ref().is_some_and(|session| {
                                 session.accepts_transaction(load.transaction_id)
                             })
                         {
-                            this.dired_status = Some(DiredStatus::Error(Arc::from(format!(
-                                "{}: {}",
-                                error.directory.display(),
-                                error.source
-                            ))));
+                            this.file_manager.status = Some(DiredStatus::Error(Arc::from(
+                                format!("{}: {}", error.directory.display(), error.source),
+                            )));
                             if let Some(current) = this
-                                .dired
+                                .file_manager
+                                .session
                                 .as_ref()
                                 .map(|session| session.directory().to_path_buf())
                             {
@@ -234,7 +395,7 @@ impl PreviewApp {
                         }
                     }
                 }
-                if std::mem::take(&mut this.dired_refresh_pending) {
+                if std::mem::take(&mut this.file_manager.refresh_pending) {
                     this.refresh_file_manager(NavigationCause::FileSystemDelta, cx);
                 }
                 cx.notify();
@@ -244,23 +405,24 @@ impl PreviewApp {
     }
 
     pub(super) fn dired_history(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let viewport = self.dired_list_state.logical_scroll_top();
+        let viewport = self.file_manager.list_state.logical_scroll_top();
         if let Some(current) = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf())
         {
-            let sidebar = self.sidebar_list_state.logical_scroll_top();
-            self.dired_viewport_memory.insert(
+            let sidebar = self.file_manager.sidebar_list_state.logical_scroll_top();
+            self.file_manager.viewport_memory.insert(
                 current.clone(),
                 (viewport.item_ix, viewport.offset_in_item.to_f64() as f32),
             );
-            self.sidebar_viewport_memory.insert(
+            self.file_manager.sidebar_viewport_memory.insert(
                 current,
                 (sidebar.item_ix, sidebar.offset_in_item.to_f64() as f32),
             );
         }
-        let load = self.dired.as_mut().and_then(|session| {
+        let load = self.file_manager.session.as_mut().and_then(|session| {
             session.capture_viewport(viewport.item_ix, viewport.offset_in_item.to_f64() as f32);
             session.begin_history_navigation(forward)
         });
@@ -271,8 +433,8 @@ impl PreviewApp {
 
     pub(super) fn return_to_document(&mut self, cx: &mut Context<Self>) {
         self.content_route = ContentRoute::Document;
-        self.sidebar_focused = false;
-        if !self.sidebar_visible {
+        self.file_manager.sidebar_focused = false;
+        if !self.file_manager.sidebar_visible {
             self.stop_dired_directory_watch();
         }
         self.install_preview_keymap();
@@ -280,35 +442,42 @@ impl PreviewApp {
     }
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.sidebar_visible = !self.sidebar_visible;
-        if self.sidebar_visible {
+        self.file_manager.sidebar_visible = !self.file_manager.sidebar_visible;
+        if self.file_manager.sidebar_visible {
             if let Some(path) = self
-                .document_path()
+                .document_path(cx)
                 .and_then(|path| path.parent().map(PathBuf::from))
-                && (self.dired.as_ref().map(DiredSession::directory) != Some(path.as_path())
-                    || self.dired_watch_task.is_none())
+                && (self
+                    .file_manager
+                    .session
+                    .as_ref()
+                    .map(DiredSession::directory)
+                    != Some(path.as_path())
+                    || self.file_manager.watch_task.is_none())
             {
                 self.open_sidebar_directory(path, cx);
             }
         } else if self.content_route == ContentRoute::Document {
             self.stop_dired_directory_watch();
         }
-        if !self.sidebar_visible && self.sidebar_focused {
+        if !self.file_manager.sidebar_visible && self.file_manager.sidebar_focused {
             self.focus_document(cx);
         }
         cx.notify();
     }
 
     pub(super) fn dired_move(&mut self, delta: i64, cx: &mut Context<Self>) {
-        if let Some(session) = self.dired.as_mut() {
+        if let Some(session) = self.file_manager.session.as_mut() {
             session.move_cursor(delta);
             if let Some(id) = session.cursor()
                 && let Some(index) = session.entries().iter().position(|entry| entry.id == id)
             {
                 if self.content_route == ContentRoute::FileManager {
-                    self.dired_list_state.scroll_to_reveal_item(index);
-                } else if self.sidebar_focused {
-                    self.sidebar_list_state.scroll_to_reveal_item(index);
+                    self.file_manager.list_state.scroll_to_reveal_item(index);
+                } else if self.file_manager.sidebar_focused {
+                    self.file_manager
+                        .sidebar_list_state
+                        .scroll_to_reveal_item(index);
                 }
             }
             cx.notify();
@@ -318,18 +487,21 @@ impl PreviewApp {
     pub(super) fn dired_open_selected(&mut self, cx: &mut Context<Self>) {
         let opened_from_full_page = self.content_route == ContentRoute::FileManager;
         let current_directory = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf());
         let selected = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .and_then(|session| session.selected())
             .map(|entry| (entry.path.to_path_buf(), entry.kind));
         match selected {
             Some((path, EntryKind::Parent)) => {
                 let anchor = current_directory.as_deref().and_then(|current| {
-                    self.dired
+                    self.file_manager
+                        .session
                         .as_ref()
                         .map(|session| session.anchor_for_path(current))
                 });
@@ -349,19 +521,15 @@ impl PreviewApp {
             Some((path, EntryKind::OrgFile | EntryKind::Markdown)) => {
                 let already_open = matches!(
                     &self.state,
-                    PreviewLoadState::Loading { path: current }
+                    PreviewLoadState::Loading { path: current, .. }
                         if current == &path
-                ) || matches!(
-                    &self.state,
-                    PreviewLoadState::Ready { document, .. }
-                        if document.path == path
-                );
+                ) || self.document_path(cx) == Some(path.as_path());
                 self.content_route = ContentRoute::Document;
                 if opened_from_full_page {
-                    self.sidebar_focused = false;
+                    self.file_manager.sidebar_focused = false;
                     self.install_preview_keymap();
                 }
-                if !self.sidebar_visible {
+                if !self.file_manager.sidebar_visible {
                     self.stop_dired_directory_watch();
                 }
                 if already_open {
@@ -376,7 +544,8 @@ impl PreviewApp {
 
     pub(super) fn dired_up(&mut self, cx: &mut Context<Self>) {
         let current = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf());
         let parent = current
@@ -385,7 +554,8 @@ impl PreviewApp {
             .map(PathBuf::from);
         if let (Some(parent), Some(current)) = (parent, current) {
             let anchor = self
-                .dired
+                .file_manager
+                .session
                 .as_ref()
                 .expect("dired session exists")
                 .anchor_for_path(&current);
@@ -403,12 +573,13 @@ impl PreviewApp {
     }
 
     pub(super) fn refresh_file_manager(&mut self, cause: NavigationCause, cx: &mut Context<Self>) {
-        if self.dired_scan_transaction.is_some() {
-            self.dired_refresh_pending = true;
+        if self.file_manager.scan_transaction.is_some() {
+            self.file_manager.refresh_pending = true;
             return;
         }
         if let Some(directory) = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.directory().to_path_buf())
         {
@@ -418,34 +589,34 @@ impl PreviewApp {
     }
 
     pub(super) fn dired_mark(&mut self, mark: Mark, cx: &mut Context<Self>) {
-        if let Some(session) = self.dired.as_mut() {
+        if let Some(session) = self.file_manager.session.as_mut() {
             session.mark_selected(mark);
             self.reveal_dired_cursor();
             cx.notify();
         }
     }
     pub(super) fn dired_unmark(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = self.dired.as_mut() {
+        if let Some(session) = self.file_manager.session.as_mut() {
             session.unmark_selected();
             self.reveal_dired_cursor();
             cx.notify();
         }
     }
     pub(super) fn dired_unmark_all(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = self.dired.as_mut() {
+        if let Some(session) = self.file_manager.session.as_mut() {
             session.unmark_all();
             cx.notify();
         }
     }
     pub(super) fn dired_invert_marks(&mut self, cx: &mut Context<Self>) {
-        if let Some(session) = self.dired.as_mut() {
+        if let Some(session) = self.file_manager.session.as_mut() {
             session.invert_marks();
             cx.notify();
         }
     }
 
     fn reveal_dired_cursor(&self) {
-        let Some(session) = self.dired.as_ref() else {
+        let Some(session) = self.file_manager.session.as_ref() else {
             return;
         };
         let Some(id) = session.cursor() else {
@@ -455,15 +626,17 @@ impl PreviewApp {
             return;
         };
         if self.content_route == ContentRoute::FileManager {
-            self.dired_list_state.scroll_to_reveal_item(index);
-        } else if self.sidebar_focused {
-            self.sidebar_list_state.scroll_to_reveal_item(index);
+            self.file_manager.list_state.scroll_to_reveal_item(index);
+        } else if self.file_manager.sidebar_focused {
+            self.file_manager
+                .sidebar_list_state
+                .scroll_to_reveal_item(index);
         }
     }
     pub(super) fn show_dired_shortcuts(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         self.which_key_items = Arc::new(super::dired_command_items(&self.commands));
-        self.dired_help_visible = true;
+        self.file_manager.help_visible = true;
         cx.notify();
     }
 
@@ -472,31 +645,31 @@ impl PreviewApp {
         entity: Entity<Self>,
         viewport_width: f32,
         window: &Window,
+        cx: &gpui::App,
     ) -> gpui::Div {
         if matches!(self.state, PreviewLoadState::Empty)
             && self.content_route == ContentRoute::Document
         {
-            return self.body(entity, viewport_width, window);
+            return self.body(entity, viewport_width, window, cx);
         }
         let body = match self.content_route {
             ContentRoute::FileManager => {
-                self.full_page_file_manager(entity.clone(), viewport_width, window)
+                self.full_page_file_manager(entity.clone(), viewport_width, window, cx)
             }
-            ContentRoute::Document if self.sidebar_visible => {
+            ContentRoute::Document if self.file_manager.sidebar_visible => {
                 let sidebar_width = self.rendered_sidebar_width(viewport_width);
-                let editor_width =
-                    (viewport_width - sidebar_width - super::sidebar::RESIZE_HANDLE_PX)
-                        .max(super::sidebar::MIN_DOCUMENT_WIDTH_PX);
+                let editor_width = (viewport_width - sidebar_width - sidebar::RESIZE_HANDLE_PX)
+                    .max(sidebar::MIN_DOCUMENT_WIDTH_PX);
                 let resize_entity = entity.clone();
                 let document_entity = entity.clone();
                 div()
                     .size_full()
                     .flex()
-                    .child(self.file_sidebar(entity.clone(), sidebar_width))
+                    .child(self.file_sidebar(entity.clone(), sidebar_width, cx))
                     .child(
                         div()
                             .id("file-sidebar-resize-handle")
-                            .w(px(super::sidebar::RESIZE_HANDLE_PX))
+                            .w(px(sidebar::RESIZE_HANDLE_PX))
                             .h_full()
                             .flex_none()
                             .flex()
@@ -524,17 +697,17 @@ impl PreviewApp {
                             .h_full()
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 document_entity.update(cx, |this, cx| {
-                                    this.dired_context_menu = None;
+                                    this.file_manager.context_menu = None;
                                     this.focus_document(cx);
                                 });
                             })
-                            .child(self.body(entity.clone(), editor_width, window)),
+                            .child(self.body(entity.clone(), editor_width, window, cx)),
                     )
             }
-            ContentRoute::Document => self.body(entity.clone(), viewport_width, window),
+            ContentRoute::Document => self.body(entity.clone(), viewport_width, window, cx),
         };
         body.relative()
-            .when_some(self.dired_context_menu, |body, menu| {
+            .when_some(self.file_manager.context_menu, |body, menu| {
                 body.child(dired_context_menu(entity, menu))
             })
     }
@@ -544,8 +717,9 @@ impl PreviewApp {
         entity: Entity<Self>,
         viewport_width: f32,
         window: &Window,
+        cx: &gpui::App,
     ) -> gpui::Div {
-        let Some(session) = self.dired.as_ref() else {
+        let Some(session) = self.file_manager.session.as_ref() else {
             return div()
                 .size_full()
                 .flex()
@@ -558,25 +732,21 @@ impl PreviewApp {
         let operation_targets = session.operation_targets();
         let cursor = session.cursor();
         let directory = session.directory();
-        let status_snapshot = self.status_snapshot();
+        let status_snapshot = self.status_snapshot(cx);
         let status_line = status_snapshot.as_ref().map(|snapshot| {
             let layout = self.status_layout(snapshot, viewport_width, window);
             super::status_line::render_status_line(snapshot, layout, entity.clone(), window)
         });
         let status_popover = status_snapshot.as_ref().and_then(|snapshot| {
-            self.status_popover
-                .as_ref()
-                .filter(|popover| popover.pane == snapshot.pane)
-                .cloned()
-                .map(|popover| {
-                    super::status_line::render_status_popover(
-                        popover,
-                        Some(snapshot),
-                        self.status_line_settings,
-                        entity.clone(),
-                        self.language,
-                    )
-                })
+            self.status.popover_for(snapshot.pane).map(|popover| {
+                super::status_line::render_status_popover(
+                    popover,
+                    Some(snapshot),
+                    self.status.settings(),
+                    entity.clone(),
+                    self.language,
+                )
+            })
         });
         let dismiss_entity = entity.clone();
         div()
@@ -587,7 +757,7 @@ impl PreviewApp {
             .bg(rgb(current_theme().background))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 dismiss_entity.update(cx, |this, cx| {
-                    if this.dired_context_menu.take().is_some() {
+                    if this.file_manager.context_menu.take().is_some() {
                         cx.notify();
                     }
                 });
@@ -615,7 +785,7 @@ impl PreviewApp {
                             .text_size(px(11.0))
                             .child("F"),
                     )
-                    .child(super::file_manager_breadcrumb::file_manager_breadcrumb(
+                    .child(breadcrumb::file_manager_breadcrumb(
                         entity.clone(),
                         directory,
                     ))
@@ -652,7 +822,7 @@ impl PreviewApp {
             )
             .child(
                 div().flex_1().min_h(px(0.0)).child(
-                    list(self.dired_list_state.clone(), move |index, _, _| {
+                    list(self.file_manager.list_state.clone(), move |index, _, _| {
                         let drag_sources = if marks.contains_key(&entries[index].id) {
                             operation_targets.clone()
                         } else if matches!(entries[index].kind, EntryKind::Parent) {
@@ -677,31 +847,40 @@ impl PreviewApp {
             .when_some(status_popover, |manager, popover| manager.child(popover))
     }
 
-    fn file_sidebar(&self, entity: Entity<Self>, sidebar_width: f32) -> gpui::Div {
+    fn file_sidebar(&self, entity: Entity<Self>, sidebar_width: f32, cx: &gpui::App) -> gpui::Div {
         let entries = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| session.entries().clone())
             .unwrap_or_default();
-        let cursor = self.dired.as_ref().and_then(|session| session.cursor());
+        let cursor = self
+            .file_manager
+            .session
+            .as_ref()
+            .and_then(|session| session.cursor());
         let marks = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(DiredSession::visible_marks)
             .unwrap_or_default();
         let operation_targets = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(DiredSession::operation_targets)
             .unwrap_or_else(|| Arc::from([]));
         let marked_count = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(DiredSession::marked_count)
             .unwrap_or(0);
-        let active_document = self.document_path().map(PathBuf::from);
+        let active_document = self.document_path(cx).map(PathBuf::from);
         let directory = self
-            .dired
+            .file_manager
+            .session
             .as_ref()
             .map(|session| {
                 session
@@ -713,11 +892,12 @@ impl PreviewApp {
             })
             .unwrap_or_else(|| "Files".to_owned());
         let status = self
-            .dired_status
+            .file_manager
+            .status
             .as_ref()
             .map(DiredStatus::message)
             .or_else(|| {
-                (self.sidebar_focused || marked_count > 0)
+                (self.file_manager.sidebar_focused || marked_count > 0)
                     .then(|| Arc::from(format!("{marked_count} marked  ·  ? help")))
             });
         let focus_entity = entity.clone();
@@ -729,7 +909,7 @@ impl PreviewApp {
             .bg(rgb(current_theme().background))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 focus_entity.update(cx, |this, cx| {
-                    this.dired_context_menu = None;
+                    this.file_manager.context_menu = None;
                     this.focus_sidebar(cx);
                 });
             })
@@ -755,23 +935,26 @@ impl PreviewApp {
             )
             .child(
                 div().flex_1().min_h(px(0.0)).child(
-                    list(self.sidebar_list_state.clone(), move |index, _, _| {
-                        let drag_sources = if marks.contains_key(&entries[index].id) {
-                            operation_targets.clone()
-                        } else if matches!(entries[index].kind, EntryKind::Parent) {
-                            Arc::from([])
-                        } else {
-                            vec![entries[index].path.clone()].into()
-                        };
-                        sidebar_row(
-                            entity.clone(),
-                            &entries[index],
-                            marks.get(&entries[index].id).copied(),
-                            cursor == Some(entries[index].id),
-                            active_document.as_deref() == Some(entries[index].path.as_ref()),
-                            drag_sources,
-                        )
-                    })
+                    list(
+                        self.file_manager.sidebar_list_state.clone(),
+                        move |index, _, _| {
+                            let drag_sources = if marks.contains_key(&entries[index].id) {
+                                operation_targets.clone()
+                            } else if matches!(entries[index].kind, EntryKind::Parent) {
+                                Arc::from([])
+                            } else {
+                                vec![entries[index].path.clone()].into()
+                            };
+                            sidebar_row(
+                                entity.clone(),
+                                &entries[index],
+                                marks.get(&entries[index].id).copied(),
+                                cursor == Some(entries[index].id),
+                                active_document.as_deref() == Some(entries[index].path.as_ref()),
+                                drag_sources,
+                            )
+                        },
+                    )
                     .size_full(),
                 ),
             )
@@ -792,7 +975,7 @@ impl PreviewApp {
     }
 }
 
-fn dired_context_menu(entity: Entity<PreviewApp>, menu: DiredContextMenu) -> gpui::AnyElement {
+fn dired_context_menu(entity: Entity<WorkspaceWindow>, menu: DiredContextMenu) -> gpui::AnyElement {
     let items = [
         ("Open", "RET", DiredContextAction::Open),
         ("Rename…", "R", DiredContextAction::Rename),
@@ -834,7 +1017,7 @@ fn dired_context_menu(entity: Entity<PreviewApp>, menu: DiredContextMenu) -> gpu
                 .on_click(move |_, window, cx| {
                     cx.stop_propagation();
                     entity.update(cx, |this, cx| {
-                        this.dired_context_menu = None;
+                        this.file_manager.context_menu = None;
                         match action {
                             DiredContextAction::Open => this.dired_open_selected(cx),
                             DiredContextAction::Rename => this.dired_rename(cx),
@@ -850,7 +1033,7 @@ fn dired_context_menu(entity: Entity<PreviewApp>, menu: DiredContextMenu) -> gpu
 }
 
 fn dired_row(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     entry: &crate::file_manager::FileEntry,
     mark: Option<Mark>,
     selected: bool,
@@ -948,7 +1131,7 @@ fn dired_row(
 }
 
 fn sidebar_row(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     entry: &crate::file_manager::FileEntry,
     mark: Option<Mark>,
     selected: bool,
@@ -1061,7 +1244,7 @@ fn sidebar_row(
 
 fn with_dired_row_interactions(
     row: gpui::Stateful<gpui::Div>,
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     id: crate::file_manager::EntryId,
     drop_directory: Arc<Path>,
     is_directory: bool,
@@ -1077,11 +1260,11 @@ fn with_dired_row_interactions(
             return;
         }
         click_entity.update(cx, |this, cx| {
-            this.dired_context_menu = None;
+            this.file_manager.context_menu = None;
             if surface == DiredRowSurface::Sidebar {
                 this.focus_sidebar(cx);
             }
-            if let Some(session) = this.dired.as_mut() {
+            if let Some(session) = this.file_manager.session.as_mut() {
                 session.set_cursor(id);
             }
             if surface == DiredRowSurface::Sidebar || event.click_count() >= 2 {
@@ -1097,10 +1280,10 @@ fn with_dired_row_interactions(
             if surface == DiredRowSurface::Sidebar {
                 this.focus_sidebar(cx);
             }
-            if let Some(session) = this.dired.as_mut() {
+            if let Some(session) = this.file_manager.session.as_mut() {
                 session.set_cursor(id);
             }
-            this.dired_context_menu = Some(DiredContextMenu {
+            this.file_manager.context_menu = Some(DiredContextMenu {
                 position: event.position,
             });
             cx.notify();

@@ -1,4 +1,4 @@
-use super::{PreviewApp, div, img, px, rgb};
+use super::{WorkspaceWindow, div, img, px, rgb};
 use crate::i18n::Language;
 use crate::recent_documents::RecentDocument;
 use gpui::{Entity, ExternalPaths, FontWeight, SharedString, prelude::*};
@@ -8,7 +8,7 @@ use std::{
 };
 
 pub(in crate::preview) fn render_home(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     recent_documents: &[RecentDocument],
     error: Option<&str>,
     opening: Option<&std::path::Path>,
@@ -253,7 +253,7 @@ fn picker_copy(
 }
 
 fn render_recents(
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     documents: &[RecentDocument],
     language: Language,
 ) -> gpui::Div {

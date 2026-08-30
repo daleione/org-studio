@@ -15,7 +15,7 @@ use crate::{
         inline::{InlineKind, InlineSpan},
     },
     preview::{
-        CodeHighlightSpan, DocumentFormat, PreviewDocument, PreviewRow, code_highlight_style,
+        CodeHighlightSpan, DocumentFormat, PreviewRow, PreviewSnapshot, code_highlight_style,
         highlight_code,
         markdown::{MarkdownBlock, MarkdownKind},
         parse_document_inline,
@@ -478,7 +478,7 @@ impl PreviewDisplayMap {
     }
 }
 
-pub(in crate::preview) fn build_display_map(document: &PreviewDocument) -> PreviewDisplayMap {
+pub(in crate::preview) fn build_display_map(document: &PreviewSnapshot) -> PreviewDisplayMap {
     PreviewDisplayMap {
         text: document.text.clone(),
         format: document.format,

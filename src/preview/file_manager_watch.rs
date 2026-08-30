@@ -2,37 +2,37 @@ use std::{path::PathBuf, time::Duration};
 
 use gpui::{AppContext, Context};
 
-use super::{DiredStatus, PreviewApp};
+use super::{DiredStatus, WorkspaceWindow};
 use crate::{
     file_manager::DiredSession, file_watcher::DirectoryWatch, navigation::NavigationCause,
 };
 
-impl PreviewApp {
-    pub(super) fn ensure_dired_directory_watch(
+impl WorkspaceWindow {
+    pub(in crate::preview) fn ensure_dired_directory_watch(
         &mut self,
         directory: PathBuf,
         cx: &mut Context<Self>,
     ) {
-        if self.dired_watch_task.is_some()
-            && self.dired_watch_directory.as_ref() == Some(&directory)
+        if self.file_manager.watch_task.is_some()
+            && self.file_manager.watch_directory.as_ref() == Some(&directory)
         {
             return;
         }
         self.stop_dired_directory_watch();
-        self.dired_watch_request = self.dired_watch_request.wrapping_add(1);
-        let request = self.dired_watch_request;
-        self.dired_watch_directory = Some(directory.clone());
+        self.file_manager.watch_request = self.file_manager.watch_request.wrapping_add(1);
+        let request = self.file_manager.watch_request;
+        self.file_manager.watch_directory = Some(directory.clone());
         let watch_directory = directory.clone();
         let setup = cx.background_spawn(async move { DirectoryWatch::new(watch_directory) });
-        self.dired_watch_task = Some(cx.spawn(async move |this, cx| {
+        self.file_manager.watch_task = Some(cx.spawn(async move |this, cx| {
             let watch = match setup.await {
                 Ok(watch) => watch,
                 Err(error) => {
                     let _ = this.update(cx, |this, cx| {
-                        if this.dired_watch_request == request {
-                            this.dired_watch_task = None;
-                            this.dired_watch_directory = None;
-                            this.dired_status = Some(DiredStatus::Error(
+                        if this.file_manager.watch_request == request {
+                            this.file_manager.watch_task = None;
+                            this.file_manager.watch_directory = None;
+                            this.file_manager.status = Some(DiredStatus::Error(
                                 format!("Directory watching unavailable: {error}").into(),
                             ));
                             cx.notify();
@@ -46,10 +46,10 @@ impl PreviewApp {
                     Ok(changed) => changed,
                     Err(error) => {
                         let _ = this.update(cx, |this, cx| {
-                            if this.dired_watch_request == request {
-                                this.dired_watch_task = None;
-                                this.dired_watch_directory = None;
-                                this.dired_status = Some(DiredStatus::Error(
+                            if this.file_manager.watch_request == request {
+                                this.file_manager.watch_task = None;
+                                this.file_manager.watch_directory = None;
+                                this.file_manager.status = Some(DiredStatus::Error(
                                     format!("Directory watch failed: {error}").into(),
                                 ));
                                 cx.notify();
@@ -60,10 +60,10 @@ impl PreviewApp {
                 };
                 if !changed {
                     let _ = this.update(cx, |this, cx| {
-                        if this.dired_watch_request == request {
-                            this.dired_watch_task = None;
-                            this.dired_watch_directory = None;
-                            this.dired_status = Some(DiredStatus::Error(
+                        if this.file_manager.watch_request == request {
+                            this.file_manager.watch_task = None;
+                            this.file_manager.watch_directory = None;
+                            this.file_manager.status = Some(DiredStatus::Error(
                                 "Directory watch stopped unexpectedly".into(),
                             ));
                             cx.notify();
@@ -77,9 +77,13 @@ impl PreviewApp {
                 watch.drain();
                 let keep_watching = this
                     .update(cx, |this, cx| {
-                        if this.dired_watch_request != request
-                            || this.dired_watch_directory.as_ref() != Some(&directory)
-                            || this.dired.as_ref().map(DiredSession::directory)
+                        if this.file_manager.watch_request != request
+                            || this.file_manager.watch_directory.as_ref() != Some(&directory)
+                            || this
+                                .file_manager
+                                .session
+                                .as_ref()
+                                .map(DiredSession::directory)
                                 != Some(directory.as_path())
                         {
                             return false;
@@ -95,9 +99,9 @@ impl PreviewApp {
         }));
     }
 
-    pub(super) fn stop_dired_directory_watch(&mut self) {
-        self.dired_watch_request = self.dired_watch_request.wrapping_add(1);
-        self.dired_watch_task = None;
-        self.dired_watch_directory = None;
+    pub(in crate::preview) fn stop_dired_directory_watch(&mut self) {
+        self.file_manager.watch_request = self.file_manager.watch_request.wrapping_add(1);
+        self.file_manager.watch_task = None;
+        self.file_manager.watch_directory = None;
     }
 }

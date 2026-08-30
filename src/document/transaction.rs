@@ -3,7 +3,8 @@ use std::sync::Arc;
 use ropey::Rope;
 
 use super::{
-    ByteRange, EditLog, EditLogError, Revision, RevisionDelta, RopeSnapshot, TextEditSummary,
+    ByteRange, DocumentId, DocumentSnapshot, EditLog, EditLogError, Revision, RevisionDelta,
+    TextEditSummary,
 };
 
 const DEFAULT_EDIT_LOG_CAPACITY: usize = 256;
@@ -48,16 +49,69 @@ pub enum EditError {
         actual: Revision,
     },
     RevisionExhausted,
+    EmptyTransaction,
     InvalidRange(ByteRange),
     InvalidUtf8Boundary(ByteRange),
     OverlappingEdits,
     EditLog(EditLogError),
 }
 
+impl std::fmt::Display for EditError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidUtf8 { valid_up_to } => {
+                write!(formatter, "file is not valid UTF-8 near byte {valid_up_to}")
+            }
+            Self::StaleRevision { expected, actual } => write!(
+                formatter,
+                "stale edit revision: expected {}, got {}",
+                expected.0, actual.0
+            ),
+            Self::RevisionExhausted => formatter.write_str("document revision space exhausted"),
+            Self::EmptyTransaction => formatter.write_str("edit transaction contains no edits"),
+            Self::InvalidRange(range) => write!(formatter, "invalid byte range {range:?}"),
+            Self::InvalidUtf8Boundary(range) => {
+                write!(
+                    formatter,
+                    "byte range is not on UTF-8 boundaries: {range:?}"
+                )
+            }
+            Self::OverlappingEdits => formatter.write_str("text edits overlap"),
+            Self::EditLog(error) => write!(formatter, "invalid edit log update: {error:?}"),
+        }
+    }
+}
+
+impl std::error::Error for EditError {}
+
 pub struct DocumentBuffer {
+    id: DocumentId,
     rope: Rope,
     revision: Revision,
     edit_log: EditLog,
+}
+
+pub(super) struct PreparedText {
+    rope: Rope,
+}
+
+impl PreparedText {
+    pub(super) fn from_utf8(bytes: Vec<u8>) -> Result<Self, EditError> {
+        let text = String::from_utf8(bytes).map_err(|error| EditError::InvalidUtf8 {
+            valid_up_to: error.utf8_error().valid_up_to(),
+        })?;
+        Ok(Self {
+            rope: Rope::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text)),
+        })
+    }
+
+    pub(super) fn len_bytes(&self) -> u64 {
+        self.rope.len_bytes() as u64
+    }
+
+    pub(super) fn snapshot(&self, document_id: DocumentId, revision: Revision) -> DocumentSnapshot {
+        DocumentSnapshot::from_rope(document_id, self.rope.clone(), revision)
+    }
 }
 
 impl DocumentBuffer {
@@ -66,11 +120,10 @@ impl DocumentBuffer {
     }
 
     pub fn with_edit_log_capacity(bytes: Vec<u8>, capacity: usize) -> Result<Self, EditError> {
-        let text = String::from_utf8(bytes).map_err(|error| EditError::InvalidUtf8 {
-            valid_up_to: error.utf8_error().valid_up_to(),
-        })?;
+        let prepared = PreparedText::from_utf8(bytes)?;
         Ok(Self {
-            rope: Rope::from_str(text.strip_prefix('\u{feff}').unwrap_or(&text)),
+            id: DocumentId::next(),
+            rope: prepared.rope,
             revision: Revision::INITIAL,
             edit_log: EditLog::new(capacity).map_err(EditError::EditLog)?,
         })
@@ -80,8 +133,12 @@ impl DocumentBuffer {
         self.revision
     }
 
-    pub fn snapshot(&self) -> RopeSnapshot {
-        RopeSnapshot::from_rope(self.rope.clone(), self.revision)
+    pub fn id(&self) -> DocumentId {
+        self.id
+    }
+
+    pub fn snapshot(&self) -> DocumentSnapshot {
+        DocumentSnapshot::from_rope(self.id, self.rope.clone(), self.revision)
     }
 
     pub fn edit_log(&self) -> &EditLog {
@@ -94,6 +151,9 @@ impl DocumentBuffer {
                 expected: self.revision,
                 actual: transaction.base_revision,
             });
+        }
+        if transaction.edits.is_empty() {
+            return Err(EditError::EmptyTransaction);
         }
         let after = self
             .revision
@@ -125,6 +185,25 @@ impl DocumentBuffer {
             .map_err(EditError::EditLog)?;
         self.revision = after;
         Ok(delta)
+    }
+
+    pub(super) fn replace_prepared(
+        &mut self,
+        prepared: PreparedText,
+        delta: RevisionDelta,
+    ) -> Result<(), EditError> {
+        if delta.before != self.revision {
+            return Err(EditError::StaleRevision {
+                expected: self.revision,
+                actual: delta.before,
+            });
+        }
+        self.edit_log
+            .push(delta.clone())
+            .map_err(EditError::EditLog)?;
+        self.rope = prepared.rope;
+        self.revision = delta.after;
+        Ok(())
     }
 
     fn validate_edits(&self, edits: &[TextEdit]) -> Result<(), EditError> {
@@ -172,7 +251,7 @@ mod tests {
     use super::*;
     use crate::document::{ByteRange, RangeMapError, RevisionRange, TextSnapshot};
 
-    fn text(snapshot: &RopeSnapshot) -> String {
+    fn text(snapshot: &DocumentSnapshot) -> String {
         snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
     }
 
@@ -223,6 +302,17 @@ mod tests {
             Err(EditError::StaleRevision { .. })
         ));
         assert_eq!(text(&document.snapshot()), original);
+    }
+
+    #[test]
+    fn rejects_empty_transactions_without_advancing_revision() {
+        let mut document = DocumentBuffer::from_utf8(b"unchanged".to_vec()).unwrap();
+        assert_eq!(
+            document.commit(EditTransaction::new(Revision::INITIAL, Vec::new())),
+            Err(EditError::EmptyTransaction)
+        );
+        assert_eq!(document.revision(), Revision::INITIAL);
+        assert!(document.edit_log().latest_revision().is_none());
     }
 
     #[test]

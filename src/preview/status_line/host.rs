@@ -5,7 +5,7 @@ use gpui::{ListState, px};
 use crate::preview::export_ui::ExportRunState;
 use crate::{document::ByteOffset, i18n::Language, navigation::PaneId};
 
-use super::super::{DiredStatus, PreviewApp, PreviewLoadState};
+use super::super::{DiredStatus, PreviewLoadState, WorkspaceWindow};
 use super::{
     format_character_count,
     model::{
@@ -14,33 +14,43 @@ use super::{
     },
 };
 
-impl PreviewApp {
-    pub(super) fn document_status_snapshot(&self, pane: PaneId) -> Option<StatusLineSnapshot> {
-        let document = match &self.state {
-            PreviewLoadState::Ready { document, .. } => document,
-            PreviewLoadState::Failed { .. } => {
-                self.last_ready.as_ref().map(|(_, document)| document)?
-            }
-            PreviewLoadState::Empty | PreviewLoadState::Loading { .. } => return None,
+impl WorkspaceWindow {
+    pub(super) fn document_status_snapshot(
+        &self,
+        pane: PaneId,
+        cx: &gpui::App,
+    ) -> Option<StatusLineSnapshot> {
+        let panel = match &self.state {
+            PreviewLoadState::Ready { document } => &document.panel,
+            PreviewLoadState::Failed {
+                previous: Some(document),
+                ..
+            } => &document.panel,
+            PreviewLoadState::Empty
+            | PreviewLoadState::Loading { .. }
+            | PreviewLoadState::Failed { previous: None, .. } => return None,
         };
-        let item_count = self.visible_rows.len();
-        let item_index = self
-            .list_state
+        let panel = panel.read(cx);
+        let document = panel.document();
+        let visible_rows = panel.visible_rows();
+        let list_state = panel.list_state();
+        let item_count = visible_rows.len();
+        let item_index = list_state
             .logical_scroll_top()
             .item_ix
             .min(item_count.saturating_sub(1));
-        let source_index = self.visible_rows.get(item_index).copied().unwrap_or(0);
+        let source_index = visible_rows.get(item_index).copied().unwrap_or(0);
         let source_row = document.projection.source_row(source_index);
         let line = source_row
             .as_ref()
             .map(|row| document.text.line_of_byte(row.content.range.start) + 1)
             .unwrap_or(1);
-        let visible_end = visible_item_end(&self.list_state, item_count);
-        let bottom_line = visible_source_bottom_line(document, &self.visible_rows, visible_end);
+        let visible_end = visible_item_end(list_state, item_count);
+        let bottom_line = visible_source_bottom_line(document, visible_rows, visible_end);
         let progress = reading_progress(
             bottom_line,
             document.statistics.lines,
-            list_reached_bottom(&self.list_state, visible_end, item_count),
+            list_reached_bottom(list_state, visible_end, item_count),
         );
         let document_statistics = DocumentStatistics {
             characters: document.statistics.characters,
@@ -67,7 +77,7 @@ impl PreviewApp {
     }
 
     pub(super) fn dired_status_snapshot(&self, pane: PaneId) -> Option<StatusLineSnapshot> {
-        let session = self.dired.as_ref()?;
+        let session = self.file_manager.session()?;
         let total = session.entries().len();
         let selected = session
             .cursor()
@@ -96,7 +106,7 @@ impl PreviewApp {
             ),
             document_statistics: None,
             format: None,
-            transient: self.dired_status.as_ref().map(|status| StatusMessage {
+            transient: self.file_manager.status().map(|status| StatusMessage {
                 text: status.message(),
                 tone: match status {
                     DiredStatus::Working(_) => StatusTone::Working,
@@ -116,7 +126,7 @@ impl PreviewApp {
                 tone: StatusTone::Working,
             });
         }
-        self.export_status.as_ref().map(|status| match status {
+        self.export.status().map(|status| match status {
             ExportRunState::Working(message) => StatusMessage {
                 text: message.clone(),
                 tone: StatusTone::Working,
@@ -134,7 +144,7 @@ impl PreviewApp {
 }
 
 fn current_outline(
-    document: &super::super::PreviewDocument,
+    document: &super::super::PreviewSnapshot,
     source_index: usize,
 ) -> Option<Arc<str>> {
     let block_id = document.projection.source_row(source_index)?.block_id as usize;
@@ -159,7 +169,7 @@ fn visible_item_end(list_state: &ListState, item_count: usize) -> usize {
 }
 
 fn visible_source_bottom_line(
-    document: &super::super::PreviewDocument,
+    document: &super::super::PreviewSnapshot,
     visible_rows: &[usize],
     visible_end: usize,
 ) -> u64 {

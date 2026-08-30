@@ -92,7 +92,7 @@ fn push_physical_rows(
 #[cfg(test)]
 mod tests {
     use crate::{
-        document::{RopeSnapshot, TextSnapshot},
+        document::{DocumentSnapshot, TextSnapshot},
         org_syntax::{BlockKind, parse},
     };
 
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn preserves_consecutive_blank_lines_and_source_numbers() {
-        let text = RopeSnapshot::from_utf8(b"* Heading\nbody\n\n\nnext\n".to_vec()).unwrap();
+        let text = DocumentSnapshot::from_utf8(b"* Heading\nbody\n\n\nnext\n".to_vec()).unwrap();
         let blocks = parse(&text);
         let rows = build_preview_rows(&text, &blocks);
 
@@ -125,7 +125,7 @@ mod tests {
     #[test]
     fn keeps_long_cjk_physical_lines_intact_for_gpui_wrapping() {
         let source = format!("{}\n", "返回当前分区中的窗口函数计算结果".repeat(32));
-        let text = RopeSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let text = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
         let blocks = parse(&text);
         let rows = build_preview_rows(&text, &blocks);
 
@@ -135,7 +135,7 @@ mod tests {
 
     #[test]
     fn org_source_block_preserves_both_fences_and_their_line_numbers() {
-        let text = RopeSnapshot::from_utf8(
+        let text = DocumentSnapshot::from_utf8(
             b"before\n#+begin_src rust\n    let value = 1;\n#+end_src\nafter\n".to_vec(),
         )
         .unwrap();

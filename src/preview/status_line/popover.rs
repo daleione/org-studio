@@ -3,7 +3,7 @@ use gpui::{Entity, MouseButton, ParentElement, Styled, div, prelude::*, px, rgb}
 use crate::{i18n::Language, settings::StatusLineSettings};
 
 use super::{
-    PreviewApp, STATUS_LINE_HEIGHT, current_theme, info_text,
+    STATUS_LINE_HEIGHT, WorkspaceWindow, current_theme, info_text,
     model::{
         CONFIGURABLE_SEGMENTS, StatusLineSnapshot, StatusPopover, StatusPopoverContent,
         StatusSegment,
@@ -15,7 +15,7 @@ pub(in crate::preview) fn render_status_popover(
     popover: StatusPopover,
     snapshot: Option<&StatusLineSnapshot>,
     settings: StatusLineSettings,
-    entity: Entity<PreviewApp>,
+    entity: Entity<WorkspaceWindow>,
     language: Language,
 ) -> gpui::AnyElement {
     let theme = current_theme();
@@ -64,7 +64,7 @@ pub(in crate::preview) fn render_status_popover(
                         .child("×")
                         .on_click(move |_, _, cx| {
                             close_entity.update(cx, |this, cx| {
-                                this.status_popover = None;
+                                this.status.popover = None;
                                 cx.notify();
                             });
                         }),
@@ -172,7 +172,7 @@ pub(in crate::preview) fn render_status_popover(
                     })
                     .on_click(move |_, _, cx| {
                         customize_entity.update(cx, |this, cx| {
-                            this.status_popover = Some(StatusPopover {
+                            this.status.popover = Some(StatusPopover {
                                 pane,
                                 content: StatusPopoverContent::Customize,
                             });

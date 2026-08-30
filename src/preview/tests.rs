@@ -6,8 +6,15 @@ use super::{
 use crate::{input::EmacsOutcome, keymap::KeyStroke};
 use gpui::AppContext;
 
-fn visible_source_lines(app: &super::PreviewApp, document: &super::PreviewDocument) -> Vec<u64> {
-    app.visible_rows
+fn visible_source_lines(
+    app: &super::WorkspaceWindow,
+    document: &super::PreviewSnapshot,
+    cx: &gpui::App,
+) -> Vec<u64> {
+    app.preview_panel()
+        .unwrap()
+        .read(cx)
+        .visible_rows()
         .iter()
         .map(|index| {
             document.text.line_of_byte(
@@ -54,15 +61,56 @@ fn finish_fold_animation<V: gpui::Render + 'static>(
     assert!(simulate_next_frame(window, cx) > 0);
 }
 
-fn ready_document(app: &super::PreviewApp) -> std::sync::Arc<super::PreviewDocument> {
+fn ready_document(
+    app: &super::WorkspaceWindow,
+    cx: &gpui::App,
+) -> std::sync::Arc<super::PreviewSnapshot> {
     match &app.state {
-        super::PreviewLoadState::Ready { document, .. } => document.clone(),
+        super::PreviewLoadState::Ready { document } => document.panel.read(cx).document().clone(),
         _ => panic!("document should be ready"),
     }
 }
 
+fn apply_load_result(
+    app: &mut super::WorkspaceWindow,
+    generation: u64,
+    result: Result<super::LoadedDocument, (std::path::PathBuf, String)>,
+    cx: &mut gpui::TestAppContext,
+) -> bool {
+    cx.update(|cx| app.apply_load_result(generation, result, cx))
+}
+
+fn cycle_panel_global_visibility(app: &super::WorkspaceWindow, cx: &mut gpui::App) {
+    app.preview_panel()
+        .unwrap()
+        .update(cx, |panel, _| panel.cycle_global_visibility());
+}
+
+fn toggle_panel_fold(
+    app: &super::WorkspaceWindow,
+    block_id: crate::org_syntax::BlockId,
+    cx: &mut gpui::App,
+) {
+    app.preview_panel()
+        .unwrap()
+        .update(cx, |panel, _| panel.toggle_fold(block_id));
+}
+
+fn toggle_panel_fold_animated(
+    app: &super::WorkspaceWindow,
+    block_id: crate::org_syntax::BlockId,
+    viewport_height: f32,
+    available_width: f32,
+    window: Option<&mut gpui::Window>,
+    cx: &mut gpui::App,
+) {
+    app.preview_panel().unwrap().update(cx, |panel, cx| {
+        panel.toggle_fold_animated(block_id, viewport_height, available_width, window, cx);
+    });
+}
+
 fn heading_id(
-    document: &super::PreviewDocument,
+    document: &super::PreviewSnapshot,
     level: u16,
     ordinal: usize,
 ) -> crate::org_syntax::BlockId {
@@ -100,7 +148,7 @@ fn shift_tab_dispatches_the_global_visibility_cycle() {
 
 #[test]
 fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
-    let mut app = super::PreviewApp::new();
+    let mut app = super::WorkspaceWindow::new();
     app.install_sidebar_keymap();
     let contexts = super::built_in_contexts();
     assert!(app.key_context.contains(contexts.key("workspace").unwrap()));
@@ -109,8 +157,46 @@ fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
     assert!(!app.key_context.contains(contexts.key("preview").unwrap()));
 }
 
-#[test]
-fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together() {
+#[gpui::test]
+fn unchanged_viewport_does_not_cancel_an_active_sidebar_resize(cx: &mut gpui::TestAppContext) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-sidebar-resize-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(&path, "* Heading\nbody\n").unwrap();
+    let document = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
+        super::WorkspaceWindow::new()
+    });
+    window
+        .update(cx, |app, _, cx| {
+            app.generation = 1;
+            assert!(app.apply_load_result(1, Ok(document), cx));
+            cx.notify();
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |app, _, cx| {
+            app.begin_sidebar_resize(240.0, 900.0, cx);
+            assert!(app.file_manager.is_resizing_sidebar());
+        })
+        .unwrap();
+    cx.run_until_parked();
+
+    window
+        .update(cx, |app, _, _| {
+            assert!(app.file_manager.is_resizing_sidebar());
+        })
+        .unwrap();
+}
+
+#[gpui::test]
+fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together(
+    cx: &mut gpui::TestAppContext,
+) {
     let path = std::env::temp_dir().join(format!(
         "org-studio-global-visibility-{}.org",
         std::process::id()
@@ -122,27 +208,77 @@ fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let mut app = super::PreviewApp::new();
-    app.generation = 1;
-    assert!(app.apply_load_result(1, Ok(document)));
-
-    app.cycle_global_visibility();
-    assert_eq!(app.global_visibility, GlobalVisibility::Overview);
-    assert_eq!(app.visible_rows.len(), 2);
-    assert_eq!(app.fold_markers.len(), 2);
-    assert_eq!(app.list_state.item_count(), app.visible_rows.len());
-
-    app.cycle_global_visibility();
-    assert_eq!(app.global_visibility, GlobalVisibility::Contents);
-    assert_eq!(app.visible_rows.len(), 3);
-    assert_eq!(app.fold_markers.len(), 2);
-    assert_eq!(app.list_state.item_count(), app.visible_rows.len());
-
-    app.cycle_global_visibility();
-    assert_eq!(app.global_visibility, GlobalVisibility::All);
-    assert!(app.fold_markers.is_empty());
-    assert_eq!(app.visible_rows.len(), 7);
-    assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+    let app = cx.new(|_| super::WorkspaceWindow::new());
+    app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document), cx));
+        cycle_panel_global_visibility(app, cx);
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).global_visibility(),
+            GlobalVisibility::Overview
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            2
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).fold_markers().len(),
+            2
+        );
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .item_count(),
+            app.preview_panel().unwrap().read(cx).visible_rows().len()
+        );
+        cycle_panel_global_visibility(app, cx);
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).global_visibility(),
+            GlobalVisibility::Contents
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            3
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).fold_markers().len(),
+            2
+        );
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .item_count(),
+            app.preview_panel().unwrap().read(cx).visible_rows().len()
+        );
+        cycle_panel_global_visibility(app, cx);
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).global_visibility(),
+            GlobalVisibility::All
+        );
+        assert!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .is_empty()
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            7
+        );
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .item_count(),
+            app.preview_panel().unwrap().read(cx).visible_rows().len()
+        );
+    });
 }
 
 #[gpui::test]
@@ -159,12 +295,12 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::PreviewApp::new()
+        super::WorkspaceWindow::new()
     });
     window
         .update(cx, |app, _, cx| {
             app.generation = 1;
-            assert!(app.apply_load_result(1, Ok(document)));
+            assert!(app.apply_load_result(1, Ok(document), cx));
             cx.notify();
         })
         .unwrap();
@@ -178,10 +314,15 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
         window
             .update(cx, |app, window, cx| {
                 app.cycle_global_visibility_animated(window, cx);
-                assert_eq!(app.global_visibility, visibility);
+                assert_eq!(
+                    app.preview_panel().unwrap().read(cx).global_visibility(),
+                    visibility
+                );
                 let animation = app
-                    .fold_animation
-                    .as_ref()
+                    .preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .fold_animation()
                     .expect("every Shift-Tab state should animate");
                 assert_eq!(animation.direction, direction);
                 if visibility == GlobalVisibility::Overview {
@@ -194,16 +335,29 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
         assert!(simulate_next_frame(&window, cx) > 0);
         finish_fold_animation(&window, cx);
         window
-            .read_with(cx, |app, _| {
-                assert!(app.fold_animation.is_none());
-                assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+            .update(cx, |app, _, cx| {
+                assert!(
+                    app.preview_panel()
+                        .unwrap()
+                        .read(cx)
+                        .fold_animation()
+                        .is_none()
+                );
+                assert_eq!(
+                    app.preview_panel()
+                        .unwrap()
+                        .read(cx)
+                        .list_state()
+                        .item_count(),
+                    app.preview_panel().unwrap().read(cx).visible_rows().len()
+                );
             })
             .unwrap();
     }
 }
 
-#[test]
-fn expanding_a_child_from_contents_does_not_collapse_its_parent() {
+#[gpui::test]
+fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::TestAppContext) {
     let path = std::env::temp_dir().join(format!(
         "org-studio-contents-child-{}.org",
         std::process::id()
@@ -215,38 +369,93 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent() {
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let mut app = super::PreviewApp::new();
-    app.generation = 1;
-    assert!(app.apply_load_result(1, Ok(document)));
-    app.cycle_global_visibility();
-    app.cycle_global_visibility();
+    let app = cx.new(|_| super::WorkspaceWindow::new());
+    app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document), cx));
+        cycle_panel_global_visibility(app, cx);
+        cycle_panel_global_visibility(app, cx);
 
-    let document = ready_document(&app);
-    let parent = heading_id(&document, 1, 0);
-    let child = heading_id(&document, 2, 0);
+        let document = ready_document(app, cx);
+        let parent = heading_id(&document, 1, 0);
+        let child = heading_id(&document, 2, 0);
 
-    assert!(!app.fold_markers.contains(&parent));
-    assert!(app.fold_markers.contains(&child));
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&parent)
+        );
+        assert!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&child)
+        );
 
-    app.toggle_fold(child, &document);
-    assert_eq!(app.global_visibility, GlobalVisibility::Contents);
-    assert!(!app.fold_markers.contains(&parent));
-    assert!(!app.fold_markers.contains(&child));
-    assert_eq!(visible_source_lines(&app, &document), vec![2, 4, 5, 6]);
+        toggle_panel_fold(app, child, cx);
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).global_visibility(),
+            GlobalVisibility::Contents
+        );
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&parent)
+        );
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&child)
+        );
+        assert_eq!(visible_source_lines(app, &document, cx), vec![2, 4, 5, 6]);
 
-    app.toggle_fold(child, &document);
-    assert_eq!(app.global_visibility, GlobalVisibility::Contents);
-    assert_eq!(app.visible_rows.len(), 3);
-    assert!(!app.fold_markers.contains(&parent));
-    assert!(app.fold_markers.contains(&child));
+        toggle_panel_fold(app, child, cx);
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).global_visibility(),
+            GlobalVisibility::Contents
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            3
+        );
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&parent)
+        );
+        assert!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&child)
+        );
 
-    app.cycle_global_visibility();
-    assert_eq!(app.global_visibility, GlobalVisibility::Overview);
-    assert_eq!(app.visible_rows.len(), 2);
+        cycle_panel_global_visibility(app, cx);
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).global_visibility(),
+            GlobalVisibility::Overview
+        );
+        assert_eq!(
+            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            2
+        );
+    });
 }
 
-#[test]
-fn clicking_a_second_level_heading_in_contents_never_folds_its_parent() {
+#[gpui::test]
+fn clicking_a_second_level_heading_in_contents_never_folds_its_parent(
+    cx: &mut gpui::TestAppContext,
+) {
     let path = std::env::temp_dir().join(format!(
         "org-studio-contents-second-level-{}.org",
         std::process::id()
@@ -258,31 +467,62 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent() {
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let mut app = super::PreviewApp::new();
-    app.generation = 1;
-    assert!(app.apply_load_result(1, Ok(document)));
-    app.cycle_global_visibility();
-    app.cycle_global_visibility();
+    let app = cx.new(|_| super::WorkspaceWindow::new());
+    app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document), cx));
+        cycle_panel_global_visibility(app, cx);
+        cycle_panel_global_visibility(app, cx);
 
-    let document = ready_document(&app);
-    let parent = heading_id(&document, 1, 0);
-    let child = heading_id(&document, 2, 0);
+        let document = ready_document(app, cx);
+        let parent = heading_id(&document, 1, 0);
+        let child = heading_id(&document, 2, 0);
 
-    assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 5, 7]);
-    assert!(!app.fold_markers.contains(&parent));
+        assert_eq!(visible_source_lines(app, &document, cx), vec![1, 3, 5, 7]);
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&parent)
+        );
 
-    app.toggle_fold(child, &document);
-    assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 7]);
-    assert!(!app.fold_markers.contains(&parent));
-    assert!(app.fold_markers.contains(&child));
+        toggle_panel_fold(app, child, cx);
+        assert_eq!(visible_source_lines(app, &document, cx), vec![1, 3, 7]);
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&parent)
+        );
+        assert!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&child)
+        );
 
-    app.toggle_fold(child, &document);
-    assert_eq!(visible_source_lines(&app, &document), vec![1, 3, 4, 5, 7]);
-    assert!(!app.fold_markers.contains(&parent));
+        toggle_panel_fold(app, child, cx);
+        assert_eq!(
+            visible_source_lines(app, &document, cx),
+            vec![1, 3, 4, 5, 7]
+        );
+        assert!(
+            !app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_markers()
+                .contains(&parent)
+        );
+    });
 }
 
-#[test]
-fn heading_click_cycles_only_its_subtree_through_official_local_states() {
+#[gpui::test]
+fn heading_click_cycles_only_its_subtree_through_official_local_states(
+    cx: &mut gpui::TestAppContext,
+) {
     let path =
         std::env::temp_dir().join(format!("org-studio-local-cycle-{}.org", std::process::id()));
     std::fs::write(
@@ -292,36 +532,50 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states() {
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let mut app = super::PreviewApp::new();
-    app.generation = 1;
-    assert!(app.apply_load_result(1, Ok(document)));
-    app.cycle_global_visibility();
-    let document = ready_document(&app);
-    let parent = heading_id(&document, 1, 0);
+    let app = cx.new(|_| super::WorkspaceWindow::new());
+    app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(document), cx));
+        cycle_panel_global_visibility(app, cx);
+        let document = ready_document(app, cx);
+        let parent = heading_id(&document, 1, 0);
 
-    app.toggle_fold(parent, &document);
-    assert_eq!(
-        app.local_cycle_continuation,
-        Some((parent, super::LocalVisibility::Children))
-    );
-    assert_eq!(visible_source_lines(&app, &document), vec![1, 2, 3, 5, 7]);
+        toggle_panel_fold(app, parent, cx);
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .local_cycle_continuation(),
+            Some((parent, super::LocalVisibility::Children))
+        );
+        assert_eq!(
+            visible_source_lines(app, &document, cx),
+            vec![1, 2, 3, 5, 7]
+        );
 
-    app.toggle_fold(parent, &document);
-    assert_eq!(
-        app.local_cycle_continuation,
-        Some((parent, super::LocalVisibility::Subtree))
-    );
-    assert_eq!(
-        visible_source_lines(&app, &document),
-        vec![1, 2, 3, 4, 5, 6, 7]
-    );
+        toggle_panel_fold(app, parent, cx);
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .local_cycle_continuation(),
+            Some((parent, super::LocalVisibility::Subtree))
+        );
+        assert_eq!(
+            visible_source_lines(app, &document, cx),
+            vec![1, 2, 3, 4, 5, 6, 7]
+        );
 
-    app.toggle_fold(parent, &document);
-    assert_eq!(
-        app.local_cycle_continuation,
-        Some((parent, super::LocalVisibility::Folded))
-    );
-    assert_eq!(visible_source_lines(&app, &document), vec![1, 7]);
+        toggle_panel_fold(app, parent, cx);
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .local_cycle_continuation(),
+            Some((parent, super::LocalVisibility::Folded))
+        );
+        assert_eq!(visible_source_lines(app, &document, cx), vec![1, 7]);
+    });
 }
 
 #[gpui::test]
@@ -339,36 +593,75 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::PreviewApp::new());
+    let app = cx.new(|_| super::WorkspaceWindow::new());
 
     app.update(cx, |app, cx| {
         app.generation = 1;
-        assert!(app.apply_load_result(1, Ok(document)));
-        let document = ready_document(app);
+        assert!(app.apply_load_result(1, Ok(document), cx));
+        let document = ready_document(app, cx);
         let parent = heading_id(&document, 1, 0);
 
-        app.toggle_fold_animated(parent, &document, 700.0, 790.0, None, cx);
-        assert_eq!(visible_source_lines(app, &document), vec![1, 5, 6]);
+        toggle_panel_fold_animated(app, parent, 700.0, 790.0, None, cx);
+        assert_eq!(visible_source_lines(app, &document, cx), vec![1, 5, 6]);
         assert_eq!(
-            app.fold_animation
-                .as_ref()
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
                 .map(|animation| animation.segments[0].transition_index),
             Some(1)
         );
-        assert_eq!(app.list_state.item_count(), app.visible_rows.len() + 1);
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .item_count(),
+            app.preview_panel().unwrap().read(cx).visible_rows().len() + 1
+        );
 
-        app.toggle_fold_animated(parent, &document, 700.0, 790.0, None, cx);
-        assert_eq!(visible_source_lines(app, &document), vec![1, 2, 3, 5, 6]);
-        let expansion = app.fold_animation.as_ref().unwrap();
+        toggle_panel_fold_animated(app, parent, 700.0, 790.0, None, cx);
+        assert_eq!(
+            visible_source_lines(app, &document, cx),
+            vec![1, 2, 3, 5, 6]
+        );
+        let expansion = app
+            .preview_panel()
+            .unwrap()
+            .read(cx)
+            .fold_animation()
+            .unwrap();
         assert!(matches!(expansion.direction, super::FoldDirection::Expand));
         assert_eq!(expansion.segments[0].target_len, 2);
-        assert_eq!(app.list_state.item_count(), app.visible_rows.len() - 1);
-        app.discard_fold_animation();
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .item_count(),
+            app.preview_panel().unwrap().read(cx).visible_rows().len() - 1
+        );
+        app.preview_panel()
+            .unwrap()
+            .update(cx, |panel, _| panel.discard_fold_animation());
     });
 
-    app.read_with(cx, |app, _| {
-        assert!(app.fold_animation.is_none());
-        assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+    app.update(cx, |app, cx| {
+        assert!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .is_none()
+        );
+        assert_eq!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .item_count(),
+            app.preview_panel().unwrap().read(cx).visible_rows().len()
+        );
     });
 }
 
@@ -382,17 +675,23 @@ fn reduced_motion_applies_local_fold_without_a_delayed_projection(cx: &mut gpui:
     std::fs::write(&path, "* Parent\nbody\n** Child\nchild body\n").unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::PreviewApp::new());
+    let app = cx.new(|_| super::WorkspaceWindow::new());
 
     app.update(cx, |app, cx| {
         app.generation = 1;
-        assert!(app.apply_load_result(1, Ok(document)));
-        let document = ready_document(app);
+        assert!(app.apply_load_result(1, Ok(document), cx));
+        let document = ready_document(app, cx);
         let parent = heading_id(&document, 1, 0);
 
-        app.toggle_fold_animated(parent, &document, 700.0, 790.0, None, cx);
-        assert_eq!(visible_source_lines(app, &document), vec![1]);
-        assert!(app.fold_animation.is_none());
+        toggle_panel_fold_animated(app, parent, 700.0, 790.0, None, cx);
+        assert_eq!(visible_source_lines(app, &document, cx), vec![1]);
+        assert!(
+            app.preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .is_none()
+        );
     });
 }
 
@@ -410,12 +709,12 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::PreviewApp::new()
+        super::WorkspaceWindow::new()
     });
     window
         .update(cx, |app, _window, cx| {
             app.generation = 1;
-            assert!(app.apply_load_result(1, Ok(document)));
+            assert!(app.apply_load_result(1, Ok(document), cx));
             cx.notify();
         })
         .unwrap();
@@ -423,18 +722,42 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
 
     window
         .update(cx, |app, window, cx| {
-            let document = ready_document(app);
+            let document = ready_document(app, cx);
             let parent = heading_id(&document, 1, 0);
-            let first_hidden = app.list_state.bounds_for_item(1).unwrap();
-            let following = app.list_state.bounds_for_item(6).unwrap();
+            let first_hidden = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(1)
+                .unwrap();
+            let following = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(6)
+                .unwrap();
             let expected_distance = f32::from(following.top() - first_hidden.top());
 
-            app.toggle_fold_animated(parent, &document, 700.0, 790.0, Some(window), cx);
-            let animation = app.fold_animation.as_ref().unwrap();
+            toggle_panel_fold_animated(app, parent, 700.0, 790.0, Some(window), cx);
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             let shell = &animation.segments[0];
             assert_eq!(shell.transition_index, 1);
             assert!((shell.distance - expected_distance).abs() < 0.01);
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len() + 1);
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len() + 1
+            );
             cx.notify();
         })
         .unwrap();
@@ -444,24 +767,64 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION + std::time::Duration::from_millis(20));
     assert!(simulate_next_frame(&window, cx) > 0);
     let first_gap = window
-        .read_with(cx, |app, _| {
-            let animation = app.fold_animation.as_ref().unwrap();
+        .update(cx, |app, _, cx| {
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert_eq!(animation.progress, 0.0);
             assert!(animation.started_at.is_some());
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let peer = app.list_state.bounds_for_item(2).unwrap();
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(2)
+                .unwrap();
             f32::from(peer.top() - heading.bottom())
         })
         .unwrap();
     std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION / 3);
     assert!(simulate_next_frame(&window, cx) > 0);
     let later_gap = window
-        .read_with(cx, |app, _| {
-            let animation = app.fold_animation.as_ref().unwrap();
+        .update(cx, |app, _, cx| {
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert!(animation.progress > 0.0);
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let shell = app.list_state.bounds_for_item(1).unwrap();
-            let peer = app.list_state.bounds_for_item(2).unwrap();
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(1)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(2)
+                .unwrap();
             assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             let gap = f32::from(peer.top() - heading.bottom());
@@ -478,34 +841,82 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
 
     finish_fold_animation(&window, cx);
     window
-        .read_with(cx, |app, _| {
-            assert!(app.fold_animation.is_none());
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
+        .update(cx, |app, _, cx| {
+            assert!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .fold_animation()
+                    .is_none()
+            );
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len()
+            );
         })
         .unwrap();
 
     window
         .update(cx, |app, window, cx| {
-            let document = ready_document(app);
+            let document = ready_document(app, cx);
             let parent = heading_id(&document, 1, 0);
-            app.toggle_fold_animated(parent, &document, 700.0, 790.0, Some(window), cx);
-            let animation = app.fold_animation.as_ref().unwrap();
+            toggle_panel_fold_animated(app, parent, 700.0, 790.0, Some(window), cx);
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert!(matches!(animation.direction, super::FoldDirection::Expand));
             assert_eq!(animation.segments[0].transition_index, 1);
             assert_eq!(animation.segments[0].target_len, 3);
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len() - 2);
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len() - 2
+            );
             cx.notify();
         })
         .unwrap();
     cx.run_until_parked();
     assert!(simulate_next_frame(&window, cx) > 0);
     let first_gap = window
-        .read_with(cx, |app, _| {
-            let animation = app.fold_animation.as_ref().unwrap();
+        .update(cx, |app, _, cx| {
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert_eq!(animation.progress, 0.0);
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let shell = app.list_state.bounds_for_item(1).unwrap();
-            let peer = app.list_state.bounds_for_item(2).unwrap();
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(1)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(2)
+                .unwrap();
             assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             f32::from(peer.top() - heading.bottom())
@@ -514,12 +925,35 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION / 3);
     assert!(simulate_next_frame(&window, cx) > 0);
     let later_gap = window
-        .read_with(cx, |app, _| {
-            let animation = app.fold_animation.as_ref().unwrap();
+        .update(cx, |app, _, cx| {
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert!(animation.progress > 0.0);
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let shell = app.list_state.bounds_for_item(1).unwrap();
-            let peer = app.list_state.bounds_for_item(2).unwrap();
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(1)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(2)
+                .unwrap();
             assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             let gap = f32::from(peer.top() - heading.bottom());
@@ -536,21 +970,51 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
 
     finish_fold_animation(&window, cx);
     window
-        .read_with(cx, |app, _| {
-            assert!(app.fold_animation.is_none());
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let peer = app.list_state.bounds_for_item(4).unwrap();
+        .update(cx, |app, _, cx| {
+            assert!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .fold_animation()
+                    .is_none()
+            );
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len()
+            );
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(4)
+                .unwrap();
             assert!(peer.top() > heading.bottom());
         })
         .unwrap();
 
     window
         .update(cx, |app, window, cx| {
-            let document = ready_document(app);
+            let document = ready_document(app, cx);
             let parent = heading_id(&document, 1, 0);
-            app.toggle_fold_animated(parent, &document, 700.0, 790.0, Some(window), cx);
-            let animation = app.fold_animation.as_ref().unwrap();
+            toggle_panel_fold_animated(app, parent, 700.0, 790.0, Some(window), cx);
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert!(matches!(animation.direction, super::FoldDirection::Expand));
             assert_eq!(animation.segments.len(), 2);
             assert_eq!(animation.segments[0].transition_index, 3);
@@ -562,9 +1026,21 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     cx.run_until_parked();
     assert!(simulate_next_frame(&window, cx) > 0);
     window
-        .read_with(cx, |app, _| {
-            let first_shell = app.list_state.bounds_for_item(3).unwrap();
-            let second_shell = app.list_state.bounds_for_item(5).unwrap();
+        .update(cx, |app, _, cx| {
+            let first_shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(3)
+                .unwrap();
+            let second_shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(5)
+                .unwrap();
             assert!(f32::from(first_shell.size.height).abs() < 0.01);
             assert!(f32::from(second_shell.size.height).abs() < 0.01);
         })
@@ -572,21 +1048,59 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     std::thread::sleep(super::LOCAL_FOLD_ANIMATION_DURATION / 3);
     assert!(simulate_next_frame(&window, cx) > 0);
     window
-        .read_with(cx, |app, _| {
-            let animation = app.fold_animation.as_ref().unwrap();
+        .update(cx, |app, _, cx| {
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             assert!(animation.progress > 0.0);
-            let first_child = app.list_state.bounds_for_item(2).unwrap();
-            let first_shell = app.list_state.bounds_for_item(3).unwrap();
-            let second_child = app.list_state.bounds_for_item(4).unwrap();
-            let second_shell = app.list_state.bounds_for_item(5).unwrap();
-            let peer = app.list_state.bounds_for_item(6).unwrap();
+            let first_child = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(2)
+                .unwrap();
+            let first_shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(3)
+                .unwrap();
+            let second_child = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(4)
+                .unwrap();
+            let second_shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(5)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(6)
+                .unwrap();
             assert!((f32::from(first_shell.top() - first_child.bottom())).abs() < 0.01);
             assert!((f32::from(second_child.top() - first_shell.bottom())).abs() < 0.01);
             assert!((f32::from(second_shell.top() - second_child.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - second_shell.bottom())).abs() < 0.01);
             for (index, shell) in animation.segments.iter().enumerate() {
                 let bounds = app
-                    .list_state
+                    .preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
                     .bounds_for_item(shell.transition_index)
                     .unwrap();
                 let expected = shell.distance * animation.progress;
@@ -599,13 +1113,50 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
         .unwrap();
     finish_fold_animation(&window, cx);
     window
-        .read_with(cx, |app, _| {
-            assert!(app.fold_animation.is_none());
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
-            let first_child_body = app.list_state.bounds_for_item(3).unwrap();
-            let second_child = app.list_state.bounds_for_item(4).unwrap();
-            let second_child_body = app.list_state.bounds_for_item(5).unwrap();
-            let peer = app.list_state.bounds_for_item(6).unwrap();
+        .update(cx, |app, _, cx| {
+            assert!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .fold_animation()
+                    .is_none()
+            );
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len()
+            );
+            let first_child_body = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(3)
+                .unwrap();
+            let second_child = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(4)
+                .unwrap();
+            let second_child_body = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(5)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(6)
+                .unwrap();
             assert!(first_child_body.size.height > gpui::px(0.0));
             assert!(second_child.top() >= first_child_body.bottom());
             assert!(second_child_body.size.height > gpui::px(0.0));
@@ -629,12 +1180,12 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(320.0)), |_, _| {
-        super::PreviewApp::new()
+        super::WorkspaceWindow::new()
     });
     window
         .update(cx, |app, _window, cx| {
             app.generation = 1;
-            assert!(app.apply_load_result(1, Ok(document)));
+            assert!(app.apply_load_result(1, Ok(document), cx));
             cx.notify();
         })
         .unwrap();
@@ -642,7 +1193,7 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
 
     window
         .update(cx, |app, window, cx| {
-            let document = ready_document(app);
+            let document = ready_document(app, cx);
             let parent = heading_id(&document, 1, 0);
             let peer = heading_id(&document, 1, 1);
             let peer_row = document
@@ -651,23 +1202,47 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
                 .iter()
                 .position(|row| row.block_id == peer)
                 .unwrap();
-            let old_peer_position = app.visible_rows.binary_search(&peer_row).unwrap();
+            let old_peer_position = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .visible_rows()
+                .binary_search(&peer_row)
+                .unwrap();
             assert!(
-                app.list_state
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
                     .bounds_for_item(old_peer_position)
                     .unwrap()
                     .top()
                     > gpui::px(320.0)
             );
 
-            app.toggle_fold_animated(parent, &document, 320.0, 790.0, Some(window), cx);
-            let animation = app.fold_animation.as_ref().unwrap();
+            toggle_panel_fold_animated(app, parent, 320.0, 790.0, Some(window), cx);
+            let animation = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .fold_animation()
+                .unwrap();
             let shell = &animation.segments[0];
             assert_eq!(shell.transition_index, 1);
             assert!(shell.distance <= 320.0);
             assert!(shell.rendered_rows.len() < 20);
-            assert_eq!(app.visible_rows[1], peer_row);
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len() + 1);
+            assert_eq!(
+                app.preview_panel().unwrap().read(cx).visible_rows()[1],
+                peer_row
+            );
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len() + 1
+            );
             cx.notify();
         })
         .unwrap();
@@ -675,30 +1250,81 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
     assert!(simulate_next_frame(&window, cx) > 0);
 
     window
-        .read_with(cx, |app, _| {
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let shell = app.list_state.bounds_for_item(1).unwrap();
-            let peer = app.list_state.bounds_for_item(2).unwrap();
+        .update(cx, |app, _, cx| {
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let shell = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(1)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(2)
+                .unwrap();
             assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             assert!(f32::from(peer.top() - heading.bottom()) > 24.0);
-            assert!(app.fold_animation.is_some());
+            assert!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .fold_animation()
+                    .is_some()
+            );
         })
         .unwrap();
     finish_fold_animation(&window, cx);
     window
-        .read_with(cx, |app, _| {
-            let heading = app.list_state.bounds_for_item(0).unwrap();
-            let peer = app.list_state.bounds_for_item(1).unwrap();
+        .update(cx, |app, _, cx| {
+            let heading = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(0)
+                .unwrap();
+            let peer = app
+                .preview_panel()
+                .unwrap()
+                .read(cx)
+                .list_state()
+                .bounds_for_item(1)
+                .unwrap();
             assert!((f32::from(peer.top() - heading.bottom())).abs() < 0.01);
-            assert_eq!(app.list_state.item_count(), app.visible_rows.len());
-            assert!(app.fold_animation.is_none());
+            assert_eq!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .list_state()
+                    .item_count(),
+                app.preview_panel().unwrap().read(cx).visible_rows().len()
+            );
+            assert!(
+                app.preview_panel()
+                    .unwrap()
+                    .read(cx)
+                    .fold_animation()
+                    .is_none()
+            );
         })
         .unwrap();
 }
 
-#[test]
-fn reload_failure_retains_previous_document_and_rejects_stale_completion() {
+#[gpui::test]
+fn open_failure_retains_previous_session_and_rejects_stale_completion(
+    cx: &mut gpui::TestAppContext,
+) {
     let path = std::env::temp_dir().join(format!(
         "org-studio-reload-state-{}.org",
         std::process::id()
@@ -707,32 +1333,89 @@ fn reload_failure_retains_previous_document_and_rejects_stale_completion() {
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(&path);
 
-    let mut app = super::PreviewApp::new();
+    let mut app = super::WorkspaceWindow::new();
     app.generation = 1;
-    assert!(app.apply_load_result(1, Ok(document)));
-    assert_eq!(
-        app.last_ready.as_ref().map(|(generation, _)| *generation),
-        Some(1)
-    );
+    assert!(apply_load_result(&mut app, 1, Ok(document), cx));
+    assert!(app.state.ready().is_some());
+    let session = app.document_session().unwrap().clone();
 
     app.generation = 2;
-    assert!(app.apply_load_result(2, Err((path.clone(), "reload failed".to_owned()))));
+    assert!(apply_load_result(
+        &mut app,
+        2,
+        Err((path.clone(), "reload failed".to_owned())),
+        cx,
+    ));
     assert!(matches!(app.state, super::PreviewLoadState::Failed { .. }));
-    assert_eq!(
-        app.last_ready.as_ref().map(|(generation, _)| *generation),
-        Some(1)
-    );
+    assert!(app.state.ready().is_some());
+    assert_eq!(app.document_session(), Some(&session));
 
     let stale_path = path.with_extension("md");
     std::fs::write(&stale_path, "# stale\n").unwrap();
     let stale = super::load_document(stale_path.clone()).unwrap();
     let _ = std::fs::remove_file(stale_path);
-    assert!(!app.apply_load_result(1, Ok(stale)));
+    assert!(!apply_load_result(&mut app, 1, Ok(stale), cx));
     assert!(matches!(app.state, super::PreviewLoadState::Failed { .. }));
+    assert!(app.state.ready().is_some());
+    assert_eq!(app.document_session(), Some(&session));
+}
+
+#[gpui::test]
+fn reload_keeps_session_identity_and_publishes_a_coherent_preview(cx: &mut gpui::TestAppContext) {
+    use std::sync::{Arc, Mutex};
+
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-stable-session-reload-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(&path, "* Before\nold\n").unwrap();
+    let loaded = super::load_document(path.clone()).unwrap();
+    let app = cx.new(|_| super::WorkspaceWindow::new());
+    let (session_before, document_id, panel, events) = app.update(cx, |app, cx| {
+        app.generation = 1;
+        assert!(app.apply_load_result(1, Ok(loaded), cx));
+        let session = app.document_session().unwrap().clone();
+        let panel = app.preview_panel().unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        panel.update(cx, |_, cx| {
+            let events = events.clone();
+            cx.subscribe_self(move |_, event, _| events.lock().unwrap().push(*event))
+                .detach();
+        });
+        let document_id = session.read(cx).id();
+        (session, document_id, panel, events)
+    });
+
+    std::fs::write(&path, "* After\nnew\n").unwrap();
+    app.update(cx, |app, cx| app.reload_current(cx));
+    cx.run_until_parked();
+
+    app.update(cx, |app, cx| {
+        let session_after = app.document_session().unwrap();
+        assert_eq!(session_after, &session_before);
+        assert_eq!(session_after.read(cx).id(), document_id);
+        assert_eq!(
+            session_after.read(cx).revision(),
+            crate::document::Revision(1)
+        );
+        let preview = panel.read(cx).document();
+        assert_eq!(preview.document_id, document_id);
+        assert_eq!(preview.revision, crate::document::Revision(1));
+        assert_eq!(
+            preview
+                .text
+                .copy_range(crate::document::ByteRange::new(0, preview.text.len_bytes())),
+            "* After\nnew\n"
+        );
+    });
     assert_eq!(
-        app.last_ready.as_ref().map(|(generation, _)| *generation),
-        Some(1)
+        events.lock().unwrap().as_slice(),
+        [super::DerivedEvent::Published {
+            document_id,
+            revision: crate::document::Revision(1),
+        }]
     );
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]
@@ -769,7 +1452,7 @@ fn dired_help_lists_every_command_and_groups_alias_keys() {
 fn loads_markdown_without_sending_it_through_the_org_parser() {
     let path = std::env::temp_dir().join(format!("org-studio-markdown-{}.md", std::process::id()));
     std::fs::write(&path, "# Markdown\n\n- **native** preview\n").unwrap();
-    let document = super::load_document(path.clone()).unwrap();
+    let document = super::load_document(path.clone()).unwrap().into_preview();
     let _ = std::fs::remove_file(path);
 
     assert_eq!(document.format, super::DocumentFormat::Markdown);
@@ -789,7 +1472,7 @@ fn markdown_parent_and_minimap_share_identical_display_runs() {
         "# **标题** and *italic*\n\n```rust\nlet answer = 42;\n```\n",
     )
     .unwrap();
-    let document = super::load_document(path.clone()).unwrap();
+    let document = super::load_document(path.clone()).unwrap().into_preview();
     let _ = std::fs::remove_file(path);
     let display_map = document.display_map.as_ref().unwrap();
     let heading_layout = display_map.layout(0);
@@ -833,7 +1516,7 @@ fn org_parent_and_minimap_share_identical_display_runs() {
         "* *粗体* and /italic/\n\n#+begin_src rust\nlet n = 7;\n#+end_src\n",
     )
     .unwrap();
-    let document = super::load_document(path.clone()).unwrap();
+    let document = super::load_document(path.clone()).unwrap().into_preview();
     let _ = std::fs::remove_file(path);
     let display_map = document.display_map.as_ref().unwrap();
     let heading_layout = display_map.layout(0);

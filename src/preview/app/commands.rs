@@ -4,11 +4,11 @@ use std::{sync::Arc, time::Duration};
 use super::{
     BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
     ContentRoute, Context, EmacsOutcome, InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent,
-    KeyStroke, PrefixArgument, PreviewApp, Window, built_in_contexts, command_count,
+    KeyStroke, PrefixArgument, Window, WorkspaceWindow, built_in_contexts, command_count,
     compile_input_profile, dired_bindings, preview_bindings,
 };
 
-impl PreviewApp {
+impl WorkspaceWindow {
     pub(in crate::preview) fn dispatch_command(
         &mut self,
         name: &str,
@@ -68,15 +68,17 @@ impl PreviewApp {
         if !matches!(
             implementation,
             CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle)
-        ) {
-            self.global_cycle_contiguous = false;
-            self.local_cycle_continuation = None;
+        ) && let Some(panel) = self.preview_panel()
+        {
+            panel.update(cx, |panel, _| panel.reset_cycle_continuation());
         }
         match implementation {
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => self.choose_file(cx),
             CommandImplementation::Builtin(BuiltinCommand::ShowHome) => self.show_home(cx),
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
-                if self.content_route == ContentRoute::FileManager || self.sidebar_focused {
+                if self.content_route == ContentRoute::FileManager
+                    || self.file_manager.sidebar_focused()
+                {
                     self.reload_file_manager(cx);
                 } else {
                     self.reload(cx);
@@ -87,23 +89,35 @@ impl PreviewApp {
             }
             CommandImplementation::Builtin(BuiltinCommand::QuitApplication) => cx.quit(),
             CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
-                self.list_state.scroll_by(px(640.0 * command_count(prefix)));
+                if let Some(panel) = self.preview_panel() {
+                    panel.update(cx, |panel, _| {
+                        panel.scroll_by(px(640.0 * command_count(prefix)));
+                    });
+                }
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::ScrollBackward) => {
-                self.list_state
-                    .scroll_by(px(-640.0 * command_count(prefix)));
+                if let Some(panel) = self.preview_panel() {
+                    panel.update(cx, |panel, _| {
+                        panel.scroll_by(px(-640.0 * command_count(prefix)));
+                    });
+                }
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::BeginningOfDocument) => {
-                self.list_state.scroll_to(ListOffset::default());
+                if let Some(panel) = self.preview_panel() {
+                    panel.update(cx, |panel, _| {
+                        panel.scroll_to(ListOffset::default());
+                    });
+                }
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::EndOfDocument) => {
-                self.list_state.scroll_to(ListOffset {
-                    item_ix: self.list_state.item_count(),
-                    offset_in_item: px(0.0),
-                });
+                if let Some(panel) = self.preview_panel() {
+                    panel.update(cx, |panel, _| {
+                        panel.scroll_to_end();
+                    });
+                }
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::OpenFileManager) => {
@@ -181,7 +195,7 @@ impl PreviewApp {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.export_panel.is_some() {
+        if self.export.is_open() {
             cx.stop_propagation();
             if event.keystroke.key == "escape" {
                 self.close_export_panel(cx);
@@ -189,8 +203,8 @@ impl PreviewApp {
             return;
         }
         if event.keystroke.key == "escape"
-            && (self.dired_context_menu.take().is_some()
-                || self.cancel_minimap_interaction()
+            && (self.file_manager.dismiss_context_menu()
+                || self.cancel_minimap_interaction(cx)
                 || self.cancel_sidebar_resize())
         {
             cx.stop_propagation();
@@ -280,7 +294,7 @@ impl PreviewApp {
     pub(in crate::preview) fn schedule_which_key(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         let request = self.which_key_request;
-        self.dired_help_visible = false;
+        self.file_manager.set_help_visible(false);
         self.which_key_items = Arc::new(Vec::new());
         let delay = cx.background_executor().timer(Duration::from_millis(400));
         self.which_key_task = Some(cx.spawn(async move |this, cx| {
@@ -319,9 +333,9 @@ impl PreviewApp {
     pub(in crate::preview) fn cancel_which_key(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         self.which_key_task = None;
-        if !self.which_key_items.is_empty() || self.dired_help_visible {
+        if !self.which_key_items.is_empty() || self.file_manager.help_visible() {
             self.which_key_items = Arc::new(Vec::new());
-            self.dired_help_visible = false;
+            self.file_manager.set_help_visible(false);
             cx.notify();
         }
     }
