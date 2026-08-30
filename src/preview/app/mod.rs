@@ -4,12 +4,12 @@ use super::{
     FoldTransitionInput, FoldTransitionPlan, HashMap, HashSet, InitialDocumentLoad, Instant,
     InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke,
     LOCAL_FOLD_ANIMATION_DURATION, ListAlignment, ListState, LocalCycleProjection, PathBuf,
-    PathPromptOptions, PrefixArgument, PreviewApp, PreviewDocument, PreviewLoadState, Window,
-    accept_generation, built_in_contexts, changed_range, command_count, compile_input_profile,
-    configured_minimap_visible, current_theme, cycle_markdown_subtree_visibility,
-    cycle_org_subtree_visibility, dired_bindings, global_markdown_visibility,
-    global_org_visibility, load_document, minimap, preview_bindings, preview_input, px,
-    render_document, render_home, render_loading, should_eagerly_measure_rows,
+    PathPromptOptions, PrefixArgument, PreviewApp, PreviewDocument, PreviewLoadState, RefCell,
+    Window, accept_generation, built_in_contexts, changed_range, command_count,
+    compile_input_profile, configured_minimap_visible, current_theme,
+    cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, dired_bindings,
+    global_markdown_visibility, global_org_visibility, load_document, minimap, preview_bindings,
+    preview_input, px, render_document, render_home, render_loading, should_eagerly_measure_rows,
 };
 use gpui::{div, prelude::*, rgb};
 
@@ -130,6 +130,9 @@ impl PreviewApp {
             dired_presentation_scheduled: false,
             dired_viewport_memory: HashMap::new(),
             sidebar_viewport_memory: HashMap::new(),
+            status_line_settings: preview_settings.status_line,
+            status_popover: None,
+            status_layout_cache: RefCell::new(HashMap::new()),
         }
     }
 
@@ -140,6 +143,7 @@ impl PreviewApp {
             minimap_thumb_visibility: self.minimap_thumb_visibility,
             minimap_width: self.minimap_width,
             sidebar_width: self.sidebar_width,
+            status_line: self.status_line_settings,
         }
         .save_async();
     }
@@ -210,12 +214,17 @@ impl PreviewApp {
         }
     }
 
-    pub(super) fn body(&self, entity: gpui::Entity<Self>, editor_width: f32) -> gpui::Div {
+    pub(super) fn body(
+        &self,
+        entity: gpui::Entity<Self>,
+        editor_width: f32,
+        window: &Window,
+    ) -> gpui::Div {
         let theme = current_theme();
         let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);
-        match &self.state {
+        let content = match &self.state {
             PreviewLoadState::Empty => render_home(
-                entity,
+                entity.clone(),
                 &self.recent_documents,
                 self.home_error.as_deref(),
                 None,
@@ -250,7 +259,7 @@ impl PreviewApp {
                             self.visible_rows.clone(),
                             self.fold_markers.clone(),
                             self.fold_animation.clone(),
-                            entity,
+                            entity.clone(),
                             self.minimap_visible,
                             editor_width,
                             minimap_width,
@@ -262,7 +271,7 @@ impl PreviewApp {
                         ))
                 } else {
                     render_home(
-                        entity,
+                        entity.clone(),
                         &self.recent_documents,
                         Some(&error),
                         None,
@@ -279,7 +288,7 @@ impl PreviewApp {
                 self.visible_rows.clone(),
                 self.fold_markers.clone(),
                 self.fold_animation.clone(),
-                entity,
+                entity.clone(),
                 self.minimap_visible,
                 editor_width,
                 minimap_width,
@@ -289,7 +298,37 @@ impl PreviewApp {
                 self.presentation_revision,
                 self.opened_at.unwrap_or_else(Instant::now),
             ),
-        }
+        };
+        let Some(snapshot) = self.status_snapshot() else {
+            return content;
+        };
+        let layout = self.status_layout(&snapshot, editor_width, window);
+        let status_popover = self
+            .status_popover
+            .as_ref()
+            .filter(|popover| popover.pane == snapshot.pane)
+            .cloned();
+        div()
+            .relative()
+            .size_full()
+            .flex()
+            .flex_col()
+            .child(div().flex_1().min_h_0().child(content))
+            .child(super::status_line::render_status_line(
+                &snapshot,
+                layout,
+                entity.clone(),
+                window,
+            ))
+            .when_some(status_popover, |view, popover| {
+                view.child(super::status_line::render_status_popover(
+                    popover,
+                    Some(&snapshot),
+                    self.status_line_settings,
+                    entity,
+                    self.language,
+                ))
+            })
     }
 
     #[cfg(test)]

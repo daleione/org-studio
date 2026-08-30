@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     path::PathBuf,
     sync::Arc,
@@ -18,7 +19,9 @@ mod highlighting;
 mod input;
 mod layout;
 mod loading;
+mod status_line;
 mod view;
+use crate::navigation::PaneId;
 pub(crate) use document::DocumentFormat;
 use document::{CodeRowRole, PreviewRow, configured_minimap_visible};
 pub use document::{InitialDocumentLoad, LoadMetrics, PreviewDocument, preload_initial_document};
@@ -253,6 +256,9 @@ pub struct PreviewApp {
     dired_presentation_scheduled: bool,
     dired_viewport_memory: HashMap<PathBuf, (usize, f32)>,
     sidebar_viewport_memory: HashMap<PathBuf, (usize, f32)>,
+    status_line_settings: crate::settings::StatusLineSettings,
+    status_popover: Option<status_line::StatusPopover>,
+    status_layout_cache: RefCell<HashMap<PaneId, status_line::CachedStatusLayout>>,
 }
 
 fn is_supported_document(path: &std::path::Path) -> bool {

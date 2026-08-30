@@ -18,6 +18,28 @@ pub struct PreviewSettings {
     /// Preferred Sidebar width. Rendering applies the current window clamp
     /// without overwriting this value.
     pub sidebar_width: u16,
+    pub status_line: StatusLineSettings,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StatusLineSettings {
+    pub outline: bool,
+    pub position: bool,
+    pub progress: bool,
+    pub statistics: bool,
+    pub format: bool,
+}
+
+impl Default for StatusLineSettings {
+    fn default() -> Self {
+        Self {
+            outline: true,
+            position: true,
+            progress: true,
+            statistics: true,
+            format: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +56,7 @@ impl Default for PreviewSettings {
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
             minimap_width: None,
             sidebar_width: 240,
+            status_line: StatusLineSettings::default(),
         }
     }
 }
@@ -88,6 +111,11 @@ impl PreviewSettings {
         let mut minimap_thumb_visibility = None;
         let mut minimap_width = None;
         let mut sidebar_width = None;
+        let mut status_outline = None;
+        let mut status_position = None;
+        let mut status_progress = None;
+        let mut status_statistics = None;
+        let mut status_format = None;
         for line in source.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -126,6 +154,11 @@ impl PreviewSettings {
                         .ok()
                         .filter(|width| (180..=420).contains(width));
                 }
+                "status_outline" => status_outline = value.trim().parse::<bool>().ok(),
+                "status_position" => status_position = value.trim().parse::<bool>().ok(),
+                "status_progress" => status_progress = value.trim().parse::<bool>().ok(),
+                "status_statistics" => status_statistics = value.trim().parse::<bool>().ok(),
+                "status_format" => status_format = value.trim().parse::<bool>().ok(),
                 _ => {}
             }
         }
@@ -136,12 +169,19 @@ impl PreviewSettings {
                 .unwrap_or(MinimapThumbVisibility::Always),
             minimap_width: minimap_width.unwrap_or(None),
             sidebar_width: sidebar_width.unwrap_or(240),
+            status_line: StatusLineSettings {
+                outline: status_outline.unwrap_or(true),
+                position: status_position.unwrap_or(true),
+                progress: status_progress.unwrap_or(true),
+                statistics: status_statistics.unwrap_or(true),
+                format: status_format.unwrap_or(true),
+            },
         })
     }
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\n",
+            "version={SETTINGS_VERSION}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
             match self.language {
                 Language::English => "en",
                 Language::Chinese => "zh-CN",
@@ -155,6 +195,11 @@ impl PreviewSettings {
                 .map(|width| width.to_string())
                 .unwrap_or_else(|| "auto".to_owned()),
             self.sidebar_width,
+            self.status_line.outline,
+            self.status_line.position,
+            self.status_line.progress,
+            self.status_line.statistics,
+            self.status_line.format,
         )
     }
 }
@@ -245,6 +290,13 @@ mod tests {
             minimap_thumb_visibility: MinimapThumbVisibility::Hover,
             minimap_width: Some(176),
             sidebar_width: 312,
+            status_line: StatusLineSettings {
+                outline: false,
+                position: true,
+                progress: false,
+                statistics: true,
+                format: false,
+            },
         };
         assert_eq!(
             PreviewSettings::parse(&settings.serialize()),

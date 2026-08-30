@@ -47,9 +47,28 @@ pub trait TextSnapshot: Send + Sync {
     }
 
     fn len_bytes(&self) -> u64;
+    fn len_chars(&self) -> u64;
+    fn len_lines(&self) -> u64;
     fn line_of_byte(&self, offset: ByteOffset) -> u64;
     fn chunk_at(&self, offset: ByteOffset) -> Option<TextChunk<'_>>;
     fn copy_range(&self, range: ByteRange) -> String;
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct TextStatistics {
+    pub bytes: u64,
+    pub characters: u64,
+    pub lines: u64,
+}
+
+impl TextStatistics {
+    pub fn from_snapshot(snapshot: &dyn TextSnapshot) -> Self {
+        Self {
+            bytes: snapshot.len_bytes(),
+            characters: snapshot.len_chars(),
+            lines: snapshot.len_lines(),
+        }
+    }
 }
 
 pub type SharedTextSnapshot = Arc<dyn TextSnapshot>;
@@ -93,6 +112,14 @@ impl TextSnapshot for RopeSnapshot {
 
     fn len_bytes(&self) -> u64 {
         self.rope.len_bytes() as u64
+    }
+
+    fn len_chars(&self) -> u64 {
+        self.rope.len_chars() as u64
+    }
+
+    fn len_lines(&self) -> u64 {
+        self.rope.len_lines() as u64
     }
 
     fn line_of_byte(&self, offset: ByteOffset) -> u64 {
@@ -199,5 +226,52 @@ impl<'a> LineCursor<'a> {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        ByteRange, DocumentBuffer, EditTransaction, RopeSnapshot, TextEdit, TextSnapshot,
+        TextStatistics,
+    };
+
+    #[test]
+    fn snapshot_reports_unicode_characters_and_physical_lines() {
+        let snapshot = RopeSnapshot::from_utf8("一a\n二🙂".as_bytes().to_vec()).unwrap();
+        assert_eq!(snapshot.len_bytes(), 12);
+        assert_eq!(snapshot.len_chars(), 5);
+        assert_eq!(snapshot.len_lines(), 2);
+        assert_eq!(
+            TextStatistics::from_snapshot(&snapshot),
+            TextStatistics {
+                bytes: 12,
+                characters: 5,
+                lines: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn statistics_follow_the_latest_edit_snapshot() {
+        let mut buffer = DocumentBuffer::from_utf8(b"one\ntwo".to_vec()).unwrap();
+        let initial = buffer.snapshot();
+        assert_eq!(TextStatistics::from_snapshot(&initial).characters, 7);
+
+        buffer
+            .commit(EditTransaction::new(
+                buffer.revision(),
+                vec![TextEdit::new(ByteRange::new(7, 7), "\nthree")],
+            ))
+            .unwrap();
+        let edited = buffer.snapshot();
+        assert_eq!(
+            TextStatistics::from_snapshot(&edited),
+            TextStatistics {
+                bytes: 13,
+                characters: 13,
+                lines: 3,
+            }
+        );
     }
 }

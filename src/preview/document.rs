@@ -2,7 +2,7 @@ use super::{
     display_map, loading::load_document, markdown, minimap, projection::PreviewProjectionSnapshot,
 };
 use crate::{
-    document::{Revision, RevisionRange, SharedTextSnapshot},
+    document::{Revision, RevisionRange, SharedTextSnapshot, TextStatistics},
     org_syntax::{BlockArena, BlockId},
 };
 use gpui::App;
@@ -19,9 +19,11 @@ pub struct PreviewDocument {
     pub(in crate::preview) format: DocumentFormat,
     pub blocks: Arc<BlockArena>,
     pub(in crate::preview) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
+    pub(in crate::preview) outline_paths: Arc<Vec<Option<Arc<str>>>>,
     pub(in crate::preview) projection: Arc<PreviewProjectionSnapshot>,
     pub(in crate::preview) minimap: Arc<minimap::MinimapState>,
     pub(in crate::preview) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
+    pub statistics: TextStatistics,
     pub metrics: LoadMetrics,
 }
 

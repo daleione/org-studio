@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    document::{RopeSnapshot, SharedTextSnapshot},
+    document::{RopeSnapshot, SharedTextSnapshot, TextStatistics},
     org_syntax::{BlockArena, BlockId, BlockKind, parse},
 };
 
@@ -103,6 +103,7 @@ fn load_document_profiled_impl(
     let rope_started = Instant::now();
     let snapshot =
         RopeSnapshot::from_utf8(bytes).map_err(|error| (path.clone(), error.to_string()))?;
+    let statistics = TextStatistics::from_snapshot(&snapshot);
     let rope = rope_started.elapsed();
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let parse_started = Instant::now();
@@ -130,6 +131,8 @@ fn load_document_profiled_impl(
             )
         }
     };
+    let outline_paths =
+        build_outline_paths(text.as_ref(), format, &blocks, &markdown_blocks, &rows);
     let parse = parse_started.elapsed();
     let table_projections = match format {
         DocumentFormat::Org => Arc::new(build_table_styles(text.as_ref(), &blocks)),
@@ -158,9 +161,11 @@ fn load_document_profiled_impl(
         format,
         blocks,
         markdown_blocks,
+        outline_paths,
         projection,
         minimap: Arc::new(super::minimap::MinimapState::new()),
         display_map: None,
+        statistics,
         metrics: LoadMetrics {
             bytes: byte_count,
             read,
@@ -177,4 +182,92 @@ fn load_document_profiled_impl(
     }
     document.metrics.total = total_started.elapsed();
     Ok(document)
+}
+
+fn build_outline_paths(
+    text: &dyn crate::document::TextSnapshot,
+    format: DocumentFormat,
+    blocks: &BlockArena,
+    markdown_blocks: &[markdown::MarkdownBlock],
+    rows: &[super::PreviewRow],
+) -> Arc<Vec<Option<Arc<str>>>> {
+    match format {
+        DocumentFormat::Org => {
+            let mut paths: Vec<Option<Arc<str>>> = Vec::with_capacity(blocks.nodes().len());
+            for node in blocks.nodes() {
+                let parent = node
+                    .parent
+                    .and_then(|parent| paths.get(parent as usize).cloned().flatten());
+                let path = if matches!(node.kind, BlockKind::Heading { .. }) {
+                    let title = text.copy_range(node.content);
+                    let title = title.trim();
+                    if title.is_empty() {
+                        parent
+                    } else if let Some(parent) = parent {
+                        Some(Arc::from(format!("{parent} / {title}")))
+                    } else {
+                        Some(Arc::from(title))
+                    }
+                } else {
+                    parent
+                };
+                paths.push(path);
+            }
+            Arc::new(paths)
+        }
+        DocumentFormat::Markdown => {
+            let mut current = None;
+            let mut paths = Vec::with_capacity(markdown_blocks.len());
+            for (index, block) in markdown_blocks.iter().enumerate() {
+                if matches!(block.kind, markdown::MarkdownKind::Heading { .. })
+                    && let Some(row) = rows.get(index)
+                {
+                    let title = text.copy_range(row.content.range);
+                    let title = title.trim();
+                    if !title.is_empty() {
+                        current = Some(Arc::from(title));
+                    }
+                }
+                paths.push(current.clone());
+            }
+            Arc::new(paths)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::RopeSnapshot;
+
+    #[test]
+    fn markdown_outline_lookup_has_no_scrollback_limit() {
+        let source = format!("# Long-lived heading\n{}", "body\n".repeat(700));
+        let text = RopeSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let (markdown_blocks, rows) = markdown::parse_markdown(&text);
+        let paths = build_outline_paths(
+            &text,
+            DocumentFormat::Markdown,
+            &BlockArena::default(),
+            &markdown_blocks,
+            &rows,
+        );
+        assert_eq!(
+            paths.last().and_then(Option::as_deref),
+            Some("Long-lived heading")
+        );
+    }
+
+    #[test]
+    fn org_outline_lookup_preserves_the_heading_path() {
+        let text = RopeSnapshot::from_utf8(b"* Parent\nbody\n** Child\nbody\n".to_vec()).unwrap();
+        let blocks = parse(&text);
+        let rows = build_preview_rows(&text, &blocks);
+        let paths = build_outline_paths(&text, DocumentFormat::Org, &blocks, &[], &rows);
+        let last_block = rows.last().unwrap().block_id as usize;
+        assert_eq!(
+            paths.get(last_block).and_then(Option::as_deref),
+            Some("Parent / Child")
+        );
+    }
 }

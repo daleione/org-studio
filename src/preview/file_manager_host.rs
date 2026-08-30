@@ -6,7 +6,7 @@ use std::{
 
 use gpui::{
     Context, CursorStyle, Entity, InteractiveElement, MouseButton, ParentElement,
-    PathPromptOptions, Styled, div, list, prelude::*, px, rgb,
+    PathPromptOptions, Styled, Window, div, list, prelude::*, px, rgb,
 };
 
 use super::{ContentRoute, DiredStatus, PreviewApp, PreviewLoadState};
@@ -467,14 +467,21 @@ impl PreviewApp {
         cx.notify();
     }
 
-    pub(super) fn workspace_body(&self, entity: Entity<Self>, viewport_width: f32) -> gpui::Div {
+    pub(super) fn workspace_body(
+        &self,
+        entity: Entity<Self>,
+        viewport_width: f32,
+        window: &Window,
+    ) -> gpui::Div {
         if matches!(self.state, PreviewLoadState::Empty)
             && self.content_route == ContentRoute::Document
         {
-            return self.body(entity, viewport_width);
+            return self.body(entity, viewport_width, window);
         }
         let body = match self.content_route {
-            ContentRoute::FileManager => self.full_page_file_manager(entity.clone()),
+            ContentRoute::FileManager => {
+                self.full_page_file_manager(entity.clone(), viewport_width, window)
+            }
             ContentRoute::Document if self.sidebar_visible => {
                 let sidebar_width = self.rendered_sidebar_width(viewport_width);
                 let editor_width =
@@ -521,10 +528,10 @@ impl PreviewApp {
                                     this.focus_document(cx);
                                 });
                             })
-                            .child(self.body(entity.clone(), editor_width)),
+                            .child(self.body(entity.clone(), editor_width, window)),
                     )
             }
-            ContentRoute::Document => self.body(entity.clone(), viewport_width),
+            ContentRoute::Document => self.body(entity.clone(), viewport_width, window),
         };
         body.relative()
             .when_some(self.dired_context_menu, |body, menu| {
@@ -532,7 +539,12 @@ impl PreviewApp {
             })
     }
 
-    fn full_page_file_manager(&self, entity: Entity<Self>) -> gpui::Div {
+    fn full_page_file_manager(
+        &self,
+        entity: Entity<Self>,
+        viewport_width: f32,
+        window: &Window,
+    ) -> gpui::Div {
         let Some(session) = self.dired.as_ref() else {
             return div()
                 .size_full()
@@ -546,19 +558,29 @@ impl PreviewApp {
         let operation_targets = session.operation_targets();
         let cursor = session.cursor();
         let directory = session.directory();
-        let status = self
-            .dired_status
-            .as_ref()
-            .map(DiredStatus::message)
-            .unwrap_or_else(|| {
-                Arc::from(format!(
-                    "{} entries  |  {} marked",
-                    entries.len(),
-                    session.marked_count()
-                ))
-            });
+        let status_snapshot = self.status_snapshot();
+        let status_line = status_snapshot.as_ref().map(|snapshot| {
+            let layout = self.status_layout(snapshot, viewport_width, window);
+            super::status_line::render_status_line(snapshot, layout, entity.clone(), window)
+        });
+        let status_popover = status_snapshot.as_ref().and_then(|snapshot| {
+            self.status_popover
+                .as_ref()
+                .filter(|popover| popover.pane == snapshot.pane)
+                .cloned()
+                .map(|popover| {
+                    super::status_line::render_status_popover(
+                        popover,
+                        Some(snapshot),
+                        self.status_line_settings,
+                        entity.clone(),
+                        self.language,
+                    )
+                })
+        });
         let dismiss_entity = entity.clone();
         div()
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -649,19 +671,10 @@ impl PreviewApp {
                     .size_full(),
                 ),
             )
-            .child(
-                div()
-                    .h(px(30.0))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .border_t_1()
-                    .border_color(rgb(current_theme().border))
-                    .bg(rgb(current_theme().background_alt))
-                    .text_color(rgb(current_theme().foreground_dim))
-                    .text_size(px(10.5))
-                    .child(status.to_string()),
-            )
+            .when_some(status_line, |manager, status_line| {
+                manager.child(status_line)
+            })
+            .when_some(status_popover, |manager, popover| manager.child(popover))
     }
 
     fn file_sidebar(&self, entity: Entity<Self>, sidebar_width: f32) -> gpui::Div {

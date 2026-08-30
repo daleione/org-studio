@@ -104,6 +104,9 @@ impl Render for PreviewApp {
                     generation,
                     elapsed.as_secs_f64() * 1000.0
                 );
+                // The list viewport is only known after the first layout pass. Render once
+                // more so pane-local status (notably bottom-edge progress) uses real bounds.
+                cx.notify();
                 if generation == 1
                     && std::env::var_os("ORG_STUDIO_RELOAD_BENCH").is_some()
                     && let PreviewLoadState::Ready { document, .. } = &this.state
@@ -123,7 +126,6 @@ impl Render for PreviewApp {
             });
         }
         let entity = cx.entity();
-        let key_status = self.keyboard.status().map(Arc::<str>::from);
         let which_key_items = self.which_key_items.clone();
         let dired_help_visible = self.dired_help_visible;
         let command_window_width = f32::from(window.viewport_size().width);
@@ -140,6 +142,14 @@ impl Render for PreviewApp {
             .text_color(rgb(current_theme().foreground))
             .font_family("Menlo")
             .text_size(px(14.0))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, _, cx| {
+                    if this.status_popover.take().is_some() {
+                        cx.notify();
+                    }
+                }),
+            )
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
             .on_action(cx.listener(|this, _: &OpenDocument, window, cx| {
                 this.dispatch_command(OPEN_DOCUMENT_COMMAND, window, cx)
@@ -168,7 +178,7 @@ impl Render for PreviewApp {
                     this.open_dropped_paths(paths, cx)
                 }),
             )
-            .child(self.workspace_body(entity.clone(), command_window_width))
+            .child(self.workspace_body(entity.clone(), command_window_width, window))
             .when(resizing_sidebar, |view| {
                 view.child(
                     div()
@@ -203,28 +213,6 @@ impl Render for PreviewApp {
                     which_key_window(which_key_items.clone(), command_window_width)
                 })
             })
-            .when_some(
-                if which_key_items.is_empty() {
-                    key_status
-                } else {
-                    None
-                },
-                |view, status| {
-                    view.child(
-                        div()
-                            .absolute()
-                            .left(px(108.0))
-                            .bottom(px(10.0))
-                            .px_2()
-                            .py_1()
-                            .rounded_sm()
-                            .bg(rgb(current_theme().background))
-                            .text_color(rgb(current_theme().foreground))
-                            .text_size(px(12.0))
-                            .child(status.to_string()),
-                    )
-                },
-            )
             .when_some(export_panel, |view, panel| {
                 view.child(render_export_panel(
                     entity.clone(),
