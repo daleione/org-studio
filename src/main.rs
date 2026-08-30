@@ -9,10 +9,9 @@ use org_studio::{
     editor::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     perf_tracing,
     preview::{
-        ExportDocument, InitialDocumentLoad, OpenDocument, PreviewMode, QuitApplication,
-        ReloadDocument, SaveDocument, SaveDocumentAs, ShowHome, SourceMode, SplitMode,
-        ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish,
-        preload_initial_document,
+        ExportDocument, InitialDocumentLoad, OpenDocument, QuitApplication, ReloadDocument,
+        ReturnToEditor, SaveDocument, SaveDocumentAs, ShowHome, ToggleMinimap, ToggleRightPreview,
+        ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish, preload_initial_document,
     },
 };
 
@@ -159,9 +158,8 @@ fn main() {
             KeyBinding::new("cmd-r", ReloadDocument, None),
             KeyBinding::new("cmd-shift-e", ExportDocument, None),
             KeyBinding::new("cmd-q", QuitApplication, None),
-            KeyBinding::new("cmd-1", SourceMode, None),
-            KeyBinding::new("cmd-2", SplitMode, None),
-            KeyBinding::new("cmd-3", PreviewMode, None),
+            KeyBinding::new("cmd-1", ReturnToEditor, None),
+            KeyBinding::new("cmd-2", ToggleRightPreview, None),
             KeyBinding::new("alt-z", ToggleSoftWrap, None),
         ]);
         cx.set_menus(app_menus());
@@ -244,9 +242,8 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::action("Select All", SelectAll),
         ]),
         Menu::new("View").items([
-            MenuItem::action("Source", SourceMode),
-            MenuItem::action("Split", SplitMode),
-            MenuItem::action("Preview", PreviewMode),
+            MenuItem::action("Return to Editor", ReturnToEditor),
+            MenuItem::action("Toggle Right Preview", ToggleRightPreview),
             MenuItem::separator(),
             MenuItem::action("Toggle Soft Wrap", ToggleSoftWrap),
             MenuItem::separator(),

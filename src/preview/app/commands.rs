@@ -150,14 +150,11 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ToggleMinimap) => {
                 self.toggle_minimap(cx)
             }
-            CommandImplementation::Builtin(BuiltinCommand::SetSourceMode) => {
-                self.set_document_mode(crate::app::DocumentMode::Source, cx)
+            CommandImplementation::Builtin(BuiltinCommand::ReturnToEditor) => {
+                self.return_to_editor(cx)
             }
-            CommandImplementation::Builtin(BuiltinCommand::SetSplitMode) => {
-                self.set_document_mode(crate::app::DocumentMode::Split, cx)
-            }
-            CommandImplementation::Builtin(BuiltinCommand::SetPreviewMode) => {
-                self.set_document_mode(crate::app::DocumentMode::Preview, cx)
+            CommandImplementation::Builtin(BuiltinCommand::ToggleRightPreview) => {
+                self.toggle_right_preview(cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ToggleSoftWrap) => {
                 self.toggle_soft_wrap(cx)
@@ -216,12 +213,31 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn set_document_mode(
-        &mut self,
-        mode: crate::app::DocumentMode,
-        cx: &mut Context<Self>,
-    ) {
-        if self.document_mode == mode {
+    pub(in crate::preview) fn return_to_editor(&mut self, cx: &mut Context<Self>) {
+        self.request_editor_focus(cx);
+        cx.notify();
+    }
+
+    pub(in crate::preview) fn toggle_right_preview(&mut self, cx: &mut Context<Self>) {
+        let preview_was_focused = !self.document_view.editor_focused();
+        let right_preview_open = !self.document_view.right_preview_open();
+        if preview_was_focused {
+            self.focus_editor_surface(right_preview_open, cx);
+        } else {
+            self.document_view = crate::app::DocumentViewState::editing(right_preview_open);
+        }
+        self.cancel_right_preview_resize();
+        if right_preview_open {
+            self.schedule_derived_update(cx);
+        } else {
+            self.discard_derived_preview();
+        }
+        self.save_preview_settings();
+        cx.notify();
+    }
+
+    pub(in crate::preview) fn focus_right_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.document_view.right_preview_open() || !self.document_view.editor_focused() {
             return;
         }
         if let Some(ready) = self.state.ready() {
@@ -229,21 +245,9 @@ impl WorkspaceWindow {
                 .editor
                 .update(cx, |editor, cx| editor.finish_composition(cx));
         }
-        self.document_mode = mode;
-        self.split_scroll.source_anchor = None;
-        self.split_scroll.preview_anchor = None;
-        let (keyboard, key_context) = super::document_keymap(mode, &self.commands);
-        self.keyboard = keyboard;
-        self.key_context = key_context;
-        if mode != crate::app::DocumentMode::Source {
-            self.schedule_derived_update(cx);
-        }
-        if mode != crate::app::DocumentMode::Preview {
-            self.request_editor_focus(cx);
-        } else {
-            self.focus_workspace_on_render = true;
-        }
-        self.save_preview_settings();
+        self.document_view = crate::app::DocumentViewState::RightPreviewFocused;
+        self.focus_workspace_on_render = true;
+        self.install_document_keymap();
         cx.notify();
     }
 
@@ -271,10 +275,17 @@ impl WorkspaceWindow {
             }
             return;
         }
+        if event.keystroke.key == "escape" && !self.document_view.editor_focused() {
+            cx.stop_propagation();
+            self.request_editor_focus(cx);
+            cx.notify();
+            return;
+        }
         if event.keystroke.key == "escape"
             && (self.file_manager.dismiss_context_menu()
                 || self.cancel_minimap_interaction(cx)
-                || self.cancel_sidebar_resize())
+                || self.cancel_sidebar_resize()
+                || self.cancel_right_preview_resize())
         {
             cx.stop_propagation();
             cx.notify();
@@ -318,15 +329,11 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn install_preview_keymap(&mut self) {
-        self.install_route_keymap(false, false);
-    }
-
     pub(in crate::preview) fn install_document_keymap(&mut self) {
-        if self.document_mode != crate::app::DocumentMode::Preview {
-            self.install_source_keymap();
+        if !self.document_view.editor_focused() {
+            self.install_route_keymap(false, false);
         } else {
-            self.install_preview_keymap();
+            self.install_source_keymap();
         }
     }
 

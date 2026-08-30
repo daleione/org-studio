@@ -97,7 +97,7 @@ fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui:
 }
 
 #[gpui::test]
-fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
+fn right_preview_toggle_preserves_editor_state_and_publishes_only_latest_revision(
     cx: &mut gpui::TestAppContext,
 ) {
     let session = crate::document::DocumentSession::from_utf8(
@@ -105,8 +105,7 @@ fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
         b"* Heading\nbody\n".to_vec(),
     )
     .unwrap();
-    let workspace =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source));
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_right_preview(false));
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
@@ -124,18 +123,18 @@ fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
     let original = session.read_with(cx, |session, _| session.snapshot());
 
     workspace.update(cx, |workspace, cx| {
-        workspace.set_document_mode(crate::app::DocumentMode::Preview, cx);
+        workspace.toggle_right_preview(cx);
         assert!(workspace.preview_panel().is_none());
         assert!(
             workspace
                 .document_status_snapshot(crate::navigation::PaneId(1), cx)
                 .is_some()
         );
-        workspace.set_document_mode(crate::app::DocumentMode::Source, cx);
+        workspace.toggle_right_preview(cx);
     });
 
     workspace.update(cx, |workspace, cx| {
-        workspace.set_document_mode(crate::app::DocumentMode::Split, cx);
+        workspace.toggle_right_preview(cx);
         workspace.toggle_soft_wrap(cx);
     });
     assert!(!cx.read(|cx| editor.read(cx).soft_wrap()));
@@ -184,8 +183,29 @@ fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
     assert_eq!(panel_revision, latest_revision);
 
     workspace.update(cx, |workspace, cx| {
-        workspace.set_document_mode(crate::app::DocumentMode::Preview, cx);
-        workspace.set_document_mode(crate::app::DocumentMode::Source, cx);
+        assert!(workspace.document_view.editor_focused());
+        workspace.focus_right_preview(cx);
+        assert!(!workspace.document_view.editor_focused());
+        assert!(
+            !workspace
+                .document_status_snapshot(crate::navigation::PaneId(1), cx)
+                .unwrap()
+                .uses_editor_viewport()
+        );
+        workspace.return_to_editor(cx);
+        assert!(workspace.document_view.editor_focused());
+        assert!(workspace.document_view.right_preview_open());
+        assert!(
+            workspace
+                .document_status_snapshot(crate::navigation::PaneId(1), cx)
+                .unwrap()
+                .uses_editor_viewport()
+        );
+    });
+
+    workspace.update(cx, |workspace, cx| {
+        workspace.toggle_right_preview(cx);
+        workspace.toggle_right_preview(cx);
     });
     assert_eq!(
         session.read_with(cx, |session, _| session.revision()),
@@ -195,6 +215,51 @@ fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
         cx.read(|cx| editor.read(cx).selection()),
         Selection::caret(ByteOffset(2))
     );
+}
+
+#[gpui::test]
+fn opening_right_preview_preserves_ime_until_preview_receives_focus(cx: &mut gpui::TestAppContext) {
+    let loaded = super::load_document(
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/preview-basics.org"),
+    )
+    .unwrap();
+    let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
+        super::WorkspaceWindow::with_right_preview(false)
+    });
+    let editor = window
+        .update(cx, |workspace, _, cx| {
+            assert!(workspace.apply_load_result(0, Ok(loaded), cx));
+            workspace.state.ready().unwrap().editor.clone()
+        })
+        .unwrap();
+    let root = window.entity(cx).unwrap();
+    cx.update(|cx| {
+        cx.with_window(root.entity_id(), |window, cx| {
+            editor.update(cx, |editor, cx| {
+                <crate::editor::SourceEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
+                    editor,
+                    None,
+                    "ni",
+                    Some(2..2),
+                    window,
+                    cx,
+                );
+            });
+        })
+        .unwrap();
+    });
+    assert!(cx.read(|cx| editor.read(cx).has_active_composition()));
+
+    window
+        .update(cx, |workspace, _, cx| workspace.toggle_right_preview(cx))
+        .unwrap();
+    assert!(cx.read(|cx| editor.read(cx).has_active_composition()));
+
+    window
+        .update(cx, |workspace, _, cx| workspace.focus_right_preview(cx))
+        .unwrap();
+    assert!(!cx.read(|cx| editor.read(cx).has_active_composition()));
 }
 
 fn simulate_next_frame<V: gpui::Render + 'static>(
@@ -314,7 +379,7 @@ fn shift_tab_dispatches_the_global_visibility_cycle() {
 
 #[test]
 fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
-    let mut app = super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview);
+    let mut app = super::WorkspaceWindow::with_right_preview(true);
     app.install_sidebar_keymap();
     let contexts = super::built_in_contexts();
     assert!(app.key_context.contains(contexts.key("workspace").unwrap()));
@@ -325,7 +390,7 @@ fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
 
 #[test]
 fn source_keymap_passes_text_keys_to_the_editor() {
-    let mut app = super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source);
+    let mut app = super::WorkspaceWindow::with_right_preview(false);
     for key in ["g", "q", "space", "backspace"] {
         assert!(
             matches!(
@@ -335,23 +400,29 @@ fn source_keymap_passes_text_keys_to_the_editor() {
                 ),
                 EmacsOutcome::PassThrough | EmacsOutcome::Undefined
             ),
-            "{key} must not be handled as a preview command in Source mode"
+            "{key} must remain available to the editor"
         );
     }
+    assert!(matches!(
+        app.keyboard.route(
+            KeyStroke::new("tab", false, false, true, false),
+            app.key_context,
+        ),
+        EmacsOutcome::PassThrough | EmacsOutcome::Undefined
+    ));
     let contexts = super::built_in_contexts();
     assert!(app.key_context.contains(contexts.key("editor").unwrap()));
     assert!(!app.key_context.contains(contexts.key("preview").unwrap()));
 }
 
 #[gpui::test]
-fn source_workspace_load_does_not_build_a_hidden_preview(cx: &mut gpui::TestAppContext) {
+fn editor_only_workspace_load_does_not_build_a_hidden_preview(cx: &mut gpui::TestAppContext) {
     let path =
         std::env::temp_dir().join(format!("org-studio-source-load-{}.org", std::process::id()));
     std::fs::write(&path, "* Heading\nbody\n").unwrap();
-    let loaded =
-        super::load_workspace_document(path.clone(), crate::app::DocumentMode::Source).unwrap();
+    let loaded = super::load_workspace_document(path.clone(), false).unwrap();
     let _ = std::fs::remove_file(&path);
-    let mut app = super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source);
+    let mut app = super::WorkspaceWindow::with_right_preview(false);
     app.generation = 1;
     assert!(cx.update(|cx| app.apply_load_result(1, Ok(loaded), cx)));
     assert!(app.document_session().is_some());
@@ -359,14 +430,133 @@ fn source_workspace_load_does_not_build_a_hidden_preview(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
+fn opening_preview_while_a_source_load_finishes_schedules_the_new_document(
+    cx: &mut gpui::TestAppContext,
+) {
+    let path = std::path::PathBuf::from("open-during-load.org");
+    let session = crate::document::DocumentSession::from_utf8(
+        path.clone(),
+        b"* Current document\nbody\n".to_vec(),
+    )
+    .unwrap();
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_right_preview(false));
+    workspace.update(cx, |workspace, cx| {
+        let generation = workspace.begin_open(path, std::time::Instant::now());
+        workspace.toggle_right_preview(cx);
+        assert!(workspace.apply_load_result(
+            generation,
+            Ok(super::WorkspaceLoadedDocument::Source(session)),
+            cx,
+        ));
+        workspace.reconcile_derived_preview(cx);
+    });
+
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(25));
+    cx.run_until_parked();
+
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let ready = workspace.state.ready().unwrap();
+        let panel = ready
+            .panel
+            .as_ref()
+            .expect("right preview should be published");
+        assert_eq!(
+            panel.read(cx).document().revision,
+            ready.session.read(cx).revision()
+        );
+    });
+}
+
+#[gpui::test]
+fn closing_preview_releases_projection_and_rejects_a_completed_preview_load(
+    cx: &mut gpui::TestAppContext,
+) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-close-preview-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(&path, "* Heading\nbody\n").unwrap();
+    let loaded = super::load_document(path.clone()).unwrap();
+    let late_loaded = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
+
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(0, Ok(loaded), cx));
+        assert!(workspace.preview_panel().is_some());
+        workspace.toggle_right_preview(cx);
+        assert!(workspace.preview_panel().is_none());
+        assert_eq!(workspace.derived.published, None);
+        assert!(
+            workspace
+                .derived
+                .pending
+                .lock()
+                .expect("derived request slot")
+                .is_none()
+        );
+
+        workspace.generation = 1;
+        assert!(workspace.apply_load_result(1, Ok(late_loaded), cx));
+        assert!(workspace.preview_panel().is_none());
+        assert_eq!(workspace.derived.published, None);
+    });
+}
+
+#[gpui::test]
+fn lagging_preview_status_falls_back_to_one_coherent_editor_snapshot(
+    cx: &mut gpui::TestAppContext,
+) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-lagging-preview-status-{}.org",
+        std::process::id()
+    ));
+    std::fs::write(&path, "* Heading\nbody\n").unwrap();
+    let loaded = super::load_document(path.clone()).unwrap();
+    let _ = std::fs::remove_file(path);
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
+    let session = workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(0, Ok(loaded), cx));
+        workspace.focus_right_preview(cx);
+        workspace.document_session().unwrap().clone()
+    });
+    session.update(cx, |session, cx| {
+        let end = session.snapshot().len_bytes();
+        session
+            .edit(
+                SessionEdit::new(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(end, end), "new")],
+                    ),
+                    Selection::caret(ByteOffset(end)),
+                    Selection::caret(ByteOffset(end + 3)),
+                    EditOrigin::Typing,
+                ),
+                cx,
+            )
+            .unwrap();
+    });
+
+    cx.read(|cx| {
+        let status = workspace
+            .read(cx)
+            .document_status_snapshot(crate::navigation::PaneId(1), cx)
+            .unwrap();
+        assert!(status.uses_editor_viewport());
+    });
+}
+
+#[gpui::test]
 fn export_source_uses_the_live_edited_session(cx: &mut gpui::TestAppContext) {
     let path =
         std::env::temp_dir().join(format!("org-studio-live-export-{}.org", std::process::id()));
     std::fs::write(&path, "old").unwrap();
-    let loaded =
-        super::load_workspace_document(path.clone(), crate::app::DocumentMode::Source).unwrap();
+    let loaded = super::load_workspace_document(path.clone(), false).unwrap();
     let _ = std::fs::remove_file(&path);
-    let mut app = super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source);
+    let mut app = super::WorkspaceWindow::with_right_preview(false);
     app.generation = 1;
     assert!(cx.update(|cx| app.apply_load_result(1, Ok(loaded), cx)));
     let session = app.document_session().unwrap().clone();
@@ -404,7 +594,7 @@ fn unchanged_viewport_does_not_cancel_an_active_sidebar_resize(cx: &mut gpui::Te
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview)
+        super::WorkspaceWindow::with_right_preview(true)
     });
     window
         .update(cx, |app, _, cx| {
@@ -445,8 +635,7 @@ fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -533,7 +722,7 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview)
+        super::WorkspaceWindow::with_right_preview(true)
     });
     window
         .update(cx, |app, _, cx| {
@@ -607,8 +796,7 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::T
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -706,8 +894,7 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -772,8 +959,7 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -834,8 +1020,7 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
 
     app.update(cx, |app, cx| {
         app.generation = 1;
@@ -917,8 +1102,7 @@ fn reduced_motion_applies_local_fold_without_a_delayed_projection(cx: &mut gpui:
     std::fs::write(&path, "* Parent\nbody\n** Child\nchild body\n").unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
 
     app.update(cx, |app, cx| {
         app.generation = 1;
@@ -952,7 +1136,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview)
+        super::WorkspaceWindow::with_right_preview(true)
     });
     window
         .update(cx, |app, _window, cx| {
@@ -1423,7 +1607,7 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(320.0)), |_, _| {
-        super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview)
+        super::WorkspaceWindow::with_right_preview(true)
     });
     window
         .update(cx, |app, _window, cx| {
@@ -1576,7 +1760,7 @@ fn open_failure_retains_previous_session_and_rejects_stale_completion(
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(&path);
 
-    let mut app = super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview);
+    let mut app = super::WorkspaceWindow::with_right_preview(true);
     app.generation = 1;
     assert!(apply_load_result(&mut app, 1, Ok(document), cx));
     assert!(app.state.ready().is_some());
@@ -1613,8 +1797,7 @@ fn reload_keeps_session_identity_and_publishes_a_coherent_preview(cx: &mut gpui:
     ));
     std::fs::write(&path, "* Before\nold\n").unwrap();
     let loaded = super::load_document(path.clone()).unwrap();
-    let app =
-        cx.new(|_| super::WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview));
+    let app = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
     let (session_before, document_id, panel, events) = app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(loaded), cx));

@@ -50,6 +50,7 @@ mod org_line;
 mod overlay;
 mod panel;
 mod projection;
+mod right_preview;
 mod rows;
 mod save;
 mod table;
@@ -71,6 +72,7 @@ use folding::{
 pub(crate) use panel::PreviewPanel;
 use panel::PreviewRenderState;
 use projection::build_projection_snapshot;
+pub(crate) use right_preview::ResizeSession as RightPreviewResizeSession;
 use rows::build_preview_rows;
 pub(crate) use save::{PendingTransition, SaveHost, SaveInteraction, SaveStatus};
 pub(crate) use status_line::StatusLineHost;
@@ -107,9 +109,8 @@ const OPEN_DEFAULT_DIRED_COMMAND: &str = "org-studio.dired.open-default";
 const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
 const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
 const TOGGLE_MINIMAP_COMMAND: &str = "org-studio.preview.toggle-minimap";
-const SOURCE_MODE_COMMAND: &str = "org-studio.document.mode-source";
-const SPLIT_MODE_COMMAND: &str = "org-studio.document.mode-split";
-const PREVIEW_MODE_COMMAND: &str = "org-studio.document.mode-preview";
+const RETURN_TO_EDITOR_COMMAND: &str = "org-studio.document.return-to-editor";
+const TOGGLE_RIGHT_PREVIEW_COMMAND: &str = "org-studio.document.toggle-right-preview";
 const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
 const GLOBAL_VISIBILITY_CYCLE_COMMAND: &str = "org-studio.preview.global-visibility-cycle";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
@@ -152,9 +153,8 @@ actions!(
         ReturnToDocument,
         ToggleSidebar,
         ToggleMinimap,
-        SourceMode,
-        SplitMode,
-        PreviewMode,
+        ReturnToEditor,
+        ToggleRightPreview,
         ToggleSoftWrap,
         UseEnglish,
         UseChinese

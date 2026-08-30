@@ -65,6 +65,7 @@ impl StatusLineSnapshot {
             width_bits: width.to_bits(),
             settings,
             host: self.host,
+            right_preview_open: self.right_preview_open,
             language: self.language,
             outline: self.outline.is_some(),
             position_reserve: self
@@ -163,9 +164,9 @@ impl StatusLineSnapshot {
 
     fn mode_label(&self) -> &'static str {
         match self.host {
-            StatusHost::Preview => "PREVIEW",
-            StatusHost::Editor => "EDIT",
-            StatusHost::Split => "SPLIT",
+            StatusHost::Preview => "EDIT · VIEW",
+            StatusHost::Editor if self.right_preview_open => "EDIT · VIEW",
+            StatusHost::Editor => "EDIT · +VIEW",
             StatusHost::Dired => "FILES",
         }
     }
@@ -722,19 +723,9 @@ impl WorkspaceWindow {
         cx: &mut gpui::Context<Self>,
     ) {
         match segment {
-            StatusSegment::Progress
-                if self.content_route == ContentRoute::Document
-                    && self.document_mode == crate::app::DocumentMode::Preview =>
-            {
-                if !self.minimap_visible {
-                    self.minimap_visible = true;
-                    self.bump_preview_revision(cx);
-                    self.save_preview_settings();
-                }
-                self.status.popover = Some(StatusPopover {
-                    pane,
-                    content: StatusPopoverContent::Info(segment),
-                });
+            StatusSegment::Mode if self.content_route == ContentRoute::Document => {
+                self.status.popover = None;
+                self.toggle_right_preview(cx);
             }
             StatusSegment::More => {
                 self.status.popover = Some(StatusPopover {
@@ -888,9 +879,9 @@ fn info_text(
         && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Editor)
     {
         return match language {
-            Language::Chinese => "当前为 Source 编辑模式。位置和进度来自编辑器的实时光标与 viewport。".to_owned(),
+            Language::Chinese => "当前为编辑界面。位置和进度来自编辑器的实时光标与 viewport；点击可打开或关闭右侧预览。".to_owned(),
             Language::English => {
-                "Source editing is active. Position and progress use the editor's live caret and viewport.".to_owned()
+                "Editing is active. Position and progress use the editor's live caret and viewport; click to toggle the right preview.".to_owned()
             }
         };
     }
@@ -904,18 +895,6 @@ fn info_text(
             Language::English => {
                 "Preview is active. Position and progress use the preview mapping and viewport."
                     .to_owned()
-            }
-        };
-    }
-    if segment == StatusSegment::Mode
-        && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Split)
-    {
-        return match language {
-            Language::Chinese => {
-                "当前为 Split：左侧编辑源文本，右侧显示同一 revision 的预览。".to_owned()
-            }
-            Language::English => {
-                "Split shows editable source and the coherent preview side by side.".to_owned()
             }
         };
     }
@@ -960,6 +939,7 @@ mod tests {
             pane: PaneId(7),
             language: Language::Chinese,
             host: StatusHost::Preview,
+            right_preview_open: false,
             outline: Some("性能优化 / Minimap".into()),
             position: Some(StatusPosition::PreviewSource {
                 line: 259,
@@ -1019,9 +999,7 @@ mod tests {
     fn clicking_the_rendered_more_segment_opens_its_pane_overflow(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
-        let app = cx.update(|cx| {
-            cx.new(|_| WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview))
-        });
+        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_right_preview(true)));
         let snapshot = snapshot();
         let pane = snapshot.pane;
         struct StatusHarness {
@@ -1058,6 +1036,49 @@ mod tests {
         ));
     }
 
+    #[gpui::test]
+    fn clicking_the_left_status_control_toggles_right_preview_without_leaving_editor(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
+
+        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_right_preview(false)));
+        let mut snapshot = snapshot();
+        snapshot.host = StatusHost::Editor;
+        struct StatusHarness {
+            app: Entity<WorkspaceWindow>,
+            snapshot: StatusLineSnapshot,
+        }
+        impl Render for StatusHarness {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let layout =
+                    self.snapshot
+                        .layout_in_window(900.0, StatusLineSettings::default(), window);
+                render_status_line(&self.snapshot, layout, self.app.clone(), window)
+            }
+        }
+        let (_harness, cx) = cx.add_window_view(|_, _| StatusHarness {
+            app: app.clone(),
+            snapshot,
+        });
+        let bounds = cx
+            .debug_bounds("status-7-segment-0")
+            .expect("left status control should be painted");
+        let center = point(
+            bounds.origin.x + bounds.size.width / 2.0,
+            bounds.origin.y + bounds.size.height / 2.0,
+        );
+        cx.simulate_mouse_move(center, None, Modifiers::default());
+        cx.simulate_click(center, Modifiers::default());
+
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert!(app.document_view.right_preview_open());
+            assert!(app.document_view.editor_focused());
+            assert!(app.status.popover.is_none());
+        });
+    }
+
     #[test]
     fn preview_and_editor_positions_have_distinct_semantics() {
         assert_eq!(
@@ -1085,7 +1106,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn source_mode_status_reads_the_editor_instead_of_the_hidden_preview(
+    fn editing_status_reads_the_editor_instead_of_the_auxiliary_preview(
         cx: &mut gpui::TestAppContext,
     ) {
         let path = std::env::temp_dir().join(format!(
@@ -1096,12 +1117,11 @@ mod tests {
         let loaded = crate::preview::load_document(path.clone()).unwrap();
         let _ = std::fs::remove_file(path);
         let window = cx.open_window(gpui::size(px(900.0), px(700.0)), |_, _| {
-            WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Preview)
+            WorkspaceWindow::with_right_preview(true)
         });
         let editor = window
             .update(cx, |app, _, cx| {
                 app.language = Language::Chinese;
-                app.document_mode = crate::app::DocumentMode::Source;
                 app.generation = 1;
                 assert!(app.apply_load_result(1, Ok(loaded), cx));
                 app.state.ready().unwrap().editor.clone()

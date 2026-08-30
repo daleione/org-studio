@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use gpui::{ListState, px};
 
-use crate::app::DocumentMode;
 use crate::preview::SaveStatus;
 use crate::preview::export_ui::ExportRunState;
 use crate::{document::ByteOffset, i18n::Language, navigation::PaneId};
@@ -32,15 +31,20 @@ impl WorkspaceWindow {
             | PreviewLoadState::Loading { .. }
             | PreviewLoadState::Failed { previous: None, .. } => return None,
         };
-        match self.document_mode {
-            DocumentMode::Source | DocumentMode::Split => {
-                Some(self.source_status_snapshot(pane, document, cx))
-            }
-            DocumentMode::Preview => document
+        if self.document_view.editor_focused() {
+            Some(self.source_status_snapshot(pane, document, cx))
+        } else {
+            document
                 .panel
                 .as_ref()
+                .filter(|panel| {
+                    let preview = panel.read(cx);
+                    let session = document.session.read(cx);
+                    preview.document().document_id == session.id()
+                        && preview.document().revision == session.revision()
+                })
                 .map(|panel| self.preview_status_snapshot(pane, panel, cx))
-                .or_else(|| Some(self.source_status_snapshot(pane, document, cx))),
+                .or_else(|| Some(self.source_status_snapshot(pane, document, cx)))
         }
     }
 
@@ -56,15 +60,24 @@ impl WorkspaceWindow {
             lines: status.total_lines,
             bytes: status.bytes,
         };
+        let outline = ready.panel.as_ref().and_then(|panel| {
+            let panel = panel.read(cx);
+            let preview = panel.document();
+            (preview.revision == ready.session.read(cx).revision())
+                .then(|| {
+                    preview
+                        .projection
+                        .visual_row_for_source_offset(status.caret_offset)
+                        .and_then(|row| current_outline(preview, row))
+                })
+                .flatten()
+        });
         StatusLineSnapshot {
             pane,
             language: self.language,
-            host: if self.document_mode == DocumentMode::Split {
-                StatusHost::Split
-            } else {
-                StatusHost::Editor
-            },
-            outline: None,
+            host: StatusHost::Editor,
+            right_preview_open: self.document_view.right_preview_open(),
+            outline,
             position: Some(StatusPosition::EditorCaret {
                 line: status.caret_line,
                 column: status.caret_column,
@@ -124,6 +137,7 @@ impl WorkspaceWindow {
             pane,
             language: self.language,
             host: StatusHost::Preview,
+            right_preview_open: self.document_view.right_preview_open(),
             outline: current_outline(document, source_index),
             position: Some(StatusPosition::PreviewSource {
                 line,
@@ -132,7 +146,7 @@ impl WorkspaceWindow {
             progress: Some(progress),
             statistics: Some(statistics),
             document_statistics: Some(document_statistics),
-            format: Some(document.format),
+            format: Some(super::super::DocumentFormat::from_path(&document.path)),
             transient: self.document_transient_status(cx),
         }
     }
@@ -155,6 +169,7 @@ impl WorkspaceWindow {
             pane,
             language: self.language,
             host: StatusHost::Dired,
+            right_preview_open: false,
             outline: Some(directory.into()),
             position: Some(StatusPosition::DiredSelection { selected, total }),
             progress: None,
@@ -210,7 +225,7 @@ impl WorkspaceWindow {
                 }
                 _ => {}
             }
-            if self.document_mode != DocumentMode::Source
+            if self.document_view.needs_preview()
                 && self.derived.published != Some((session.id(), session.revision()))
             {
                 return Some(StatusMessage {

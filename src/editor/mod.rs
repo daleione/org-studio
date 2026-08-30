@@ -131,6 +131,7 @@ pub(super) enum FrameBenchmarkAction {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct SourceEditorStatus {
+    pub(crate) caret_offset: ByteOffset,
     pub(crate) caret_line: u64,
     pub(crate) caret_column: u64,
     pub(crate) visible_bottom_line: u64,
@@ -328,6 +329,11 @@ impl SourceEditor {
         self.session.read(cx).snapshot()
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_active_composition(&self) -> bool {
+        self.composition.is_some()
+    }
+
     pub(crate) fn status(&self, cx: &App) -> SourceEditorStatus {
         let snapshot = self.snapshot(cx);
         let (line, column) = snapshot
@@ -351,6 +357,7 @@ impl SourceEditor {
         let reached_end =
             viewport_height > 0.0 && self.scroll_y + viewport_height + 0.5 >= document_height;
         SourceEditorStatus {
+            caret_offset: self.selection.head(),
             caret_line: line.0 + 1,
             caret_column: column + 1,
             visible_bottom_line,

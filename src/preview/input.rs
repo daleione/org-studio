@@ -20,20 +20,39 @@ use super::{
     DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND, DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND,
     END_COMMAND, EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
     OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
-    PREVIEW_MODE_COMMAND, QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND,
-    RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
-    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, SOURCE_MODE_COMMAND,
-    SPLIT_MODE_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
+    QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
+    RETURN_TO_EDITOR_COMMAND, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
+    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND,
+    TOGGLE_RIGHT_PREVIEW_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
 };
 
 #[cfg(test)]
 pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
-    document_input(crate::app::DocumentMode::Preview)
+    let (commands, _, _) = document_input();
+    let contexts = built_in_contexts();
+    let active_contexts = vec!["workspace", "preview"];
+    let active_context = contexts
+        .set(active_contexts.clone())
+        .expect("registered built-in contexts");
+    let configuration = compile_input_profile(
+        1,
+        &preview_bindings(),
+        &commands,
+        &contexts,
+        &active_contexts,
+        &["prompt"],
+    )
+    .expect("built-in preview input profile is valid");
+    let keyboard = KeyboardRouter::new(
+        configuration.generation,
+        configuration.interner,
+        configuration.grammar,
+        configuration.enabled_when,
+    );
+    (commands, keyboard, active_context)
 }
 
-pub(super) fn document_input(
-    mode: crate::app::DocumentMode,
-) -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
+pub(super) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
     builder
         .register_builtin(BuiltinCommandSpec {
@@ -122,19 +141,14 @@ pub(super) fn document_input(
         .expect("valid built-in reload command");
     for (name, title, command) in [
         (
-            SOURCE_MODE_COMMAND,
-            "Source Mode",
-            BuiltinCommand::SetSourceMode,
+            RETURN_TO_EDITOR_COMMAND,
+            "Return to Editor",
+            BuiltinCommand::ReturnToEditor,
         ),
         (
-            SPLIT_MODE_COMMAND,
-            "Split Mode",
-            BuiltinCommand::SetSplitMode,
-        ),
-        (
-            PREVIEW_MODE_COMMAND,
-            "Preview Mode",
-            BuiltinCommand::SetPreviewMode,
+            TOGGLE_RIGHT_PREVIEW_COMMAND,
+            "Toggle Right Preview",
+            BuiltinCommand::ToggleRightPreview,
         ),
         (
             TOGGLE_SOFT_WRAP_COMMAND,
@@ -411,22 +425,15 @@ pub(super) fn document_input(
             .expect("valid built-in file operation command");
     }
     let commands = Arc::new(builder.build());
-    let (keyboard, active_context) = document_keymap(mode, &commands);
+    let (keyboard, active_context) = document_keymap(&commands);
     (commands, keyboard, active_context)
 }
 
-pub(super) fn document_keymap(
-    mode: crate::app::DocumentMode,
-    commands: &Arc<CommandRegistry>,
-) -> (KeyboardRouter, ContextSet) {
+pub(super) fn document_keymap(commands: &Arc<CommandRegistry>) -> (KeyboardRouter, ContextSet) {
     let contexts = built_in_contexts();
-    let (bindings, active_contexts): (_, Vec<&str>) = match mode {
-        crate::app::DocumentMode::Source => (workspace_bindings(), vec!["workspace", "editor"]),
-        crate::app::DocumentMode::Split => {
-            (workspace_bindings(), vec!["workspace", "editor", "preview"])
-        }
-        crate::app::DocumentMode::Preview => (preview_bindings(), vec!["workspace", "preview"]),
-    };
+    // Editing remains the primary interaction surface whether the right preview is open or not.
+    let bindings = workspace_bindings();
+    let active_contexts = vec!["workspace", "editor"];
     let active_context = contexts
         .set(active_contexts.clone())
         .expect("registered built-in contexts");
@@ -469,6 +476,10 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
     let mut bindings = workspace_bindings();
     bindings.extend([
         BindingSpec {
+            keys: "S-tab",
+            behavior: BindingBehavior::Command(GLOBAL_VISIBILITY_CYCLE_COMMAND),
+        },
+        BindingSpec {
             keys: "g",
             behavior: BindingBehavior::Command(RELOAD_DOCUMENT_COMMAND),
         },
@@ -491,10 +502,6 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec {
             keys: "M->",
             behavior: BindingBehavior::Command(END_COMMAND),
-        },
-        BindingSpec {
-            keys: "S-tab",
-            behavior: BindingBehavior::Command(GLOBAL_VISIBILITY_CYCLE_COMMAND),
         },
     ]);
     bindings
@@ -528,15 +535,11 @@ pub(super) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
         },
         BindingSpec {
             keys: "C-c v s",
-            behavior: BindingBehavior::Command(SOURCE_MODE_COMMAND),
+            behavior: BindingBehavior::Command(RETURN_TO_EDITOR_COMMAND),
         },
         BindingSpec {
             keys: "C-c v d",
-            behavior: BindingBehavior::Command(SPLIT_MODE_COMMAND),
-        },
-        BindingSpec {
-            keys: "C-c v p",
-            behavior: BindingBehavior::Command(PREVIEW_MODE_COMMAND),
+            behavior: BindingBehavior::Command(TOGGLE_RIGHT_PREVIEW_COMMAND),
         },
         BindingSpec {
             keys: "M-z",

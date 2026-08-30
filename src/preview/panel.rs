@@ -364,7 +364,9 @@ impl PreviewPanel {
         self.top_source_anchor().map(|(offset, _)| offset)
     }
 
-    pub(in crate::preview) fn split_anchor(&self) -> Option<(crate::document::ByteOffset, f32)> {
+    pub(in crate::preview) fn source_scroll_anchor(
+        &self,
+    ) -> Option<(crate::document::ByteOffset, f32)> {
         let scroll_top = self.list_state.logical_scroll_top();
         let source = self.top_source_offset()?;
         let height = self
@@ -393,7 +395,7 @@ impl PreviewPanel {
             .map(|row| (row.content.range.start, scroll_top.offset_in_item))
     }
 
-    pub(in crate::preview) fn scroll_to_split_anchor(
+    pub(in crate::preview) fn scroll_to_source_anchor(
         &mut self,
         offset: crate::document::ByteOffset,
         fraction: f32,

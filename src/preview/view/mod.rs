@@ -2,10 +2,10 @@ use super::{
     Arc, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context, DocumentFormat,
     FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
     InlineText, Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager,
-    PreviewLoadState, PreviewMode, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND,
-    QuitApplication, RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument,
+    PreviewLoadState, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
+    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, ReturnToEditor,
     SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument,
-    SaveDocumentAs, ShowHome, SourceMode, SplitMode, StyledText, ToggleMinimap, ToggleSidebar,
+    SaveDocumentAs, ShowHome, StyledText, ToggleMinimap, ToggleRightPreview, ToggleSidebar,
     ToggleSoftWrap, UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme, div, img,
     markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
 };
@@ -32,7 +32,7 @@ impl Render for WorkspaceWindow {
         profiling::scope!("WorkspaceWindow::render");
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
-        self.ensure_split_scroll_sync(cx);
+        self.ensure_right_preview_scroll_sync(cx);
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),
@@ -42,6 +42,7 @@ impl Render for WorkspaceWindow {
             let viewport_changed = panel.update(cx, |panel, _| panel.note_viewport(viewport_key));
             if viewport_changed {
                 self.cancel_sidebar_resize();
+                self.cancel_right_preview_resize();
             }
         }
         let focus_handle = self
@@ -58,7 +59,10 @@ impl Render for WorkspaceWindow {
         }
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
-                if this.cancel_minimap_interaction(cx) || this.cancel_sidebar_resize() {
+                if this.cancel_minimap_interaction(cx)
+                    || this.cancel_sidebar_resize()
+                    || this.cancel_right_preview_resize()
+                {
                     cx.notify();
                 }
             }));
@@ -107,10 +111,13 @@ impl Render for WorkspaceWindow {
         let dired_help_visible = self.file_manager.help_visible();
         let command_window_width = f32::from(window.viewport_size().width);
         let resizing_sidebar = self.file_manager.is_resizing_sidebar();
+        let resizing_right_preview = self.right_preview_resize.is_some();
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
+        let right_resize_entity = entity.clone();
+        let finish_right_resize_entity = entity.clone();
         div()
             .relative()
             .track_focus(&focus_handle)
@@ -153,15 +160,10 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
-            .on_action(cx.listener(|this, _: &SourceMode, _, cx| {
-                this.set_document_mode(crate::app::DocumentMode::Source, cx)
-            }))
-            .on_action(cx.listener(|this, _: &SplitMode, _, cx| {
-                this.set_document_mode(crate::app::DocumentMode::Split, cx)
-            }))
-            .on_action(cx.listener(|this, _: &PreviewMode, _, cx| {
-                this.set_document_mode(crate::app::DocumentMode::Preview, cx)
-            }))
+            .on_action(cx.listener(|this, _: &ReturnToEditor, _, cx| this.return_to_editor(cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleRightPreview, _, cx| this.toggle_right_preview(cx)),
+            )
             .on_action(cx.listener(|this, _: &ToggleSoftWrap, _, cx| this.toggle_soft_wrap(cx)))
             .on_action(cx.listener(|this, _: &UseEnglish, _, cx| {
                 this.set_language(crate::i18n::Language::English, cx)
@@ -197,6 +199,32 @@ impl Render for WorkspaceWindow {
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
                             finish_resize_entity
                                 .update(cx, |this, cx| this.finish_sidebar_resize(cx));
+                        }),
+                )
+            })
+            .when(resizing_right_preview, |view| {
+                view.child(
+                    div()
+                        .id("right-preview-resize-overlay")
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .left_0()
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .on_mouse_move(move |event, _, cx| {
+                            if event.dragging() {
+                                right_resize_entity.update(cx, |this, cx| {
+                                    this.update_right_preview_resize(
+                                        f32::from(event.position.x),
+                                        cx,
+                                    );
+                                });
+                            }
+                        })
+                        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                            finish_right_resize_entity
+                                .update(cx, |this, cx| this.finish_right_preview_resize(cx));
                         }),
                 )
             })

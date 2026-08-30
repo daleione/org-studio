@@ -3,11 +3,16 @@ use super::{
     PreviewLoadState, WorkspaceLoadedDocument, WorkspaceWindow, accept_generation,
     load_workspace_document, minimap,
 };
-use crate::preview::{ReadyDocument, WorkspaceReloadedDocument, reload_workspace_document};
+use crate::preview::{
+    PreviewPanel, ReadyDocument, WorkspaceReloadedDocument, reload_workspace_document,
+};
 use gpui::AppContext;
 
 impl WorkspaceWindow {
     pub(super) fn show_home_now(&mut self, cx: &mut Context<Self>) {
+        self.document_view =
+            crate::app::DocumentViewState::editing(self.document_view.right_preview_open());
+        self.discard_derived_preview();
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
         self.stop_document_watch();
@@ -58,6 +63,7 @@ impl WorkspaceWindow {
         match receiver.try_recv() {
             Ok(result) => {
                 if self.apply_load_result(generation, result, cx) {
+                    self.reconcile_derived_preview(cx);
                     self.sync_document_watch(cx);
                     cx.notify();
                 }
@@ -69,6 +75,7 @@ impl WorkspaceWindow {
                     });
                     let _ = this.update(cx, |this, cx| {
                         if this.apply_load_result(generation, result, cx) {
+                            this.reconcile_derived_preview(cx);
                             this.sync_document_watch(cx);
                             cx.notify();
                         }
@@ -79,6 +86,7 @@ impl WorkspaceWindow {
                 let result: Result<WorkspaceLoadedDocument, _> =
                     Err((path, "initial document loader stopped".to_owned()));
                 if self.apply_load_result(generation, result, cx) {
+                    self.reconcile_derived_preview(cx);
                     self.sync_document_watch(cx);
                     cx.notify();
                 }
@@ -105,7 +113,7 @@ impl WorkspaceWindow {
         }
         let generation =
             self.begin_open_with_previous(path.clone(), Instant::now(), preserve_previous);
-        let document_mode = self.document_mode;
+        let build_preview = self.document_view.right_preview_open();
 
         // Opening the requested document is user-visible latency. Submit it before synchronous
         // file-watcher setup and before one-time font startup work so a small local file is not
@@ -121,7 +129,7 @@ impl WorkspaceWindow {
                             opened_at.elapsed().as_secs_f64() * 1000.0,
                         );
                     }
-                    let result = load_workspace_document(path, document_mode);
+                    let result = load_workspace_document(path, build_preview);
                     if minimap::minimap_perf_enabled() {
                         eprintln!(
                             "org_preview_document_load_complete generation={} since_open_ms={:.3}",
@@ -135,6 +143,7 @@ impl WorkspaceWindow {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
                 if this.apply_load_result(generation, result, cx) {
+                    this.reconcile_derived_preview(cx);
                     this.sync_document_watch(cx);
                     cx.notify();
                 }
@@ -170,11 +179,11 @@ impl WorkspaceWindow {
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
         self.set_document_notice(None);
-        let document_mode = self.document_mode;
+        let build_preview = self.document_view.right_preview_open();
         let background = cx
             .background_executor()
             .spawn_with_priority(gpui::Priority::High, async move {
-                reload_workspace_document(request, document_mode)
+                reload_workspace_document(request, build_preview)
             });
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
@@ -225,11 +234,28 @@ impl WorkspaceWindow {
             self.set_document_notice(Some(format!("Reload was not applied: {error:?}").into()));
             return true;
         }
-        if let (Some(panel), Some(preview)) = (panel, preview) {
+        if !self.document_view.needs_preview() {
+            self.discard_derived_preview();
+        } else if let Some(preview) = preview {
+            let published = (preview.document_id, preview.revision);
             let document = Arc::new(preview);
-            panel.update(cx, |panel, cx| {
-                panel.replace_document(document, cx);
-            });
+            if let Some(panel) = panel {
+                panel.update(cx, |panel, cx| {
+                    panel.replace_document(document, cx);
+                });
+            } else if let PreviewLoadState::Ready { document: ready } = &mut self.state {
+                let list_overdraw = self.list_overdraw;
+                ready.panel = Some(cx.new(|_| PreviewPanel::new(document, list_overdraw)));
+            }
+            self.derived
+                .pending
+                .lock()
+                .expect("derived request slot poisoned")
+                .take();
+            self.derived.published = Some(published);
+        } else {
+            self.derived.published = None;
+            self.schedule_derived_update(cx);
         }
         self.set_document_notice(None);
         true
@@ -451,6 +477,11 @@ impl WorkspaceWindow {
                         (session, Some(preview))
                     }
                 };
+                let preview = self
+                    .document_view
+                    .needs_preview()
+                    .then_some(preview)
+                    .flatten();
                 if minimap::minimap_perf_enabled()
                     && let Some(preview) = preview.as_ref()
                 {
@@ -636,11 +667,9 @@ mod tests {
         let old_path = old_directory.join("old.org");
         let failed_path = new_directory.join("missing.org");
         std::fs::write(&old_path, b"* Active").unwrap();
-        let loaded =
-            load_workspace_document(old_path.clone(), crate::app::DocumentMode::Source).unwrap();
+        let loaded = load_workspace_document(old_path.clone(), false).unwrap();
         let active_path = old_path.clone();
-        let workspace =
-            cx.new(|_| WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source));
+        let workspace = cx.new(|_| WorkspaceWindow::with_right_preview(false));
 
         workspace.update(cx, |workspace, cx| {
             workspace.generation = 1;

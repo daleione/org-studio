@@ -4,11 +4,11 @@ use super::{
     KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, PathBuf, PathPromptOptions, PrefixArgument,
     PreviewLoadState, PreviewRenderOptions, Window, WorkspaceLoadedDocument, WorkspaceWindow,
     accept_generation, built_in_contexts, command_count, compile_input_profile,
-    configured_minimap_visible, current_theme, dired_bindings, document_input, document_keymap,
+    configured_minimap_visible, current_theme, dired_bindings, document_input,
     load_workspace_document, minimap, preview_bindings, px, render_document, render_home,
-    render_loading, workspace_bindings,
+    render_loading, right_preview, workspace_bindings,
 };
-use crate::app::DocumentMode;
+use crate::app::{DocumentViewPreferences, DocumentViewState};
 use gpui::{div, prelude::*, rgb};
 
 mod benchmark;
@@ -26,26 +26,24 @@ impl Default for WorkspaceWindow {
 impl WorkspaceWindow {
     pub fn new() -> Self {
         let settings = crate::settings::PreviewSettings::load();
-        Self::with_settings(
-            DocumentMode::from_environment(settings.document_mode),
-            settings,
-        )
+        Self::with_settings(settings)
     }
 
     #[cfg(test)]
-    pub(crate) fn with_document_mode(document_mode: DocumentMode) -> Self {
-        Self::with_settings(document_mode, crate::settings::PreviewSettings::default())
+    pub(crate) fn with_right_preview(right_preview_open: bool) -> Self {
+        let settings = crate::settings::PreviewSettings {
+            right_preview_open,
+            ..crate::settings::PreviewSettings::default()
+        };
+        Self::with_settings(settings)
     }
 
-    fn with_settings(
-        document_mode: DocumentMode,
-        preview_settings: crate::settings::PreviewSettings,
-    ) -> Self {
+    fn with_settings(preview_settings: crate::settings::PreviewSettings) -> Self {
         let list_overdraw = std::env::var("ORG_STUDIO_LIST_OVERDRAW")
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(80.0);
-        let (commands, keyboard, key_context) = document_input(document_mode);
+        let (commands, keyboard, key_context) = document_input();
         let minimap_visible = configured_minimap_visible();
         Self {
             language: preview_settings.language,
@@ -63,7 +61,7 @@ impl WorkspaceWindow {
             generation: 0,
             load_task: None,
             derived: crate::app::DerivedHost::default(),
-            split_scroll: crate::app::SplitScrollHost::default(),
+            right_preview_scroll: crate::app::RightPreviewScrollHost::default(),
             file_watch_task: None,
             file_watch_request: 0,
             file_watch_directory: None,
@@ -101,7 +99,11 @@ impl WorkspaceWindow {
             key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
             content_route: ContentRoute::Document,
-            document_mode,
+            document_view: DocumentViewState::editing(preview_settings.right_preview_open),
+            document_view_preferences: DocumentViewPreferences {
+                right_preview_width: preview_settings.right_preview_width,
+            },
+            right_preview_resize: None,
             soft_wrap: preview_settings.soft_wrap,
             minimap_visible,
             minimap_thumb_visibility: crate::settings::initial_minimap_thumb_visibility(
@@ -117,9 +119,19 @@ impl WorkspaceWindow {
         self.state.ready().map(|document| &document.session)
     }
 
-    pub(super) fn request_editor_focus(&self, cx: &mut Context<Self>) {
-        if self.document_mode == DocumentMode::Preview {
-            return;
+    pub(super) fn request_editor_focus(&mut self, cx: &mut Context<Self>) {
+        self.focus_editor_surface(self.document_view.right_preview_open(), cx);
+    }
+
+    pub(super) fn focus_editor_surface(
+        &mut self,
+        right_preview_open: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let keymap_changed = !self.document_view.editor_focused();
+        self.document_view = DocumentViewState::editing(right_preview_open);
+        if keymap_changed {
+            self.install_document_keymap();
         }
         if let Some(document) = self.state.ready() {
             document
@@ -148,7 +160,8 @@ impl WorkspaceWindow {
 
     pub(super) fn save_preview_settings(&self) {
         crate::settings::PreviewSettings {
-            document_mode: self.document_mode,
+            right_preview_open: self.document_view.right_preview_open(),
+            right_preview_width: self.document_view_preferences.right_preview_width,
             soft_wrap: self.soft_wrap,
             language: self.language,
             minimap_enabled: self.minimap_visible,
@@ -251,7 +264,7 @@ impl WorkspaceWindow {
             } => {
                 let error = format!("{}: {message}", path.display());
                 if let Some(previous) = previous.as_ref() {
-                    let document = self.render_document_mode(
+                    let document = self.render_document_layout(
                         previous,
                         entity.clone(),
                         editor_width,
@@ -290,7 +303,7 @@ impl WorkspaceWindow {
             }
             PreviewLoadState::Ready { document: ready } => {
                 let notice = &ready.notice;
-                let document = self.render_document_mode(
+                let document = self.render_document_layout(
                     ready,
                     entity.clone(),
                     editor_width,
@@ -349,7 +362,7 @@ impl WorkspaceWindow {
             })
     }
 
-    fn render_document_mode(
+    fn render_document_layout(
         &self,
         ready: &super::ReadyDocument,
         entity: gpui::Entity<Self>,
@@ -357,39 +370,58 @@ impl WorkspaceWindow {
         minimap_width: f32,
         cx: &gpui::App,
     ) -> gpui::Div {
-        match self.document_mode {
-            DocumentMode::Source => div().size_full().child(ready.editor.clone()),
-            DocumentMode::Preview => self.render_preview(
-                ready,
-                entity,
-                editor_width,
-                minimap_width,
-                self.minimap_visible,
-                cx,
-            ),
-            DocumentMode::Split => {
-                let pane_width = editor_width / 2.0;
-                div()
-                    .size_full()
-                    .flex()
-                    .child(
-                        div()
-                            .w_1_2()
-                            .h_full()
-                            .min_w_0()
-                            .border_r_1()
-                            .border_color(rgb(current_theme().border))
-                            .child(ready.editor.clone()),
-                    )
-                    .child(div().w_1_2().h_full().min_w_0().child(self.render_preview(
-                        ready,
-                        entity,
-                        pane_width,
-                        minimap_width,
-                        false,
-                        cx,
-                    )))
-            }
+        if self.document_view.right_preview_open() {
+            let pane_width = self.rendered_right_preview_width(editor_width);
+            let resize_entity = entity.clone();
+            div()
+                .size_full()
+                .flex()
+                .child(
+                    div()
+                        .flex_1()
+                        .h_full()
+                        .min_w_0()
+                        .child(ready.editor.clone()),
+                )
+                .child(
+                    div()
+                        .id("right-preview-resize-handle")
+                        .w(px(right_preview::RESIZE_HANDLE_PX))
+                        .h_full()
+                        .flex_none()
+                        .cursor(gpui::CursorStyle::ResizeLeftRight)
+                        .border_l_1()
+                        .border_color(rgb(current_theme().border))
+                        .on_mouse_down(gpui::MouseButton::Left, move |event, _, cx| {
+                            resize_entity.update(cx, |this, cx| {
+                                this.begin_right_preview_resize(
+                                    f32::from(event.position.x),
+                                    editor_width,
+                                    cx,
+                                );
+                            });
+                        }),
+                )
+                .child({
+                    let focus_entity = entity.clone();
+                    div()
+                        .w(px(pane_width))
+                        .h_full()
+                        .min_w_0()
+                        .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                            focus_entity.update(cx, |this, cx| this.focus_right_preview(cx));
+                        })
+                        .child(self.render_preview(
+                            ready,
+                            entity,
+                            pane_width,
+                            minimap_width,
+                            false,
+                            cx,
+                        ))
+                })
+        } else {
+            div().size_full().child(ready.editor.clone())
         }
     }
 
@@ -412,6 +444,18 @@ impl WorkspaceWindow {
                 .child("Updating Preview…");
         };
         let panel = panel_entity.read(cx);
+        let session = ready.session.read(cx);
+        if panel.document().document_id != session.id()
+            || panel.document().revision != session.revision()
+        {
+            return div()
+                .size_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .text_color(rgb(current_theme().foreground_dim))
+                .child("Updating Preview…");
+        }
         render_document(
             panel.render_state(),
             panel_entity.clone(),

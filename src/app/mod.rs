@@ -21,25 +21,38 @@ use crate::{
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum DocumentMode {
+pub enum DocumentViewState {
     #[default]
-    Source,
-    Split,
-    Preview,
+    EditorOnly,
+    EditorWithPreview,
+    RightPreviewFocused,
 }
 
-impl DocumentMode {
-    pub(crate) fn from_environment(fallback: Self) -> Self {
-        std::env::var("ORG_STUDIO_DOCUMENT_MODE")
-            .ok()
-            .and_then(|mode| match mode.to_ascii_lowercase().as_str() {
-                "source" => Some(Self::Source),
-                "split" => Some(Self::Split),
-                "preview" => Some(Self::Preview),
-                _ => None,
-            })
-            .unwrap_or(fallback)
+impl DocumentViewState {
+    pub(crate) const fn editing(right_preview_open: bool) -> Self {
+        if right_preview_open {
+            Self::EditorWithPreview
+        } else {
+            Self::EditorOnly
+        }
     }
+
+    pub(crate) const fn right_preview_open(self) -> bool {
+        !matches!(self, Self::EditorOnly)
+    }
+
+    pub(crate) const fn editor_focused(self) -> bool {
+        !matches!(self, Self::RightPreviewFocused)
+    }
+
+    pub(crate) const fn needs_preview(self) -> bool {
+        self.right_preview_open()
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DocumentViewPreferences {
+    pub(crate) right_preview_width: u16,
 }
 
 pub struct WorkspaceWindow {
@@ -58,7 +71,7 @@ pub struct WorkspaceWindow {
     pub(crate) generation: u64,
     pub(crate) load_task: Option<Task<()>>,
     pub(crate) derived: DerivedHost,
-    pub(crate) split_scroll: SplitScrollHost,
+    pub(crate) right_preview_scroll: RightPreviewScrollHost,
     pub(crate) file_watch_task: Option<Task<()>>,
     pub(crate) file_watch_request: u64,
     pub(crate) file_watch_directory: Option<PathBuf>,
@@ -77,7 +90,9 @@ pub struct WorkspaceWindow {
     pub(crate) key_feedback_request: u64,
     pub(crate) which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
     pub(crate) content_route: ContentRoute,
-    pub(crate) document_mode: DocumentMode,
+    pub(crate) document_view: DocumentViewState,
+    pub(crate) document_view_preferences: DocumentViewPreferences,
+    pub(crate) right_preview_resize: Option<crate::preview::RightPreviewResizeSession>,
     pub(crate) soft_wrap: bool,
     pub(crate) minimap_visible: bool,
     pub(crate) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
@@ -95,9 +110,7 @@ pub(crate) struct DerivedHost {
 }
 
 #[derive(Default)]
-pub(crate) struct SplitScrollHost {
+pub(crate) struct RightPreviewScrollHost {
     pub(crate) source_subscription: Option<Subscription>,
     pub(crate) panel_revision: Option<(crate::document::DocumentId, crate::document::Revision)>,
-    pub(crate) source_anchor: Option<(crate::document::ByteOffset, u32)>,
-    pub(crate) preview_anchor: Option<(crate::document::ByteOffset, u32)>,
 }

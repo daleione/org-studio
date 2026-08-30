@@ -11,7 +11,6 @@ pub(super) const DIRED_PANE_ID: PaneId = PaneId(2);
 pub(super) enum StatusHost {
     Preview,
     Editor,
-    Split,
     Dired,
 }
 
@@ -40,6 +39,7 @@ pub(in crate::preview) struct StatusLineSnapshot {
     pub(in crate::preview) pane: PaneId,
     pub(super) language: Language,
     pub(super) host: StatusHost,
+    pub(super) right_preview_open: bool,
     pub(super) outline: Option<Arc<str>>,
     pub(super) position: Option<StatusPosition>,
     pub(super) progress: Option<u8>,
@@ -50,6 +50,11 @@ pub(in crate::preview) struct StatusLineSnapshot {
 }
 
 impl StatusLineSnapshot {
+    #[cfg(test)]
+    pub(crate) fn uses_editor_viewport(&self) -> bool {
+        self.host == StatusHost::Editor
+    }
+
     pub(super) fn has_segment(&self, segment: StatusSegment) -> bool {
         match segment {
             StatusSegment::Mode | StatusSegment::More => true,
@@ -152,6 +157,7 @@ pub(super) struct StatusLayoutKey {
     pub width_bits: u32,
     pub settings: StatusLineSettings,
     pub host: StatusHost,
+    pub right_preview_open: bool,
     pub language: Language,
     pub outline: bool,
     pub position_reserve: Option<String>,

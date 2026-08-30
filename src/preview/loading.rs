@@ -90,23 +90,22 @@ pub fn load_document(path: PathBuf) -> Result<LoadedDocument, (PathBuf, String)>
 
 pub(crate) fn load_workspace_document(
     path: PathBuf,
-    mode: crate::app::DocumentMode,
+    build_preview: bool,
 ) -> Result<super::WorkspaceLoadedDocument, (PathBuf, String)> {
     let path = crate::document::resolve_symlink_target(&path);
-    match mode {
-        crate::app::DocumentMode::Source => {
-            let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
-            let session = DocumentSession::from_utf8(path.clone(), bytes)
-                .map_err(|error| (path, error.to_string()))?;
-            let snapshot = session.snapshot();
-            snapshot
-                .byte_to_utf16(crate::document::ByteOffset(snapshot.len_bytes()))
-                .expect("document end is a valid coordinate");
-            Ok(super::WorkspaceLoadedDocument::Source(session))
-        }
-        crate::app::DocumentMode::Split | crate::app::DocumentMode::Preview => load_document(path)
+    if !build_preview {
+        let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
+        let session = DocumentSession::from_utf8(path.clone(), bytes)
+            .map_err(|error| (path, error.to_string()))?;
+        let snapshot = session.snapshot();
+        snapshot
+            .byte_to_utf16(crate::document::ByteOffset(snapshot.len_bytes()))
+            .expect("document end is a valid coordinate");
+        Ok(super::WorkspaceLoadedDocument::Source(session))
+    } else {
+        load_document(path)
             .map(Box::new)
-            .map(super::WorkspaceLoadedDocument::Preview),
+            .map(super::WorkspaceLoadedDocument::Preview)
     }
 }
 
@@ -189,26 +188,23 @@ pub(in crate::preview) fn reload_document_profiled(
 
 pub(in crate::preview) fn reload_workspace_document(
     request: ReloadRequest,
-    mode: crate::app::DocumentMode,
+    build_preview: bool,
 ) -> Result<super::WorkspaceReloadedDocument, (PathBuf, String)> {
-    match mode {
-        crate::app::DocumentMode::Source => {
-            let path = request.path().to_path_buf();
-            let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
-            let prepared = request
-                .prepare(bytes)
-                .map_err(|error| (path, format!("reload preparation failed: {error:?}")))?;
-            prepared
-                .snapshot()
-                .byte_to_utf16(crate::document::ByteOffset(prepared.snapshot().len_bytes()))
-                .expect("document end is a valid coordinate");
-            Ok(super::WorkspaceReloadedDocument::Source(prepared))
-        }
-        crate::app::DocumentMode::Split | crate::app::DocumentMode::Preview => {
-            reload_document_profiled(request)
-                .map(Box::new)
-                .map(super::WorkspaceReloadedDocument::Preview)
-        }
+    if !build_preview {
+        let path = request.path().to_path_buf();
+        let bytes = std::fs::read(&path).map_err(|error| (path.clone(), error.to_string()))?;
+        let prepared = request
+            .prepare(bytes)
+            .map_err(|error| (path, format!("reload preparation failed: {error:?}")))?;
+        prepared
+            .snapshot()
+            .byte_to_utf16(crate::document::ByteOffset(prepared.snapshot().len_bytes()))
+            .expect("document end is a valid coordinate");
+        Ok(super::WorkspaceReloadedDocument::Source(prepared))
+    } else {
+        reload_document_profiled(request)
+            .map(Box::new)
+            .map(super::WorkspaceReloadedDocument::Preview)
     }
 }
 

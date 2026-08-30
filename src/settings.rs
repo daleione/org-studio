@@ -5,11 +5,14 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 2;
+const SETTINGS_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreviewSettings {
-    pub document_mode: crate::app::DocumentMode,
+    pub right_preview_open: bool,
+    /// Preferred right-preview width. Rendering clamps it to the current viewport without
+    /// overwriting the preference.
+    pub right_preview_width: u16,
     pub soft_wrap: bool,
     pub language: Language,
     pub minimap_enabled: bool,
@@ -53,7 +56,8 @@ pub enum MinimapThumbVisibility {
 impl Default for PreviewSettings {
     fn default() -> Self {
         Self {
-            document_mode: crate::app::DocumentMode::Source,
+            right_preview_open: false,
+            right_preview_width: 420,
             soft_wrap: true,
             language: Language::system(),
             minimap_enabled: true,
@@ -111,7 +115,8 @@ impl PreviewSettings {
     fn parse(source: &str) -> Option<Self> {
         let mut version = None;
         let mut minimap_enabled = None;
-        let mut document_mode = None;
+        let mut right_preview_open = None;
+        let mut right_preview_width = None;
         let mut soft_wrap = None;
         let mut language = None;
         let mut minimap_thumb_visibility = None;
@@ -135,13 +140,13 @@ impl PreviewSettings {
                         _ => None,
                     }
                 }
-                "document_mode" => {
-                    document_mode = match value.trim() {
-                        "source" => Some(crate::app::DocumentMode::Source),
-                        "split" => Some(crate::app::DocumentMode::Split),
-                        "preview" => Some(crate::app::DocumentMode::Preview),
-                        _ => None,
-                    }
+                "right_preview_open" => right_preview_open = value.trim().parse::<bool>().ok(),
+                "right_preview_width" => {
+                    right_preview_width = value
+                        .trim()
+                        .parse::<u16>()
+                        .ok()
+                        .filter(|width| (280..=960).contains(width));
                 }
                 "soft_wrap" => soft_wrap = value.trim().parse::<bool>().ok(),
                 "minimap_enabled" => minimap_enabled = value.trim().parse::<bool>().ok(),
@@ -178,7 +183,8 @@ impl PreviewSettings {
             }
         }
         (version == Some(SETTINGS_VERSION)).then_some(Self {
-            document_mode: document_mode.unwrap_or_default(),
+            right_preview_open: right_preview_open.unwrap_or(false),
+            right_preview_width: right_preview_width.unwrap_or(420),
             soft_wrap: soft_wrap.unwrap_or(true),
             language: language.unwrap_or_else(Language::system),
             minimap_enabled: minimap_enabled.unwrap_or(true),
@@ -198,12 +204,9 @@ impl PreviewSettings {
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\ndocument_mode={}\nsoft_wrap={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
-            match self.document_mode {
-                crate::app::DocumentMode::Source => "source",
-                crate::app::DocumentMode::Split => "split",
-                crate::app::DocumentMode::Preview => "preview",
-            },
+            "version={SETTINGS_VERSION}\nright_preview_open={}\nright_preview_width={}\nsoft_wrap={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
+            self.right_preview_open,
+            self.right_preview_width,
             self.soft_wrap,
             match self.language {
                 Language::English => "en",
@@ -308,7 +311,8 @@ mod tests {
     #[test]
     fn settings_round_trip_and_reject_unknown_versions() {
         let settings = PreviewSettings {
-            document_mode: crate::app::DocumentMode::Split,
+            right_preview_open: true,
+            right_preview_width: 536,
             soft_wrap: false,
             language: Language::English,
             minimap_enabled: false,
@@ -336,36 +340,40 @@ mod tests {
     #[test]
     fn missing_field_uses_product_default() {
         assert_eq!(
-            PreviewSettings::parse("version=2\n"),
+            PreviewSettings::parse("version=3\ndocument_mode=preview\n"),
+            Some(PreviewSettings::default())
+        );
+        assert_eq!(
+            PreviewSettings::parse("version=3\n"),
             Some(PreviewSettings::default())
         );
         assert_eq!(
             PreviewSettings::parse(
-                "version=2\nminimap_width=auto\nminimap_thumb_visibility=always\n"
+                "version=3\nminimap_width=auto\nminimap_thumb_visibility=always\n"
             )
             .expect("auto width settings"),
             PreviewSettings::default()
         );
         assert_eq!(
-            PreviewSettings::parse("version=2\nminimap_width=480\n")
+            PreviewSettings::parse("version=3\nminimap_width=480\n")
                 .expect("manual width settings")
                 .minimap_width,
             Some(480)
         );
         assert_eq!(
-            PreviewSettings::parse("version=2\nminimap_width=999\n")
+            PreviewSettings::parse("version=3\nminimap_width=999\n")
                 .expect("invalid width falls back")
                 .minimap_width,
             None
         );
         assert_eq!(
-            PreviewSettings::parse("version=2\nsidebar_width=320\n")
+            PreviewSettings::parse("version=3\nsidebar_width=320\n")
                 .expect("manual sidebar width settings")
                 .sidebar_width,
             320
         );
         assert_eq!(
-            PreviewSettings::parse("version=2\nsidebar_width=999\n")
+            PreviewSettings::parse("version=3\nsidebar_width=999\n")
                 .expect("invalid sidebar width falls back")
                 .sidebar_width,
             240

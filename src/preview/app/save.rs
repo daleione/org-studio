@@ -382,12 +382,8 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::write(&path, b"base").unwrap();
-        let loaded =
-            crate::preview::load_workspace_document(path.clone(), crate::app::DocumentMode::Source)
-                .unwrap();
-        let (workspace, cx) = cx.add_window_view(|_, _| {
-            WorkspaceWindow::with_document_mode(crate::app::DocumentMode::Source)
-        });
+        let loaded = crate::preview::load_workspace_document(path.clone(), false).unwrap();
+        let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_right_preview(false));
         workspace.update(cx, |workspace, cx| {
             workspace.generation = 1;
             assert!(workspace.apply_load_result(1, Ok(loaded), cx));

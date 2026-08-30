@@ -13,10 +13,10 @@ pub(crate) struct DerivedRequest {
 }
 
 impl WorkspaceWindow {
-    pub(super) fn ensure_split_scroll_sync(&mut self, cx: &mut Context<Self>) {
-        if self.document_mode != crate::app::DocumentMode::Split {
-            self.split_scroll.source_subscription = None;
-            self.split_scroll.panel_revision = None;
+    pub(super) fn ensure_right_preview_scroll_sync(&mut self, cx: &mut Context<Self>) {
+        if !self.document_view.right_preview_open() {
+            self.right_preview_scroll.source_subscription = None;
+            self.right_preview_scroll.panel_revision = None;
             return;
         }
         let Some(ready) = self.state.ready() else {
@@ -34,16 +34,16 @@ impl WorkspaceWindow {
             // coherent snapshot is published.
             return;
         }
-        if self.split_scroll.source_subscription.is_none() {
-            self.split_scroll.source_subscription = Some(cx.subscribe(
+        if self.right_preview_scroll.source_subscription.is_none() {
+            self.right_preview_scroll.source_subscription = Some(cx.subscribe(
                 &editor,
                 |this, _, _: &crate::editor::SourceScrollEvent, cx| {
-                    this.sync_source_scroll_to_preview(cx);
+                    this.sync_editor_scroll_to_right_preview(cx);
                 },
             ));
         }
         let panel_revision = (snapshot.document_id(), snapshot.revision());
-        if self.split_scroll.panel_revision != Some(panel_revision) {
+        if self.right_preview_scroll.panel_revision != Some(panel_revision) {
             let workspace = cx.entity().downgrade();
             panel
                 .read(cx)
@@ -52,17 +52,17 @@ impl WorkspaceWindow {
                     let workspace = workspace.clone();
                     cx.defer(move |cx| {
                         let _ = workspace.update(cx, |this, cx| {
-                            this.sync_preview_scroll_to_source(cx);
+                            this.sync_right_preview_scroll_to_editor(cx);
                         });
                     });
                 });
-            self.split_scroll.panel_revision = Some(panel_revision);
-            self.sync_source_scroll_to_preview(cx);
+            self.right_preview_scroll.panel_revision = Some(panel_revision);
+            self.sync_editor_scroll_to_right_preview(cx);
         }
     }
 
-    fn sync_source_scroll_to_preview(&mut self, cx: &mut Context<Self>) {
-        if self.document_mode != crate::app::DocumentMode::Split {
+    fn sync_editor_scroll_to_right_preview(&mut self, cx: &mut Context<Self>) {
+        if !self.document_view.right_preview_open() {
             return;
         }
         let Some(ready) = self.state.ready() else {
@@ -77,17 +77,12 @@ impl WorkspaceWindow {
         }
         let (source, fraction) = ready.editor.read(cx).top_source_anchor(&snapshot);
         panel.update(cx, |panel, _| {
-            panel.scroll_to_split_anchor(source, fraction)
+            panel.scroll_to_source_anchor(source, fraction)
         });
-        self.split_scroll.source_anchor = Some((source, fraction.to_bits()));
-        self.split_scroll.preview_anchor = panel
-            .read(cx)
-            .split_anchor()
-            .map(|(source, fraction)| (source, fraction.to_bits()));
     }
 
-    fn sync_preview_scroll_to_source(&mut self, cx: &mut Context<Self>) {
-        if self.document_mode != crate::app::DocumentMode::Split {
+    fn sync_right_preview_scroll_to_editor(&mut self, cx: &mut Context<Self>) {
+        if !self.document_view.right_preview_open() {
             return;
         }
         let Some(ready) = self.state.ready() else {
@@ -96,18 +91,38 @@ impl WorkspaceWindow {
         let Some(panel) = ready.panel.clone() else {
             return;
         };
-        let Some((source, fraction)) = panel.read(cx).split_anchor() else {
+        let Some((source, fraction)) = panel.read(cx).source_scroll_anchor() else {
             return;
         };
         ready.editor.update(cx, |editor, cx| {
             editor.scroll_to_source_anchor(source, fraction, cx)
         });
-        self.split_scroll.preview_anchor = Some((source, fraction.to_bits()));
-        let snapshot = ready.session.read(cx).snapshot();
-        self.split_scroll.source_anchor = Some({
-            let (source, fraction) = ready.editor.read(cx).top_source_anchor(&snapshot);
-            (source, fraction.to_bits())
-        });
+    }
+
+    pub(super) fn discard_derived_preview(&mut self) {
+        self.derived
+            .pending
+            .lock()
+            .expect("derived request slot poisoned")
+            .take();
+        if let Some(document) = self.state.ready_mut() {
+            document.panel = None;
+        }
+        self.derived.published = None;
+        self.right_preview_scroll.source_subscription = None;
+        self.right_preview_scroll.panel_revision = None;
+        if let Some(sender) = &self.derived.sender {
+            // Wake the worker so it can release its incremental base when no request remains.
+            let _ = sender.try_send(());
+        }
+    }
+
+    pub(super) fn reconcile_derived_preview(&mut self, cx: &mut Context<Self>) {
+        if self.document_view.needs_preview() {
+            self.schedule_derived_update(cx);
+        } else {
+            self.discard_derived_preview();
+        }
     }
 
     /// Rebuilds a coherent preview snapshot off the UI thread. Publication is revision-gated, so
@@ -121,7 +136,7 @@ impl WorkspaceWindow {
         delta: Option<crate::document::RevisionDelta>,
         cx: &mut Context<Self>,
     ) {
-        if self.document_mode == crate::app::DocumentMode::Source {
+        if !self.document_view.needs_preview() {
             return;
         }
         let Some(session) = self.document_session().cloned() else {
@@ -153,6 +168,7 @@ impl WorkspaceWindow {
                         .expect("derived request slot poisoned")
                         .take()
                     else {
+                        local_base = None;
                         continue;
                     };
                     let request_document_id = request.snapshot.document_id();
@@ -179,27 +195,46 @@ impl WorkspaceWindow {
                         })
                         .await;
                     let document = Arc::new(preview);
-                    local_base = Some(document.clone());
-                    let _ = this.update(cx, |this, cx| {
-                        let Some(current) = this.document_session() else {
-                            return;
-                        };
-                        if current.read(cx).id() != request_document_id
-                            || current.read(cx).revision() != request_revision
-                        {
-                            return;
-                        }
-                        let list_overdraw = this.list_overdraw;
-                        if let Some(panel) = this.preview_panel() {
-                            panel.update(cx, |panel, cx| panel.replace_document(document, cx));
-                        } else if let PreviewLoadState::Ready { document: ready } = &mut this.state
-                        {
-                            ready.panel =
-                                Some(cx.new(|_| PreviewPanel::new(document, list_overdraw)));
-                        }
-                        this.derived.published = Some((request_document_id, request_revision));
-                        cx.notify();
-                    });
+                    let keep_base = this
+                        .update(cx, |this, cx| {
+                            if !this.document_view.needs_preview() {
+                                return false;
+                            }
+                            let Some(current) = this.document_session() else {
+                                return false;
+                            };
+                            if current.read(cx).id() != request_document_id
+                                || current.read(cx).revision() != request_revision
+                            {
+                                return false;
+                            }
+                            if this.derived.published
+                                == Some((request_document_id, request_revision))
+                                && this.preview_panel().is_some_and(|panel| {
+                                    let preview = panel.read(cx);
+                                    preview.document().document_id == request_document_id
+                                        && preview.document().revision == request_revision
+                                })
+                            {
+                                return false;
+                            }
+                            let list_overdraw = this.list_overdraw;
+                            if let Some(panel) = this.preview_panel() {
+                                let document = document.clone();
+                                panel.update(cx, |panel, cx| panel.replace_document(document, cx));
+                            } else if let PreviewLoadState::Ready { document: ready } =
+                                &mut this.state
+                            {
+                                let document = document.clone();
+                                ready.panel =
+                                    Some(cx.new(|_| PreviewPanel::new(document, list_overdraw)));
+                            }
+                            this.derived.published = Some((request_document_id, request_revision));
+                            cx.notify();
+                            true
+                        })
+                        .unwrap_or(false);
+                    local_base = keep_base.then_some(document);
                 }
             }));
         }

@@ -47,7 +47,6 @@ impl WorkspaceWindow {
     pub(in crate::preview) fn focus_document(&mut self, cx: &mut Context<Self>) {
         if self.file_manager.sidebar_focused {
             self.file_manager.sidebar_focused = false;
-            self.install_document_keymap();
             self.request_editor_focus(cx);
             cx.notify();
         }

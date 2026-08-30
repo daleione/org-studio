@@ -189,7 +189,16 @@ fn removed_product_types_do_not_return_as_items() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
     rust_files_under(&root.join("src"), &mut files);
-    let forbidden = ["PreviewApp", "PreviewDocument", "RopeSnapshot"];
+    let forbidden = [
+        "PreviewApp",
+        "PreviewDocument",
+        "RopeSnapshot",
+        "DocumentMode",
+        "SplitScrollHost",
+        "DocumentLayout",
+        "DocumentSurfaceFocus",
+        "RightPreviewState",
+    ];
     let mut violations = Vec::new();
     for path in files {
         for item in parse(&path).items {

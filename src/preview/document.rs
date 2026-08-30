@@ -157,9 +157,7 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
             }
             let result = super::loading::load_workspace_document(
                 load_path,
-                crate::app::DocumentMode::from_environment(
-                    crate::settings::PreviewSettings::load().document_mode,
-                ),
+                crate::settings::PreviewSettings::load().right_preview_open,
             );
             if minimap::minimap_perf_enabled() {
                 eprintln!(
