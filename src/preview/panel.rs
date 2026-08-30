@@ -7,7 +7,8 @@ use super::{
     FoldTransitionPlan, GlobalVisibility, LOCAL_FOLD_ANIMATION_DURATION, ListAlignment,
     LocalCycleProjection, LocalVisibility, PreviewSnapshot, accept_generation, changed_range,
     cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
-    global_org_visibility, minimap, should_eagerly_measure_rows,
+    global_org_visibility, minimap, should_eagerly_measure_rows, visible_markdown_row_indices,
+    visible_row_indices,
 };
 
 /// Owns all state whose lifetime and invalidation are local to one rendered document.
@@ -143,40 +144,163 @@ impl PreviewPanel {
     pub(in crate::preview) fn replace_document(
         &mut self,
         document: Arc<PreviewSnapshot>,
-        list_overdraw: f32,
         cx: &mut Context<Self>,
     ) {
         let source_anchor = self.top_source_anchor();
+        let previous_visible_rows = self.visible_rows.clone();
+        let previous_minimap = self.minimap_state.clone();
         let global_visibility = self.global_visibility;
         let global_cycle_contiguous = self.global_cycle_contiguous;
+        let local_cycle = self
+            .local_cycle_continuation
+            .and_then(|(block_id, visibility)| {
+                self.block_source_start(block_id).map(|source| {
+                    let syntax_id = (self.document.format == DocumentFormat::Org)
+                        .then(|| {
+                            self.document
+                                .blocks
+                                .nodes()
+                                .get(block_id as usize)
+                                .map(|block| block.syntax_id)
+                        })
+                        .flatten();
+                    (syntax_id, source, visibility)
+                })
+            });
         let folded_sources = self
             .fold_markers
             .iter()
-            .filter_map(|block_id| self.block_source_start(*block_id))
+            .filter_map(|block_id| {
+                self.block_source_start(*block_id).map(|source| {
+                    let syntax_id = match self.document.format {
+                        DocumentFormat::Org => self
+                            .document
+                            .blocks
+                            .nodes()
+                            .get(*block_id as usize)
+                            .map(|block| block.syntax_id),
+                        DocumentFormat::Markdown => None,
+                    };
+                    (syntax_id, source)
+                })
+            })
             .collect::<Vec<_>>();
         let event = document.derived_event();
-        *self = Self::new(document, list_overdraw);
-        if global_visibility != GlobalVisibility::All {
-            if let Some(projection) = self.global_visibility_projection(global_visibility) {
-                self.global_visibility = global_visibility;
-                self.global_cycle_contiguous = global_cycle_contiguous;
-                self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
+        let mut next_global_visibility = GlobalVisibility::All;
+        let mut next_global_cycle_contiguous = false;
+        let (next_visible_rows, next_fold_markers) = if global_visibility != GlobalVisibility::All {
+            let (visible_rows, fold_markers) = match document.format {
+                DocumentFormat::Org => global_org_visibility(
+                    &document.projection.rows,
+                    &document.blocks,
+                    global_visibility,
+                ),
+                DocumentFormat::Markdown => global_markdown_visibility(
+                    &document.projection.rows,
+                    &document.markdown_blocks,
+                    global_visibility,
+                ),
+            };
+            if visible_rows.is_empty() {
+                (
+                    (0..document.projection.rows.len()).collect(),
+                    HashSet::new(),
+                )
+            } else {
+                next_global_visibility = global_visibility;
+                next_global_cycle_contiguous = global_cycle_contiguous;
+                (visible_rows, fold_markers)
             }
         } else {
-            for source in folded_sources {
-                let Some(block_id) = self.closest_block_at(source) else {
+            let mut markers = HashSet::with_capacity(folded_sources.len());
+            for (syntax_id, source) in folded_sources {
+                let Some(block_id) = syntax_id
+                    .and_then(|syntax_id| document.blocks.block_for_syntax_id(syntax_id))
+                    .or_else(|| Self::closest_block_in(&document, source))
+                else {
                     continue;
                 };
-                let Some(projection) = self.local_fold_projection(block_id) else {
-                    continue;
-                };
-                if projection.visibility == LocalVisibility::Folded {
-                    self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
+                if Self::is_heading_in(&document, block_id) {
+                    markers.insert(block_id);
                 }
             }
-        }
+            let visible_rows = match document.format {
+                DocumentFormat::Org => {
+                    visible_row_indices(&document.projection.rows, &document.blocks, &markers)
+                }
+                DocumentFormat::Markdown => visible_markdown_row_indices(
+                    &document.projection.rows,
+                    &document.markdown_blocks,
+                    &markers,
+                ),
+            };
+            (visible_rows, markers)
+        };
+        let next_local_cycle = local_cycle.and_then(|(syntax_id, source, visibility)| {
+            syntax_id
+                .and_then(|syntax_id| document.blocks.block_for_syntax_id(syntax_id))
+                .or_else(|| Self::closest_block_in(&document, source))
+                .filter(|block_id| Self::is_heading_in(&document, *block_id))
+                .map(|block_id| (block_id, visibility))
+        });
+        self.discard_fold_animation();
+        self.document = document;
+        self.fold_markers = Arc::new(next_fold_markers);
+        self.global_visibility = next_global_visibility;
+        self.global_cycle_contiguous = next_global_cycle_contiguous;
+        self.local_cycle_continuation = next_local_cycle;
+        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.minimap_pending_seek = None;
+        self.minimap_seek_scheduled = false;
+        self.minimap_state = Arc::new(minimap::MinimapState::new());
+        self.apply_visible_rows(Arc::new(next_visible_rows));
         if let Some((anchor, offset_in_item)) = source_anchor {
             self.scroll_to_source_offset_with_offset(anchor, offset_in_item);
+        }
+        if let super::DerivedUpdate::Incremental {
+            patch,
+            reused_chunks,
+            total_chunks,
+        } = &self.document.update
+        {
+            if self.visible_rows.as_ref() == previous_visible_rows.as_ref() {
+                self.visible_rows = previous_visible_rows;
+                self.minimap_state = previous_minimap;
+                let start = self
+                    .visible_rows
+                    .partition_point(|row| *row < patch.new_visual.start);
+                let end = self
+                    .visible_rows
+                    .partition_point(|row| *row < patch.new_visual.end);
+                self.list_state
+                    .splice(start..end, end.saturating_sub(start));
+                self.minimap_state
+                    .apply_document_patch(&self.document, patch, &self.visible_rows);
+            }
+            if minimap::minimap_perf_enabled() {
+                eprintln!(
+                    "org_preview_incremental revision={} old_rows={} new_rows={} reused_chunks={} total_chunks={} reparsed_bytes={} document_bytes={}",
+                    self.document.revision.0,
+                    patch.old_visual.len(),
+                    patch.new_visual.len(),
+                    reused_chunks,
+                    total_chunks,
+                    self.document.metrics.syntax_reparsed_bytes,
+                    self.document.metrics.bytes,
+                );
+            }
+        } else {
+            let count = self.list_state.item_count();
+            self.list_state.splice(0..count, count);
+            if minimap::minimap_perf_enabled() {
+                eprintln!(
+                    "org_preview_full_update revision={} fallback={} parsed_bytes={} document_bytes={}",
+                    self.document.revision.0,
+                    self.document.metrics.full_syntax_fallback,
+                    self.document.metrics.syntax_reparsed_bytes,
+                    self.document.metrics.bytes,
+                );
+            }
         }
         cx.emit(event);
         cx.notify();
@@ -198,28 +322,42 @@ impl PreviewPanel {
         }
     }
 
-    fn closest_block_at(&self, source: crate::document::ByteOffset) -> Option<BlockId> {
-        let starts: Box<dyn Iterator<Item = (BlockId, crate::document::ByteOffset)> + '_> =
-            match self.document.format {
-                DocumentFormat::Org => Box::new(
-                    self.document
-                        .blocks
-                        .nodes()
-                        .iter()
-                        .enumerate()
-                        .map(|(id, block)| (id as BlockId, block.source.start)),
-                ),
-                DocumentFormat::Markdown => Box::new(
-                    self.document
-                        .markdown_blocks
-                        .iter()
-                        .enumerate()
-                        .map(|(id, block)| (id as BlockId, block.source.start)),
-                ),
-            };
-        starts
-            .min_by_key(|(_, start)| start.0.abs_diff(source.0))
-            .map(|(id, _)| id)
+    fn closest_block_in(
+        document: &PreviewSnapshot,
+        source: crate::document::ByteOffset,
+    ) -> Option<BlockId> {
+        match document.format {
+            DocumentFormat::Org => {
+                closest_block_by_source(document.blocks.nodes().len(), source, |index| {
+                    document.blocks.nodes()[index].source.start
+                })
+            }
+            DocumentFormat::Markdown => {
+                closest_block_by_source(document.markdown_blocks.len(), source, |index| {
+                    document.markdown_blocks[index].source.start
+                })
+            }
+        }
+    }
+
+    fn is_heading_in(document: &PreviewSnapshot, block_id: BlockId) -> bool {
+        match document.format {
+            DocumentFormat::Org => {
+                document
+                    .blocks
+                    .nodes()
+                    .get(block_id as usize)
+                    .is_some_and(|block| {
+                        matches!(block.kind, crate::org_syntax::BlockKind::Heading { .. })
+                    })
+            }
+            DocumentFormat::Markdown => document
+                .markdown_blocks
+                .get(block_id as usize)
+                .is_some_and(|block| {
+                    matches!(block.kind, super::markdown::MarkdownKind::Heading { .. })
+                }),
+        }
     }
 
     pub(in crate::preview) fn top_source_offset(&self) -> Option<crate::document::ByteOffset> {
@@ -630,4 +768,38 @@ impl PreviewPanel {
         self.list_state.scrollbar_drag_ended();
         was_dragging
     }
+}
+
+fn closest_block_by_source(
+    len: usize,
+    source: crate::document::ByteOffset,
+    source_at: impl Fn(usize) -> crate::document::ByteOffset,
+) -> Option<BlockId> {
+    if len == 0 {
+        return None;
+    }
+    let mut low = 0;
+    let mut high = len;
+    while low < high {
+        let middle = low + (high - low) / 2;
+        if source_at(middle) <= source {
+            low = middle + 1;
+        } else {
+            high = middle;
+        }
+    }
+    let after = low;
+    let index = match (after.checked_sub(1), (after < len).then_some(after)) {
+        (Some(before), Some(after)) => {
+            if source_at(before).0.abs_diff(source.0) <= source_at(after).0.abs_diff(source.0) {
+                before
+            } else {
+                after
+            }
+        }
+        (Some(before), None) => before,
+        (None, Some(after)) => after,
+        (None, None) => return None,
+    };
+    BlockId::try_from(index).ok()
 }

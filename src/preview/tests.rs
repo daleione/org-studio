@@ -45,6 +45,58 @@ fn eager_layout_is_limited_to_small_documents() {
 }
 
 #[gpui::test]
+fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui::TestAppContext) {
+    let source = (0..400)
+        .map(|index| format!("* Heading {index}\nbody {index}\n"))
+        .collect::<String>();
+    let mut buffer = crate::document::DocumentBuffer::from_utf8(source.into_bytes()).unwrap();
+    let before = buffer.snapshot();
+    let previous =
+        super::loading::derive_preview(std::path::PathBuf::from("panel-state.org"), before.clone());
+    let folded = previous
+        .blocks
+        .nodes()
+        .iter()
+        .position(|block| {
+            matches!(block.kind, crate::org_syntax::BlockKind::Heading { .. })
+                && previous.text.copy_range(block.content) == "Heading 200"
+        })
+        .unwrap() as crate::org_syntax::BlockId;
+    let panel = cx.new(|_| super::PreviewPanel::new(std::sync::Arc::new(previous), 80.0));
+    panel.update(cx, |panel, _| {
+        panel.toggle_fold(folded);
+        panel.list_state().scrollbar_drag_started();
+    });
+
+    let edit = before
+        .copy_range(ByteRange::new(0, before.len_bytes()))
+        .find("body 100")
+        .unwrap() as u64
+        + 5;
+    let delta = buffer
+        .commit(EditTransaction::new(
+            before.revision(),
+            vec![TextEdit::new(ByteRange::new(edit, edit + 3), "one hundred")],
+        ))
+        .unwrap();
+    let next = cx.read(|cx| {
+        let previous = panel.read(cx).document().clone();
+        super::loading::derive_preview_incremental(
+            std::path::PathBuf::from("panel-state.org"),
+            buffer.snapshot(),
+            Some(&previous),
+            &[delta],
+        )
+    });
+    panel.update(cx, |panel, cx| {
+        panel.replace_document(std::sync::Arc::new(next), cx);
+        assert!(panel.list_state().is_scrollbar_dragging());
+        assert_eq!(panel.fold_markers().len(), 1);
+        assert!(panel.fold_markers().contains(&folded));
+    });
+}
+
+#[gpui::test]
 fn phase_d_mode_switch_preserves_source_and_publishes_only_latest_revision(
     cx: &mut gpui::TestAppContext,
 ) {

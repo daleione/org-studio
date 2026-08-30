@@ -1,13 +1,13 @@
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::{
-    document::{ByteRange, LineCursor, TextSnapshot},
+    document::{ByteRange, LineCursor, RevisionDelta, RevisionRange, TextSnapshot},
     org_syntax::inline::{InlineKind, InlineSpan, InlineText},
 };
 
 use super::{CodeRowRole, PreviewRow};
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum MarkdownKind {
     Blank,
     Heading {
@@ -33,10 +33,112 @@ pub(super) struct MarkdownBlock {
     pub source: ByteRange,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct MarkdownPatch {
+    pub(super) old_blocks: std::ops::Range<usize>,
+    pub(super) new_blocks: std::ops::Range<usize>,
+    pub(super) reparsed_bytes: u64,
+}
+
 pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Vec<PreviewRow>) {
+    parse_markdown_range(text, ByteRange::new(0, text.len_bytes()), 0)
+        .expect("the complete document is a valid Markdown parse range")
+}
+
+/// Reparse a bounded line region when its surrounding parser state is known to be neutral.
+/// Fenced code, tables, images and line-count changes deliberately fall back to the full parser;
+/// those constructs have dependencies outside a single physical line.
+pub(super) fn parse_markdown_incremental(
+    text: &dyn TextSnapshot,
+    previous_blocks: &[MarkdownBlock],
+    previous_rows: &[PreviewRow],
+    deltas: &[RevisionDelta],
+) -> Option<(Vec<MarkdownBlock>, Vec<PreviewRow>, MarkdownPatch)> {
+    let [delta] = deltas else {
+        return None;
+    };
+    if previous_blocks.len() != previous_rows.len()
+        || delta.after != text.revision()
+        || previous_blocks.is_empty()
+    {
+        return None;
+    }
+    let edit_start = delta.edits.iter().map(|edit| edit.old.start).min()?;
+    let edit_end = delta.edits.iter().map(|edit| edit.old.end).max()?;
+    let first = previous_blocks
+        .partition_point(|block| block.source.end < edit_start)
+        .saturating_sub(1);
+    let last = previous_blocks
+        .partition_point(|block| block.source.start <= edit_end)
+        .saturating_add(1)
+        .min(previous_blocks.len());
+    let old_blocks = first..last.max(first + 1).min(previous_blocks.len());
+    if previous_blocks[old_blocks.clone()]
+        .iter()
+        .any(|block| has_external_dependency(&block.kind))
+    {
+        return None;
+    }
+    let old_source = ByteRange {
+        start: previous_blocks[old_blocks.start].source.start,
+        end: previous_blocks[old_blocks.end - 1].source.end,
+    };
+    let new_source = ByteRange {
+        start: map_delta_boundary(old_source.start, delta, false)?,
+        end: map_delta_boundary(old_source.end, delta, true)?,
+    };
+    let (replacement_blocks, replacement_rows) =
+        parse_markdown_range(text, new_source, old_blocks.start as u32)?;
+    if replacement_blocks.len() != old_blocks.len()
+        || replacement_blocks
+            .iter()
+            .any(|block| has_external_dependency(&block.kind))
+    {
+        return None;
+    }
+
+    let map_range = |range| {
+        delta
+            .map_range(RevisionRange::new(delta.before, range))
+            .ok()
+            .map(|mapped| mapped.range)
+    };
+    let mut blocks = Vec::with_capacity(previous_blocks.len());
+    let mut rows = Vec::with_capacity(previous_rows.len());
+    for index in 0..previous_blocks.len() {
+        if old_blocks.contains(&index) {
+            let local = index - old_blocks.start;
+            blocks.push(replacement_blocks[local].clone());
+            rows.push(replacement_rows[local]);
+        } else {
+            blocks.push(MarkdownBlock {
+                kind: previous_blocks[index].kind.clone(),
+                source: map_range(previous_blocks[index].source)?,
+            });
+            let mut row = previous_rows[index];
+            row.content = delta.map_range(row.content).ok()?;
+            rows.push(row);
+        }
+    }
+    Some((
+        blocks,
+        rows,
+        MarkdownPatch {
+            old_blocks: old_blocks.clone(),
+            new_blocks: old_blocks,
+            reparsed_bytes: new_source.len(),
+        },
+    ))
+}
+
+fn parse_markdown_range(
+    text: &dyn TextSnapshot,
+    range: ByteRange,
+    block_offset: u32,
+) -> Option<(Vec<MarkdownBlock>, Vec<PreviewRow>)> {
     let mut blocks = Vec::new();
     let mut rows = Vec::new();
-    let mut cursor = LineCursor::new(text);
+    let mut cursor = LineCursor::within(text, range)?;
     let mut fence: Option<(char, usize, Option<String>)> = None;
 
     while let Some(line) = cursor.next_line() {
@@ -107,7 +209,7 @@ pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Ve
                 line_end,
             )
         };
-        let id = blocks.len() as u32;
+        let id = block_offset.checked_add(blocks.len().try_into().ok()?)?;
         let blank = matches!(kind, MarkdownKind::Blank);
         blocks.push(MarkdownBlock {
             kind,
@@ -121,7 +223,31 @@ pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Ve
             blank,
         });
     }
-    (blocks, rows)
+    Some((blocks, rows))
+}
+
+fn has_external_dependency(kind: &MarkdownKind) -> bool {
+    matches!(
+        kind,
+        MarkdownKind::Code { .. } | MarkdownKind::TableRow | MarkdownKind::Image { .. }
+    )
+}
+
+fn map_delta_boundary(
+    point: crate::document::ByteOffset,
+    delta: &RevisionDelta,
+    after_insertions: bool,
+) -> Option<crate::document::ByteOffset> {
+    let mut shift = 0_i128;
+    for edit in delta.edits.iter().copied() {
+        let insertion = edit.old.start == edit.old.end;
+        if edit.old.end < point || (edit.old.end == point && (!insertion || after_insertions)) {
+            shift += i128::from(edit.new_len) - i128::from(edit.old.len());
+        }
+    }
+    u64::try_from(i128::from(point.0) + shift)
+        .ok()
+        .map(crate::document::ByteOffset)
 }
 
 pub(super) fn parse_markdown_inline(source: &str) -> InlineText {
@@ -260,7 +386,9 @@ fn standalone_image(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::document::{DocumentSnapshot, TextSnapshot};
+    use crate::document::{
+        DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit, TextSnapshot,
+    };
 
     #[test]
     fn parses_markdown_blocks_and_inline_markup() {
@@ -355,5 +483,24 @@ mod tests {
             }
         ));
         assert!(matches!(blocks[4].kind, MarkdownKind::Paragraph));
+    }
+
+    #[test]
+    fn plain_text_edit_reparses_only_neighboring_markdown_lines() {
+        let mut buffer =
+            DocumentBuffer::from_utf8(b"# Heading\nbody one\n\nbody two\n".to_vec()).unwrap();
+        let before = buffer.snapshot();
+        let (blocks, rows) = parse_markdown(&before);
+        let delta = buffer
+            .commit(EditTransaction::new(
+                before.revision(),
+                vec![TextEdit::new(ByteRange::new(15, 15), "x")],
+            ))
+            .unwrap();
+        let (_, next_rows, patch) =
+            parse_markdown_incremental(&buffer.snapshot(), &blocks, &rows, &[delta])
+                .expect("plain line edits have a neutral incremental boundary");
+        assert_eq!(next_rows.len(), rows.len());
+        assert!(patch.reparsed_bytes < buffer.snapshot().len_bytes());
     }
 }

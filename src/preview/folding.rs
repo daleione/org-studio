@@ -311,7 +311,6 @@ fn direct_child_headings(
     children
 }
 
-#[cfg(test)]
 pub(super) fn visible_row_indices(
     rows: &VisualRowTree,
     blocks: &BlockArena,
@@ -325,7 +324,6 @@ pub(super) fn visible_row_indices(
         .collect()
 }
 
-#[cfg(test)]
 pub(super) fn visible_markdown_row_indices(
     rows: &VisualRowTree,
     blocks: &[MarkdownBlock],
@@ -353,7 +351,6 @@ pub(super) fn visible_markdown_row_indices(
     visible
 }
 
-#[cfg(test)]
 fn has_folded_ancestor(block_id: BlockId, blocks: &BlockArena, folded: &HashSet<BlockId>) -> bool {
     let mut parent = blocks.nodes()[block_id as usize].parent;
     while let Some(block_id) = parent {

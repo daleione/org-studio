@@ -1,8 +1,9 @@
-use std::{ops::Range, sync::Arc};
+use std::sync::Arc;
+
+#[cfg(test)]
+use std::ops::Range;
 
 use crate::document::Revision;
-
-use super::projection::{InvalidationFlags, VisualPatch};
 
 const LAYOUT_CHUNK_ROWS: usize = 256;
 
@@ -118,6 +119,7 @@ impl LayoutSnapshot {
         Self::from_chunks(chunks)
     }
 
+    #[cfg(test)]
     pub(in crate::preview) fn replacing_range(
         &self,
         range: Range<usize>,
@@ -159,6 +161,7 @@ impl LayoutSnapshot {
             .min(self.chunks.len())
     }
 
+    #[cfg(test)]
     fn locate_boundary(&self, row: usize) -> (usize, usize) {
         if row >= self.rows {
             return (self.chunks.len(), 0);
@@ -261,24 +264,9 @@ pub(in crate::preview) struct LayoutKey {
     pub(in crate::preview) fold_revision: u64,
 }
 
-#[allow(dead_code)] // Used by the editor transaction host once editing is enabled.
-pub(in crate::preview) fn apply_visual_patch(
-    snapshot: &LayoutSnapshot,
-    patch: &VisualPatch,
-    replacements: Vec<ResolvedRow>,
-) -> LayoutSnapshot {
-    if patch.invalidation.contains(InvalidationFlags::GEOMETRY) {
-        snapshot.replacing_range(patch.old_visual.clone(), replacements)
-    } else {
-        snapshot.clone()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
-
-    use crate::document::Revision;
 
     use super::*;
 
@@ -287,14 +275,8 @@ mod tests {
         let rows = 256 * 500;
         let snapshot =
             LayoutSnapshot::new((0..rows).map(|_| ResolvedRow::new(1, 24.0, true)).collect());
-        let patch = VisualPatch {
-            before_revision: Revision(0),
-            after_revision: Revision(1),
-            old_visual: 64_000..64_001,
-            new_visual: 64_000..64_001,
-            invalidation: InvalidationFlags::CONTENT.union(InvalidationFlags::GEOMETRY),
-        };
-        let updated = apply_visual_patch(&snapshot, &patch, vec![ResolvedRow::new(2, 48.0, false)]);
+        let updated =
+            snapshot.replacing_range(64_000..64_001, vec![ResolvedRow::new(2, 48.0, false)]);
         let shared = snapshot
             .chunks
             .iter()
@@ -303,19 +285,5 @@ mod tests {
             .count();
         assert!(shared as f32 / snapshot.chunks.len() as f32 >= 0.99);
         assert_eq!(updated.measure(64_000).display_lines, 2);
-    }
-
-    #[test]
-    fn paint_only_patch_keeps_the_entire_layout_snapshot_shared() {
-        let snapshot = LayoutSnapshot::new(vec![ResolvedRow::new(1, 24.0, true)]);
-        let patch = VisualPatch {
-            before_revision: Revision(0),
-            after_revision: Revision(1),
-            old_visual: 0..1,
-            new_visual: 0..1,
-            invalidation: InvalidationFlags::CONTENT.union(InvalidationFlags::PAINT),
-        };
-        let updated = apply_visual_patch(&snapshot, &patch, Vec::new());
-        assert!(Arc::ptr_eq(&snapshot.chunks[0], &updated.chunks[0]));
     }
 }

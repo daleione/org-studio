@@ -324,6 +324,44 @@ impl PreviewDisplayMap {
             .layout
     }
 
+    pub(in crate::preview) fn estimated_measure(
+        &self,
+        row: usize,
+        available_width: f32,
+    ) -> crate::preview::layout::ResolvedRow {
+        let layout = self.layout(row);
+        let source_row = self.source_row(row);
+        let kind = self.row_kind(row);
+        let marker_width = if matches!(kind, PreviewLineKind::Heading(_)) {
+            20.0
+        } else {
+            0.0
+        };
+        let wrap_width =
+            (available_width - layout.padding_left - layout.padding_right - marker_width).max(1.0);
+        let source_bytes = source_row.content.range.len() as f32;
+        let estimated_text_width = source_bytes * layout.font_size * 0.5;
+        let line_count =
+            if layout.fixed_height.is_some() || self.image_size(row, available_width).is_some() {
+                1
+            } else {
+                (estimated_text_width / wrap_width).ceil().max(1.0) as usize
+            };
+        let parent_height = self
+            .image_size(row, available_width)
+            .map(|(_, height)| height + layout.padding_top + layout.padding_bottom)
+            .or(layout.fixed_height)
+            .unwrap_or_else(|| {
+                (line_count as f32 * layout.line_height
+                    + layout.padding_top
+                    + layout.padding_bottom)
+                    .max(layout.min_height)
+            })
+            + layout.margin_top
+            + layout.margin_bottom;
+        crate::preview::layout::ResolvedRow::new(line_count, parent_height, false)
+    }
+
     pub(super) fn source_row_layout(
         format: DocumentFormat,
         blocks: &BlockArena,
@@ -490,6 +528,43 @@ pub(in crate::preview) fn build_display_map(document: &PreviewSnapshot) -> Previ
         display_lines: Mutex::new(DisplayLineCache {
             entries: HashMap::with_capacity(DisplayLineCache::CAPACITY),
             order: VecDeque::with_capacity(DisplayLineCache::CAPACITY),
+        }),
+    }
+}
+
+pub(in crate::preview) fn build_display_map_reusing(
+    document: &PreviewSnapshot,
+    previous: &PreviewDisplayMap,
+) -> PreviewDisplayMap {
+    let old_runs = previous
+        .display_runs
+        .lock()
+        .expect("display-run cache poisoned");
+    // Row identities include their semantic revision and are never recycled. Keeping this bounded
+    // cache is therefore safe: stale entries cannot match new rows and disappear naturally via
+    // the existing LRU capacity, without scanning every row in a large document after each edit.
+    let run_entries = old_runs.entries.clone();
+    let run_order = old_runs.order.clone();
+    drop(old_runs);
+
+    let old_lines = previous
+        .display_lines
+        .lock()
+        .expect("display-line cache poisoned");
+    let line_entries = old_lines.entries.clone();
+    let line_order = old_lines.order.clone();
+
+    PreviewDisplayMap {
+        text: document.text.clone(),
+        format: document.format,
+        projection: document.projection.clone(),
+        display_runs: Mutex::new(DisplayRunCache {
+            entries: run_entries,
+            order: run_order,
+        }),
+        display_lines: Mutex::new(DisplayLineCache {
+            entries: line_entries,
+            order: line_order,
         }),
     }
 }

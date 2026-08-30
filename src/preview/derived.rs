@@ -3,11 +3,13 @@ use std::{sync::Arc, time::Duration};
 use crate::document::TextSnapshot;
 use gpui::{AppContext, Context};
 
-use super::{PreviewLoadState, PreviewPanel, WorkspaceWindow, derive_preview};
+use super::{PreviewLoadState, PreviewPanel, WorkspaceWindow, derive_preview_incremental};
 
 pub(crate) struct DerivedRequest {
     path: std::path::PathBuf,
     snapshot: crate::document::DocumentSnapshot,
+    deltas: Vec<crate::document::RevisionDelta>,
+    previous: Option<Arc<super::PreviewSnapshot>>,
 }
 
 impl WorkspaceWindow {
@@ -111,6 +113,14 @@ impl WorkspaceWindow {
     /// Rebuilds a coherent preview snapshot off the UI thread. Publication is revision-gated, so
     /// an older parse can never replace a newer source revision.
     pub(super) fn schedule_derived_update(&mut self, cx: &mut Context<Self>) {
+        self.schedule_derived_update_with_delta(None, cx);
+    }
+
+    pub(super) fn schedule_derived_update_with_delta(
+        &mut self,
+        delta: Option<crate::document::RevisionDelta>,
+        cx: &mut Context<Self>,
+    ) {
         if self.document_mode == crate::app::DocumentMode::Source {
             return;
         }
@@ -129,20 +139,47 @@ impl WorkspaceWindow {
             return;
         }
         if self.derived.sender.is_none() {
-            let (sender, receiver) = async_channel::unbounded::<DerivedRequest>();
+            let (sender, receiver) = async_channel::bounded::<()>(1);
             self.derived.sender = Some(sender);
+            let pending = self.derived.pending.clone();
             let executor = cx.background_executor().clone();
             self.derived.task = Some(cx.spawn(async move |this, cx| {
-                while let Ok(mut request) = receiver.recv().await {
+                let mut local_base: Option<Arc<super::PreviewSnapshot>> = None;
+                while receiver.recv().await.is_ok() {
                     executor.timer(Duration::from_millis(24)).await;
-                    while let Ok(newer) = receiver.try_recv() {
-                        request = newer;
-                    }
+                    while receiver.try_recv().is_ok() {}
+                    let Some(request) = pending
+                        .lock()
+                        .expect("derived request slot poisoned")
+                        .take()
+                    else {
+                        continue;
+                    };
                     let request_document_id = request.snapshot.document_id();
                     let request_revision = request.snapshot.revision();
+                    let base = local_base
+                        .as_ref()
+                        .filter(|base| {
+                            base.document_id == request_document_id
+                                && request
+                                    .deltas
+                                    .first()
+                                    .is_some_and(|delta| delta.before == base.revision)
+                        })
+                        .cloned()
+                        .or(request.previous);
                     let preview = executor
-                        .spawn(async move { derive_preview(request.path, request.snapshot) })
+                        .spawn(async move {
+                            derive_preview_incremental(
+                                request.path,
+                                request.snapshot,
+                                base.as_deref(),
+                                &request.deltas,
+                            )
+                        })
                         .await;
+                    let document = Arc::new(preview);
+                    local_base = Some(document.clone());
                     let _ = this.update(cx, |this, cx| {
                         let Some(current) = this.document_session() else {
                             return;
@@ -152,12 +189,9 @@ impl WorkspaceWindow {
                         {
                             return;
                         }
-                        let document = Arc::new(preview);
                         let list_overdraw = this.list_overdraw;
                         if let Some(panel) = this.preview_panel() {
-                            panel.update(cx, |panel, cx| {
-                                panel.replace_document(document, list_overdraw, cx)
-                            });
+                            panel.update(cx, |panel, cx| panel.replace_document(document, cx));
                         } else if let PreviewLoadState::Ready { document: ready } = &mut this.state
                         {
                             ready.panel =
@@ -170,7 +204,35 @@ impl WorkspaceWindow {
             }));
         }
         if let Some(sender) = &self.derived.sender {
-            let _ = sender.try_send(DerivedRequest { path, snapshot });
+            let previous = self
+                .preview_panel()
+                .map(|panel| panel.read(cx).document().clone());
+            let request = DerivedRequest {
+                path,
+                snapshot,
+                deltas: delta.into_iter().collect(),
+                previous,
+            };
+            let mut pending = self
+                .derived
+                .pending
+                .lock()
+                .expect("derived request slot poisoned");
+            if let Some(queued) = pending.as_mut()
+                && queued
+                    .deltas
+                    .last()
+                    .zip(request.deltas.first())
+                    .is_some_and(|(old, new)| old.after == new.before)
+            {
+                queued.deltas.extend(request.deltas);
+                queued.path = request.path;
+                queued.snapshot = request.snapshot;
+            } else {
+                *pending = Some(request);
+            }
+            drop(pending);
+            let _ = sender.try_send(());
         }
         cx.notify();
     }

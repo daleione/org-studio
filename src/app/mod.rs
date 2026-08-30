@@ -3,7 +3,11 @@
 //! Feature modules implement their focused command and rendering adapters, while the product shell
 //! owns routing, document lifecycle handles, and window-scoped settings in one canonical type.
 
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+    time::Instant,
+};
 
 use gpui::{FocusHandle, Subscription, Task};
 
@@ -85,7 +89,8 @@ pub struct WorkspaceWindow {
 #[derive(Default)]
 pub(crate) struct DerivedHost {
     pub(crate) task: Option<Task<()>>,
-    pub(crate) sender: Option<async_channel::Sender<crate::preview::derived::DerivedRequest>>,
+    pub(crate) sender: Option<async_channel::Sender<()>>,
+    pub(crate) pending: Arc<Mutex<Option<crate::preview::derived::DerivedRequest>>>,
     pub(crate) published: Option<(crate::document::DocumentId, crate::document::Revision)>,
 }
 

@@ -6,6 +6,7 @@ use std::{
 use super::{
     CachedMinimapLineIndex, MinimapInteractionAnchor, MinimapLineIndexBuilder, RasterTileCache,
 };
+use crate::preview::{PreviewSnapshot, projection::VisualPatch};
 
 pub(in crate::preview) struct MinimapState {
     pub(in crate::preview) line_index: Mutex<Option<CachedMinimapLineIndex>>,
@@ -54,6 +55,48 @@ impl MinimapState {
             .expect("minimap anchor poisoned")
             .take();
         was_dragging || was_resizing
+    }
+
+    pub(in crate::preview) fn apply_document_patch(
+        &self,
+        document: &PreviewSnapshot,
+        patch: &VisualPatch,
+        presentation_rows: &Arc<Vec<usize>>,
+    ) {
+        *self
+            .line_index_build
+            .lock()
+            .expect("minimap line-index builder poisoned") = None;
+        let mut cached = self.line_index.lock().expect("minimap line index poisoned");
+        let Some(index) = cached.as_mut() else {
+            return;
+        };
+        if !Arc::ptr_eq(&index.presentation_rows, presentation_rows)
+            || patch.old_visual != patch.new_visual
+        {
+            *cached = None;
+            return;
+        }
+        let Some(display_map) = document.display_map.as_deref() else {
+            *cached = None;
+            return;
+        };
+        let start = presentation_rows.partition_point(|row| *row < patch.new_visual.start);
+        let end = presentation_rows.partition_point(|row| *row < patch.new_visual.end);
+        let replacements = presentation_rows[start..end]
+            .iter()
+            .enumerate()
+            .map(|(offset, row)| {
+                (
+                    start + offset,
+                    display_map.estimated_measure(*row, index.index.width as f32),
+                )
+            })
+            .collect::<Vec<_>>();
+        index.index.projection = Arc::new(index.index.projection.replacing(&replacements));
+        index.index.layout.document_revision = document.revision;
+        index.index.total = index.index.projection.total_display_lines();
+        index.presentation_rows = presentation_rows.clone();
     }
 }
 

@@ -169,7 +169,6 @@ pub fn render(
                 let tile_end = (tile_start + RASTER_TILE_ROWS).min(shape_rows.len());
                 let tile_rows = &shape_rows[tile_start..tile_end];
                 let mut wrap_hasher = std::collections::hash_map::DefaultHasher::new();
-                shape_model.projection.revision.hash(&mut wrap_hasher);
                 parent_width.to_bits().hash(&mut wrap_hasher);
                 let raster_rows = tile_rows
                     .iter()

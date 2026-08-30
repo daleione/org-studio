@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ops::Range,
     sync::{
         Arc,
@@ -293,7 +294,6 @@ pub(in crate::preview) struct VisualRevisions {
 #[allow(dead_code)]
 pub(in crate::preview) struct InvalidationFlags(u8);
 
-#[allow(dead_code)]
 impl InvalidationFlags {
     pub(in crate::preview) const CONTENT: Self = Self(1 << 0);
     pub(in crate::preview) const GEOMETRY: Self = Self(1 << 1);
@@ -302,20 +302,32 @@ impl InvalidationFlags {
     pub(in crate::preview) const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
-
-    pub(in crate::preview) const fn contains(self, other: Self) -> bool {
-        self.0 & other.0 == other.0
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
 pub(in crate::preview) struct VisualPatch {
     pub(in crate::preview) before_revision: Revision,
     pub(in crate::preview) after_revision: Revision,
     pub(in crate::preview) old_visual: Range<usize>,
     pub(in crate::preview) new_visual: Range<usize>,
     pub(in crate::preview) invalidation: InvalidationFlags,
+}
+
+/// The changed-row envelope bound to the exact revision chain that produced it.
+///
+/// Keeping this opaque prevents callers from accidentally pairing a range calculated for one
+/// delta chain with a different patch operation.
+#[derive(Clone, Debug)]
+pub(in crate::preview) struct VisualPatchPlan {
+    before_revision: Revision,
+    after_revision: Revision,
+    affected: Range<usize>,
+}
+
+impl VisualPatchPlan {
+    pub(in crate::preview) fn affected(&self) -> Range<usize> {
+        self.affected.clone()
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,6 +340,32 @@ pub(in crate::preview) enum ProjectionPatchError {
 }
 
 impl PreviewProjectionSnapshot {
+    fn rebased(&self) -> Result<Self, ProjectionPatchError> {
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| {
+                let source = self
+                    .edit_log
+                    .map_range(row.source, self.revision)
+                    .map_err(|_| ProjectionPatchError::StaleSnapshot)?;
+                let mut row = row.clone();
+                row.source = source;
+                row.render.content = source;
+                Ok(row)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            revision: self.revision,
+            revisions: self.revisions,
+            rows: VisualRowTree::from_rows(rows),
+            presentation: self.presentation.clone(),
+            edit_log: Arc::new(
+                EditLog::new(256).expect("projection edit log capacity is non-zero"),
+            ),
+        })
+    }
+
     pub(in crate::preview) fn visual_row_for_source_offset(
         &self,
         offset: crate::document::ByteOffset,
@@ -363,11 +401,12 @@ impl PreviewProjectionSnapshot {
         Some(row)
     }
 
-    pub(in crate::preview) fn affected_visual_range(
+    fn affected_visual_range_with_log(
         &self,
         delta: &RevisionDelta,
+        edit_log: &EditLog,
     ) -> Result<Range<usize>, ProjectionPatchError> {
-        if self.revision != delta.before {
+        if self.revision != delta.before && edit_log.latest_revision() != Some(delta.before) {
             return Err(ProjectionPatchError::StaleSnapshot);
         }
         let mut affected_start = self.rows.len();
@@ -382,8 +421,8 @@ impl PreviewProjectionSnapshot {
                         .first_source
                         .zip(chunk.last_source)
                         .and_then(|(first, last)| {
-                            let first = self.edit_log.map_range(first, delta.before).ok()?;
-                            let last = self.edit_log.map_range(last, delta.before).ok()?;
+                            let first = edit_log.map_range(first, delta.before).ok()?;
+                            let last = edit_log.map_range(last, delta.before).ok()?;
                             Some(first.range.start.0..last.range.end.0)
                         });
                 let Some(envelope) = envelope else {
@@ -403,7 +442,7 @@ impl PreviewProjectionSnapshot {
                     continue;
                 }
                 for (local, row) in chunk.rows.iter().enumerate() {
-                    let Ok(mapped) = self.edit_log.map_range(row.source, delta.before) else {
+                    let Ok(mapped) = edit_log.map_range(row.source, delta.before) else {
                         affected_start = affected_start.min(offset + local);
                         affected_end = affected_end.max(offset + local + 1);
                         edit_found = true;
@@ -435,14 +474,87 @@ impl PreviewProjectionSnapshot {
         Ok(affected_start..affected_end.max(affected_start))
     }
 
-    #[allow(dead_code)] // Public within Preview for the upcoming editor host; covered by unit tests now.
+    pub(in crate::preview) fn patch_plan(
+        &self,
+        deltas: &[RevisionDelta],
+    ) -> Result<VisualPatchPlan, ProjectionPatchError> {
+        let Some(first) = deltas.first() else {
+            return Err(ProjectionPatchError::StaleSnapshot);
+        };
+        if self.revision != first.before
+            || deltas
+                .windows(2)
+                .any(|pair| pair[0].after != pair[1].before)
+        {
+            return Err(ProjectionPatchError::StaleSnapshot);
+        }
+        let mut edit_log = (*self.edit_log).clone();
+        let mut affected_start = self.rows.len();
+        let mut affected_end = 0;
+        for delta in deltas {
+            let next = self.affected_visual_range_with_log(delta, &edit_log)?;
+            affected_start = affected_start.min(next.start);
+            affected_end = affected_end.max(next.end);
+            edit_log
+                .push(delta.clone())
+                .map_err(|_| ProjectionPatchError::StaleSnapshot)?;
+        }
+        let affected = if affected_start == self.rows.len() && affected_end == 0 {
+            self.rows.len()..self.rows.len()
+        } else {
+            affected_start..affected_end.max(affected_start)
+        };
+        Ok(VisualPatchPlan {
+            before_revision: first.before,
+            after_revision: deltas
+                .last()
+                .expect("a patch plan has at least one delta")
+                .after,
+            affected,
+        })
+    }
+
+    #[cfg(test)]
     pub(in crate::preview) fn apply_patch(
         &self,
         delta: &RevisionDelta,
         old_visual: Range<usize>,
         replacements: Vec<VisualRow>,
     ) -> Result<(Self, VisualPatch), ProjectionPatchError> {
-        if self.revision != delta.before {
+        self.apply_patch_chain(std::slice::from_ref(delta), old_visual, replacements)
+    }
+
+    #[cfg(test)]
+    pub(in crate::preview) fn apply_patch_chain(
+        &self,
+        deltas: &[RevisionDelta],
+        old_visual: Range<usize>,
+        replacements: Vec<VisualRow>,
+    ) -> Result<(Self, VisualPatch), ProjectionPatchError> {
+        let plan = self.patch_plan(deltas)?;
+        self.apply_patch_chain_with_plan(deltas, old_visual, replacements, plan)
+    }
+
+    pub(in crate::preview) fn apply_patch_chain_with_plan(
+        &self,
+        deltas: &[RevisionDelta],
+        old_visual: Range<usize>,
+        replacements: Vec<VisualRow>,
+        plan: VisualPatchPlan,
+    ) -> Result<(Self, VisualPatch), ProjectionPatchError> {
+        let Some(first) = deltas.first() else {
+            return Err(ProjectionPatchError::StaleSnapshot);
+        };
+        let Some(last) = deltas.last() else {
+            return Err(ProjectionPatchError::StaleSnapshot);
+        };
+        if self.revision != first.before
+            || plan.before_revision != first.before
+            || plan.after_revision != last.after
+            || deltas
+                .windows(2)
+                .any(|pair| pair[0].after != pair[1].before)
+        {
             return Err(ProjectionPatchError::StaleSnapshot);
         }
         if old_visual.start > old_visual.end || old_visual.end > self.rows.len() {
@@ -450,36 +562,46 @@ impl PreviewProjectionSnapshot {
         }
         if replacements
             .iter()
-            .any(|row| row.source.revision != delta.after)
+            .any(|row| row.source.revision != last.after)
         {
             return Err(ProjectionPatchError::ReplacementRevision);
         }
-        let affected = self.affected_visual_range(delta)?;
-        if old_visual.start > affected.start || old_visual.end < affected.end {
+        if old_visual.start > plan.affected.start || old_visual.end < plan.affected.end {
             return Err(ProjectionPatchError::UncoveredChangedRow);
         }
-        let mut edit_log = (*self.edit_log).clone();
-        edit_log
-            .push(delta.clone())
-            .map_err(|_| ProjectionPatchError::StaleSnapshot)?;
-        let new_start = old_visual.start;
-        let new_end = new_start + replacements.len();
+        let rebased;
+        let base = if self.edit_log.can_append_without_expiring(deltas.len()) {
+            self
+        } else {
+            rebased = self.rebased()?;
+            &rebased
+        };
+        let mut edit_log = (*base.edit_log).clone();
+        for delta in deltas {
+            edit_log
+                .push(delta.clone())
+                .map_err(|_| ProjectionPatchError::StaleSnapshot)?;
+        }
         let old_rows = old_visual
             .clone()
-            .filter_map(|index| self.rows.get(index))
+            .filter_map(|index| base.rows.get(index))
             .collect::<Vec<_>>();
         let invalidates_geometry = old_rows.len() != replacements.len()
             || old_rows
                 .iter()
                 .zip(&replacements)
                 .any(|(old, new)| !geometry_compatible(old, new));
-        let invalidation = invalidates_geometry
-            .then_some(InvalidationFlags::CONTENT.union(InvalidationFlags::GEOMETRY))
-            .unwrap_or_else(|| InvalidationFlags::CONTENT.union(InvalidationFlags::PAINT));
-        let presentation = self.presentation.replace(old_visual.clone(), &replacements);
+        let invalidation = if invalidates_geometry {
+            InvalidationFlags::CONTENT.union(InvalidationFlags::GEOMETRY)
+        } else {
+            InvalidationFlags::CONTENT.union(InvalidationFlags::PAINT)
+        };
+        let new_start = old_visual.start;
+        let new_end = new_start + replacements.len();
+        let presentation = base.presentation.replace(old_visual.clone(), &replacements);
         Ok((
             Self {
-                revision: delta.after,
+                revision: last.after,
                 revisions: VisualRevisions {
                     geometry: self
                         .revisions
@@ -488,18 +610,47 @@ impl PreviewProjectionSnapshot {
                     paint: self.revisions.paint.wrapping_add(1),
                     theme: self.revisions.theme,
                 },
-                rows: self.rows.replace(old_visual.clone(), replacements),
+                rows: base.rows.replace(old_visual.clone(), replacements),
                 presentation,
                 edit_log: Arc::new(edit_log),
             },
             VisualPatch {
-                before_revision: delta.before,
-                after_revision: delta.after,
+                before_revision: first.before,
+                after_revision: last.after,
                 old_visual,
                 new_visual: new_start..new_end,
                 invalidation,
             },
         ))
+    }
+
+    pub(in crate::preview) fn replacement_rows(
+        &self,
+        range: Range<usize>,
+    ) -> Option<Vec<VisualRow>> {
+        (range.start <= range.end && range.end <= self.rows.len()).then(|| {
+            range
+                .filter_map(|index| self.rows.get(index).cloned())
+                .collect()
+        })
+    }
+
+    pub(in crate::preview) fn shared_chunk_count(&self, other: &Self) -> usize {
+        let other_chunks = other
+            .rows
+            .chunks
+            .iter()
+            .map(Arc::as_ptr)
+            .collect::<HashSet<_>>();
+        self.rows
+            .chunks
+            .iter()
+            .filter(|chunk| other_chunks.contains(&Arc::as_ptr(chunk)))
+            .count()
+    }
+
+    pub(in crate::preview) fn chunk_count(&self) -> usize {
+        self.rows.chunks.len()
     }
 }
 
@@ -523,7 +674,35 @@ pub(in crate::preview) fn build_projection_snapshot(
     tables: &std::collections::HashMap<BlockId, TableRowProjection>,
     images: &std::collections::HashMap<BlockId, (u32, u32)>,
 ) -> Arc<PreviewProjectionSnapshot> {
-    let rows = source_rows
+    let rows = build_visual_rows(
+        revision,
+        format,
+        &source_rows,
+        blocks,
+        markdown_blocks,
+        tables,
+        images,
+    );
+    let rows = VisualRowTree::from_rows(rows);
+    Arc::new(PreviewProjectionSnapshot {
+        revision,
+        revisions: VisualRevisions::default(),
+        presentation: PresentationTree::from_visual_rows(&rows),
+        edit_log: Arc::new(EditLog::new(256).expect("projection edit log capacity is non-zero")),
+        rows,
+    })
+}
+
+pub(in crate::preview) fn build_visual_rows(
+    revision: Revision,
+    format: DocumentFormat,
+    source_rows: &[PreviewRow],
+    blocks: &BlockArena,
+    markdown_blocks: &[MarkdownBlock],
+    tables: &std::collections::HashMap<BlockId, TableRowProjection>,
+    images: &std::collections::HashMap<BlockId, (u32, u32)>,
+) -> Vec<VisualRow> {
+    source_rows
         .iter()
         .map(|row| VisualRow {
             id: next_visual_row_id(),
@@ -547,15 +726,7 @@ pub(in crate::preview) fn build_projection_snapshot(
             ),
             render: *row,
         })
-        .collect();
-    let rows = VisualRowTree::from_rows(rows);
-    Arc::new(PreviewProjectionSnapshot {
-        revision,
-        revisions: VisualRevisions::default(),
-        presentation: PresentationTree::from_visual_rows(&rows),
-        edit_log: Arc::new(EditLog::new(256).expect("projection edit log capacity is non-zero")),
-        rows,
-    })
+        .collect()
 }
 
 fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
@@ -807,5 +978,39 @@ mod tests {
             .unwrap();
         assert_eq!(next.revisions.geometry, snapshot.revisions.geometry);
         assert_eq!(patch.invalidation.0 & InvalidationFlags::GEOMETRY.0, 0);
+    }
+
+    #[test]
+    fn projection_rebases_before_bounded_history_expires() {
+        let rows = VisualRowTree::from_rows((0..3).map(|index| row(index, Revision(0))).collect());
+        let mut snapshot = PreviewProjectionSnapshot {
+            revision: Revision(0),
+            revisions: VisualRevisions::default(),
+            presentation: PresentationTree::from_visual_rows(&rows),
+            edit_log: Arc::new(EditLog::new(256).unwrap()),
+            rows,
+        };
+        for revision in 0..300 {
+            let delta = RevisionDelta::new(
+                Revision(revision),
+                Revision(revision + 1),
+                vec![TextEditSummary::new(ByteRange::new(1, 1), 1)],
+            )
+            .unwrap();
+            let replacement = VisualRow {
+                source: RevisionRange::new(Revision(revision + 1), ByteRange::new(0, 5)),
+                semantic_revision: revision + 1,
+                ..row(0, Revision(revision + 1))
+            };
+            snapshot = snapshot
+                .apply_patch(&delta, 0..1, vec![replacement])
+                .unwrap()
+                .0;
+        }
+        assert_eq!(snapshot.revision, Revision(300));
+        assert_eq!(
+            snapshot.source_row(2).unwrap().content.range,
+            ByteRange::new(320, 325)
+        );
     }
 }

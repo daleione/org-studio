@@ -21,6 +21,7 @@ Commands:
   prepare [MIB ...]           Generate fixtures (default: 1 10 50).
   build                       Build all release binaries.
   cpu [MIB]                   Run the visible-block CPU benchmark.
+  incremental [MIB]           Gate incremental edit p95 and chunk reuse.
   first-frame [MIB]           Measure the first readable GPUI frame.
   minimap-first-frame [MIB]   Measure minimap index, first tile, and first pixels.
   scroll [PIXELS] [MIB]       Run one GUI scroll sample.
@@ -127,6 +128,15 @@ run_cpu() {
         2>&1 | tee "$RUN_DIR/cpu.log"
 }
 
+run_incremental() {
+    local mib="${1:-$DEFAULT_MIB}"
+    require_positive_integer "$mib" "fixture MiB"
+    ensure_fixture "$mib"
+    ORG_STUDIO_PHASE_E_FIXTURE="$(fixture_path "$mib")" \
+        cargo test --release --features benchmarks --lib \
+        phase_e_ -- --nocapture
+}
+
 run_first_frame() {
     local mib="${1:-$DEFAULT_MIB}"
     require_positive_integer "$mib" "fixture MiB"
@@ -213,6 +223,7 @@ case "$command" in
     prepare) prepare "$@" ;;
     build) build_release ;;
     cpu) run_cpu "$@" ;;
+    incremental) run_incremental "$@" ;;
     first-frame) run_first_frame "$@" ;;
     minimap-first-frame) run_minimap_first_frame "$@" ;;
     scroll) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 0 ;;

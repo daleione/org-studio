@@ -184,6 +184,10 @@ impl EditLog {
         self.deltas.back().map(|delta| delta.after)
     }
 
+    pub fn can_append_without_expiring(&self, count: usize) -> bool {
+        self.deltas.len().saturating_add(count) <= self.capacity
+    }
+
     pub fn map_range(
         &self,
         mut range: RevisionRange,

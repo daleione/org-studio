@@ -233,13 +233,16 @@ impl WorkspaceWindow {
         self.document_subscription = Some(cx.subscribe(
             &session,
             |this, _, event: &crate::document::DocumentEvent, cx| {
-                if matches!(
-                    event,
-                    crate::document::DocumentEvent::Edited { .. }
-                        | crate::document::DocumentEvent::Reloaded { .. }
-                        | crate::document::DocumentEvent::PathChanged { .. }
-                ) {
-                    this.schedule_derived_update(cx);
+                match event {
+                    crate::document::DocumentEvent::Edited { delta, .. }
+                    | crate::document::DocumentEvent::Reloaded { delta, .. } => {
+                        this.schedule_derived_update_with_delta(Some(delta.clone()), cx);
+                    }
+                    crate::document::DocumentEvent::PathChanged { .. } => {
+                        this.schedule_derived_update(cx);
+                    }
+                    crate::document::DocumentEvent::Saved { .. }
+                    | crate::document::DocumentEvent::DiskChanged { .. } => {}
                 }
                 cx.notify();
             },

@@ -227,9 +227,8 @@ impl WorkspaceWindow {
         }
         if let (Some(panel), Some(preview)) = (panel, preview) {
             let document = Arc::new(preview);
-            let list_overdraw = self.list_overdraw;
             panel.update(cx, |panel, cx| {
-                panel.replace_document(document, list_overdraw, cx);
+                panel.replace_document(document, cx);
             });
         }
         self.set_document_notice(None);

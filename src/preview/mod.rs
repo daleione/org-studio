@@ -21,8 +21,8 @@ mod status_line;
 mod view;
 pub(crate) use document::DocumentFormat;
 use document::{
-    CodeRowRole, PreviewRow, ReloadedDocument, WorkspaceLoadedDocument, WorkspaceReloadedDocument,
-    configured_minimap_visible,
+    CodeRowRole, DerivedUpdate, PreviewRow, ReloadedDocument, WorkspaceLoadedDocument,
+    WorkspaceReloadedDocument, configured_minimap_visible,
 };
 pub use document::{
     DerivedEvent, InitialDocumentLoad, LoadMetrics, LoadedDocument, PreviewSnapshot,
@@ -31,8 +31,8 @@ pub use document::{
 use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 use input::*;
 use loading::{
-    derive_preview, fitted_image_size, load_workspace_document, reload_workspace_document,
-    resolve_image_path,
+    derive_preview_incremental, fitted_image_size, load_workspace_document,
+    reload_workspace_document, resolve_image_path,
 };
 pub use loading::{
     load_document, load_document_profiled, load_document_profiled_without_display_map,
@@ -66,7 +66,7 @@ use fold_transition::{
 use folding::{
     GlobalVisibility, LocalCycleProjection, LocalVisibility, changed_range,
     cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
-    global_org_visibility,
+    global_org_visibility, visible_markdown_row_indices, visible_row_indices,
 };
 pub(crate) use panel::PreviewPanel;
 use panel::PreviewRenderState;

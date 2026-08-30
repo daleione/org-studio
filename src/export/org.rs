@@ -52,14 +52,14 @@ pub(super) fn parse(
                 });
             }
             BlockKind::Image { path } => document.blocks.push(ExportBlock::Image {
-                path: PathBuf::from(path),
+                path: PathBuf::from(path.as_ref()),
                 alt: None,
                 caption: None,
                 source: range,
             }),
             BlockKind::SourceBlock { language } => {
                 document.blocks.push(ExportBlock::Code {
-                    language: language.clone(),
+                    language: language.as_deref().map(ToOwned::to_owned),
                     code: text,
                     source: range,
                 });

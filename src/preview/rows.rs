@@ -2,13 +2,22 @@ use crate::{
     document::{ByteRange, TextSnapshot},
     org_syntax::{BlockArena, BlockId, BlockKind},
 };
+use std::ops::Range;
 
 use super::PreviewRow;
 
 pub(super) fn build_preview_rows(text: &dyn TextSnapshot, blocks: &BlockArena) -> Vec<PreviewRow> {
-    let mut rows = Vec::with_capacity(blocks.nodes().len());
-    for (block_id, block) in blocks.nodes().iter().enumerate() {
-        let block_id = block_id as BlockId;
+    build_preview_rows_in_range(text, blocks, 0..blocks.nodes().len())
+}
+
+pub(super) fn build_preview_rows_in_range(
+    text: &dyn TextSnapshot,
+    blocks: &BlockArena,
+    block_range: Range<usize>,
+) -> Vec<PreviewRow> {
+    let mut rows = Vec::with_capacity(block_range.len());
+    for (block_id, block) in blocks.nodes()[block_range.clone()].iter().enumerate() {
+        let block_id = (block_range.start + block_id) as BlockId;
 
         if matches!(block.kind, BlockKind::Comment | BlockKind::CommentBlock) {
             continue;

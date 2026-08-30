@@ -26,6 +26,17 @@ pub struct PreviewSnapshot {
     pub(in crate::preview) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
     pub statistics: TextStatistics,
     pub metrics: LoadMetrics,
+    pub(in crate::preview) update: DerivedUpdate,
+}
+
+#[derive(Clone, Debug)]
+pub(in crate::preview) enum DerivedUpdate {
+    Full,
+    Incremental {
+        patch: super::projection::VisualPatch,
+        reused_chunks: usize,
+        total_chunks: usize,
+    },
 }
 
 /// A newly opened mutable document together with its first coherent preview projection.
@@ -228,4 +239,6 @@ pub struct LoadMetrics {
     pub parse: Duration,
     pub display_map: Duration,
     pub total: Duration,
+    pub syntax_reparsed_bytes: u64,
+    pub full_syntax_fallback: bool,
 }

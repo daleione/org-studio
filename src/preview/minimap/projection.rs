@@ -12,8 +12,8 @@ use crate::{
 use gpui::{ListOffset, px};
 
 use super::{
-    MINIMAP_INDEX_FRAME_BUDGET, PreviewDisplayMap, PreviewLineKind, RASTER_TILE_ROWS,
-    minimap_perf_enabled, minimap_trace_enabled, width::Density as MinimapDensity,
+    MINIMAP_INDEX_FRAME_BUDGET, PreviewDisplayMap, RASTER_TILE_ROWS, minimap_perf_enabled,
+    minimap_trace_enabled, width::Density as MinimapDensity,
 };
 
 #[derive(Clone)]
@@ -288,48 +288,7 @@ impl PreviewDisplayMap {
         let mut measures = Vec::with_capacity(presentation_rows.len());
 
         for &row in presentation_rows {
-            let layout = self.layout(row);
-            let source_row = self.source_row(row);
-            let kind = self.row_kind(row);
-            let marker_width = if matches!(kind, PreviewLineKind::Heading(_)) {
-                20.0
-            } else {
-                0.0
-            };
-            let wrap_width =
-                (available_width - layout.padding_left - layout.padding_right - marker_width)
-                    .max(1.0);
-            let source_bytes = source_row
-                .content
-                .range
-                .end
-                .0
-                .saturating_sub(source_row.content.range.start.0)
-                as f32;
-            // This estimate intentionally uses metadata only: no text copy, inline
-            // parsing, shaping or font lock. The coefficient is a conservative
-            // average across ASCII and UTF-8 CJK source. Exact wrapping replaces it.
-            let estimated_text_width = source_bytes * layout.font_size * 0.5;
-            let line_count = if layout.fixed_height.is_some()
-                || self.image_size(row, available_width).is_some()
-            {
-                1
-            } else {
-                (estimated_text_width / wrap_width).ceil().max(1.0) as usize
-            };
-            let parent_height = self
-                .image_size(row, available_width)
-                .map(|(_, height)| height + layout.padding_top + layout.padding_bottom)
-                .or(layout.fixed_height)
-                .unwrap_or_else(|| {
-                    (line_count as f32 * layout.line_height
-                        + layout.padding_top
-                        + layout.padding_bottom)
-                        .max(layout.min_height)
-                })
-                + layout.margin_top
-                + layout.margin_bottom;
-            measures.push(ResolvedRow::new(line_count, parent_height, false));
+            measures.push(self.estimated_measure(row, available_width));
         }
 
         let projection = Arc::new(LayoutSnapshot::new(measures));

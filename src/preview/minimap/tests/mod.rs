@@ -1195,6 +1195,112 @@ fn truncation_preserves_combining_clusters_and_rtl_text() {
     let rtl = "مرحبا بالعالم";
     assert_eq!(truncate_for_minimap(rtl), rtl);
 }
+
+#[test]
+fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
+    use crate::document::{ByteRange, DocumentBuffer, EditTransaction, TextEdit, TextSnapshot};
+    use crate::preview::{
+        DerivedUpdate,
+        loading::{derive_preview, derive_preview_incremental},
+    };
+
+    let source = (0..400)
+        .map(|index| format!("* Heading {index}\nbody {index}\n"))
+        .collect::<String>();
+    let mut buffer = DocumentBuffer::from_utf8(source.into_bytes()).unwrap();
+    let before = buffer.snapshot();
+    let previous = derive_preview(std::path::PathBuf::from("minimap.org"), before.clone());
+    let caret = before
+        .copy_range(ByteRange::new(0, before.len_bytes()))
+        .find("body 200")
+        .unwrap() as u64
+        + 8;
+    let delta = buffer
+        .commit(EditTransaction::new(
+            before.revision(),
+            vec![TextEdit::new(ByteRange::new(caret, caret), "x")],
+        ))
+        .unwrap();
+    let next = derive_preview_incremental(
+        std::path::PathBuf::from("minimap.org"),
+        buffer.snapshot(),
+        Some(&previous),
+        &[delta],
+    );
+    let DerivedUpdate::Incremental { patch, .. } = &next.update else {
+        panic!("test edit should produce a visual patch");
+    };
+    let presentation = Arc::new((0..previous.projection.rows.len()).collect::<Vec<_>>());
+    let model = previous.display_map.as_deref().unwrap();
+    let key = MinimapLineIndexKey::new(
+        &presentation,
+        800.0,
+        MinimapDensity::Comfortable,
+        previous.revision,
+        0,
+    );
+    let index = model.estimated_minimap_line_index(
+        &presentation,
+        key.width,
+        1,
+        800.0,
+        MinimapDensity::Comfortable,
+        key.layout,
+    );
+    let old_projection = index.projection.clone();
+    let state = MinimapState::new();
+    *state.line_index.lock().unwrap() = Some(CachedMinimapLineIndex {
+        presentation_rows: presentation.clone(),
+        index,
+    });
+    state.apply_document_patch(&next, patch, &presentation);
+    let cached = state.line_index.lock().unwrap();
+    let patched = cached.as_ref().unwrap();
+    assert_eq!(patched.index.layout.document_revision, next.revision);
+    assert!(
+        old_projection
+            .chunks
+            .iter()
+            .zip(patched.index.projection.chunks.iter())
+            .filter(|(old, new)| Arc::ptr_eq(old, new))
+            .count()
+            > 0
+    );
+
+    drop(cached);
+    let folded_presentation = Arc::new(
+        (0..previous.projection.rows.len())
+            .filter(|row| row % 3 != 0 || patch.old_visual.contains(row))
+            .collect::<Vec<_>>(),
+    );
+    assert!(folded_presentation.len() < presentation.len());
+    let folded_key = MinimapLineIndexKey::new(
+        &folded_presentation,
+        800.0,
+        MinimapDensity::Comfortable,
+        previous.revision,
+        1,
+    );
+    let folded_index = model.estimated_minimap_line_index(
+        &folded_presentation,
+        folded_key.width,
+        2,
+        800.0,
+        MinimapDensity::Comfortable,
+        folded_key.layout,
+    );
+    *state.line_index.lock().unwrap() = Some(CachedMinimapLineIndex {
+        presentation_rows: folded_presentation.clone(),
+        index: folded_index,
+    });
+    state.apply_document_patch(&next, patch, &folded_presentation);
+    let cached = state.line_index.lock().unwrap();
+    let patched = cached
+        .as_ref()
+        .expect("unchanged folds should support a local minimap patch");
+    assert_eq!(patched.index.layout.document_revision, next.revision);
+    assert_eq!(patched.index.projection.rows, folded_presentation.len());
+}
 #[cfg(test)]
 fn composite_rgb(foreground: u32, background: u32, alpha: f32) -> u32 {
     let channel = |shift: u32| {

@@ -242,6 +242,7 @@ pub struct TextLine<'a> {
 pub struct LineCursor<'a> {
     snapshot: &'a dyn TextSnapshot,
     offset: u64,
+    end: u64,
 }
 
 impl<'a> LineCursor<'a> {
@@ -249,11 +250,23 @@ impl<'a> LineCursor<'a> {
         Self {
             snapshot,
             offset: 0,
+            end: snapshot.len_bytes(),
         }
     }
 
+    pub fn within(snapshot: &'a dyn TextSnapshot, range: ByteRange) -> Option<Self> {
+        if range.start > range.end || range.end.0 > snapshot.len_bytes() {
+            return None;
+        }
+        Some(Self {
+            snapshot,
+            offset: range.start.0,
+            end: range.end.0,
+        })
+    }
+
     pub fn next_line(&mut self) -> Option<TextLine<'a>> {
-        if self.offset >= self.snapshot.len_bytes() {
+        if self.offset >= self.end {
             return None;
         }
 
@@ -263,7 +276,9 @@ impl<'a> LineCursor<'a> {
         loop {
             let chunk = self.snapshot.chunk_at(ByteOffset(self.offset))?;
             let local_start = (self.offset - chunk.start.0) as usize;
-            let remaining = &chunk.text[local_start..];
+            let available =
+                (self.end - self.offset).min((chunk.text.len() - local_start) as u64) as usize;
+            let remaining = &chunk.text[local_start..local_start + available];
 
             if let Some(newline) = remaining.as_bytes().iter().position(|byte| *byte == b'\n') {
                 let end = self.offset + newline as u64 + 1;
@@ -289,7 +304,7 @@ impl<'a> LineCursor<'a> {
             scratch.push_str(remaining);
             self.offset += remaining.len() as u64;
 
-            if self.offset >= self.snapshot.len_bytes() {
+            if self.offset >= self.end {
                 return Some(TextLine {
                     range: ByteRange::new(line_start, self.offset),
                     text: std::borrow::Cow::Owned(scratch),
