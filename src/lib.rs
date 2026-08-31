@@ -8,6 +8,7 @@ pub mod file_watcher;
 pub mod i18n;
 pub mod input;
 pub mod keymap;
+pub mod minimap;
 pub mod navigation;
 pub mod org_syntax;
 pub mod perf_tracing;

@@ -17,6 +17,15 @@ mod document_lifecycle;
 mod save;
 pub(crate) use benchmark::ScrollBenchmark;
 
+fn preview_snapshot_is_renderable(
+    panel_document: crate::document::DocumentId,
+    panel_revision: crate::document::Revision,
+    session_document: crate::document::DocumentId,
+    session_revision: crate::document::Revision,
+) -> bool {
+    panel_document == session_document && panel_revision <= session_revision
+}
+
 impl Default for WorkspaceWindow {
     fn default() -> Self {
         Self::new()
@@ -55,6 +64,7 @@ impl WorkspaceWindow {
             key_context,
             state: PreviewLoadState::Empty,
             document_subscription: None,
+            editor_minimap_width_subscription: None,
             subscribed_document: None,
             recent_documents: crate::recent_documents::load(),
             home_error: None,
@@ -445,9 +455,12 @@ impl WorkspaceWindow {
         };
         let panel = panel_entity.read(cx);
         let session = ready.session.read(cx);
-        if panel.document().document_id != session.id()
-            || panel.document().revision != session.revision()
-        {
+        if !preview_snapshot_is_renderable(
+            panel.document().document_id,
+            panel.document().revision,
+            session.id(),
+            session.revision(),
+        ) {
             return div()
                 .size_full()
                 .flex()
@@ -456,6 +469,9 @@ impl WorkspaceWindow {
                 .text_color(rgb(current_theme().foreground_dim))
                 .child("Updating Preview…");
         }
+        // A previous revision is still a complete, internally coherent immutable snapshot.
+        // Keep painting it until the derived projection is atomically replaced; source-mapped
+        // cross-pane interactions already wait for matching revisions in `derived`.
         render_document(
             panel.render_state(),
             panel_entity.clone(),
@@ -551,5 +567,29 @@ impl WorkspaceWindow {
             _ => "",
         };
         format!("{title}{marker}")
+    }
+}
+
+#[cfg(test)]
+mod render_coherence_tests {
+    use super::preview_snapshot_is_renderable;
+    use crate::document::{DocumentSnapshot, Revision};
+
+    #[test]
+    fn previous_revision_remains_visible_until_atomic_preview_replacement() {
+        let document = DocumentSnapshot::from_utf8(b"text".to_vec()).unwrap();
+        assert!(preview_snapshot_is_renderable(
+            document.document_id(),
+            Revision(3),
+            document.document_id(),
+            Revision(4),
+        ));
+        let other = DocumentSnapshot::from_utf8(b"other".to_vec()).unwrap();
+        assert!(!preview_snapshot_is_renderable(
+            document.document_id(),
+            Revision(3),
+            other.document_id(),
+            Revision(4),
+        ));
     }
 }

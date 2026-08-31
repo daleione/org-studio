@@ -248,32 +248,45 @@ impl Render for WorkspaceWindow {
 
 impl WorkspaceWindow {
     fn ensure_document_subscription(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.document_session().cloned() else {
+        let Some(document) = self.state.ready() else {
             self.document_subscription = None;
+            self.editor_minimap_width_subscription = None;
             self.subscribed_document = None;
             return;
         };
+        let session = document.session.clone();
+        let editor = document.editor.clone();
         let document_id = session.read(cx).id();
-        if self.subscribed_document == Some(document_id) {
-            return;
+        if self.subscribed_document != Some(document_id) {
+            self.subscribed_document = Some(document_id);
+            self.document_subscription = Some(cx.subscribe(
+                &session,
+                |this, _, event: &crate::document::DocumentEvent, cx| {
+                    match event {
+                        crate::document::DocumentEvent::Edited { delta, .. }
+                        | crate::document::DocumentEvent::Reloaded { delta, .. } => {
+                            this.schedule_derived_update_with_delta(Some(delta.clone()), cx);
+                        }
+                        crate::document::DocumentEvent::PathChanged { .. } => {
+                            this.schedule_derived_update(cx);
+                        }
+                        crate::document::DocumentEvent::Saved { .. }
+                        | crate::document::DocumentEvent::DiskChanged { .. } => {}
+                    }
+                    cx.notify();
+                },
+            ));
         }
-        self.subscribed_document = Some(document_id);
-        self.document_subscription = Some(cx.subscribe(
-            &session,
-            |this, _, event: &crate::document::DocumentEvent, cx| {
-                match event {
-                    crate::document::DocumentEvent::Edited { delta, .. }
-                    | crate::document::DocumentEvent::Reloaded { delta, .. } => {
-                        this.schedule_derived_update_with_delta(Some(delta.clone()), cx);
-                    }
-                    crate::document::DocumentEvent::PathChanged { .. } => {
-                        this.schedule_derived_update(cx);
-                    }
-                    crate::document::DocumentEvent::Saved { .. }
-                    | crate::document::DocumentEvent::DiskChanged { .. } => {}
-                }
-                cx.notify();
-            },
-        ));
+        if self.editor_minimap_width_subscription.is_none() {
+            self.editor_minimap_width_subscription = Some(cx.subscribe(
+                &editor,
+                |this, _, event: &crate::editor::EditorMinimapWidthEvent, cx| {
+                    this.change_minimap_width(
+                        crate::preview::minimap::MinimapWidthChange::Commit(event.0),
+                        cx,
+                    );
+                },
+            ));
+        }
     }
 }

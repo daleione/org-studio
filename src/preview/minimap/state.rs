@@ -4,7 +4,8 @@ use std::{
 };
 
 use super::{
-    CachedMinimapLineIndex, MinimapInteractionAnchor, MinimapLineIndexBuilder, RasterTileCache,
+    CachedMinimapLineIndex, MinimapDragSession, MinimapInteractionAnchor, MinimapLineIndexBuilder,
+    RasterTileCache,
 };
 use crate::preview::{PreviewSnapshot, projection::VisualPatch};
 
@@ -12,7 +13,7 @@ pub(in crate::preview) struct MinimapState {
     pub(in crate::preview) line_index: Mutex<Option<CachedMinimapLineIndex>>,
     pub(in crate::preview) line_index_build: Mutex<Option<MinimapLineIndexBuilder>>,
     pub(in crate::preview) raster_tiles: Mutex<RasterTileCache>,
-    pub(in crate::preview) drag: Arc<Mutex<Option<DragSession>>>,
+    pub(in crate::preview) drag: Arc<Mutex<Option<MinimapDragSession>>>,
     pub(in crate::preview) resize_drag: Arc<Mutex<Option<ResizeSession>>>,
     pub(in crate::preview) interaction_anchor: Arc<Mutex<Option<MinimapInteractionAnchor>>>,
     pub(in crate::preview) initial_visible_batch_ready: AtomicBool,
@@ -112,14 +113,6 @@ impl PerfState {
             first_pixels_painted: AtomicBool::new(false),
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct DragSession {
-    pub(in crate::preview) start_pointer_y: f32,
-    pub(in crate::preview) start_thumb_top: f32,
-    pub(in crate::preview) start_ratio: f32,
-    pub(in crate::preview) current_thumb_top: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

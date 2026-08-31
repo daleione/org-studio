@@ -12,14 +12,14 @@ use super::{
 };
 
 #[derive(Clone, Debug)]
-pub struct SessionEdit {
+pub struct DocumentCommand {
     transaction: EditTransaction,
     before: Selection,
     after: Selection,
     origin: EditOrigin,
 }
 
-impl SessionEdit {
+impl DocumentCommand {
     pub fn new(
         transaction: EditTransaction,
         before: Selection,
@@ -275,7 +275,7 @@ impl DocumentSession {
 
     pub fn edit(
         &mut self,
-        edit: SessionEdit,
+        edit: DocumentCommand,
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
         let snapshot = self.buffer.snapshot();
@@ -940,7 +940,7 @@ mod tests {
                 let after = Selection::caret(ByteOffset(offset + text.len() as u64));
                 session
                     .edit(
-                        SessionEdit::new(
+                        DocumentCommand::new(
                             EditTransaction::new(
                                 session.revision(),
                                 vec![TextEdit::new(ByteRange::new(offset, offset), text)],

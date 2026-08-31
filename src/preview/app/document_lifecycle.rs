@@ -16,6 +16,7 @@ impl WorkspaceWindow {
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
         self.stop_document_watch();
+        self.editor_minimap_width_subscription = None;
         self.save.status = None;
         self.save.interaction = crate::preview::SaveInteraction::Idle;
         self.state = PreviewLoadState::Empty;
@@ -505,8 +506,15 @@ impl WorkspaceWindow {
                 );
                 self.home_error = None;
                 let session = cx.new(|_| session);
-                let editor = cx.new(|cx| crate::editor::SourceEditor::new(session.clone(), cx));
-                editor.update(cx, |editor, cx| editor.set_soft_wrap(self.soft_wrap, cx));
+                let editor = cx.new(|cx| crate::editor::SemanticEditor::new(session.clone(), cx));
+                self.editor_minimap_width_subscription = None;
+                editor.update(cx, |editor, cx| {
+                    editor.set_soft_wrap(self.soft_wrap, cx);
+                    let minimap_visible = self.minimap_visible
+                        || (cfg!(feature = "benchmarks")
+                            && std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_BENCH").is_some());
+                    editor.set_minimap(minimap_visible, self.minimap_width, cx);
+                });
                 self.derived.published = preview
                     .as_ref()
                     .map(|preview| (preview.document_id, preview.revision));
@@ -637,6 +645,11 @@ impl WorkspaceWindow {
 
     pub fn toggle_minimap(&mut self, cx: &mut Context<Self>) {
         self.minimap_visible = !self.minimap_visible;
+        if let Some(document) = self.state.ready() {
+            document.editor.update(cx, |editor, cx| {
+                editor.set_minimap(self.minimap_visible, self.minimap_width, cx)
+            });
+        }
         if self.minimap_visible {
             cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
                 .detach();

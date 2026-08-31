@@ -9,9 +9,9 @@ use crate::document::{
     Utf16Offset,
 };
 
-use super::{Composition, LINE_HEIGHT, PlatformRange, SourceEditor};
+use super::{Composition, PlatformRange, SemanticEditor};
 
-impl SourceEditor {
+impl SemanticEditor {
     fn byte_range_from_utf16(&self, range: Range<usize>, cx: &gpui::App) -> Option<ByteRange> {
         let snapshot = self.snapshot(cx);
         Some(ByteRange {
@@ -36,7 +36,8 @@ impl SourceEditor {
         cx: &mut Context<Self>,
     ) -> Option<crate::document::Revision> {
         let revision = self.session.read(cx).revision();
-        self.session
+        let result = self
+            .session
             .update(cx, |session, cx| {
                 session.apply_transient_edit(
                     EditTransaction::new(revision, vec![TextEdit::new(range, text.to_owned())]),
@@ -44,7 +45,11 @@ impl SourceEditor {
                 )
             })
             .ok()
-            .map(|delta| delta.after)
+            .map(|delta| delta.after);
+        if result.is_some() {
+            self.hit_rows = std::sync::Arc::from([]);
+        }
+        result
     }
 
     fn begin_or_update_composition(
@@ -96,8 +101,7 @@ impl SourceEditor {
             self.selection_utf16 = marked_end_utf16..marked_end_utf16;
         }
         self.selection_utf16_reversed = false;
-        let snapshot = self.snapshot(cx);
-        self.reveal_caret(&snapshot);
+        self.pending_reveal_caret = true;
         cx.notify();
     }
 
@@ -127,7 +131,7 @@ impl SourceEditor {
     }
 }
 
-impl EntityInputHandler for SourceEditor {
+impl EntityInputHandler for SemanticEditor {
     fn text_for_range(
         &mut self,
         range_utf16: Range<usize>,
@@ -202,8 +206,7 @@ impl EntityInputHandler for SourceEditor {
                     )
                 });
                 debug_assert!(result.is_ok(), "composition revision must remain current");
-                let snapshot = self.snapshot(cx);
-                self.reveal_caret(&snapshot);
+                self.pending_reveal_caret = true;
                 cx.notify();
             }
         } else {
@@ -256,10 +259,8 @@ impl EntityInputHandler for SourceEditor {
             .saturating_sub(row.range.start.0)
             .min(row.range.len()) as usize;
         let end = row.display.source_to_display(end);
-        let start_position = row
-            .layout
-            .position_for_index(start, gpui::px(LINE_HEIGHT))?;
-        let end_position = row.layout.position_for_index(end, gpui::px(LINE_HEIGHT))?;
+        let start_position = row.layout.position_for_index(start, row.line_height)?;
+        let end_position = row.layout.position_for_index(end, row.line_height)?;
         Some(Bounds::new(
             point(
                 row.text_origin_x + start_position.x,
@@ -267,7 +268,7 @@ impl EntityInputHandler for SourceEditor {
             ),
             size(
                 (end_position.x - start_position.x).max(gpui::px(1.0)),
-                gpui::px(LINE_HEIGHT),
+                row.line_height,
             ),
         ))
     }

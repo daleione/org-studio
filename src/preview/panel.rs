@@ -58,12 +58,13 @@ impl PreviewPanel {
         if should_eagerly_measure_rows(visible_rows.len()) {
             list_state.clone().measure_all();
         }
+        let minimap_state = Arc::new(minimap::MinimapState::new());
         Self {
             document,
             list_state,
             fold_markers: Arc::new(HashSet::new()),
             visible_rows,
-            minimap_state: Arc::new(minimap::MinimapState::new()),
+            minimap_state,
             global_visibility: GlobalVisibility::All,
             global_cycle_contiguous: false,
             local_cycle_continuation: None,
@@ -243,6 +244,16 @@ impl PreviewPanel {
                 .filter(|block_id| Self::is_heading_in(&document, *block_id))
                 .map(|block_id| (block_id, visibility))
         });
+        let incremental_update = match &document.update {
+            super::DerivedUpdate::Incremental {
+                patch,
+                reused_chunks,
+                total_chunks,
+            } => Some((patch.clone(), *reused_chunks, *total_chunks)),
+            super::DerivedUpdate::Full => None,
+        };
+        let preserves_visible_rows = incremental_update.is_some()
+            && next_visible_rows.as_slice() == previous_visible_rows.as_slice();
         self.discard_fold_animation();
         self.document = document;
         self.fold_markers = Arc::new(next_fold_markers);
@@ -252,30 +263,27 @@ impl PreviewPanel {
         self.presentation_revision = self.presentation_revision.wrapping_add(1);
         self.minimap_pending_seek = None;
         self.minimap_seek_scheduled = false;
-        self.minimap_state = Arc::new(minimap::MinimapState::new());
-        self.apply_visible_rows(Arc::new(next_visible_rows));
-        if let Some((anchor, offset_in_item)) = source_anchor {
-            self.scroll_to_source_offset_with_offset(anchor, offset_in_item);
+        if preserves_visible_rows {
+            self.visible_rows = previous_visible_rows;
+            self.minimap_state = previous_minimap;
+        } else {
+            self.minimap_state = Arc::new(minimap::MinimapState::new());
+            self.apply_visible_rows(Arc::new(next_visible_rows));
+            if let Some((anchor, offset_in_item)) = source_anchor {
+                self.scroll_to_source_offset_with_offset(anchor, offset_in_item);
+            }
         }
-        if let super::DerivedUpdate::Incremental {
-            patch,
-            reused_chunks,
-            total_chunks,
-        } = &self.document.update
-        {
-            if self.visible_rows.as_ref() == previous_visible_rows.as_ref() {
-                self.visible_rows = previous_visible_rows;
-                self.minimap_state = previous_minimap;
+        if let Some((patch, reused_chunks, total_chunks)) = incremental_update {
+            if preserves_visible_rows {
                 let start = self
                     .visible_rows
                     .partition_point(|row| *row < patch.new_visual.start);
                 let end = self
                     .visible_rows
                     .partition_point(|row| *row < patch.new_visual.end);
-                self.list_state
-                    .splice(start..end, end.saturating_sub(start));
+                self.list_state.remeasure_items(start..end);
                 self.minimap_state
-                    .apply_document_patch(&self.document, patch, &self.visible_rows);
+                    .apply_document_patch(&self.document, &patch, &self.visible_rows);
             }
             if minimap::minimap_perf_enabled() {
                 eprintln!(

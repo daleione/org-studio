@@ -16,7 +16,7 @@ impl WorkspaceWindow {
     pub(super) fn ensure_right_preview_scroll_sync(&mut self, cx: &mut Context<Self>) {
         if !self.document_view.right_preview_open() {
             self.right_preview_scroll.source_subscription = None;
-            self.right_preview_scroll.panel_revision = None;
+            self.right_preview_scroll.bound_panel = None;
             return;
         }
         let Some(ready) = self.state.ready() else {
@@ -37,13 +37,13 @@ impl WorkspaceWindow {
         if self.right_preview_scroll.source_subscription.is_none() {
             self.right_preview_scroll.source_subscription = Some(cx.subscribe(
                 &editor,
-                |this, _, _: &crate::editor::SourceScrollEvent, cx| {
+                |this, _, _: &crate::editor::EditorScrollEvent, cx| {
                     this.sync_editor_scroll_to_right_preview(cx);
                 },
             ));
         }
-        let panel_revision = (snapshot.document_id(), snapshot.revision());
-        if self.right_preview_scroll.panel_revision != Some(panel_revision) {
+        let panel_id = panel.entity_id();
+        if self.right_preview_scroll.bound_panel != Some(panel_id) {
             let workspace = cx.entity().downgrade();
             panel
                 .read(cx)
@@ -56,7 +56,7 @@ impl WorkspaceWindow {
                         });
                     });
                 });
-            self.right_preview_scroll.panel_revision = Some(panel_revision);
+            self.right_preview_scroll.bound_panel = Some(panel_id);
             self.sync_editor_scroll_to_right_preview(cx);
         }
     }
@@ -110,7 +110,7 @@ impl WorkspaceWindow {
         }
         self.derived.published = None;
         self.right_preview_scroll.source_subscription = None;
-        self.right_preview_scroll.panel_revision = None;
+        self.right_preview_scroll.bound_panel = None;
         if let Some(sender) = &self.derived.sender {
             // Wake the worker so it can release its incremental base when no request remains.
             let _ = sender.try_send(());

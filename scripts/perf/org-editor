@@ -14,8 +14,8 @@ Commands:
   prepare [MIB]       Generate an editor fixture (default: 50).
   build               Build release binaries.
   typing [MIB]        Measure edits plus UTF-16 caret mapping without parsing.
-  frame [MIB]         Measure visible SourceEditor prepaint+paint CPU while typing.
-  first-frame [MIB]   Measure the first readable SourceEditor frame.
+  frame [MIB]         Measure visible SemanticEditor prepaint+paint CPU while typing.
+  first-frame [MIB]   Measure the first readable SemanticEditor frame.
   suite [MIB]         Build, prepare, typing, and first-frame.
 EOF
 }
@@ -71,8 +71,8 @@ first_frame() {
     ensure_fixture "$mib"
     [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
     new_run_dir "editor-first-frame-${mib}m"
-    ORG_STUDIO_DOCUMENT_MODE=source \
     ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 \
     ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=1 \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/first-frame.log"
 }
@@ -83,10 +83,10 @@ frame() {
     ensure_fixture "$mib"
     [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
     new_run_dir "editor-frame-${mib}m"
-    ORG_STUDIO_DOCUMENT_MODE=source \
     ORG_STUDIO_EDITOR_BENCH_WARMUP_FRAMES="${ORG_STUDIO_EDITOR_BENCH_WARMUP_FRAMES:-120}" \
     ORG_STUDIO_EDITOR_BENCH_FRAMES="${ORG_STUDIO_EDITOR_BENCH_FRAMES:-500}" \
     ORG_STUDIO_EXIT_AFTER_EDITOR_BENCH=1 \
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 \
     ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=1 \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/frame.log"
 }

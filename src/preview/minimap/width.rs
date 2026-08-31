@@ -1,7 +1,12 @@
 use super::MinimapResizeSession;
 
+pub(in crate::preview) use crate::minimap::Density;
+
+#[cfg(test)]
 pub(in crate::preview) const FONT_PX: f32 = 2.0;
+#[cfg(test)]
 pub(in crate::preview) const LINE_HEIGHT_PX: f32 = 2.6;
+#[cfg(test)]
 pub(in crate::preview) const EDGE_PADDING_PX: f32 = 4.0;
 const MANUAL_MIN_PX: f32 = 48.0;
 pub(in crate::preview) const MANUAL_MAX_PX: f32 = 480.0;
@@ -19,61 +24,6 @@ pub(in crate::preview) const AUTO_COMPACT_MAX_PX: f32 = 96.0;
 const AUTO_GROW_START_PX: f32 = 1280.0;
 const AUTO_GROW_PER_PX: f32 = 0.11;
 const AUTO_MAX_PX: f32 = 220.0;
-
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) enum Density {
-    Compact,
-    Comfortable,
-    Large,
-    ExtraLarge,
-    Maximum,
-}
-
-impl Density {
-    pub(in crate::preview) fn for_width(width: f32) -> Self {
-        if width < 128.0 {
-            Self::Compact
-        } else if width < 184.0 {
-            Self::Comfortable
-        } else if width < 280.0 {
-            Self::Large
-        } else if width < 400.0 {
-            Self::ExtraLarge
-        } else {
-            Self::Maximum
-        }
-    }
-
-    pub(in crate::preview) fn font_px(self) -> f32 {
-        match self {
-            Self::Compact => FONT_PX,
-            Self::Comfortable => 3.0,
-            Self::Large => 3.8,
-            Self::ExtraLarge => 4.1,
-            Self::Maximum => 4.25,
-        }
-    }
-
-    pub(in crate::preview) fn line_height(self) -> f32 {
-        match self {
-            Self::Compact => LINE_HEIGHT_PX,
-            Self::Comfortable => 3.8,
-            Self::Large => 4.6,
-            Self::ExtraLarge => 4.9,
-            Self::Maximum => 5.0,
-        }
-    }
-
-    pub(in crate::preview) fn edge_padding(self) -> f32 {
-        match self {
-            Self::Compact => EDGE_PADDING_PX,
-            Self::Comfortable => 5.0,
-            Self::Large => 6.0,
-            Self::ExtraLarge => 7.0,
-            Self::Maximum => 8.0,
-        }
-    }
-}
 
 pub(in crate::preview) fn automatic_for_viewport(viewport_width: f32) -> f32 {
     let compact = (viewport_width * 0.15).clamp(24.0, AUTO_COMPACT_MAX_PX);

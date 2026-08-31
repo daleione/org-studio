@@ -1,23 +1,27 @@
 mod commands;
-mod display_map;
 mod element;
+mod folding;
 mod input;
+mod layout_map;
+mod minimap;
+mod org_commands;
 mod syntax;
 
 use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
 
-use display_map::SourceDisplayMap;
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, SharedString,
     Subscription, Task, Window, WrappedLine, actions, div, prelude::*, px, rgb,
 };
+use layout_map::EditorLayoutMap;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     document::{
-        ByteOffset, ByteRange, DocumentEvent, DocumentSession, DocumentSnapshot, EditOrigin,
-        EditTransaction, HistoryOutcome, LineIndex, Selection, SessionEdit, TextEdit, TextSnapshot,
+        ByteOffset, ByteRange, DocumentCommand, DocumentEvent, DocumentSession, DocumentSnapshot,
+        EditOrigin, EditTransaction, HistoryOutcome, LineIndex, RevisionRange, Selection, TextEdit,
+        TextSnapshot,
     },
     theme::current_theme,
 };
@@ -25,7 +29,7 @@ use crate::{
 pub use element::EditorElement;
 
 actions!(
-    source_editor,
+    semantic_editor,
     [
         Backspace,
         DeleteForward,
@@ -48,6 +52,10 @@ actions!(
         SelectAll,
         Newline,
         InsertTab,
+        ShiftTab,
+        AlignTable,
+        ToggleTodo,
+        ToggleCheckbox,
         Undo,
         Redo,
         Copy,
@@ -60,32 +68,36 @@ const LINE_HEIGHT: f32 = 22.0;
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
-        KeyBinding::new("backspace", Backspace, Some("SourceEditor")),
-        KeyBinding::new("delete", DeleteForward, Some("SourceEditor")),
-        KeyBinding::new("left", MoveLeft, Some("SourceEditor")),
-        KeyBinding::new("right", MoveRight, Some("SourceEditor")),
-        KeyBinding::new("alt-left", MoveWordLeft, Some("SourceEditor")),
-        KeyBinding::new("alt-right", MoveWordRight, Some("SourceEditor")),
-        KeyBinding::new("up", MoveUp, Some("SourceEditor")),
-        KeyBinding::new("down", MoveDown, Some("SourceEditor")),
-        KeyBinding::new("shift-left", SelectLeft, Some("SourceEditor")),
-        KeyBinding::new("shift-right", SelectRight, Some("SourceEditor")),
-        KeyBinding::new("alt-shift-left", SelectWordLeft, Some("SourceEditor")),
-        KeyBinding::new("alt-shift-right", SelectWordRight, Some("SourceEditor")),
-        KeyBinding::new("shift-up", SelectUp, Some("SourceEditor")),
-        KeyBinding::new("shift-down", SelectDown, Some("SourceEditor")),
-        KeyBinding::new("cmd-left", MoveLineStart, Some("SourceEditor")),
-        KeyBinding::new("cmd-right", MoveLineEnd, Some("SourceEditor")),
-        KeyBinding::new("cmd-up", MoveDocumentStart, Some("SourceEditor")),
-        KeyBinding::new("cmd-down", MoveDocumentEnd, Some("SourceEditor")),
-        KeyBinding::new("cmd-a", SelectAll, Some("SourceEditor")),
-        KeyBinding::new("enter", Newline, Some("SourceEditor")),
-        KeyBinding::new("tab", InsertTab, Some("SourceEditor")),
-        KeyBinding::new("cmd-z", Undo, Some("SourceEditor")),
-        KeyBinding::new("cmd-shift-z", Redo, Some("SourceEditor")),
-        KeyBinding::new("cmd-c", Copy, Some("SourceEditor")),
-        KeyBinding::new("cmd-x", Cut, Some("SourceEditor")),
-        KeyBinding::new("cmd-v", Paste, Some("SourceEditor")),
+        KeyBinding::new("backspace", Backspace, Some("SemanticEditor")),
+        KeyBinding::new("delete", DeleteForward, Some("SemanticEditor")),
+        KeyBinding::new("left", MoveLeft, Some("SemanticEditor")),
+        KeyBinding::new("right", MoveRight, Some("SemanticEditor")),
+        KeyBinding::new("alt-left", MoveWordLeft, Some("SemanticEditor")),
+        KeyBinding::new("alt-right", MoveWordRight, Some("SemanticEditor")),
+        KeyBinding::new("up", MoveUp, Some("SemanticEditor")),
+        KeyBinding::new("down", MoveDown, Some("SemanticEditor")),
+        KeyBinding::new("shift-left", SelectLeft, Some("SemanticEditor")),
+        KeyBinding::new("shift-right", SelectRight, Some("SemanticEditor")),
+        KeyBinding::new("alt-shift-left", SelectWordLeft, Some("SemanticEditor")),
+        KeyBinding::new("alt-shift-right", SelectWordRight, Some("SemanticEditor")),
+        KeyBinding::new("shift-up", SelectUp, Some("SemanticEditor")),
+        KeyBinding::new("shift-down", SelectDown, Some("SemanticEditor")),
+        KeyBinding::new("cmd-left", MoveLineStart, Some("SemanticEditor")),
+        KeyBinding::new("cmd-right", MoveLineEnd, Some("SemanticEditor")),
+        KeyBinding::new("cmd-up", MoveDocumentStart, Some("SemanticEditor")),
+        KeyBinding::new("cmd-down", MoveDocumentEnd, Some("SemanticEditor")),
+        KeyBinding::new("cmd-a", SelectAll, Some("SemanticEditor")),
+        KeyBinding::new("enter", Newline, Some("SemanticEditor")),
+        KeyBinding::new("tab", InsertTab, Some("SemanticEditor")),
+        KeyBinding::new("shift-tab", ShiftTab, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-shift-a", AlignTable, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-shift-t", ToggleTodo, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-shift-x", ToggleCheckbox, Some("SemanticEditor")),
+        KeyBinding::new("cmd-z", Undo, Some("SemanticEditor")),
+        KeyBinding::new("cmd-shift-z", Redo, Some("SemanticEditor")),
+        KeyBinding::new("cmd-c", Copy, Some("SemanticEditor")),
+        KeyBinding::new("cmd-x", Cut, Some("SemanticEditor")),
+        KeyBinding::new("cmd-v", Paste, Some("SemanticEditor")),
     ]);
 }
 
@@ -95,7 +107,8 @@ pub(super) struct HitRow {
     pub(super) line: LineIndex,
     pub(super) origin_y: Pixels,
     pub(super) text_origin_x: Pixels,
-    pub(super) display: display_map::DisplayLineText,
+    pub(super) line_height: Pixels,
+    pub(super) display: layout_map::DisplayLineText,
     pub(super) layout: Arc<WrappedLine>,
 }
 
@@ -130,7 +143,7 @@ pub(super) enum FrameBenchmarkAction {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct SourceEditorStatus {
+pub(crate) struct SemanticEditorStatus {
     pub(crate) caret_offset: ByteOffset,
     pub(crate) caret_line: u64,
     pub(crate) caret_column: u64,
@@ -193,7 +206,7 @@ impl EditorFrameBenchmark {
     }
 }
 
-pub struct SourceEditor {
+pub struct SemanticEditor {
     session: Entity<DocumentSession>,
     focus_handle: FocusHandle,
     selection: Selection,
@@ -201,13 +214,19 @@ pub struct SourceEditor {
     selection_utf16_reversed: bool,
     marked: Option<PlatformRange>,
     composition: Option<Composition>,
-    display_map: SourceDisplayMap,
+    display_map: EditorLayoutMap,
+    folds: folding::EditorFoldState,
+    command_feedback: Option<SharedString>,
+    minimap: minimap::EditorMinimapHost,
+    syntax_cache: syntax::EditorSyntaxCache,
+    layout_anchor: Option<RevisionRange>,
     shape_cache: HashMap<ShapeKey, Arc<WrappedLine>>,
     scroll_y: f32,
     scroll_x: f32,
     vertical_goal_x: Option<f32>,
     viewport: Option<Bounds<Pixels>>,
     hit_rows: Arc<[HitRow]>,
+    pending_reveal_caret: bool,
     is_selecting: bool,
     drag_position: Option<Point<Pixels>>,
     autoscroll_task: Option<Task<()>>,
@@ -219,15 +238,34 @@ pub struct SourceEditor {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct SourceScrollEvent;
+pub(crate) struct EditorScrollEvent;
 
-impl EventEmitter<SourceScrollEvent> for SourceEditor {}
+impl EventEmitter<EditorScrollEvent> for SemanticEditor {}
 
-impl SourceEditor {
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
+
+impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
+
+impl SemanticEditor {
     pub fn new(session: Entity<DocumentSession>, cx: &mut Context<Self>) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::Edited { delta, .. } = event {
+                let viewport_height = this
+                    .viewport
+                    .map_or(0.0, |viewport| f32::from(viewport.size.height));
+                let was_at_end = this.viewport.is_some()
+                    && this.scroll_y + viewport_height + 0.5 >= this.display_map.total_height();
+                let anchor_line = this.display_map.line_at_y(this.scroll_y);
+                let anchor_start = this.display_map.line_start_y(anchor_line);
+                let anchor_fraction = (this.scroll_y - anchor_start)
+                    / this.display_map.line_height_px(anchor_line).max(1.0);
+                let mapped_anchor = this
+                    .layout_anchor
+                    .and_then(|anchor| delta.map_range(anchor).ok())
+                    .map(|anchor| anchor.range.start);
                 let snapshot = this.snapshot(cx);
+                let previous_line_count = this.display_map.line_count();
                 let first_line = delta
                     .edits
                     .iter()
@@ -239,27 +277,92 @@ impl SourceEditor {
                     .map(|line| line.0)
                     .min()
                     .unwrap_or(0);
+                this.syntax_cache.invalidate_from(
+                    snapshot.document_id(),
+                    snapshot.revision(),
+                    first_line,
+                );
                 let wrap_width = this.display_map.wrap_width();
-                this.display_map.configure(snapshot.len_lines(), wrap_width);
-                this.display_map.invalidate_layout_from(first_line);
+                if previous_line_count != snapshot.len_lines() && delta.edits.len() == 1 {
+                    let edit = delta.edits[0];
+                    let new_end = edit.old.start.0.saturating_add(edit.new_len);
+                    let last_line = snapshot
+                        .line_index_at(ByteOffset(new_end.min(snapshot.len_bytes())))
+                        .map_or(first_line, |line| line.0);
+                    let new_count = last_line.saturating_sub(first_line).saturating_add(1);
+                    let added_lines = snapshot.len_lines().saturating_sub(previous_line_count);
+                    let removed_lines = previous_line_count.saturating_sub(snapshot.len_lines());
+                    let old_count = new_count
+                        .saturating_add(removed_lines)
+                        .saturating_sub(added_lines)
+                        .max(1);
+                    this.display_map.splice_lines(
+                        first_line..first_line.saturating_add(old_count),
+                        new_count,
+                        snapshot.len_lines(),
+                    );
+                } else {
+                    this.display_map.configure(snapshot.len_lines(), wrap_width);
+                }
+                if delta.edits.len() != 1 {
+                    this.display_map.invalidate_layout_from(first_line);
+                }
+                this.folds.apply_delta(delta);
+                this.display_map
+                    .set_hidden_ranges(this.folds.hidden_ranges(&snapshot));
+                let anchor_line = mapped_anchor
+                    .and_then(|offset| snapshot.line_index_at(offset).ok())
+                    .map_or(anchor_line, |line| line.0)
+                    .min(snapshot.len_lines().saturating_sub(1));
+                let anchored = this.display_map.line_start_y(anchor_line)
+                    + anchor_fraction.clamp(0.0, 1.0)
+                        * this.display_map.line_height_px(anchor_line);
+                let max_scroll = (this.display_map.total_height() - viewport_height).max(0.0);
+                this.scroll_y = if was_at_end {
+                    max_scroll
+                } else {
+                    anchored.clamp(0.0, max_scroll)
+                };
+                this.layout_anchor = snapshot
+                    .line_content_range(LineIndex(anchor_line))
+                    .ok()
+                    .map(|range| {
+                        RevisionRange::new(
+                            snapshot.revision(),
+                            ByteRange::new(range.start.0, range.start.0),
+                        )
+                    });
                 this.shape_cache.clear();
+                this.hit_rows = Arc::from([]);
                 this.vertical_goal_x = None;
             } else if matches!(event, DocumentEvent::Reloaded { .. }) {
                 this.display_map.invalidate_layout();
+            } else if matches!(event, DocumentEvent::PathChanged { .. }) {
+                this.syntax_cache.reset();
+                this.folds = folding::EditorFoldState::default();
+                this.display_map.set_hidden_ranges(Vec::new());
+                this.shape_cache.clear();
+                this.minimap.invalidate_raster();
             }
             if matches!(event, DocumentEvent::Reloaded { .. }) {
+                this.syntax_cache.reset();
                 let snapshot = this.snapshot(cx);
                 this.selection = this.selection.clamp(&snapshot);
                 this.sync_selection_utf16(&snapshot);
                 this.marked = None;
                 this.composition = None;
                 this.shape_cache.clear();
+                this.hit_rows = Arc::from([]);
+                this.pending_reveal_caret = false;
                 this.scroll_y = 0.0;
+                this.minimap.note_viewport_changed();
                 this.scroll_x = 0.0;
+                this.layout_anchor = None;
+                this.folds = folding::EditorFoldState::default();
             }
             cx.notify();
         });
-        let mut display_map = SourceDisplayMap::default();
+        let mut display_map = EditorLayoutMap::default();
         display_map.configure(session.read(cx).snapshot().len_lines(), 1.0);
         Self {
             session,
@@ -270,12 +373,18 @@ impl SourceEditor {
             marked: None,
             composition: None,
             display_map,
+            folds: folding::EditorFoldState::default(),
+            command_feedback: None,
+            minimap: minimap::EditorMinimapHost::default(),
+            syntax_cache: syntax::EditorSyntaxCache::default(),
+            layout_anchor: None,
             shape_cache: HashMap::with_capacity(128),
             scroll_y: 0.0,
             scroll_x: 0.0,
             vertical_goal_x: None,
             viewport: None,
             hit_rows: Arc::from([]),
+            pending_reveal_caret: false,
             is_selecting: false,
             drag_position: None,
             autoscroll_task: None,
@@ -306,8 +415,33 @@ impl SourceEditor {
                 self.scroll_x = 0.0;
             }
             self.shape_cache.clear();
+            self.minimap.invalidate_raster();
             cx.notify();
         }
+    }
+
+    pub(crate) fn set_minimap(
+        &mut self,
+        visible: bool,
+        width: Option<u16>,
+        cx: &mut Context<Self>,
+    ) {
+        self.minimap.visible = visible;
+        if let Some(width) = width {
+            self.minimap.width = (width as f32).clamp(minimap::MIN_WIDTH, minimap::MAX_WIDTH);
+        }
+        if !visible {
+            self.minimap.drag = None;
+            self.minimap.resizing = None;
+            self.minimap.bounds = None;
+        }
+        self.shape_cache.clear();
+        cx.notify();
+    }
+
+    pub fn set_minimap_search_marks(&mut self, marks: Arc<[ByteRange]>, cx: &mut Context<Self>) {
+        self.minimap.search_marks = marks;
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -334,7 +468,7 @@ impl SourceEditor {
         self.composition.is_some()
     }
 
-    pub(crate) fn status(&self, cx: &App) -> SourceEditorStatus {
+    pub(crate) fn status(&self, cx: &App) -> SemanticEditorStatus {
         let snapshot = self.snapshot(cx);
         let (line, column) = snapshot
             .line_and_column_at(self.selection.head())
@@ -345,18 +479,16 @@ impl SourceEditor {
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
         let visible_bottom_line = if viewport_height > 0.0 {
             self.display_map
-                .line_at_visual_row(
-                    ((self.scroll_y + viewport_height - 0.5).max(0.0) / LINE_HEIGHT).floor() as u64,
-                )
+                .line_at_y((self.scroll_y + viewport_height - 0.5).max(0.0))
                 .saturating_add(1)
         } else {
             0
         }
         .min(total_lines);
-        let document_height = self.display_map.total_visual_rows() as f32 * LINE_HEIGHT;
+        let document_height = self.display_map.total_height();
         let reached_end =
             viewport_height > 0.0 && self.scroll_y + viewport_height + 0.5 >= document_height;
-        SourceEditorStatus {
+        SemanticEditorStatus {
             caret_offset: self.selection.head(),
             caret_line: line.0 + 1,
             caret_column: column + 1,
@@ -443,12 +575,12 @@ mod tests {
     use std::path::PathBuf;
 
     #[gpui::test]
-    fn source_editor_edits_unicode_and_restores_selection_on_undo(cx: &mut gpui::TestAppContext) {
+    fn semantic_editor_edits_unicode_and_restores_selection_on_undo(cx: &mut gpui::TestAppContext) {
         let session = cx.new(|_| {
             DocumentSession::from_utf8(PathBuf::from("test.org"), "a中".as_bytes().to_vec())
                 .unwrap()
         });
-        let editor = cx.new(|cx| SourceEditor::new(session.clone(), cx));
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
         editor.update(cx, |editor, cx| {
             editor.set_selection(Selection::caret(ByteOffset(1)), cx);
             editor.replace_selection("🙂", EditOrigin::Typing, cx);
@@ -475,7 +607,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn source_status_uses_live_caret_and_viewport_coordinates(cx: &mut gpui::TestAppContext) {
+    fn semantic_status_uses_live_caret_and_viewport_coordinates(cx: &mut gpui::TestAppContext) {
         let session = cx.new(|_| {
             DocumentSession::from_utf8(
                 PathBuf::from("test.org"),
@@ -483,7 +615,7 @@ mod tests {
             )
             .unwrap()
         });
-        let editor = cx.new(|cx| SourceEditor::new(session, cx));
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
         editor.update(cx, |editor, cx| {
             editor.set_selection(Selection::caret(ByteOffset(13)), cx);
             editor.scroll_y = LINE_HEIGHT;
@@ -509,21 +641,481 @@ mod tests {
     }
 
     #[gpui::test]
+    fn edits_above_viewport_preserve_the_same_source_anchor(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                PathBuf::from("test.org"),
+                b"first\nsecond\nthird\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        editor.update(cx, |editor, cx| {
+            let snapshot = session.read(cx).snapshot();
+            let range = snapshot.line_content_range(LineIndex(2)).unwrap();
+            editor.scroll_y = editor.display_map.line_start_y(2);
+            editor.layout_anchor = Some(RevisionRange::new(
+                snapshot.revision(),
+                ByteRange::new(range.start.0, range.start.0),
+            ));
+        });
+
+        session.update(cx, |session, cx| {
+            let revision = session.revision();
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(
+                            revision,
+                            vec![TextEdit::new(ByteRange::new(0, 0), "\n")],
+                        ),
+                        Selection::caret(ByteOffset(0)),
+                        Selection::caret(ByteOffset(1)),
+                        EditOrigin::Typing,
+                    ),
+                    cx,
+                )
+                .unwrap();
+        });
+
+        cx.read(|cx| {
+            let snapshot = session.read(cx).snapshot();
+            let (anchor, _) = editor.read(cx).top_source_anchor(&snapshot);
+            assert_eq!(
+                snapshot.copy_range(ByteRange::new(anchor.0, anchor.0 + 5)),
+                "third"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn trailing_space_edit_retains_layout_until_atomic_remeasurement(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let source = (0..1_000)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        editor.update(cx, |editor, cx| {
+            let snapshot = session.read(cx).snapshot();
+            editor.display_map.configure(snapshot.len_lines(), 640.0);
+            editor
+                .display_map
+                .update_line_layout(500, 3, 24.0, 2.0, 2.0);
+            editor
+                .display_map
+                .update_line_layout(800, 5, 22.0, 0.0, 0.0);
+            let end = snapshot.line_content_range(LineIndex(500)).unwrap().end;
+            editor.set_selection(Selection::caret(end), cx);
+            editor.replace_selection(" ", EditOrigin::Typing, cx);
+        });
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.display_map.line_height_px(500), 76.0);
+            assert_eq!(editor.display_map.line_height_px(800), 110.0);
+        });
+    }
+
+    #[gpui::test]
+    fn newline_edit_shifts_downstream_layout_without_clearing_it(cx: &mut gpui::TestAppContext) {
+        let source = (0..1_000)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        editor.update(cx, |editor, cx| {
+            let snapshot = session.read(cx).snapshot();
+            editor.display_map.configure(snapshot.len_lines(), 640.0);
+            editor
+                .display_map
+                .update_line_layout(500, 3, 24.0, 2.0, 2.0);
+            editor
+                .display_map
+                .update_line_layout(800, 5, 22.0, 0.0, 0.0);
+            let end = snapshot.line_content_range(LineIndex(500)).unwrap().end;
+            editor.set_selection(Selection::caret(end), cx);
+            editor.replace_selection("\n", EditOrigin::Typing, cx);
+        });
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.display_map.line_height_px(500), 76.0);
+            assert_eq!(editor.display_map.line_height_px(501), LINE_HEIGHT);
+            assert_eq!(editor.display_map.line_height_px(801), 110.0);
+        });
+
+        editor.update(cx, |editor, cx| {
+            let snapshot = session.read(cx).snapshot();
+            let newline = snapshot.line_content_range(LineIndex(500)).unwrap().end;
+            editor.set_selection(
+                Selection::new(newline, ByteOffset(newline.0.saturating_add(1))),
+                cx,
+            );
+            editor.replace_selection("", EditOrigin::Typing, cx);
+        });
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.display_map.line_height_px(500), 76.0);
+            assert_eq!(editor.display_map.line_height_px(800), 110.0);
+        });
+    }
+
+    #[gpui::test]
+    fn edits_discard_previous_revision_hit_rows_before_revealing_the_caret(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(init);
+        let source = (0..100)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            assert!(!editor.hit_rows.is_empty());
+            let snapshot = session.read(cx).snapshot();
+            let caret = snapshot.line_content_range(LineIndex(10)).unwrap().end;
+            editor.set_selection(Selection::caret(caret), cx);
+            editor.replace_selection("\n", EditOrigin::Newline, cx);
+            assert!(
+                editor.hit_rows.is_empty(),
+                "pixel rows from the previous revision must not drive reveal_caret"
+            );
+            assert!(
+                editor.pending_reveal_caret,
+                "caret reveal must wait for rows from the edited revision"
+            );
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert!(!editor.pending_reveal_caret);
+            let snapshot = session.read(cx).snapshot();
+            let caret_line = snapshot.line_index_at(editor.selection.head()).unwrap();
+            assert!(editor.hit_rows.iter().any(|row| {
+                row.line == caret_line
+                    && editor.selection.head() >= row.range.start
+                    && editor.selection.head() <= row.range.end
+            }));
+        });
+    }
+
+    #[gpui::test]
+    fn reversible_newlines_do_not_move_a_visible_viewport(cx: &mut gpui::TestAppContext) {
+        cx.update(init);
+        let source = (0..1_000)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            let snapshot = session.read(cx).snapshot();
+            editor.scroll_y = editor.display_map.line_start_y(500);
+            editor.layout_anchor = snapshot
+                .line_content_range(LineIndex(500))
+                .ok()
+                .map(|range| {
+                    RevisionRange::new(
+                        snapshot.revision(),
+                        ByteRange::new(range.start.0, range.start.0),
+                    )
+                });
+            let caret = snapshot.line_content_range(LineIndex(510)).unwrap().end;
+            editor.selection = Selection::caret(caret);
+            editor.sync_selection_utf16(&snapshot);
+            cx.notify();
+        });
+        cx.run_until_parked();
+        let settled_scroll = editor.read_with(cx, |editor, _| editor.scroll_y);
+
+        for _ in 0..8 {
+            editor.update(cx, |editor, cx| {
+                editor.replace_selection("\n", EditOrigin::Newline, cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                editor.read_with(cx, |editor, _| editor.scroll_y),
+                settled_scroll,
+                "inserting a visible newline must preserve the viewport anchor"
+            );
+
+            editor.update(cx, |editor, cx| {
+                let caret = editor.selection.head();
+                editor.selection = Selection::new(caret, ByteOffset(caret.0 - 1));
+                editor.replace_selection("", EditOrigin::DeleteBackward, cx);
+            });
+            cx.run_until_parked();
+            assert_eq!(
+                editor.read_with(cx, |editor, _| editor.scroll_y),
+                settled_scroll,
+                "deleting the newline must restore without moving the viewport"
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn deleting_a_visible_bottom_newline_keeps_scroll_within_the_new_document_end(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(init);
+        let source = (0..1_000)
+            .map(|line| format!("line {line}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            let viewport_height = f32::from(editor.viewport.unwrap().size.height);
+            editor.scroll_y = (editor.display_map.total_height() - viewport_height).max(0.0);
+            let snapshot = session.read(cx).snapshot();
+            let line = snapshot.line_content_range(LineIndex(990)).unwrap();
+            editor.selection = Selection::new(line.end, ByteOffset(line.end.0 + 1));
+            editor.sync_selection_utf16(&snapshot);
+            editor.replace_selection("", EditOrigin::DeleteBackward, cx);
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let viewport_height = f32::from(editor.viewport.unwrap().size.height);
+            let max_scroll = (editor.display_map.total_height() - viewport_height).max(0.0);
+            assert!(
+                (editor.scroll_y - max_scroll).abs() <= 0.5,
+                "bottom scroll {} must follow the shortened document end {max_scroll}",
+                editor.scroll_y
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn minimap_seek_to_end_places_the_last_line_at_the_viewport_bottom(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(init);
+        let source = (0..750)
+            .map(|line| {
+                if line % 7 == 0 {
+                    format!("* Heading {line}\n")
+                } else {
+                    format!(
+                        "- line {line}: https://example.com/a/long/path/that/wraps/in/the/editor/{line}\n"
+                    )
+                }
+            })
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            let bottom = editor.minimap.bounds.unwrap().bottom();
+            let geometry = editor.minimap_viewport_geometry(editor.minimap.bounds.unwrap());
+            let pointer = geometry.thumb_top + geometry.thumb_height / 2.0;
+            editor.minimap.drag = Some(crate::minimap::DragSession {
+                start_pointer_y: pointer,
+                start_thumb_top: geometry.thumb_top,
+                start_ratio: geometry.scroll_ratio,
+                current_thumb_top: geometry.thumb_top,
+            });
+            editor.seek_from_minimap(bottom, cx);
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let snapshot = session.read(cx).snapshot();
+            let viewport = editor.viewport.unwrap();
+            let last = editor.hit_rows.last().unwrap();
+            assert_eq!(last.line.0, snapshot.len_lines() - 1);
+            let last_bottom =
+                last.origin_y + last.line_height * (last.layout.wrap_boundaries().len() + 1) as f32;
+            assert!(
+                f32::from(viewport.bottom() - last_bottom).abs() <= 1.0,
+                "last row bottom {last_bottom:?} must meet viewport bottom {:?}",
+                viewport.bottom()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn table_alignment_is_one_transaction_and_one_undo_step(cx: &mut gpui::TestAppContext) {
+        let original = "| 名|x|\n|---+---|\n| longer |🙂|\n";
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), original.as_bytes().to_vec())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+            let snapshot = editor.snapshot(cx);
+            let context = org_commands::EditorCommandContext::at(
+                std::path::Path::new("test.org"),
+                &snapshot,
+                editor.selection.head(),
+            )
+            .unwrap();
+            editor.align_table_from_context(&snapshot, &context, 1, cx);
+        });
+        assert_eq!(session.read_with(cx, |session, _| session.revision().0), 1);
+        session.update(cx, |session, cx| {
+            assert!(matches!(
+                session.undo(cx).unwrap(),
+                HistoryOutcome::Applied(_)
+            ));
+        });
+        assert_eq!(
+            cx.read(|cx| {
+                let snapshot = session.read(cx).snapshot();
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+            }),
+            original
+        );
+    }
+
+    #[gpui::test]
+    fn editor_minimap_seek_controls_only_the_editor_viewport(cx: &mut gpui::TestAppContext) {
+        let text = "line\n".repeat(1_000);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), text.into_bytes()).unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+        editor.update(cx, |editor, cx| {
+            editor.viewport = Some(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(800.0), px(220.0)),
+            ));
+            editor.minimap.bounds = Some(Bounds::new(
+                gpui::point(px(704.0), px(0.0)),
+                gpui::size(px(96.0), px(220.0)),
+            ));
+            editor.seek_from_minimap(px(110.0), cx);
+            let density = crate::minimap::Density::for_width(96.0);
+            let geometry = crate::editor::minimap::viewport_geometry(
+                editor.display_map.total_height() / LINE_HEIGHT,
+                0.0,
+                220.0 / LINE_HEIGHT,
+                220.0,
+                density,
+            );
+            let line_height = editor.minimap.line_height(density);
+            let clicked_unit =
+                geometry.content_top + ((110.0 - density.edge_padding()) / line_height).max(0.0);
+            let max_scroll_units =
+                (editor.display_map.total_height() / LINE_HEIGHT - 220.0 / LINE_HEIGHT).max(0.0);
+            let expected = crate::minimap::ratio_to_offset(
+                (clicked_unit / max_scroll_units).clamp(0.0, 1.0),
+                editor.display_map.total_height(),
+                220.0,
+            );
+            assert!((editor.scroll_y - expected).abs() < 0.1);
+        });
+    }
+
+    #[gpui::test]
+    fn editor_minimap_paints_first_frame_with_coherent_revision(cx: &mut gpui::TestAppContext) {
+        cx.update(init);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                PathBuf::from("test.org"),
+                b"* Heading\nbody\n| a | b |\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert!(editor.minimap.bounds.is_some());
+            assert_eq!(editor.minimap.revision, Some(session.read(cx).revision()));
+            assert!(!editor.hit_rows.is_empty());
+        });
+    }
+
+    #[gpui::test]
+    fn minimap_geometry_uses_the_settled_visible_source_span(cx: &mut gpui::TestAppContext) {
+        cx.update(init);
+        let source = (0..1_000)
+            .map(|index| format!("* Heading {index}\nbody {index}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("diagnostic.org"), source.into_bytes())
+                .unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+        let initial_height = cx.read(|cx| editor.read(cx).display_map.total_height());
+        for scroll_y in [0.0, 5_000.0, 10_000.0, 15_000.0, 20_000.0] {
+            editor.update(cx, |editor, cx| {
+                editor.scroll_y = scroll_y;
+                cx.notify();
+            });
+            cx.run_until_parked();
+            cx.read(|cx| {
+                let editor = editor.read(cx);
+                let bounds = editor.minimap.bounds.unwrap();
+                let geometry = editor.minimap_viewport_geometry(bounds);
+                let (_, visible_top, visible_bottom) =
+                    editor.minimap_source_viewport(f32::from(bounds.size.height));
+                let density = crate::minimap::Density::for_width(f32::from(bounds.size.width));
+                let line_height = editor.minimap.line_height(density);
+                let expected = ((visible_bottom - visible_top) * line_height
+                    + density.edge_padding() * 2.0)
+                    .max(crate::minimap::MIN_THUMB_PX)
+                    .min(geometry.interaction_height);
+                assert!((geometry.thumb_height - expected).abs() < 0.001);
+            });
+        }
+        let final_height = cx.read(|cx| editor.read(cx).display_map.total_height());
+        assert!(final_height > initial_height + 2_000.0);
+    }
+
+    #[gpui::test]
     fn platform_input_and_ime_are_single_undo_steps(cx: &mut gpui::TestAppContext) {
         cx.update(init);
         let session =
             cx.new(|_| DocumentSession::from_utf8(PathBuf::from("test.org"), Vec::new()).unwrap());
         let session_for_view = session.clone();
         let (editor, cx) =
-            cx.add_window_view(move |_, cx| SourceEditor::new(session_for_view.clone(), cx));
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view.clone(), cx));
 
         cx.simulate_input("e\u{301}🙂");
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                <SourceEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
+                <SemanticEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
                     editor, None, "n", None, window, cx,
                 );
-                <SourceEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
+                <SemanticEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
                     editor,
                     None,
                     "ni",
@@ -531,7 +1123,7 @@ mod tests {
                     window,
                     cx,
                 );
-                <SourceEditor as gpui::EntityInputHandler>::replace_text_in_range(
+                <SemanticEditor as gpui::EntityInputHandler>::replace_text_in_range(
                     editor, None, "你", window, cx,
                 );
             });
@@ -569,11 +1161,11 @@ mod tests {
             cx.new(|_| DocumentSession::from_utf8(PathBuf::from("test.org"), Vec::new()).unwrap());
         let session_for_view = session.clone();
         let (editor, cx) =
-            cx.add_window_view(move |_, cx| SourceEditor::new(session_for_view.clone(), cx));
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view.clone(), cx));
 
         cx.update(|window, cx| {
             editor.update(cx, |editor, cx| {
-                <SourceEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
+                <SemanticEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
                     editor,
                     None,
                     "ni",

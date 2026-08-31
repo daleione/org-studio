@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet, VecDeque},
     hash::{Hash, Hasher},
     ops::Range,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -384,50 +384,13 @@ pub(in crate::preview) fn fill_bgra(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn paint_text_pixels(
-    pixels: &mut [u8],
-    image_width: usize,
-    image_height: usize,
-    x: i32,
-    y: i32,
-    width: u32,
-    height: u32,
-    color: cosmic_text::Color,
-) {
-    for py in 0..height as i32 {
-        let target_y = y + py;
-        if target_y < 0 || target_y >= image_height as i32 {
-            continue;
-        }
-        for px_offset in 0..width as i32 {
-            let target_x = x + px_offset;
-            if target_x < 0 || target_x >= image_width as i32 {
-                continue;
-            }
-            let offset = (target_y as usize * image_width + target_x as usize) * 4;
-            pixels[offset] = color.b();
-            pixels[offset + 1] = color.g();
-            pixels[offset + 2] = color.r();
-            pixels[offset + 3] = color.a();
-        }
-    }
-}
-
-pub(in crate::preview) fn minimap_font_system() -> cosmic_text::FontSystem {
-    cosmic_text::FontSystem::new()
-}
-
-pub(in crate::preview) type MinimapTextRasterizer =
-    Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)>;
-pub(in crate::preview) static TEXT_RASTERIZER: OnceLock<MinimapTextRasterizer> = OnceLock::new();
 pub(in crate::preview) static TEXT_RASTERIZER_PREWARMED: OnceLock<()> = OnceLock::new();
 
 pub(in crate::preview) fn prewarm_text_rasterizer() {
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
 
     let started = Instant::now();
-    let rasterizer = TEXT_RASTERIZER
-        .get_or_init(|| Mutex::new((minimap_font_system(), cosmic_text::SwashCache::new())));
+    let rasterizer = crate::minimap::text_rasterizer();
     let mut did_work = false;
     TEXT_RASTERIZER_PREWARMED.get_or_init(|| {
         did_work = true;
@@ -487,9 +450,8 @@ pub(in crate::preview) fn rasterize_tile(
     let width = (logical_width as f32 * scale_factor).ceil() as u32;
     let mut pixels = vec![0_u8; width as usize * height as usize * 4];
     let text_system_started = Instant::now();
-    let cold_text_system = TEXT_RASTERIZER.get().is_none();
-    let rasterizer = TEXT_RASTERIZER
-        .get_or_init(|| Mutex::new((minimap_font_system(), cosmic_text::SwashCache::new())));
+    let cold_text_system = !crate::minimap::text_rasterizer_initialized();
+    let rasterizer = crate::minimap::text_rasterizer();
     let mut rasterizer = rasterizer.lock().expect("minimap rasterizer poisoned");
     let text_system_wait = text_system_started.elapsed();
     let (font_system, swash_cache) = &mut *rasterizer;
@@ -628,7 +590,7 @@ pub(in crate::preview) fn rasterize_tile(
                     buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {
                         let x = x + origin_x;
                         let y = y + segment_y;
-                        paint_text_pixels(
+                        crate::minimap::paint_text_pixels(
                             &mut pixels,
                             width as usize,
                             height as usize,
@@ -661,7 +623,7 @@ pub(in crate::preview) fn rasterize_tile(
             buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {
                 let x = x + indent;
                 let y = y + segment_y;
-                paint_text_pixels(
+                crate::minimap::paint_text_pixels(
                     &mut pixels,
                     width as usize,
                     height as usize,

@@ -65,6 +65,7 @@ use super::display_map::{
 };
 #[cfg(test)]
 use super::layout::{LayoutSnapshot as ProjectionSnapshot, ResolvedRow as ProjectionMeasure};
+pub(super) use crate::minimap::DragSession as MinimapDragSession;
 #[cfg(test)]
 use projection::MinimapLineIndexKey;
 pub(super) use projection::{
@@ -78,8 +79,8 @@ use raster::{
 };
 pub(super) use render::render;
 pub(super) use state::{
-    DragSession as MinimapDragSession, MinimapState, ResizeSession as MinimapResizeSession,
-    current_resize_session, take_resize_session,
+    MinimapState, ResizeSession as MinimapResizeSession, current_resize_session,
+    take_resize_session,
 };
 pub(super) use viewport::MinimapInteractionAnchor;
 use viewport::{
@@ -99,7 +100,7 @@ pub(super) use width::{
     for_viewport as width_for_viewport,
 };
 
-const MIN_THUMB_PX: f32 = 24.0;
+const MIN_THUMB_PX: f32 = crate::minimap::MIN_THUMB_PX;
 const SCROLL_WHEEL_LINE_PX: f32 = 20.0;
 const MINIMAP_RESIZE_HANDLE_PX: f32 = 6.0;
 // Leave the overwhelming majority of a 120Hz frame (8.333ms) to GPUI layout,

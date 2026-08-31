@@ -203,7 +203,7 @@ pub(crate) enum PreviewLoadState {
 #[derive(Clone)]
 pub(crate) struct ReadyDocument {
     session: gpui::Entity<crate::document::DocumentSession>,
-    editor: gpui::Entity<crate::editor::SourceEditor>,
+    editor: gpui::Entity<crate::editor::SemanticEditor>,
     panel: Option<gpui::Entity<PreviewPanel>>,
     notice: Option<Arc<str>>,
 }

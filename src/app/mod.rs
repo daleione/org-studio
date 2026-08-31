@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use gpui::{FocusHandle, Subscription, Task};
+use gpui::{EntityId, FocusHandle, Subscription, Task};
 
 use crate::{
     command::CommandRegistry,
@@ -65,6 +65,7 @@ pub struct WorkspaceWindow {
     pub(crate) key_context: ContextSet,
     pub(crate) state: PreviewLoadState,
     pub(crate) document_subscription: Option<Subscription>,
+    pub(crate) editor_minimap_width_subscription: Option<Subscription>,
     pub(crate) subscribed_document: Option<crate::document::DocumentId>,
     pub(crate) recent_documents: Vec<crate::recent_documents::RecentDocument>,
     pub(crate) home_error: Option<Arc<str>>,
@@ -112,5 +113,5 @@ pub(crate) struct DerivedHost {
 #[derive(Default)]
 pub(crate) struct RightPreviewScrollHost {
     pub(crate) source_subscription: Option<Subscription>,
-    pub(crate) panel_revision: Option<(crate::document::DocumentId, crate::document::Revision)>,
+    pub(crate) bound_panel: Option<EntityId>,
 }

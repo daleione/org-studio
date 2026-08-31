@@ -5,7 +5,7 @@ use super::{
 
 use crate::{
     document::{
-        ByteOffset, ByteRange, EditOrigin, EditTransaction, Selection, SessionEdit, TextEdit,
+        ByteOffset, ByteRange, DocumentCommand, EditOrigin, EditTransaction, Selection, TextEdit,
         TextSnapshot,
     },
     input::EmacsOutcome,
@@ -66,6 +66,10 @@ fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui:
     panel.update(cx, |panel, _| {
         panel.toggle_fold(folded);
         panel.list_state().scrollbar_drag_started();
+        panel.scroll_to(gpui::ListOffset {
+            item_ix: 200,
+            offset_in_item: gpui::px(7.0),
+        });
     });
 
     let edit = before
@@ -93,7 +97,78 @@ fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui:
         assert!(panel.list_state().is_scrollbar_dragging());
         assert_eq!(panel.fold_markers().len(), 1);
         assert!(panel.fold_markers().contains(&folded));
+        let scroll = panel.list_state().logical_scroll_top();
+        assert_eq!(scroll.item_ix, 200);
+        assert_eq!(scroll.offset_in_item, gpui::px(7.0));
     });
+}
+
+#[gpui::test]
+fn trailing_space_update_does_not_rebind_or_jump_right_preview(cx: &mut gpui::TestAppContext) {
+    let source = (0..400)
+        .map(|index| format!("* Heading {index}\nbody {index}\n"))
+        .collect::<String>();
+    let session = crate::document::DocumentSession::from_utf8(
+        std::path::PathBuf::from("stable-right-preview.org"),
+        source.into_bytes(),
+    )
+    .unwrap();
+    let before = session.snapshot();
+    let preview = super::loading::derive_preview(
+        std::path::PathBuf::from("stable-right-preview.org"),
+        before.clone(),
+    );
+    let loaded = super::LoadedDocument::new(session, preview).unwrap();
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_right_preview(true));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(super::WorkspaceLoadedDocument::Preview(Box::new(loaded))),
+            cx,
+        ));
+        workspace.ensure_right_preview_scroll_sync(cx);
+    });
+    let (session, panel) = cx.read(|cx| {
+        let ready = workspace.read(cx).state.ready().unwrap();
+        (ready.session.clone(), ready.panel.clone().unwrap())
+    });
+    let edit = before
+        .copy_range(ByteRange::new(0, before.len_bytes()))
+        .find("body 100\n")
+        .unwrap() as u64
+        + "body 100".len() as u64;
+    session.update(cx, |session, cx| {
+        session
+            .edit(
+                DocumentCommand::new(
+                    EditTransaction::new(
+                        before.revision(),
+                        vec![TextEdit::new(ByteRange::new(edit, edit), " ")],
+                    ),
+                    Selection::caret(ByteOffset(edit)),
+                    Selection::caret(ByteOffset(edit + 1)),
+                    EditOrigin::Typing,
+                ),
+                cx,
+            )
+            .unwrap();
+    });
+    workspace.update(cx, |workspace, cx| workspace.schedule_derived_update(cx));
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(25));
+    cx.run_until_parked();
+    let expected = gpui::ListOffset {
+        item_ix: 200,
+        offset_in_item: gpui::px(7.0),
+    };
+    panel.update(cx, |panel, _| panel.scroll_to(expected));
+    workspace.update(cx, |workspace, cx| {
+        workspace.ensure_right_preview_scroll_sync(cx)
+    });
+
+    let actual = cx.read(|cx| panel.read(cx).list_state().logical_scroll_top());
+    assert_eq!(actual.item_ix, expected.item_ix);
+    assert_eq!(actual.offset_in_item, expected.offset_in_item);
 }
 
 #[gpui::test]
@@ -152,7 +227,7 @@ fn right_preview_toggle_preserves_editor_state_and_publishes_only_latest_revisio
     session.update(cx, |session, cx| {
         session
             .edit(
-                SessionEdit::new(
+                DocumentCommand::new(
                     EditTransaction::new(
                         revision,
                         vec![TextEdit::new(ByteRange::new(end, end), "latest")],
@@ -237,7 +312,7 @@ fn opening_right_preview_preserves_ime_until_preview_receives_focus(cx: &mut gpu
     cx.update(|cx| {
         cx.with_window(root.entity_id(), |window, cx| {
             editor.update(cx, |editor, cx| {
-                <crate::editor::SourceEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
+                <crate::editor::SemanticEditor as gpui::EntityInputHandler>::replace_and_mark_text_in_range(
                     editor,
                     None,
                     "ni",
@@ -526,7 +601,7 @@ fn lagging_preview_status_falls_back_to_one_coherent_editor_snapshot(
         let end = session.snapshot().len_bytes();
         session
             .edit(
-                SessionEdit::new(
+                DocumentCommand::new(
                     EditTransaction::new(
                         session.revision(),
                         vec![TextEdit::new(ByteRange::new(end, end), "new")],
@@ -564,7 +639,7 @@ fn export_source_uses_the_live_edited_session(cx: &mut gpui::TestAppContext) {
         session.update(cx, |session, cx| {
             session
                 .edit(
-                    SessionEdit::new(
+                    DocumentCommand::new(
                         EditTransaction::new(
                             session.revision(),
                             vec![TextEdit::new(ByteRange::new(0, 3), "new")],
