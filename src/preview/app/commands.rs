@@ -150,12 +150,9 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ToggleMinimap) => {
                 self.toggle_minimap(cx)
             }
-            CommandImplementation::Builtin(BuiltinCommand::ReturnToEditor) => {
-                self.return_to_editor(cx)
-            }
-            CommandImplementation::Builtin(BuiltinCommand::ToggleRightPreview) => {
-                self.toggle_right_preview(cx)
-            }
+            CommandImplementation::Builtin(BuiltinCommand::ShowEditor) => self.show_editor(cx),
+            CommandImplementation::Builtin(BuiltinCommand::ShowReading) => self.show_reading(cx),
+            CommandImplementation::Builtin(BuiltinCommand::ShowSplit) => self.show_split(cx),
             CommandImplementation::Builtin(BuiltinCommand::ToggleSoftWrap) => {
                 self.toggle_soft_wrap(cx)
             }
@@ -213,50 +210,115 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn return_to_editor(&mut self, cx: &mut Context<Self>) {
-        self.request_editor_focus(cx);
+    pub(in crate::preview) fn show_editor(&mut self, cx: &mut Context<Self>) {
+        self.document_workspace.layout = crate::app::WorkspaceLayout::Single;
+        self.set_active_surface(crate::app::PaneSurface::Editor, cx);
+    }
+
+    pub(in crate::preview) fn show_reading(&mut self, cx: &mut Context<Self>) {
+        self.document_workspace.layout = crate::app::WorkspaceLayout::Single;
+        self.set_active_surface(crate::app::PaneSurface::Reading, cx);
+    }
+
+    pub(in crate::preview) fn show_split(&mut self, cx: &mut Context<Self>) {
+        self.document_workspace.layout = crate::app::WorkspaceLayout::Split;
+        self.cancel_split_resize();
+        self.reconcile_visible_editor_panes(cx);
+        self.reconcile_visible_reading_panes(cx);
+        self.reconcile_derived_preview(cx);
+        self.install_document_keymap();
+        self.focus_active_surface(cx);
         cx.notify();
     }
 
-    pub(in crate::preview) fn toggle_right_preview(&mut self, cx: &mut Context<Self>) {
-        let preview_was_focused = !self.document_view.editor_focused();
-        let right_preview_open = !self.document_view.right_preview_open();
-        if preview_was_focused {
-            self.focus_editor_surface(right_preview_open, cx);
-        } else {
-            self.document_view = crate::app::DocumentViewState::editing(right_preview_open);
-        }
-        self.cancel_right_preview_resize();
-        if right_preview_open {
-            self.schedule_derived_update(cx);
-        } else {
-            self.discard_derived_preview();
-        }
-        self.save_preview_settings();
-        cx.notify();
+    pub(in crate::preview) fn toggle_pane_surface(
+        &mut self,
+        pane: crate::app::PaneSide,
+        cx: &mut Context<Self>,
+    ) {
+        self.document_workspace.active_pane = pane;
+        let surface = match self.document_workspace.surface(pane) {
+            crate::app::PaneSurface::Editor => crate::app::PaneSurface::Reading,
+            crate::app::PaneSurface::Reading => crate::app::PaneSurface::Editor,
+        };
+        self.set_active_surface(surface, cx);
     }
 
-    pub(in crate::preview) fn focus_right_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.document_view.right_preview_open() || !self.document_view.editor_focused() {
+    pub(in crate::preview) fn activate_pane(
+        &mut self,
+        pane: crate::app::PaneSide,
+        cx: &mut Context<Self>,
+    ) {
+        if self.document_workspace.active_pane == pane {
             return;
         }
-        if let Some(ready) = self.state.ready() {
-            ready
-                .editor
-                .update(cx, |editor, cx| editor.finish_composition(cx));
+        let previous = self.document_workspace.active_pane;
+        if matches!(
+            self.document_workspace.surface(previous),
+            crate::app::PaneSurface::Editor
+        ) && let Some(editor) = self.editor(previous)
+        {
+            editor.update(cx, |editor, cx| editor.finish_composition(cx));
         }
-        self.document_view = crate::app::DocumentViewState::RightPreviewFocused;
-        self.focus_workspace_on_render = true;
+        self.document_workspace.active_pane = pane;
+        if matches!(
+            self.document_workspace.surface(pane),
+            crate::app::PaneSurface::Editor
+        ) {
+            self.ensure_editor_for(pane, cx);
+        }
         self.install_document_keymap();
+        self.focus_active_surface(cx);
         cx.notify();
+    }
+
+    pub(super) fn set_active_surface(
+        &mut self,
+        surface: crate::app::PaneSurface,
+        cx: &mut Context<Self>,
+    ) {
+        let pane = self.document_workspace.active_pane;
+        if matches!(surface, crate::app::PaneSurface::Reading)
+            && let Some(editor) = self.editor(pane)
+        {
+            editor.update(cx, |editor, cx| editor.finish_composition(cx));
+        }
+        self.document_workspace.set_surface(pane, surface);
+        match surface {
+            crate::app::PaneSurface::Editor => self.ensure_editor_for(pane, cx),
+            crate::app::PaneSurface::Reading => {
+                self.reconcile_visible_reading_panes(cx);
+            }
+        }
+        self.cancel_split_resize();
+        self.reconcile_derived_preview(cx);
+        self.install_document_keymap();
+        self.focus_active_surface(cx);
+        cx.notify();
+    }
+
+    pub(super) fn focus_active_surface(&mut self, cx: &mut Context<Self>) {
+        match self.document_workspace.active_surface() {
+            crate::app::PaneSurface::Editor => {
+                if let Some(editor) = self.editor(self.document_workspace.active_pane) {
+                    editor.update(cx, |editor, cx| editor.request_focus(cx));
+                }
+            }
+            crate::app::PaneSurface::Reading => {
+                self.focus_workspace_on_render = true;
+            }
+        }
     }
 
     pub(in crate::preview) fn toggle_soft_wrap(&mut self, cx: &mut Context<Self>) {
         self.soft_wrap = !self.soft_wrap;
         if let Some(ready) = self.state.ready() {
-            ready
-                .editor
-                .update(cx, |editor, cx| editor.set_soft_wrap(self.soft_wrap, cx));
+            for editor in [&ready.editors.left, &ready.editors.right]
+                .into_iter()
+                .flatten()
+            {
+                editor.update(cx, |editor, cx| editor.set_soft_wrap(self.soft_wrap, cx));
+            }
         }
         self.save_preview_settings();
         cx.notify();
@@ -275,17 +337,11 @@ impl WorkspaceWindow {
             }
             return;
         }
-        if event.keystroke.key == "escape" && !self.document_view.editor_focused() {
-            cx.stop_propagation();
-            self.request_editor_focus(cx);
-            cx.notify();
-            return;
-        }
         if event.keystroke.key == "escape"
             && (self.file_manager.dismiss_context_menu()
                 || self.cancel_minimap_interaction(cx)
                 || self.cancel_sidebar_resize()
-                || self.cancel_right_preview_resize())
+                || self.cancel_split_resize())
         {
             cx.stop_propagation();
             cx.notify();
@@ -330,7 +386,10 @@ impl WorkspaceWindow {
     }
 
     pub(in crate::preview) fn install_document_keymap(&mut self) {
-        if !self.document_view.editor_focused() {
+        if matches!(
+            self.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading
+        ) {
             self.install_route_keymap(false, false);
         } else {
             self.install_source_keymap();

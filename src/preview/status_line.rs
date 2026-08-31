@@ -65,7 +65,7 @@ impl StatusLineSnapshot {
             width_bits: width.to_bits(),
             settings,
             host: self.host,
-            right_preview_open: self.right_preview_open,
+            surface: self.surface,
             language: self.language,
             outline: self.outline.is_some(),
             position_reserve: self
@@ -164,10 +164,11 @@ impl StatusLineSnapshot {
 
     fn mode_label(&self) -> &'static str {
         match self.host {
-            StatusHost::Preview => "EDIT · VIEW",
-            StatusHost::Editor if self.right_preview_open => "EDIT · VIEW",
-            StatusHost::Editor => "EDIT · +VIEW",
             StatusHost::Dired => "FILES",
+            StatusHost::Preview | StatusHost::Editor => match self.surface {
+                crate::app::PaneSurface::Editor => "EDITOR",
+                crate::app::PaneSurface::Reading => "READING",
+            },
         }
     }
 }
@@ -687,7 +688,9 @@ fn progress_ring(progress: u8) -> impl gpui::IntoElement {
 impl WorkspaceWindow {
     pub(super) fn status_snapshot(&self, cx: &gpui::App) -> Option<StatusLineSnapshot> {
         match self.content_route {
-            ContentRoute::Document => self.document_status_snapshot(DOCUMENT_PANE_ID, cx),
+            ContentRoute::Document => {
+                self.document_status_snapshot(self.document_workspace.active_pane, cx)
+            }
             ContentRoute::FileManager => self.dired_status_snapshot(DIRED_PANE_ID),
         }
     }
@@ -725,7 +728,7 @@ impl WorkspaceWindow {
         match segment {
             StatusSegment::Mode if self.content_route == ContentRoute::Document => {
                 self.status.popover = None;
-                self.toggle_right_preview(cx);
+                self.toggle_pane_surface(pane_side_for_status(pane), cx);
             }
             StatusSegment::More => {
                 self.status.popover = Some(StatusPopover {
@@ -760,6 +763,14 @@ impl WorkspaceWindow {
         }
         self.save_preview_settings();
         cx.notify();
+    }
+}
+
+fn pane_side_for_status(pane: PaneId) -> crate::app::PaneSide {
+    if pane == RIGHT_DOCUMENT_PANE_ID {
+        crate::app::PaneSide::Right
+    } else {
+        crate::app::PaneSide::Left
     }
 }
 
@@ -939,7 +950,7 @@ mod tests {
             pane: PaneId(7),
             language: Language::Chinese,
             host: StatusHost::Preview,
-            right_preview_open: false,
+            surface: crate::app::PaneSurface::Reading,
             outline: Some("性能优化 / Minimap".into()),
             position: Some(StatusPosition::PreviewSource {
                 line: 259,
@@ -999,7 +1010,7 @@ mod tests {
     fn clicking_the_rendered_more_segment_opens_its_pane_overflow(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
-        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_right_preview(true)));
+        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_split_layout(true)));
         let snapshot = snapshot();
         let pane = snapshot.pane;
         struct StatusHarness {
@@ -1037,12 +1048,10 @@ mod tests {
     }
 
     #[gpui::test]
-    fn clicking_the_left_status_control_toggles_right_preview_without_leaving_editor(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn clicking_a_status_surface_control_only_changes_its_own_pane(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
-        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_right_preview(false)));
+        let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_split_layout(false)));
         let mut snapshot = snapshot();
         snapshot.host = StatusHost::Editor;
         struct StatusHarness {
@@ -1073,8 +1082,10 @@ mod tests {
 
         cx.update(|_, cx| {
             let app = app.read(cx);
-            assert!(app.document_view.right_preview_open());
-            assert!(app.document_view.editor_focused());
+            assert_eq!(
+                app.document_workspace.surface(crate::app::PaneSide::Left),
+                crate::app::PaneSurface::Reading
+            );
             assert!(app.status.popover.is_none());
         });
     }
@@ -1117,14 +1128,20 @@ mod tests {
         let loaded = crate::preview::load_document(path.clone()).unwrap();
         let _ = std::fs::remove_file(path);
         let window = cx.open_window(gpui::size(px(900.0), px(700.0)), |_, _| {
-            WorkspaceWindow::with_right_preview(true)
+            WorkspaceWindow::with_split_layout(true)
         });
         let editor = window
             .update(cx, |app, _, cx| {
                 app.language = Language::Chinese;
                 app.generation = 1;
                 assert!(app.apply_load_result(1, Ok(loaded), cx));
-                app.state.ready().unwrap().editor.clone()
+                app.state
+                    .ready()
+                    .unwrap()
+                    .editors
+                    .left
+                    .clone()
+                    .expect("left editor exists")
             })
             .unwrap();
         cx.run_until_parked();

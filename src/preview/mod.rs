@@ -50,9 +50,9 @@ mod org_line;
 mod overlay;
 mod panel;
 mod projection;
-mod right_preview;
 mod rows;
 mod save;
+mod split_layout;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -72,9 +72,9 @@ use folding::{
 pub(crate) use panel::PreviewPanel;
 use panel::PreviewRenderState;
 use projection::build_projection_snapshot;
-pub(crate) use right_preview::ResizeSession as RightPreviewResizeSession;
 use rows::build_preview_rows;
 pub(crate) use save::{PendingTransition, SaveHost, SaveInteraction, SaveStatus};
+pub(crate) use split_layout::ResizeSession as SplitResizeSession;
 pub(crate) use status_line::StatusLineHost;
 use table::{build_markdown_table_styles, build_table_styles, render_table_row};
 
@@ -109,8 +109,9 @@ const OPEN_DEFAULT_DIRED_COMMAND: &str = "org-studio.dired.open-default";
 const RETURN_DOCUMENT_COMMAND: &str = "org-studio.file-manager.return-document";
 const TOGGLE_SIDEBAR_COMMAND: &str = "org-studio.file-manager.toggle-sidebar";
 const TOGGLE_MINIMAP_COMMAND: &str = "org-studio.preview.toggle-minimap";
-const RETURN_TO_EDITOR_COMMAND: &str = "org-studio.document.return-to-editor";
-const TOGGLE_RIGHT_PREVIEW_COMMAND: &str = "org-studio.document.toggle-right-preview";
+const SHOW_EDITOR_COMMAND: &str = "org-studio.workspace.show-editor";
+const SHOW_READING_COMMAND: &str = "org-studio.workspace.show-reading";
+const SHOW_SPLIT_COMMAND: &str = "org-studio.workspace.show-split";
 const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
 const GLOBAL_VISIBILITY_CYCLE_COMMAND: &str = "org-studio.preview.global-visibility-cycle";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
@@ -153,8 +154,9 @@ actions!(
         ReturnToDocument,
         ToggleSidebar,
         ToggleMinimap,
-        ReturnToEditor,
-        ToggleRightPreview,
+        ShowEditor,
+        ShowReading,
+        ShowSplit,
         ToggleSoftWrap,
         UseEnglish,
         UseChinese
@@ -203,9 +205,31 @@ pub(crate) enum PreviewLoadState {
 #[derive(Clone)]
 pub(crate) struct ReadyDocument {
     session: gpui::Entity<crate::document::DocumentSession>,
-    editor: gpui::Entity<crate::editor::SemanticEditor>,
-    panel: Option<gpui::Entity<PreviewPanel>>,
+    editors: PanePair<Option<gpui::Entity<crate::editor::SemanticEditor>>>,
+    readers: PanePair<Option<gpui::Entity<PreviewPanel>>>,
     notice: Option<Arc<str>>,
+}
+
+#[derive(Clone)]
+struct PanePair<T> {
+    left: T,
+    right: T,
+}
+
+impl<T> PanePair<T> {
+    fn get(&self, pane: crate::app::PaneSide) -> &T {
+        match pane {
+            crate::app::PaneSide::Left => &self.left,
+            crate::app::PaneSide::Right => &self.right,
+        }
+    }
+
+    fn get_mut(&mut self, pane: crate::app::PaneSide) -> &mut T {
+        match pane {
+            crate::app::PaneSide::Left => &mut self.left,
+            crate::app::PaneSide::Right => &mut self.right,
+        }
+    }
 }
 
 impl PreviewLoadState {

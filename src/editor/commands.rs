@@ -40,6 +40,7 @@ impl SemanticEditor {
             self.pending_reveal_caret = true;
             self.command_feedback = None;
             self.selection = after;
+            self.sync_selection_revision(cx);
             self.selection_utf16 = after_utf16..after_utf16;
             self.selection_utf16_reversed = false;
             cx.notify();
@@ -411,6 +412,7 @@ impl SemanticEditor {
             self.command_feedback = None;
             self.selection = after;
             let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
             self.sync_selection_utf16(&snapshot);
             self.hit_rows = Arc::from([]);
             self.pending_reveal_caret = true;
@@ -488,6 +490,7 @@ impl SemanticEditor {
             self.command_feedback = None;
             self.selection = after;
             let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
             self.sync_selection_utf16(&snapshot);
             self.hit_rows = Arc::from([]);
             self.pending_reveal_caret = true;
@@ -504,6 +507,7 @@ impl SemanticEditor {
             self.pending_reveal_caret = true;
             self.selection = selection;
             let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
             self.sync_selection_utf16(&snapshot);
             cx.notify();
         }
@@ -518,6 +522,7 @@ impl SemanticEditor {
             self.pending_reveal_caret = true;
             self.selection = selection;
             let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
             self.sync_selection_utf16(&snapshot);
             cx.notify();
         }
@@ -719,7 +724,6 @@ impl SemanticEditor {
         if (self.scroll_y - previous_y).abs() > 0.5 {
             self.minimap.note_viewport_changed();
         }
-        cx.emit(super::EditorScrollEvent);
         cx.notify();
     }
 
@@ -868,7 +872,6 @@ impl SemanticEditor {
         }
         if (self.scroll_y - previous_y).abs() > 0.5 {
             self.minimap.note_viewport_changed();
-            cx.emit(super::EditorScrollEvent);
         }
         cx.notify();
     }
@@ -968,6 +971,7 @@ impl SemanticEditor {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn top_source_anchor(&self, snapshot: &DocumentSnapshot) -> (ByteOffset, f32) {
         let line = self.display_map.line_at_y(self.scroll_y);
         let line_start = self.display_map.line_start_y(line);
@@ -977,25 +981,6 @@ impl SemanticEditor {
             .line_content_range(LineIndex(line))
             .map_or(ByteOffset(0), |range| range.start);
         (source, fraction)
-    }
-
-    pub(crate) fn scroll_to_source_anchor(
-        &mut self,
-        offset: ByteOffset,
-        fraction: f32,
-        cx: &mut Context<Self>,
-    ) {
-        let snapshot = self.snapshot(cx);
-        let Ok(line) = snapshot.line_index_at(offset) else {
-            return;
-        };
-        let start = self.display_map.line_start_y(line.0);
-        let target = start + self.display_map.line_height_px(line.0) * fraction.clamp(0.0, 1.0);
-        if (self.scroll_y - target).abs() > 0.5 {
-            self.scroll_y = target;
-            self.minimap.note_viewport_changed();
-            cx.notify();
-        }
     }
 
     pub(super) fn sync_selection_utf16(&mut self, snapshot: &DocumentSnapshot) {

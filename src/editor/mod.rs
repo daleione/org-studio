@@ -20,8 +20,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::{
     document::{
         ByteOffset, ByteRange, DocumentCommand, DocumentEvent, DocumentSession, DocumentSnapshot,
-        EditOrigin, EditTransaction, HistoryOutcome, LineIndex, RevisionRange, Selection, TextEdit,
-        TextSnapshot,
+        EditOrigin, EditTransaction, HistoryOutcome, LineIndex, Revision, RevisionRange, Selection,
+        TextEdit, TextSnapshot,
     },
     theme::current_theme,
 };
@@ -210,6 +210,7 @@ pub struct SemanticEditor {
     session: Entity<DocumentSession>,
     focus_handle: FocusHandle,
     selection: Selection,
+    selection_revision: Revision,
     selection_utf16: Range<usize>,
     selection_utf16_reversed: bool,
     marked: Option<PlatformRange>,
@@ -238,19 +239,44 @@ pub struct SemanticEditor {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct EditorScrollEvent;
-
-impl EventEmitter<EditorScrollEvent> for SemanticEditor {}
-
-#[derive(Clone, Copy, Debug)]
 pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
 
 impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
 
 impl SemanticEditor {
     pub fn new(session: Entity<DocumentSession>, cx: &mut Context<Self>) -> Self {
+        Self::new_with_autofocus(session, true, cx)
+    }
+
+    pub(crate) fn new_with_autofocus(
+        session: Entity<DocumentSession>,
+        autofocus: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::Edited { delta, .. } = event {
+                if this.selection_revision == delta.before {
+                    let range = RevisionRange::new(delta.before, this.selection.range());
+                    this.selection = delta.map_range(range).map_or_else(
+                        |_| {
+                            let start = delta.edits.first().map_or(this.selection.head(), |edit| {
+                                ByteOffset(edit.old.start.0 + edit.new_len)
+                            });
+                            Selection::caret(start)
+                        },
+                        |mapped| {
+                            if this.selection.anchor() <= this.selection.head() {
+                                Selection::new(mapped.range.start, mapped.range.end)
+                            } else {
+                                Selection::new(mapped.range.end, mapped.range.start)
+                            }
+                        },
+                    );
+                    let snapshot = this.snapshot(cx);
+                    this.selection = this.selection.clamp(&snapshot);
+                    this.sync_selection_utf16(&snapshot);
+                    this.selection_revision = delta.after;
+                }
                 let viewport_height = this
                     .viewport
                     .map_or(0.0, |viewport| f32::from(viewport.size.height));
@@ -348,6 +374,7 @@ impl SemanticEditor {
                 this.syntax_cache.reset();
                 let snapshot = this.snapshot(cx);
                 this.selection = this.selection.clamp(&snapshot);
+                this.selection_revision = snapshot.revision();
                 this.sync_selection_utf16(&snapshot);
                 this.marked = None;
                 this.composition = None;
@@ -362,12 +389,14 @@ impl SemanticEditor {
             }
             cx.notify();
         });
+        let initial_snapshot = session.read(cx).snapshot();
         let mut display_map = EditorLayoutMap::default();
-        display_map.configure(session.read(cx).snapshot().len_lines(), 1.0);
+        display_map.configure(initial_snapshot.len_lines(), 1.0);
         Self {
             session,
             focus_handle: cx.focus_handle(),
             selection: Selection::default(),
+            selection_revision: initial_snapshot.revision(),
             selection_utf16: 0..0,
             selection_utf16_reversed: false,
             marked: None,
@@ -388,7 +417,7 @@ impl SemanticEditor {
             is_selecting: false,
             drag_position: None,
             autoscroll_task: None,
-            autofocus: true,
+            autofocus,
             focus_lost_subscription: None,
             #[cfg(feature = "benchmarks")]
             frame_benchmark: EditorFrameBenchmark::from_environment(),
@@ -427,9 +456,9 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) {
         self.minimap.visible = visible;
-        if let Some(width) = width {
-            self.minimap.width = (width as f32).clamp(minimap::MIN_WIDTH, minimap::MAX_WIDTH);
-        }
+        self.minimap.width = width.map_or(minimap::DEFAULT_WIDTH, |width| {
+            (width as f32).clamp(minimap::MIN_WIDTH, minimap::MAX_WIDTH)
+        });
         if !visible {
             self.minimap.drag = None;
             self.minimap.resizing = None;
@@ -449,14 +478,29 @@ impl SemanticEditor {
         self.display_map.soft_wrap()
     }
 
+    #[cfg(test)]
+    pub(crate) fn autofocus_pending(&self) -> bool {
+        self.autofocus
+    }
+
+    #[cfg(test)]
+    pub(crate) fn minimap_width(&self) -> f32 {
+        self.minimap.width
+    }
+
     pub fn set_selection(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         let snapshot = self.snapshot(cx);
         self.selection = selection.clamp(&snapshot);
+        self.selection_revision = snapshot.revision();
         self.sync_selection_utf16(&snapshot);
         self.reveal_caret(&snapshot);
         cx.notify();
+    }
+
+    fn sync_selection_revision(&mut self, cx: &App) {
+        self.selection_revision = self.session.read(cx).revision();
     }
 
     pub fn snapshot(&self, cx: &App) -> DocumentSnapshot {
@@ -1194,6 +1238,47 @@ mod tests {
         assert_eq!(
             cx.read_entity(&session, |session, _| session.snapshot().len_bytes()),
             0
+        );
+    }
+
+    #[gpui::test]
+    fn a_second_editor_maps_its_selection_through_shared_document_edits(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("shared.org"), b"abcd".to_vec()).unwrap()
+        });
+        let left = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        let right = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        right.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(4)), cx)
+        });
+
+        session.update(cx, |session, cx| {
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(
+                            session.revision(),
+                            vec![TextEdit::new(ByteRange::new(0, 0), "x")],
+                        ),
+                        Selection::caret(ByteOffset(0)),
+                        Selection::caret(ByteOffset(1)),
+                        EditOrigin::Typing,
+                    ),
+                    cx,
+                )
+                .unwrap();
+        });
+        cx.run_until_parked();
+
+        assert_eq!(
+            cx.read(|cx| right.read(cx).selection()),
+            Selection::caret(ByteOffset(5))
+        );
+        assert_eq!(
+            cx.read(|cx| left.read(cx).selection()),
+            Selection::caret(ByteOffset(0))
         );
     }
 }

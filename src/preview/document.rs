@@ -155,10 +155,7 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
             if minimap::minimap_perf_enabled() {
                 eprintln!("org_preview_initial_prefetch_start since_open_ms=0.000");
             }
-            let result = super::loading::load_workspace_document(
-                load_path,
-                crate::settings::PreviewSettings::load().right_preview_open,
-            );
+            let result = super::loading::load_workspace_document(load_path, false);
             if minimap::minimap_perf_enabled() {
                 eprintln!(
                     "org_preview_initial_prefetch_complete since_open_ms={:.3}",

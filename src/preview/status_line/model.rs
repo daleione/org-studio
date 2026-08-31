@@ -6,6 +6,7 @@ use super::super::DocumentFormat;
 
 pub(super) const DOCUMENT_PANE_ID: PaneId = PaneId(1);
 pub(super) const DIRED_PANE_ID: PaneId = PaneId(2);
+pub(super) const RIGHT_DOCUMENT_PANE_ID: PaneId = PaneId(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum StatusHost {
@@ -39,7 +40,7 @@ pub(in crate::preview) struct StatusLineSnapshot {
     pub(in crate::preview) pane: PaneId,
     pub(super) language: Language,
     pub(super) host: StatusHost,
-    pub(super) right_preview_open: bool,
+    pub(super) surface: crate::app::PaneSurface,
     pub(super) outline: Option<Arc<str>>,
     pub(super) position: Option<StatusPosition>,
     pub(super) progress: Option<u8>,
@@ -157,7 +158,7 @@ pub(super) struct StatusLayoutKey {
     pub width_bits: u32,
     pub settings: StatusLineSettings,
     pub host: StatusHost,
-    pub right_preview_open: bool,
+    pub surface: crate::app::PaneSurface,
     pub language: Language,
     pub outline: bool,
     pub position_reserve: Option<String>,

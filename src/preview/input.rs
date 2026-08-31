@@ -21,9 +21,9 @@ use super::{
     END_COMMAND, EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
     OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
     QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
-    RETURN_TO_EDITOR_COMMAND, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
-    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_HOME_COMMAND, TOGGLE_MINIMAP_COMMAND,
-    TOGGLE_RIGHT_PREVIEW_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
+    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
+    SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND, SHOW_HOME_COMMAND, SHOW_READING_COMMAND,
+    SHOW_SPLIT_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
 };
 
 #[cfg(test)]
@@ -141,15 +141,16 @@ pub(super) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
         .expect("valid built-in reload command");
     for (name, title, command) in [
         (
-            RETURN_TO_EDITOR_COMMAND,
-            "Return to Editor",
-            BuiltinCommand::ReturnToEditor,
+            SHOW_EDITOR_COMMAND,
+            "Show Editor",
+            BuiltinCommand::ShowEditor,
         ),
         (
-            TOGGLE_RIGHT_PREVIEW_COMMAND,
-            "Toggle Right Preview",
-            BuiltinCommand::ToggleRightPreview,
+            SHOW_READING_COMMAND,
+            "Show Reading",
+            BuiltinCommand::ShowReading,
         ),
+        (SHOW_SPLIT_COMMAND, "Show Split", BuiltinCommand::ShowSplit),
         (
             TOGGLE_SOFT_WRAP_COMMAND,
             "Toggle Soft Wrap",
@@ -534,12 +535,16 @@ pub(super) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
             behavior: BindingBehavior::Command(TOGGLE_SIDEBAR_COMMAND),
         },
         BindingSpec {
-            keys: "C-c v s",
-            behavior: BindingBehavior::Command(RETURN_TO_EDITOR_COMMAND),
+            keys: "C-c v e",
+            behavior: BindingBehavior::Command(SHOW_EDITOR_COMMAND),
         },
         BindingSpec {
-            keys: "C-c v d",
-            behavior: BindingBehavior::Command(TOGGLE_RIGHT_PREVIEW_COMMAND),
+            keys: "C-c v r",
+            behavior: BindingBehavior::Command(SHOW_READING_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-c v s",
+            behavior: BindingBehavior::Command(SHOW_SPLIT_COMMAND),
         },
         BindingSpec {
             keys: "M-z",

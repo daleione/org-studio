@@ -18,7 +18,7 @@ use super::{
 impl WorkspaceWindow {
     pub(in crate::preview) fn document_status_snapshot(
         &self,
-        pane: PaneId,
+        pane: crate::app::PaneSide,
         cx: &gpui::App,
     ) -> Option<StatusLineSnapshot> {
         let document = match &self.state {
@@ -31,39 +31,62 @@ impl WorkspaceWindow {
             | PreviewLoadState::Loading { .. }
             | PreviewLoadState::Failed { previous: None, .. } => return None,
         };
-        if self.document_view.editor_focused() {
-            Some(self.source_status_snapshot(pane, document, cx))
+        let status_pane = match pane {
+            crate::app::PaneSide::Left => super::model::DOCUMENT_PANE_ID,
+            crate::app::PaneSide::Right => super::model::RIGHT_DOCUMENT_PANE_ID,
+        };
+        if matches!(
+            self.document_workspace.surface(pane),
+            crate::app::PaneSurface::Editor
+        ) {
+            self.source_status_snapshot(status_pane, pane, document, cx)
         } else {
-            document
-                .panel
-                .as_ref()
+            let panel = document.readers.get(pane).as_ref();
+            panel
                 .filter(|panel| {
                     let preview = panel.read(cx);
                     let session = document.session.read(cx);
                     preview.document().document_id == session.id()
                         && preview.document().revision == session.revision()
+                        && preview.document().path == session.path()
                 })
-                .map(|panel| self.preview_status_snapshot(pane, panel, cx))
-                .or_else(|| Some(self.source_status_snapshot(pane, document, cx)))
+                .map(|panel| self.preview_status_snapshot(status_pane, panel, cx))
+                .or_else(|| {
+                    self.source_status_snapshot(status_pane, pane, document, cx)
+                        .map(|mut snapshot| {
+                            snapshot.surface = crate::app::PaneSurface::Reading;
+                            snapshot
+                        })
+                })
+                .or_else(|| panel.map(|panel| self.preview_status_snapshot(status_pane, panel, cx)))
         }
     }
 
     fn source_status_snapshot(
         &self,
         pane: PaneId,
+        pane_side: crate::app::PaneSide,
         ready: &super::super::ReadyDocument,
         cx: &gpui::App,
-    ) -> StatusLineSnapshot {
-        let status = ready.editor.read(cx).status(cx);
+    ) -> Option<StatusLineSnapshot> {
+        let status = ready.editors.get(pane_side).as_ref()?.read(cx).status(cx);
         let document_statistics = DocumentStatistics {
             characters: status.characters,
             lines: status.total_lines,
             bytes: status.bytes,
         };
-        let outline = ready.panel.as_ref().and_then(|panel| {
-            let panel = panel.read(cx);
-            let preview = panel.document();
-            (preview.revision == ready.session.read(cx).revision())
+        let outline = ready
+            .readers
+            .get(pane_side)
+            .as_ref()
+            .or_else(|| ready.readers.get(pane_side.other()).as_ref())
+            .and_then(|panel| {
+                let panel = panel.read(cx);
+                let preview = panel.document();
+                let session = ready.session.read(cx);
+                (preview.document_id == session.id()
+                    && preview.revision == session.revision()
+                    && preview.path == session.path())
                 .then(|| {
                     preview
                         .projection
@@ -71,12 +94,12 @@ impl WorkspaceWindow {
                         .and_then(|row| current_outline(preview, row))
                 })
                 .flatten()
-        });
-        StatusLineSnapshot {
+            });
+        Some(StatusLineSnapshot {
             pane,
             language: self.language,
             host: StatusHost::Editor,
-            right_preview_open: self.document_view.right_preview_open(),
+            surface: crate::app::PaneSurface::Editor,
             outline,
             position: Some(StatusPosition::EditorCaret {
                 line: status.caret_line,
@@ -95,7 +118,7 @@ impl WorkspaceWindow {
                 ready.session.read(cx).path(),
             )),
             transient: self.document_transient_status(cx),
-        }
+        })
     }
 
     fn preview_status_snapshot(
@@ -137,7 +160,7 @@ impl WorkspaceWindow {
             pane,
             language: self.language,
             host: StatusHost::Preview,
-            right_preview_open: self.document_view.right_preview_open(),
+            surface: crate::app::PaneSurface::Reading,
             outline: current_outline(document, source_index),
             position: Some(StatusPosition::PreviewSource {
                 line,
@@ -169,7 +192,7 @@ impl WorkspaceWindow {
             pane,
             language: self.language,
             host: StatusHost::Dired,
-            right_preview_open: false,
+            surface: crate::app::PaneSurface::Editor,
             outline: Some(directory.into()),
             position: Some(StatusPosition::DiredSelection { selected, total }),
             progress: None,
@@ -225,9 +248,7 @@ impl WorkspaceWindow {
                 }
                 _ => {}
             }
-            if self.document_view.needs_preview()
-                && self.derived.published != Some((session.id(), session.revision()))
-            {
+            if self.document_workspace.needs_reading() && !self.latest_preview_is_current(cx) {
                 return Some(StatusMessage {
                     text: "Updating Preview…".into(),
                     tone: StatusTone::Working,

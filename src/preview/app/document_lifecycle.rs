@@ -4,19 +4,18 @@ use super::{
     load_workspace_document, minimap,
 };
 use crate::preview::{
-    PreviewPanel, ReadyDocument, WorkspaceReloadedDocument, reload_workspace_document,
+    PanePair, ReadyDocument, WorkspaceReloadedDocument, reload_workspace_document,
 };
 use gpui::AppContext;
 
 impl WorkspaceWindow {
     pub(super) fn show_home_now(&mut self, cx: &mut Context<Self>) {
-        self.document_view =
-            crate::app::DocumentViewState::editing(self.document_view.right_preview_open());
-        self.discard_derived_preview();
+        self.suspend_derived_preview();
+        self.derived.latest = None;
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
         self.stop_document_watch();
-        self.editor_minimap_width_subscription = None;
+        self.editor_minimap_width_subscriptions.clear();
         self.save.status = None;
         self.save.interaction = crate::preview::SaveInteraction::Idle;
         self.state = PreviewLoadState::Empty;
@@ -114,7 +113,7 @@ impl WorkspaceWindow {
         }
         let generation =
             self.begin_open_with_previous(path.clone(), Instant::now(), preserve_previous);
-        let build_preview = self.document_view.right_preview_open();
+        let build_preview = self.document_workspace.needs_reading();
 
         // Opening the requested document is user-visible latency. Submit it before synchronous
         // file-watcher setup and before one-time font startup work so a small local file is not
@@ -180,7 +179,7 @@ impl WorkspaceWindow {
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
         self.set_document_notice(None);
-        let build_preview = self.document_view.right_preview_open();
+        let build_preview = self.document_workspace.needs_reading();
         let background = cx
             .background_executor()
             .spawn_with_priority(gpui::Priority::High, async move {
@@ -211,8 +210,8 @@ impl WorkspaceWindow {
         if !accept_generation(self.generation, generation) {
             return false;
         }
-        let (session, panel) = match self.state.ready() {
-            Some(document) => (document.session.clone(), document.panel.clone()),
+        let session = match self.state.ready() {
+            Some(document) => document.session.clone(),
             None => return false,
         };
         let reloaded = match result {
@@ -235,27 +234,19 @@ impl WorkspaceWindow {
             self.set_document_notice(Some(format!("Reload was not applied: {error:?}").into()));
             return true;
         }
-        if !self.document_view.needs_preview() {
-            self.discard_derived_preview();
+        if !self.document_workspace.needs_reading() {
+            self.suspend_derived_preview();
         } else if let Some(preview) = preview {
-            let published = (preview.document_id, preview.revision);
             let document = Arc::new(preview);
-            if let Some(panel) = panel {
-                panel.update(cx, |panel, cx| {
-                    panel.replace_document(document, cx);
-                });
-            } else if let PreviewLoadState::Ready { document: ready } = &mut self.state {
-                let list_overdraw = self.list_overdraw;
-                ready.panel = Some(cx.new(|_| PreviewPanel::new(document, list_overdraw)));
-            }
             self.derived
                 .pending
                 .lock()
                 .expect("derived request slot poisoned")
                 .take();
-            self.derived.published = Some(published);
+            self.derived.latest = Some(document);
+            self.reconcile_visible_reading_panes(cx);
         } else {
-            self.derived.published = None;
+            self.derived.latest = None;
             self.schedule_derived_update(cx);
         }
         self.set_document_notice(None);
@@ -479,8 +470,8 @@ impl WorkspaceWindow {
                     }
                 };
                 let preview = self
-                    .document_view
-                    .needs_preview()
+                    .document_workspace
+                    .needs_reading()
                     .then_some(preview)
                     .flatten();
                 if minimap::minimap_perf_enabled()
@@ -506,36 +497,84 @@ impl WorkspaceWindow {
                 );
                 self.home_error = None;
                 let session = cx.new(|_| session);
-                let editor = cx.new(|cx| crate::editor::SemanticEditor::new(session.clone(), cx));
-                self.editor_minimap_width_subscription = None;
-                editor.update(cx, |editor, cx| {
-                    editor.set_soft_wrap(self.soft_wrap, cx);
-                    let minimap_visible = self.minimap_visible
-                        || (cfg!(feature = "benchmarks")
-                            && std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_BENCH").is_some());
-                    editor.set_minimap(minimap_visible, self.minimap_width, cx);
-                });
-                self.derived.published = preview
-                    .as_ref()
-                    .map(|preview| (preview.document_id, preview.revision));
-                let panel = preview.map(|preview| {
-                    let document = Arc::new(preview);
-                    cx.new(|_| super::super::PreviewPanel::new(document, self.list_overdraw))
-                });
+                self.editor_minimap_width_subscriptions.clear();
+                let minimap_visible = self.minimap_visible
+                    || (cfg!(feature = "benchmarks")
+                        && std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_BENCH").is_some());
+                let document_workspace = self.document_workspace;
+                let soft_wrap = self.soft_wrap;
+                let minimap_width = self.minimap_width;
+                let mut create_editor = |pane| {
+                    document_workspace
+                        .shows(pane, crate::app::PaneSurface::Editor)
+                        .then(|| {
+                            let session = session.clone();
+                            cx.new(|cx| {
+                                let mut editor = crate::editor::SemanticEditor::new_with_autofocus(
+                                    session,
+                                    document_workspace.active_pane == pane,
+                                    cx,
+                                );
+                                editor.set_soft_wrap(soft_wrap, cx);
+                                editor.set_minimap(minimap_visible, minimap_width, cx);
+                                editor
+                            })
+                        })
+                };
+                let left_editor = create_editor(crate::app::PaneSide::Left);
+                let right_editor = create_editor(crate::app::PaneSide::Right);
+                let preview = preview.map(Arc::new);
+                self.derived.latest = preview.clone();
+                let list_overdraw = self.list_overdraw;
+                let readers = preview
+                    .map(|document| PanePair {
+                        left: document_workspace
+                            .shows(crate::app::PaneSide::Left, crate::app::PaneSurface::Reading)
+                            .then(|| {
+                                cx.new({
+                                    let document = document.clone();
+                                    move |_| {
+                                        super::super::PreviewPanel::new(document, list_overdraw)
+                                    }
+                                })
+                            }),
+                        right: document_workspace
+                            .shows(
+                                crate::app::PaneSide::Right,
+                                crate::app::PaneSurface::Reading,
+                            )
+                            .then(|| {
+                                cx.new(move |_| {
+                                    super::super::PreviewPanel::new(document, list_overdraw)
+                                })
+                            }),
+                    })
+                    .unwrap_or(PanePair {
+                        left: None,
+                        right: None,
+                    });
                 PreviewLoadState::Ready {
                     document: ReadyDocument {
                         session,
-                        editor,
-                        panel,
+                        editors: PanePair {
+                            left: left_editor,
+                            right: right_editor,
+                        },
+                        readers,
                         notice: None,
                     },
                 }
             }
-            Err((path, message)) => PreviewLoadState::Failed {
-                path,
-                message,
-                previous,
-            },
+            Err((path, message)) => {
+                if previous.is_none() {
+                    self.derived.latest = None;
+                }
+                PreviewLoadState::Failed {
+                    path,
+                    message,
+                    previous,
+                }
+            }
         };
         true
     }
@@ -646,9 +685,14 @@ impl WorkspaceWindow {
     pub fn toggle_minimap(&mut self, cx: &mut Context<Self>) {
         self.minimap_visible = !self.minimap_visible;
         if let Some(document) = self.state.ready() {
-            document.editor.update(cx, |editor, cx| {
-                editor.set_minimap(self.minimap_visible, self.minimap_width, cx)
-            });
+            for editor in [&document.editors.left, &document.editors.right]
+                .into_iter()
+                .flatten()
+            {
+                editor.update(cx, |editor, cx| {
+                    editor.set_minimap(self.minimap_visible, self.minimap_width, cx)
+                });
+            }
         }
         if self.minimap_visible {
             cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
@@ -682,7 +726,7 @@ mod tests {
         std::fs::write(&old_path, b"* Active").unwrap();
         let loaded = load_workspace_document(old_path.clone(), false).unwrap();
         let active_path = old_path.clone();
-        let workspace = cx.new(|_| WorkspaceWindow::with_right_preview(false));
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
 
         workspace.update(cx, |workspace, cx| {
             workspace.generation = 1;

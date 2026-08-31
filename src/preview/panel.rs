@@ -299,7 +299,10 @@ impl PreviewPanel {
             }
         } else {
             let count = self.list_state.item_count();
-            self.list_state.splice(0..count, count);
+            // A full projection rebuild invalidates every row's measurement, but the item set was
+            // already reconciled above. Splicing the whole list a second time resets its logical
+            // scroll position after the source anchor has been restored.
+            self.list_state.remeasure_items(0..count);
             if minimap::minimap_perf_enabled() {
                 eprintln!(
                     "org_preview_full_update revision={} fallback={} parsed_bytes={} document_bytes={}",
@@ -368,27 +371,6 @@ impl PreviewPanel {
         }
     }
 
-    pub(in crate::preview) fn top_source_offset(&self) -> Option<crate::document::ByteOffset> {
-        self.top_source_anchor().map(|(offset, _)| offset)
-    }
-
-    pub(in crate::preview) fn source_scroll_anchor(
-        &self,
-    ) -> Option<(crate::document::ByteOffset, f32)> {
-        let scroll_top = self.list_state.logical_scroll_top();
-        let source = self.top_source_offset()?;
-        let height = self
-            .list_state
-            .bounds_for_item(scroll_top.item_ix)
-            .map(|bounds| f32::from(bounds.size.height))
-            .filter(|height| *height > 0.0)
-            .unwrap_or(1.0);
-        Some((
-            source,
-            (f32::from(scroll_top.offset_in_item) / height).clamp(0.0, 1.0),
-        ))
-    }
-
     fn top_source_anchor(&self) -> Option<(crate::document::ByteOffset, gpui::Pixels)> {
         let scroll_top = self.list_state.logical_scroll_top();
         let item = self
@@ -401,44 +383,6 @@ impl PreviewPanel {
             .projection
             .source_row(visual)
             .map(|row| (row.content.range.start, scroll_top.offset_in_item))
-    }
-
-    pub(in crate::preview) fn scroll_to_source_anchor(
-        &mut self,
-        offset: crate::document::ByteOffset,
-        fraction: f32,
-    ) {
-        let Some(visual) = self
-            .document
-            .projection
-            .visual_row_for_source_offset(offset)
-        else {
-            return;
-        };
-        let item = self
-            .visible_rows
-            .binary_search(&visual)
-            .unwrap_or_else(|index| index)
-            .min(self.visible_rows.len().saturating_sub(1));
-        let height = self
-            .list_state
-            .bounds_for_item(item)
-            .map(|bounds| f32::from(bounds.size.height))
-            .filter(|height| *height > 0.0)
-            .unwrap_or_else(|| {
-                self.document
-                    .display_map
-                    .as_ref()
-                    .map(|map| {
-                        let layout = map.layout(visual);
-                        layout.fixed_height.unwrap_or(layout.min_height).max(24.0)
-                    })
-                    .unwrap_or(24.0)
-            });
-        self.list_state.scroll_to(ListOffset {
-            item_ix: item,
-            offset_in_item: px(height * fraction.clamp(0.0, 1.0)),
-        });
     }
 
     fn scroll_to_source_offset_with_offset(

@@ -101,6 +101,7 @@ impl SemanticEditor {
             self.selection_utf16 = marked_end_utf16..marked_end_utf16;
         }
         self.selection_utf16_reversed = false;
+        self.selection_revision = revision;
         self.pending_reveal_caret = true;
         cx.notify();
     }
@@ -191,6 +192,7 @@ impl EntityInputHandler for SemanticEditor {
             if let Some(revision) = self.apply_composition_update(range, text, cx) {
                 let current = ByteRange::new(range.start.0, range.start.0 + text.len() as u64);
                 self.selection = Selection::caret(current.end);
+                self.selection_revision = revision;
                 self.marked = None;
                 let caret_utf16 = target_utf16.start + text.encode_utf16().count();
                 self.selection_utf16 = caret_utf16..caret_utf16;
@@ -295,6 +297,7 @@ impl EntityInputHandler for SemanticEditor {
             self.selection_utf16 = range_utf16;
             self.selection_utf16_reversed = false;
             let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
             self.reveal_caret(&snapshot);
             cx.notify();
         }

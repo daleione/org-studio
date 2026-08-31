@@ -3,11 +3,11 @@ use super::{
     FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
     InlineText, Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager,
     PreviewLoadState, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
-    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, ReturnToEditor,
-    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument,
-    SaveDocumentAs, ShowHome, StyledText, ToggleMinimap, ToggleRightPreview, ToggleSidebar,
-    ToggleSoftWrap, UseChinese, UseEnglish, Window, WorkspaceWindow, current_theme, div, img,
-    markdown, minimap, parse_inline, px, render_table_row, resolve_image_path, rgb,
+    RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
+    SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome,
+    ShowReading, ShowSplit, StyledText, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
+    UseEnglish, Window, WorkspaceWindow, current_theme, div, img, markdown, minimap, parse_inline,
+    px, render_table_row, resolve_image_path, rgb,
 };
 use super::{EXPORT_DOCUMENT_COMMAND, ExportDocument, export_ui::render_export_panel};
 use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
@@ -32,18 +32,21 @@ impl Render for WorkspaceWindow {
         profiling::scope!("WorkspaceWindow::render");
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
-        self.ensure_right_preview_scroll_sync(cx);
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),
             f32::from(viewport.height).to_bits(),
         );
-        if let Some(panel) = self.preview_panel() {
-            let viewport_changed = panel.update(cx, |panel, _| panel.note_viewport(viewport_key));
-            if viewport_changed {
-                self.cancel_sidebar_resize();
-                self.cancel_right_preview_resize();
-            }
+        let mut viewport_changed = false;
+        for panel in self
+            .visible_panes()
+            .filter_map(|pane| self.preview_panel_for(pane))
+        {
+            viewport_changed |= panel.update(cx, |panel, _| panel.note_viewport(viewport_key));
+        }
+        if viewport_changed {
+            self.cancel_sidebar_resize();
+            self.cancel_split_resize();
         }
         let focus_handle = self
             .focus_handle
@@ -61,7 +64,7 @@ impl Render for WorkspaceWindow {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
                 if this.cancel_minimap_interaction(cx)
                     || this.cancel_sidebar_resize()
-                    || this.cancel_right_preview_resize()
+                    || this.cancel_split_resize()
                 {
                     cx.notify();
                 }
@@ -111,13 +114,13 @@ impl Render for WorkspaceWindow {
         let dired_help_visible = self.file_manager.help_visible();
         let command_window_width = f32::from(window.viewport_size().width);
         let resizing_sidebar = self.file_manager.is_resizing_sidebar();
-        let resizing_right_preview = self.right_preview_resize.is_some();
+        let resizing_split = self.split_resize.is_some();
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
-        let right_resize_entity = entity.clone();
-        let finish_right_resize_entity = entity.clone();
+        let split_resize_entity = entity.clone();
+        let finish_split_resize_entity = entity.clone();
         div()
             .relative()
             .track_focus(&focus_handle)
@@ -160,10 +163,9 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
             .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
-            .on_action(cx.listener(|this, _: &ReturnToEditor, _, cx| this.return_to_editor(cx)))
-            .on_action(
-                cx.listener(|this, _: &ToggleRightPreview, _, cx| this.toggle_right_preview(cx)),
-            )
+            .on_action(cx.listener(|this, _: &ShowEditor, _, cx| this.show_editor(cx)))
+            .on_action(cx.listener(|this, _: &ShowReading, _, cx| this.show_reading(cx)))
+            .on_action(cx.listener(|this, _: &ShowSplit, _, cx| this.show_split(cx)))
             .on_action(cx.listener(|this, _: &ToggleSoftWrap, _, cx| this.toggle_soft_wrap(cx)))
             .on_action(cx.listener(|this, _: &UseEnglish, _, cx| {
                 this.set_language(crate::i18n::Language::English, cx)
@@ -202,10 +204,10 @@ impl Render for WorkspaceWindow {
                         }),
                 )
             })
-            .when(resizing_right_preview, |view| {
+            .when(resizing_split, |view| {
                 view.child(
                     div()
-                        .id("right-preview-resize-overlay")
+                        .id("split-resize-overlay")
                         .absolute()
                         .top_0()
                         .right_0()
@@ -214,17 +216,14 @@ impl Render for WorkspaceWindow {
                         .cursor(CursorStyle::ResizeLeftRight)
                         .on_mouse_move(move |event, _, cx| {
                             if event.dragging() {
-                                right_resize_entity.update(cx, |this, cx| {
-                                    this.update_right_preview_resize(
-                                        f32::from(event.position.x),
-                                        cx,
-                                    );
+                                split_resize_entity.update(cx, |this, cx| {
+                                    this.update_split_resize(f32::from(event.position.x), cx);
                                 });
                             }
                         })
                         .on_mouse_up(MouseButton::Left, move |_, _, cx| {
-                            finish_right_resize_entity
-                                .update(cx, |this, cx| this.finish_right_preview_resize(cx));
+                            finish_split_resize_entity
+                                .update(cx, |this, cx| this.finish_split_resize(cx));
                         }),
                 )
             })
@@ -250,12 +249,12 @@ impl WorkspaceWindow {
     fn ensure_document_subscription(&mut self, cx: &mut Context<Self>) {
         let Some(document) = self.state.ready() else {
             self.document_subscription = None;
-            self.editor_minimap_width_subscription = None;
+            self.editor_minimap_width_subscriptions.clear();
             self.subscribed_document = None;
             return;
         };
         let session = document.session.clone();
-        let editor = document.editor.clone();
+        let editors = document.editors.clone();
         let document_id = session.read(cx).id();
         if self.subscribed_document != Some(document_id) {
             self.subscribed_document = Some(document_id);
@@ -277,16 +276,24 @@ impl WorkspaceWindow {
                 },
             ));
         }
-        if self.editor_minimap_width_subscription.is_none() {
-            self.editor_minimap_width_subscription = Some(cx.subscribe(
-                &editor,
-                |this, _, event: &crate::editor::EditorMinimapWidthEvent, cx| {
-                    this.change_minimap_width(
-                        crate::preview::minimap::MinimapWidthChange::Commit(event.0),
-                        cx,
-                    );
-                },
-            ));
+        let editors = [&editors.left, &editors.right]
+            .into_iter()
+            .flatten()
+            .cloned()
+            .collect::<Vec<_>>();
+        if self.editor_minimap_width_subscriptions.len() != editors.len() {
+            self.editor_minimap_width_subscriptions.clear();
+            for editor in editors {
+                self.editor_minimap_width_subscriptions.push(cx.subscribe(
+                    &editor,
+                    |this, _, event: &crate::editor::EditorMinimapWidthEvent, cx| {
+                        this.change_minimap_width(
+                            crate::preview::minimap::MinimapWidthChange::Commit(event.0),
+                            cx,
+                        );
+                    },
+                ));
+            }
         }
     }
 }

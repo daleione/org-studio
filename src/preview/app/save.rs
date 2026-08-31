@@ -383,7 +383,7 @@ mod tests {
         ));
         std::fs::write(&path, b"base").unwrap();
         let loaded = crate::preview::load_workspace_document(path.clone(), false).unwrap();
-        let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_right_preview(false));
+        let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
         workspace.update(cx, |workspace, cx| {
             workspace.generation = 1;
             assert!(workspace.apply_load_result(1, Ok(loaded), cx));

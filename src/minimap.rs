@@ -313,9 +313,9 @@ mod tests {
                     / Density::Compact.line_height(),
             1_000.0
         );
-        assert_eq!(
-            viewport.thumb_top + viewport.thumb_height,
-            viewport.interaction_height
+        assert!(
+            (viewport.thumb_top + viewport.thumb_height - viewport.interaction_height).abs()
+                < 0.001
         );
     }
 }

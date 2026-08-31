@@ -10,7 +10,7 @@ use org_studio::{
     perf_tracing,
     preview::{
         ExportDocument, InitialDocumentLoad, OpenDocument, QuitApplication, ReloadDocument,
-        ReturnToEditor, SaveDocument, SaveDocumentAs, ShowHome, ToggleMinimap, ToggleRightPreview,
+        SaveDocument, SaveDocumentAs, ShowEditor, ShowHome, ShowReading, ShowSplit, ToggleMinimap,
         ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish, preload_initial_document,
     },
 };
@@ -158,8 +158,9 @@ fn main() {
             KeyBinding::new("cmd-r", ReloadDocument, None),
             KeyBinding::new("cmd-shift-e", ExportDocument, None),
             KeyBinding::new("cmd-q", QuitApplication, None),
-            KeyBinding::new("cmd-1", ReturnToEditor, None),
-            KeyBinding::new("cmd-2", ToggleRightPreview, None),
+            KeyBinding::new("cmd-1", ShowEditor, None),
+            KeyBinding::new("cmd-2", ShowReading, None),
+            KeyBinding::new("cmd-3", ShowSplit, None),
             KeyBinding::new("alt-z", ToggleSoftWrap, None),
         ]);
         cx.set_menus(app_menus());
@@ -242,8 +243,9 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::action("Select All", SelectAll),
         ]),
         Menu::new("View").items([
-            MenuItem::action("Return to Editor", ReturnToEditor),
-            MenuItem::action("Toggle Right Preview", ToggleRightPreview),
+            MenuItem::action("Editor", ShowEditor),
+            MenuItem::action("Reading", ShowReading),
+            MenuItem::action("Split", ShowSplit),
             MenuItem::separator(),
             MenuItem::action("Toggle Soft Wrap", ToggleSoftWrap),
             MenuItem::separator(),

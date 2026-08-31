@@ -1,9 +1,9 @@
 use std::{sync::Arc, time::Duration};
 
 use crate::document::TextSnapshot;
-use gpui::{AppContext, Context};
+use gpui::Context;
 
-use super::{PreviewLoadState, PreviewPanel, WorkspaceWindow, derive_preview_incremental};
+use super::{WorkspaceWindow, derive_preview_incremental};
 
 pub(crate) struct DerivedRequest {
     path: std::path::PathBuf,
@@ -13,104 +13,12 @@ pub(crate) struct DerivedRequest {
 }
 
 impl WorkspaceWindow {
-    pub(super) fn ensure_right_preview_scroll_sync(&mut self, cx: &mut Context<Self>) {
-        if !self.document_view.right_preview_open() {
-            self.right_preview_scroll.source_subscription = None;
-            self.right_preview_scroll.bound_panel = None;
-            return;
-        }
-        let Some(ready) = self.state.ready() else {
-            return;
-        };
-        let Some(panel) = ready.panel.clone() else {
-            return;
-        };
-        let editor = ready.editor.clone();
-        let snapshot = ready.session.read(cx).snapshot();
-        if panel.read(cx).document().document_id != snapshot.document_id()
-            || panel.read(cx).document().revision != snapshot.revision()
-        {
-            // A lagging projection has no safe source mapping. Hold both viewports until a
-            // coherent snapshot is published.
-            return;
-        }
-        if self.right_preview_scroll.source_subscription.is_none() {
-            self.right_preview_scroll.source_subscription = Some(cx.subscribe(
-                &editor,
-                |this, _, _: &crate::editor::EditorScrollEvent, cx| {
-                    this.sync_editor_scroll_to_right_preview(cx);
-                },
-            ));
-        }
-        let panel_id = panel.entity_id();
-        if self.right_preview_scroll.bound_panel != Some(panel_id) {
-            let workspace = cx.entity().downgrade();
-            panel
-                .read(cx)
-                .list_state()
-                .set_scroll_handler(move |_, _, cx| {
-                    let workspace = workspace.clone();
-                    cx.defer(move |cx| {
-                        let _ = workspace.update(cx, |this, cx| {
-                            this.sync_right_preview_scroll_to_editor(cx);
-                        });
-                    });
-                });
-            self.right_preview_scroll.bound_panel = Some(panel_id);
-            self.sync_editor_scroll_to_right_preview(cx);
-        }
-    }
-
-    fn sync_editor_scroll_to_right_preview(&mut self, cx: &mut Context<Self>) {
-        if !self.document_view.right_preview_open() {
-            return;
-        }
-        let Some(ready) = self.state.ready() else {
-            return;
-        };
-        let Some(panel) = ready.panel.clone() else {
-            return;
-        };
-        let snapshot = ready.session.read(cx).snapshot();
-        if panel.read(cx).document().revision != snapshot.revision() {
-            return;
-        }
-        let (source, fraction) = ready.editor.read(cx).top_source_anchor(&snapshot);
-        panel.update(cx, |panel, _| {
-            panel.scroll_to_source_anchor(source, fraction)
-        });
-    }
-
-    fn sync_right_preview_scroll_to_editor(&mut self, cx: &mut Context<Self>) {
-        if !self.document_view.right_preview_open() {
-            return;
-        }
-        let Some(ready) = self.state.ready() else {
-            return;
-        };
-        let Some(panel) = ready.panel.clone() else {
-            return;
-        };
-        let Some((source, fraction)) = panel.read(cx).source_scroll_anchor() else {
-            return;
-        };
-        ready.editor.update(cx, |editor, cx| {
-            editor.scroll_to_source_anchor(source, fraction, cx)
-        });
-    }
-
-    pub(super) fn discard_derived_preview(&mut self) {
+    pub(super) fn suspend_derived_preview(&mut self) {
         self.derived
             .pending
             .lock()
             .expect("derived request slot poisoned")
             .take();
-        if let Some(document) = self.state.ready_mut() {
-            document.panel = None;
-        }
-        self.derived.published = None;
-        self.right_preview_scroll.source_subscription = None;
-        self.right_preview_scroll.bound_panel = None;
         if let Some(sender) = &self.derived.sender {
             // Wake the worker so it can release its incremental base when no request remains.
             let _ = sender.try_send(());
@@ -118,10 +26,10 @@ impl WorkspaceWindow {
     }
 
     pub(super) fn reconcile_derived_preview(&mut self, cx: &mut Context<Self>) {
-        if self.document_view.needs_preview() {
+        if self.document_workspace.needs_reading() {
             self.schedule_derived_update(cx);
         } else {
-            self.discard_derived_preview();
+            self.suspend_derived_preview();
         }
     }
 
@@ -136,7 +44,7 @@ impl WorkspaceWindow {
         delta: Option<crate::document::RevisionDelta>,
         cx: &mut Context<Self>,
     ) {
-        if !self.document_view.needs_preview() {
+        if !self.document_workspace.needs_reading() {
             return;
         }
         let Some(session) = self.document_session().cloned() else {
@@ -144,13 +52,8 @@ impl WorkspaceWindow {
         };
         let snapshot = session.read(cx).snapshot();
         let path = session.read(cx).path().to_path_buf();
-        let document_id = snapshot.document_id();
-        let revision = snapshot.revision();
-        if self.derived.published == Some((document_id, revision))
-            && self
-                .preview_panel()
-                .is_some_and(|panel| panel.read(cx).document().document_id == document_id)
-        {
+        self.reconcile_visible_reading_panes(cx);
+        if self.visible_reading_panes_are_current(cx) {
             return;
         }
         if self.derived.sender.is_none() {
@@ -173,17 +76,27 @@ impl WorkspaceWindow {
                     };
                     let request_document_id = request.snapshot.document_id();
                     let request_revision = request.snapshot.revision();
+                    let previous = request.previous.filter(|base| {
+                        base.document_id == request_document_id
+                            && base.path == request.path
+                            && request
+                                .deltas
+                                .first()
+                                .is_none_or(|delta| delta.before == base.revision)
+                    });
                     let base = local_base
                         .as_ref()
                         .filter(|base| {
                             base.document_id == request_document_id
+                                && base.path == request.path
                                 && request
                                     .deltas
                                     .first()
                                     .is_some_and(|delta| delta.before == base.revision)
                         })
                         .cloned()
-                        .or(request.previous);
+                        .or(previous);
+                    let request_path = request.path.clone();
                     let preview = executor
                         .spawn(async move {
                             derive_preview_incremental(
@@ -197,7 +110,7 @@ impl WorkspaceWindow {
                     let document = Arc::new(preview);
                     let keep_base = this
                         .update(cx, |this, cx| {
-                            if !this.document_view.needs_preview() {
+                            if !this.document_workspace.needs_reading() {
                                 return false;
                             }
                             let Some(current) = this.document_session() else {
@@ -205,31 +118,16 @@ impl WorkspaceWindow {
                             };
                             if current.read(cx).id() != request_document_id
                                 || current.read(cx).revision() != request_revision
+                                || current.read(cx).path() != request_path
                             {
                                 return false;
                             }
-                            if this.derived.published
-                                == Some((request_document_id, request_revision))
-                                && this.preview_panel().is_some_and(|panel| {
-                                    let preview = panel.read(cx);
-                                    preview.document().document_id == request_document_id
-                                        && preview.document().revision == request_revision
-                                })
-                            {
+                            this.reconcile_visible_reading_panes(cx);
+                            if this.visible_reading_panes_are_current(cx) {
                                 return false;
                             }
-                            let list_overdraw = this.list_overdraw;
-                            if let Some(panel) = this.preview_panel() {
-                                let document = document.clone();
-                                panel.update(cx, |panel, cx| panel.replace_document(document, cx));
-                            } else if let PreviewLoadState::Ready { document: ready } =
-                                &mut this.state
-                            {
-                                let document = document.clone();
-                                ready.panel =
-                                    Some(cx.new(|_| PreviewPanel::new(document, list_overdraw)));
-                            }
-                            this.derived.published = Some((request_document_id, request_revision));
+                            this.derived.latest = Some(document.clone());
+                            this.reconcile_visible_reading_panes(cx);
                             cx.notify();
                             true
                         })
@@ -239,9 +137,7 @@ impl WorkspaceWindow {
             }));
         }
         if let Some(sender) = &self.derived.sender {
-            let previous = self
-                .preview_panel()
-                .map(|panel| panel.read(cx).document().clone());
+            let previous = self.derived.latest.clone();
             let request = DerivedRequest {
                 path,
                 snapshot,
