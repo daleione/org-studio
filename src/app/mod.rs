@@ -162,6 +162,7 @@ pub struct WorkspaceWindow {
     pub(crate) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
     pub(crate) minimap_width: Option<u16>,
     pub(crate) minimap_resize_preview: Option<f32>,
+    pub(crate) reading_style: crate::preview::PreviewStyleId,
     pub(crate) status: StatusLineHost,
 }
 

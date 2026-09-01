@@ -19,6 +19,10 @@ pub(crate) fn checkbox_token(text: &str) -> Option<(Range<usize>, &str)> {
     super::list::checkbox_token(text)
 }
 
+pub(crate) fn is_checkbox_state_token(text: &str) -> bool {
+    CheckboxState::from_token(text).is_some()
+}
+
 /// Builds one atomic checkbox transaction, including affected parent states and statistics
 /// cookies. Only the containing list is scanned; the rest of a large document is never copied.
 pub(crate) fn checkbox_transaction(

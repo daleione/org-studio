@@ -4,7 +4,11 @@ use gpui::{ListState, px};
 
 use crate::preview::SaveStatus;
 use crate::preview::export_ui::ExportRunState;
-use crate::{document::ByteOffset, i18n::Language, navigation::PaneId};
+use crate::{
+    document::{ByteOffset, DocumentSession},
+    i18n::Language,
+    navigation::PaneId,
+};
 
 use super::super::{DiredStatus, PreviewLoadState, WorkspaceWindow};
 use super::{
@@ -14,6 +18,15 @@ use super::{
         StatusTone,
     },
 };
+
+fn preview_matches_session(
+    preview: &super::super::ReadingPreviewPanel,
+    session: &DocumentSession,
+) -> bool {
+    preview.document().document_id == session.id()
+        && preview.document().revision <= session.revision()
+        && preview.document().path == session.path()
+}
 
 impl WorkspaceWindow {
     pub(in crate::preview) fn document_status_snapshot(
@@ -46,19 +59,17 @@ impl WorkspaceWindow {
                 .filter(|panel| {
                     let preview = panel.read(cx);
                     let session = document.session.read(cx);
-                    preview.document().document_id == session.id()
-                        && preview.document().revision == session.revision()
-                        && preview.document().path == session.path()
+                    preview_matches_session(preview, session)
                 })
-                .map(|panel| self.preview_status_snapshot(status_pane, panel, cx))
+                .map(|panel| self.preview_status_snapshot(status_pane, pane, panel, cx))
                 .or_else(|| {
                     self.source_status_snapshot(status_pane, pane, document, cx)
                         .map(|mut snapshot| {
                             snapshot.surface = crate::app::PaneSurface::Reading;
+                            snapshot.reading_style = Some(self.reading_style);
                             snapshot
                         })
                 })
-                .or_else(|| panel.map(|panel| self.preview_status_snapshot(status_pane, panel, cx)))
         }
     }
 
@@ -100,6 +111,7 @@ impl WorkspaceWindow {
             language: self.language,
             host: StatusHost::Editor,
             surface: crate::app::PaneSurface::Editor,
+            reading_style: None,
             outline,
             position: Some(StatusPosition::EditorCaret {
                 line: status.caret_line,
@@ -117,13 +129,14 @@ impl WorkspaceWindow {
             format: Some(super::super::DocumentFormat::from_path(
                 ready.session.read(cx).path(),
             )),
-            transient: self.document_transient_status(cx),
+            transient: self.document_transient_status(None, cx),
         })
     }
 
     fn preview_status_snapshot(
         &self,
         pane: PaneId,
+        pane_side: crate::app::PaneSide,
         panel: &gpui::Entity<super::super::ReadingPreviewPanel>,
         cx: &gpui::App,
     ) -> StatusLineSnapshot {
@@ -161,6 +174,7 @@ impl WorkspaceWindow {
             language: self.language,
             host: StatusHost::Preview,
             surface: crate::app::PaneSurface::Reading,
+            reading_style: Some(self.reading_style),
             outline: current_outline(document, source_index),
             position: Some(StatusPosition::PreviewSource {
                 line,
@@ -170,7 +184,7 @@ impl WorkspaceWindow {
             statistics: Some(statistics),
             document_statistics: Some(document_statistics),
             format: Some(super::super::DocumentFormat::from_path(&document.path)),
-            transient: self.document_transient_status(cx),
+            transient: self.document_transient_status(Some(pane_side), cx),
         }
     }
 
@@ -193,6 +207,7 @@ impl WorkspaceWindow {
             language: self.language,
             host: StatusHost::Dired,
             surface: crate::app::PaneSurface::Editor,
+            reading_style: None,
             outline: Some(directory.into()),
             position: Some(StatusPosition::DiredSelection { selected, total }),
             progress: None,
@@ -216,7 +231,11 @@ impl WorkspaceWindow {
         })
     }
 
-    fn document_transient_status(&self, cx: &gpui::App) -> Option<StatusMessage> {
+    fn document_transient_status(
+        &self,
+        reading_pane: Option<crate::app::PaneSide>,
+        cx: &gpui::App,
+    ) -> Option<StatusMessage> {
         if self.which_key_items.is_empty()
             && let Some(status) = self.keyboard.status()
         {
@@ -248,7 +267,18 @@ impl WorkspaceWindow {
                 }
                 _ => {}
             }
-            if self.document_workspace.needs_reading() && !self.latest_preview_is_current(cx) {
+            let pane_has_coherent_preview = reading_pane.is_some_and(|pane| {
+                self.state.ready().is_some_and(|document| {
+                    document.readers.get(pane).as_ref().is_some_and(|panel| {
+                        let preview = panel.read(cx);
+                        preview_matches_session(preview, session)
+                    })
+                })
+            });
+            if reading_pane.is_some()
+                && !self.latest_preview_is_current(cx)
+                && !pane_has_coherent_preview
+            {
                 return Some(StatusMessage {
                     text: "Updating Preview…".into(),
                     tone: StatusTone::Working,

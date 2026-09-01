@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::{i18n::Language, navigation::PaneId, settings::StatusLineSettings};
 
 use super::super::DocumentFormat;
+use super::super::PreviewStyleId;
 
 pub(super) const DOCUMENT_PANE_ID: PaneId = PaneId(1);
 pub(super) const DIRED_PANE_ID: PaneId = PaneId(2);
@@ -41,6 +42,7 @@ pub(in crate::preview) struct StatusLineSnapshot {
     pub(super) language: Language,
     pub(super) host: StatusHost,
     pub(super) surface: crate::app::PaneSurface,
+    pub(super) reading_style: Option<PreviewStyleId>,
     pub(super) outline: Option<Arc<str>>,
     pub(super) position: Option<StatusPosition>,
     pub(super) progress: Option<u8>,
@@ -56,9 +58,15 @@ impl StatusLineSnapshot {
         self.host == StatusHost::Editor
     }
 
+    #[cfg(test)]
+    pub(crate) fn transient_text(&self) -> Option<&str> {
+        self.transient.as_ref().map(|message| message.text.as_ref())
+    }
+
     pub(super) fn has_segment(&self, segment: StatusSegment) -> bool {
         match segment {
             StatusSegment::Mode | StatusSegment::More => true,
+            StatusSegment::ReadingStyle => self.reading_style.is_some(),
             StatusSegment::Outline => self.outline.is_some(),
             StatusSegment::Position => self.position.is_some(),
             StatusSegment::Progress => self.progress.is_some(),
@@ -85,6 +93,7 @@ pub(super) enum Variant {
 #[derive(Clone, Debug, PartialEq)]
 pub(in crate::preview) struct StatusLineLayout {
     pub(super) mode: Variant,
+    pub(super) reading_style: Variant,
     pub(super) outline: Variant,
     pub(super) position: Variant,
     pub(super) progress: Variant,
@@ -98,6 +107,7 @@ impl StatusLineLayout {
     pub(super) fn variant(&self, segment: StatusSegment) -> Variant {
         match segment {
             StatusSegment::Mode => self.mode,
+            StatusSegment::ReadingStyle => self.reading_style,
             StatusSegment::Outline => self.outline,
             StatusSegment::Position => self.position,
             StatusSegment::Progress => self.progress,
@@ -117,6 +127,7 @@ pub(super) enum StatusSegment {
     Statistics,
     Format,
     More,
+    ReadingStyle,
 }
 
 pub(super) const CONFIGURABLE_SEGMENTS: [StatusSegment; 5] = [
@@ -135,7 +146,7 @@ impl StatusSegment {
             Self::Progress => settings.progress,
             Self::Statistics => settings.statistics,
             Self::Format => settings.format,
-            Self::Mode | Self::More => true,
+            Self::Mode | Self::ReadingStyle | Self::More => true,
         }
     }
 }
@@ -148,6 +159,7 @@ pub(in crate::preview) struct StatusPopover {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum StatusPopoverContent {
+    ReadingStyle,
     Info(StatusSegment),
     Overflow(Arc<[StatusSegment]>),
     Customize,
@@ -159,6 +171,7 @@ pub(super) struct StatusLayoutKey {
     pub settings: StatusLineSettings,
     pub host: StatusHost,
     pub surface: crate::app::PaneSurface,
+    pub reading_style: Option<PreviewStyleId>,
     pub language: Language,
     pub outline: bool,
     pub position_reserve: Option<String>,

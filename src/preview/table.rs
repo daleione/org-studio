@@ -7,7 +7,6 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     document::{ByteRange, TextSnapshot},
     org_syntax::{BlockArena, BlockId, BlockKind},
-    theme::current_theme,
 };
 
 use super::{
@@ -77,20 +76,27 @@ impl TableRenderProjection {
         self.columns == other.columns
     }
 
-    fn resolve_for_viewport(&self, available_width: f32, zoom: f32) -> ReadingTableLayout {
+    fn resolve_for_viewport(
+        &self,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+    ) -> ReadingTableLayout {
         let available_width = available_width.max(1.0);
         let zoom = zoom.max(0.01);
+        let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
+        let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
         let preferred = self
             .columns
             .iter()
-            .map(|column| column.width_px() * zoom)
+            .map(|column| column.width_chars as f32 * character_width + cell_padding)
             .collect::<Vec<_>>();
         let minimum = self
             .columns
             .iter()
             .map(|column| {
                 let minimum_chars = column.width_chars.clamp(1, MIN_COLUMN_CONTENT_CHARS);
-                minimum_chars as f32 * CELL_WIDTH_PX * zoom + CELL_PADDING_PX * zoom
+                minimum_chars as f32 * character_width + cell_padding
             })
             .collect::<Vec<_>>();
         let minimum_width = minimum.iter().sum::<f32>();
@@ -165,19 +171,30 @@ impl TableRowProjection {
         self.table.resolve()
     }
 
-    pub(super) fn estimated_line_count(&self, source: &str, available_width: f32) -> usize {
+    pub(super) fn estimated_line_count(
+        &self,
+        source: &str,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+    ) -> usize {
         if self.separator || self.cells.is_empty() {
             return 1;
         }
-        let layout = self
-            .table
-            .resolve_for_viewport((available_width - TABLE_FRAME_WIDTH_PX).max(1.0), 1.0);
+        let layout = self.table.resolve_for_viewport(
+            (available_width - TABLE_FRAME_WIDTH_PX).max(1.0),
+            zoom,
+            style,
+        );
+        let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
+        let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
         self.columns()
             .iter()
             .enumerate()
             .map(|(index, _)| {
                 let cell_width = layout.column_widths[index];
-                let content_chars = ((cell_width - 24.0).max(CELL_WIDTH_PX) / CELL_WIDTH_PX)
+                let content_chars = ((cell_width - cell_padding).max(character_width)
+                    / character_width)
                     .floor()
                     .max(1.0) as usize;
                 let display_width = self
@@ -448,6 +465,7 @@ fn build_table_group(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn render_table_row(
     source: &str,
     projection: &TableRowProjection,
@@ -456,14 +474,25 @@ pub(super) fn render_table_row(
     zoom: f32,
     row_id: usize,
     horizontal_scroll: Option<&ScrollHandle>,
+    style: super::PreviewStyle,
 ) -> Div {
-    let theme = current_theme();
+    let palette = style.palette;
+    let horizontal_rules = style.variants.table == super::style::TableVariant::HorizontalRules;
     if projection.separator {
-        return div().w_full().h(px(2.0)).bg(rgb(theme.border));
+        return div()
+            .w_full()
+            .h(px(if horizontal_rules { 1.0 } else { 2.0 }))
+            .bg(rgb(if horizontal_rules {
+                palette.border_strong
+            } else {
+                palette.border
+            }));
     }
-    let layout = projection
-        .table
-        .resolve_for_viewport((available_width - TABLE_FRAME_WIDTH_PX).max(1.0), zoom);
+    let layout = projection.table.resolve_for_viewport(
+        (available_width - TABLE_FRAME_WIDTH_PX).max(1.0),
+        zoom,
+        style,
+    );
     let mut elements: Vec<AnyElement> = Vec::with_capacity(projection.columns().len());
     for (index, column) in projection.columns().iter().enumerate() {
         let width_px = layout.column_widths[index];
@@ -485,6 +514,7 @@ pub(super) fn render_table_row(
             .child(styled_inline_runs(
                 display.text.into(),
                 display.spans.into(),
+                style,
             ));
         elements.push(
             div()
@@ -493,14 +523,15 @@ pub(super) fn render_table_row(
                 .flex_none()
                 .overflow_hidden()
                 .whitespace_normal()
-                .px(px(12.0 * zoom))
-                .py(px(8.0 * zoom))
+                .px(px(style.spacing.table_cell_x * zoom))
+                .py(px(style.spacing.table_cell_y * zoom))
                 .flex()
                 .flex_col()
                 .items_start()
-                .when(index + 1 < projection.columns().len(), |element| {
-                    element.border_r_1().border_color(rgb(theme.border))
-                })
+                .when(
+                    !horizontal_rules && index + 1 < projection.columns().len(),
+                    |element| element.border_r_1().border_color(rgb(palette.border)),
+                )
                 .child(content)
                 .into_any(),
         );
@@ -510,19 +541,30 @@ pub(super) fn render_table_row(
         .flex_none()
         .flex()
         .items_stretch()
-        .border_l_1()
-        .border_r_1()
+        .when(!horizontal_rules, |element| {
+            element.border_l_1().border_r_1()
+        })
         .border_b_1()
         .when(projection.is_first(), |element| element.border_t_1())
-        .border_color(rgb(theme.border))
+        .border_color(rgb(if horizontal_rules {
+            palette.border_strong
+        } else {
+            palette.border
+        }))
         .when(projection.is_header(), |element| {
             element
-                .bg(rgb(theme.background_alt))
+                .bg(rgb(palette.surface))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
         })
-        .text_size(px(14.0 * zoom))
-        .line_height(px(21.0 * zoom))
-        .text_color(rgb(theme.foreground))
+        .when(horizontal_rules, |element| {
+            element.hover(|hover| hover.bg(rgb(palette.hover)))
+        })
+        .font_family(style.typography.body_family)
+        .text_size(px((style.typography.body_size - 1.0).max(12.0) * zoom))
+        .line_height(px(
+            (style.typography.body_line_height - 3.0).max(18.0) * zoom
+        ))
+        .text_color(rgb(palette.foreground))
         .children(elements);
     let scroller = div()
         .w_full()
@@ -702,6 +744,10 @@ mod tests {
         is_separator, parse_cells, parse_separator_alignments, test_table_projection,
     };
 
+    fn base_style() -> crate::preview::PreviewStyle {
+        *crate::preview::preview_style(crate::preview::PreviewStyleId::Base)
+    }
+
     #[test]
     fn preserves_per_cell_org_alignment() {
         let source = "| apple |       42 |    score |";
@@ -802,8 +848,11 @@ mod tests {
         assert!(rows[&1].is_separator());
         assert!(!rows[&2].is_header());
         let body_source = snapshot.copy_range(blocks[2].source);
-        assert!(rows[&2].estimated_line_count(&body_source, 220.0) > 1);
-        assert_eq!(rows[&2].estimated_line_count(&body_source, 4_000.0), 1);
+        assert!(rows[&2].estimated_line_count(&body_source, 220.0, 1.0, base_style()) > 1);
+        assert_eq!(
+            rows[&2].estimated_line_count(&body_source, 4_000.0, 1.0, base_style()),
+            1
+        );
     }
 
     #[test]
@@ -819,13 +868,18 @@ mod tests {
             "resolved width: {}",
             resolved.width
         );
-        assert!(rows[&0].estimated_line_count(source.lines().next().unwrap(), 320.0) > 100);
+        assert!(
+            rows[&0].estimated_line_count(source.lines().next().unwrap(), 320.0, 1.0, base_style())
+                > 100
+        );
     }
 
     #[test]
     fn reading_columns_fill_the_viewport_without_flex_reallocation() {
         let projection = test_table_projection();
-        let layout = projection.table().resolve_for_viewport(480.0, 1.0);
+        let layout = projection
+            .table()
+            .resolve_for_viewport(480.0, 1.0, base_style());
 
         assert!(!layout.overflow);
         assert!((layout.column_widths.iter().sum::<f32>() - 480.0).abs() < 0.01);
@@ -846,7 +900,9 @@ mod tests {
         let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
         let (blocks, _) = parse_markdown(&snapshot);
         let rows = build_markdown_table_styles(&snapshot, &blocks);
-        let layout = rows[&0].table().resolve_for_viewport(320.0, 1.0);
+        let layout = rows[&0]
+            .table()
+            .resolve_for_viewport(320.0, 1.0, base_style());
 
         assert!(layout.overflow);
         assert!(layout.content_width > 320.0);
@@ -868,7 +924,7 @@ mod tests {
 
         let cjk = snapshot.copy_range(blocks[2].source);
         let url = snapshot.copy_range(blocks[3].source);
-        assert!(rows[&2].estimated_line_count(&cjk, 240.0) > 1);
-        assert!(rows[&3].estimated_line_count(&url, 240.0) > 1);
+        assert!(rows[&2].estimated_line_count(&cjk, 240.0, 1.0, base_style()) > 1);
+        assert!(rows[&3].estimated_line_count(&url, 240.0, 1.0, base_style()) > 1);
     }
 }

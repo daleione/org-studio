@@ -3,7 +3,7 @@ use std::{collections::HashSet, ops::Range, sync::Arc, time::Instant};
 use crate::org_syntax::BlockId;
 use gpui::{ListState, Window};
 
-use super::PreviewSnapshot;
+use super::{PreviewSnapshot, PreviewStyle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum FoldDirection {
@@ -65,6 +65,8 @@ pub(super) struct FoldTransitionInput<'a> {
     pub(super) list_state: &'a ListState,
     pub(super) viewport_height: f32,
     pub(super) available_width: f32,
+    pub(super) zoom: f32,
+    pub(super) style: PreviewStyle,
     pub(super) measurement: FoldMeasurement<'a>,
 }
 
@@ -311,7 +313,7 @@ fn item_boundary(list_state: &ListState, index: usize) -> Option<f32> {
 fn collapse_geometry(
     changed: &[usize],
     first_position: usize,
-    document: &PreviewSnapshot,
+    _document: &PreviewSnapshot,
     list_state: &ListState,
     viewport_height: f32,
 ) -> (Vec<usize>, f32) {
@@ -343,7 +345,7 @@ fn collapse_geometry(
                 )
             })
         });
-        let (top, height) = measured.unwrap_or((cursor, estimated_row_height(document, row)));
+        let (top, height) = measured.unwrap_or((cursor, 24.0));
         cursor = cursor.max(top + height);
         if top < distance_limit {
             rendered_rows.push(row);
@@ -376,12 +378,20 @@ fn expansion_geometry(
                 .display_map
                 .as_ref()
                 .map(|map| {
-                    map.display_lines(row, input.available_width, window.text_system())
-                        .parent_height
-                        .max(24.0)
+                    map.display_lines(
+                        row,
+                        input.available_width,
+                        input.zoom,
+                        input.style,
+                        window.text_system(),
+                    )
+                    .parent_height
+                    .max(24.0)
                 })
                 .unwrap_or(24.0),
-            FoldMeasurement::Estimated => estimated_row_height(input.document, row),
+            FoldMeasurement::Estimated => {
+                estimated_row_height(input.document, row, input.zoom, input.style)
+            }
         };
         if cursor < distance_limit {
             rendered_rows.push(row);
@@ -394,12 +404,17 @@ fn expansion_geometry(
     (rendered_rows, cursor.min(distance_limit))
 }
 
-fn estimated_row_height(document: &PreviewSnapshot, row: usize) -> f32 {
+fn estimated_row_height(
+    document: &PreviewSnapshot,
+    row: usize,
+    zoom: f32,
+    style: PreviewStyle,
+) -> f32 {
     document
         .display_map
         .as_ref()
         .map(|map| {
-            let layout = map.layout(row);
+            let layout = map.layout(row, style).scaled(zoom);
             layout.fixed_height.unwrap_or(layout.min_height).max(24.0)
         })
         .unwrap_or(24.0)

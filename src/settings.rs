@@ -5,7 +5,7 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 4;
+const SETTINGS_VERSION: u32 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PreviewSettings {
@@ -21,6 +21,7 @@ pub struct PreviewSettings {
     /// Preferred Sidebar width. Rendering applies the current window clamp
     /// without overwriting this value.
     pub sidebar_width: u16,
+    pub reading_style: crate::preview::PreviewStyleId,
     pub status_line: StatusLineSettings,
 }
 
@@ -61,6 +62,7 @@ impl Default for PreviewSettings {
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
             minimap_width: None,
             sidebar_width: 240,
+            reading_style: crate::preview::PreviewStyleId::Base,
             status_line: StatusLineSettings::default(),
         }
     }
@@ -118,6 +120,7 @@ impl PreviewSettings {
         let mut minimap_thumb_visibility = None;
         let mut minimap_width = None;
         let mut sidebar_width = None;
+        let mut reading_style = None;
         let mut status_outline = None;
         let mut status_position = None;
         let mut status_progress = None;
@@ -169,6 +172,9 @@ impl PreviewSettings {
                         .ok()
                         .filter(|width| (180..=420).contains(width));
                 }
+                "reading_style" => {
+                    reading_style = crate::preview::PreviewStyleId::parse(value.trim());
+                }
                 "status_outline" => status_outline = value.trim().parse::<bool>().ok(),
                 "status_position" => status_position = value.trim().parse::<bool>().ok(),
                 "status_progress" => status_progress = value.trim().parse::<bool>().ok(),
@@ -186,6 +192,7 @@ impl PreviewSettings {
                 .unwrap_or(MinimapThumbVisibility::Always),
             minimap_width: minimap_width.unwrap_or(None),
             sidebar_width: sidebar_width.unwrap_or(240),
+            reading_style: reading_style.unwrap_or_default(),
             status_line: StatusLineSettings {
                 outline: status_outline.unwrap_or(true),
                 position: status_position.unwrap_or(true),
@@ -198,7 +205,7 @@ impl PreviewSettings {
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nsplit_ratio={}\nsoft_wrap={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
+            "version={SETTINGS_VERSION}\nsplit_ratio={}\nsoft_wrap={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nreading_style={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
             self.split_ratio,
             self.soft_wrap,
             match self.language {
@@ -214,6 +221,7 @@ impl PreviewSettings {
                 .map(|width| width.to_string())
                 .unwrap_or_else(|| "auto".to_owned()),
             self.sidebar_width,
+            self.reading_style.as_str(),
             self.status_line.outline,
             self.status_line.position,
             self.status_line.progress,
@@ -311,6 +319,7 @@ mod tests {
             minimap_thumb_visibility: MinimapThumbVisibility::Hover,
             minimap_width: Some(176),
             sidebar_width: 312,
+            reading_style: crate::preview::PreviewStyleId::WarmClay,
             status_line: StatusLineSettings {
                 outline: false,
                 position: true,
@@ -332,43 +341,51 @@ mod tests {
     #[test]
     fn missing_field_uses_product_default() {
         assert_eq!(
-            PreviewSettings::parse("version=4\n"),
-            Some(PreviewSettings::default())
-        );
-        assert_eq!(
-            PreviewSettings::parse("version=4\n"),
+            PreviewSettings::parse("version=5\n"),
             Some(PreviewSettings::default())
         );
         assert_eq!(
             PreviewSettings::parse(
-                "version=4\nminimap_width=auto\nminimap_thumb_visibility=always\n"
+                "version=5\nminimap_width=auto\nminimap_thumb_visibility=always\n"
             )
             .expect("auto width settings"),
             PreviewSettings::default()
         );
         assert_eq!(
-            PreviewSettings::parse("version=4\nminimap_width=480\n")
+            PreviewSettings::parse("version=5\nminimap_width=480\n")
                 .expect("manual width settings")
                 .minimap_width,
             Some(480)
         );
         assert_eq!(
-            PreviewSettings::parse("version=4\nminimap_width=999\n")
+            PreviewSettings::parse("version=5\nminimap_width=999\n")
                 .expect("invalid width falls back")
                 .minimap_width,
             None
         );
         assert_eq!(
-            PreviewSettings::parse("version=4\nsidebar_width=320\n")
+            PreviewSettings::parse("version=5\nsidebar_width=320\n")
                 .expect("manual sidebar width settings")
                 .sidebar_width,
             320
         );
         assert_eq!(
-            PreviewSettings::parse("version=4\nsidebar_width=999\n")
+            PreviewSettings::parse("version=5\nsidebar_width=999\n")
                 .expect("invalid sidebar width falls back")
                 .sidebar_width,
             240
+        );
+        assert_eq!(
+            PreviewSettings::parse("version=5\nreading_style=warm-clay\n")
+                .expect("known reading style")
+                .reading_style,
+            crate::preview::PreviewStyleId::WarmClay
+        );
+        assert_eq!(
+            PreviewSettings::parse("version=5\nreading_style=old-preview\n")
+                .expect("unknown reading style falls back")
+                .reading_style,
+            crate::preview::PreviewStyleId::Base
         );
     }
 }

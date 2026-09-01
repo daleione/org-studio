@@ -58,6 +58,7 @@ mod reading_panel;
 mod rows;
 mod save;
 mod split_layout;
+mod style;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -81,6 +82,8 @@ use rows::build_preview_rows;
 pub(crate) use save::{PendingTransition, SaveHost, SaveInteraction, SaveStatus};
 pub(crate) use split_layout::ResizeSession as SplitResizeSession;
 pub(crate) use status_line::StatusLineHost;
+pub use style::PreviewStyleId;
+use style::{PreviewStyle, preview_style};
 use table::{build_markdown_table_styles, build_table_styles, render_table_row};
 
 use crate::{

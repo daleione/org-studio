@@ -12,6 +12,10 @@ DEFAULT_MINIMAP_WIDTH="${ORG_STUDIO_PERF_MINIMAP_WIDTH:-auto}"
 DEFAULT_WINDOW_WIDTH="${ORG_STUDIO_PERF_WINDOW_WIDTH:-920}"
 DEFAULT_WINDOW_HEIGHT="${ORG_STUDIO_PERF_WINDOW_HEIGHT:-720}"
 DEFAULT_DISABLE_INACTIVE_THROTTLE="${ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE:-1}"
+DEFAULT_STYLE_SWITCHES="${ORG_STUDIO_PERF_STYLE_SWITCHES:-20}"
+DEFAULT_STYLE_PIXELS="${ORG_STUDIO_PERF_STYLE_SCROLL_PIXELS:-16}"
+DEFAULT_STYLE_P95_MS="${ORG_STUDIO_PERF_STYLE_P95_MS:-16.67}"
+DEFAULT_STYLE_LATE_RATE_PCT="${ORG_STUDIO_PERF_STYLE_LATE_RATE_PCT:-10}"
 
 usage() {
     cat <<'EOF'
@@ -25,6 +29,8 @@ Commands:
   first-frame [MIB]           Measure the first readable GPUI frame.
   minimap-first-frame [MIB]   Measure minimap index, first tile, and first pixels.
   scroll [PIXELS] [MIB]       Run one GUI scroll sample.
+  style [MIB]                 Gate 10 Base/Warm Clay round trips while scrolling
+                              and resizing between narrow and wide viewports.
   profile [PIXELS] [MIB]      Run scroll plus GPUI profiling spans.
   suite [MIB]                 Build, prepare, then run CPU and 0/16/80px GUI samples.
   gate [MIB ...]              Run first-frame, scroll, memory, and incremental gates
@@ -41,6 +47,10 @@ Configuration environment variables:
   ORG_STUDIO_PERF_MINIMAP_WIDTH        default auto; 48..480 logical px
   ORG_STUDIO_PERF_WINDOW_WIDTH         default 920 logical px
   ORG_STUDIO_PERF_WINDOW_HEIGHT        default 720 logical px
+  ORG_STUDIO_PERF_STYLE_SWITCHES       default 20 (10 round trips)
+  ORG_STUDIO_PERF_STYLE_SCROLL_PIXELS  default 16 pixels per frame
+  ORG_STUDIO_PERF_STYLE_P95_MS         default 16.67
+  ORG_STUDIO_PERF_STYLE_LATE_RATE_PCT  default 10
   ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE
                                          default 1; set 0 to test GPUI background throttling
 
@@ -189,13 +199,15 @@ run_scroll() {
     ensure_fixture "$mib"
     ensure_release_binaries
     require_boolean "$DEFAULT_DISABLE_INACTIVE_THROTTLE" "ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE"
-    new_run_dir "scroll-${pixels}px-${mib}m"
+    local style_switches="${ORG_STUDIO_STYLE_BENCH_SWITCHES:-0}"
+    new_run_dir "scroll-${pixels}px-${mib}m-style${style_switches}"
     {
         printf 'minimap_enabled=%s\n' "${ORG_STUDIO_MINIMAP:-settings}"
         printf 'minimap_width=%s\n' "$DEFAULT_MINIMAP_WIDTH"
         printf 'window_size=%sx%s\n' "$DEFAULT_WINDOW_WIDTH" "$DEFAULT_WINDOW_HEIGHT"
         printf 'requested_display_index=%s\n' "${ORG_STUDIO_DISPLAY_INDEX:-manual}"
         printf 'inactive_window_throttle_disabled=%s\n' "$DEFAULT_DISABLE_INACTIVE_THROTTLE"
+        printf 'style_switches=%s\n' "$style_switches"
     } >>"$RUN_DIR/metadata.txt"
     printf 'Move the benchmark window to the Mac internal display during the %s-frame warmup.\n' \
         "$DEFAULT_WARMUP"
@@ -207,6 +219,9 @@ run_scroll() {
         "ORG_STUDIO_WINDOW_WIDTH=$DEFAULT_WINDOW_WIDTH"
         "ORG_STUDIO_WINDOW_HEIGHT=$DEFAULT_WINDOW_HEIGHT"
         "ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=$DEFAULT_DISABLE_INACTIVE_THROTTLE"
+        "ORG_STUDIO_STYLE_BENCH_SWITCHES=$style_switches"
+        "ORG_STUDIO_STYLE_BENCH_NARROW_WIDTH=${ORG_STUDIO_STYLE_BENCH_NARROW_WIDTH:-760}"
+        "ORG_STUDIO_STYLE_BENCH_WIDE_WIDTH=${ORG_STUDIO_STYLE_BENCH_WIDE_WIDTH:-1400}"
     )
     if [[ "$profile" == "1" ]]; then
         env_args+=("ORG_STUDIO_PROFILE_FRAMES=1")
@@ -214,6 +229,39 @@ run_scroll() {
     run_measured env "${env_args[@]}" \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
         2>&1 | tee "$RUN_DIR/scroll.log"
+}
+
+run_style_gate() {
+    local mib="${1:-$DEFAULT_MIB}"
+    require_positive_integer "$mib" "fixture MiB"
+    require_positive_integer "$DEFAULT_STYLE_SWITCHES" "ORG_STUDIO_PERF_STYLE_SWITCHES"
+    require_nonnegative_number "$DEFAULT_STYLE_PIXELS" "ORG_STUDIO_PERF_STYLE_SCROLL_PIXELS"
+    require_nonnegative_number "$DEFAULT_STYLE_P95_MS" "ORG_STUDIO_PERF_STYLE_P95_MS"
+    require_nonnegative_number "$DEFAULT_STYLE_LATE_RATE_PCT" "ORG_STUDIO_PERF_STYLE_LATE_RATE_PCT"
+    local DEFAULT_FRAMES="${ORG_STUDIO_PERF_STYLE_FRAMES:-100}"
+    local DEFAULT_WARMUP="${ORG_STUDIO_PERF_STYLE_WARMUP_FRAMES:-60}"
+    local DEFAULT_WINDOW_WIDTH="${ORG_STUDIO_PERF_STYLE_WIDE_WIDTH:-1400}"
+    local DEFAULT_WINDOW_HEIGHT="${ORG_STUDIO_PERF_STYLE_WINDOW_HEIGHT:-900}"
+    ORG_STUDIO_STYLE_BENCH_SWITCHES="$DEFAULT_STYLE_SWITCHES" \
+    ORG_STUDIO_STYLE_BENCH_NARROW_WIDTH="${ORG_STUDIO_PERF_STYLE_NARROW_WIDTH:-760}" \
+    ORG_STUDIO_STYLE_BENCH_WIDE_WIDTH="$DEFAULT_WINDOW_WIDTH" \
+    ORG_STUDIO_MINIMAP=1 \
+        run_scroll "$DEFAULT_STYLE_PIXELS" "$mib" 0
+    grep -q \
+        "org_preview_style_gate switches=$DEFAULT_STYLE_SWITCHES expected=$DEFAULT_STYLE_SWITCHES" \
+        "$RUN_DIR/scroll.log" || die "style gate did not complete every requested switch"
+    local metrics p95_ms late_rate_pct
+    metrics="$(grep 'org_preview_scroll ' "$RUN_DIR/scroll.log" | tail -n 1)"
+    [[ -n "$metrics" ]] || die "style gate did not emit scroll metrics"
+    p95_ms="$(sed -n 's/.* p95_ms=\([^ ]*\).*/\1/p' <<<"$metrics")"
+    late_rate_pct="$(sed -n 's/.* late_rate_pct=\([^ ]*\).*/\1/p' <<<"$metrics")"
+    [[ -n "$p95_ms" && -n "$late_rate_pct" ]] || die "style gate emitted malformed metrics"
+    awk -v actual="$p95_ms" -v limit="$DEFAULT_STYLE_P95_MS" \
+        'BEGIN { exit !(actual <= limit) }' \
+        || die "style gate p95 ${p95_ms}ms exceeds ${DEFAULT_STYLE_P95_MS}ms"
+    awk -v actual="$late_rate_pct" -v limit="$DEFAULT_STYLE_LATE_RATE_PCT" \
+        'BEGIN { exit !(actual <= limit) }' \
+        || die "style gate late rate ${late_rate_pct}% exceeds ${DEFAULT_STYLE_LATE_RATE_PCT}%"
 }
 
 run_suite() {
@@ -243,6 +291,7 @@ run_gate() {
         run_scroll 16 "$mib" 0
     done
     run_incremental "$final_mib"
+    run_style_gate "$final_mib"
 }
 
 cd "$ROOT_DIR"
@@ -256,6 +305,7 @@ case "$command" in
     first-frame) run_first_frame "$@" ;;
     minimap-first-frame) run_minimap_first_frame "$@" ;;
     scroll) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 0 ;;
+    style) run_style_gate "${1:-$DEFAULT_MIB}" ;;
     profile) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 1 ;;
     suite) run_suite "$@" ;;
     gate) run_gate "$@" ;;

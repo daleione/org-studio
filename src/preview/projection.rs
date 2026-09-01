@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    hash::{Hash, Hasher},
     ops::Range,
     sync::{
         Arc,
@@ -14,9 +15,9 @@ use crate::{
 
 use super::{
     DocumentFormat, PreviewRow,
-    display_map::{PreviewDisplayMap, RowLayout},
     markdown::{MarkdownBlock, MarkdownKind},
     org_line::{CheckboxState, parse_list_item},
+    style::RowStyleKind,
     table::TableRowProjection,
 };
 
@@ -57,6 +58,9 @@ pub(in crate::preview) struct ReadingListMarker {
     pub(in crate::preview) marker: Arc<str>,
     pub(in crate::preview) checkbox: Option<CheckboxState>,
     pub(in crate::preview) indent: u16,
+    /// Hash of the rendered term/body, deliberately excluding checkbox state.
+    /// Checkbox state changes paint the marker but do not change row geometry.
+    pub(in crate::preview) text_signature: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -74,7 +78,7 @@ pub(in crate::preview) struct VisualRow {
     pub(in crate::preview) kind: VisualRowKind,
     pub(in crate::preview) code_language: Option<Arc<str>>,
     pub(in crate::preview) code_action_range: Option<crate::document::ByteRange>,
-    pub(in crate::preview) layout: RowLayout,
+    pub(in crate::preview) style_kind: RowStyleKind,
     pub(in crate::preview) render: PreviewRow,
 }
 
@@ -310,7 +314,6 @@ pub(in crate::preview) struct ReadingProjection {
 pub(in crate::preview) struct VisualRevisions {
     pub(in crate::preview) geometry: u64,
     pub(in crate::preview) paint: u64,
-    pub(in crate::preview) theme: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -324,6 +327,10 @@ impl InvalidationFlags {
 
     pub(in crate::preview) const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    pub(in crate::preview) const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
     }
 }
 
@@ -407,14 +414,6 @@ impl ReadingProjection {
             }
         }
         Some(low.min(self.rows.len() - 1))
-    }
-
-    #[allow(dead_code)] // Theme hot-reload is not wired by the current read-only host yet.
-    pub(in crate::preview) fn with_theme_revision(&self, theme: u64) -> Self {
-        let mut snapshot = self.clone();
-        snapshot.revisions.theme = theme;
-        snapshot.revisions.paint = snapshot.revisions.paint.wrapping_add(1);
-        snapshot
     }
 
     pub(in crate::preview) fn source_row(&self, index: usize) -> Option<PreviewRow> {
@@ -631,7 +630,6 @@ impl ReadingProjection {
                         .geometry
                         .wrapping_add(u64::from(invalidates_geometry)),
                     paint: self.revisions.paint.wrapping_add(1),
-                    theme: self.revisions.theme,
                 },
                 rows: base.rows.replace(old_visual.clone(), replacements),
                 presentation,
@@ -729,20 +727,8 @@ pub(in crate::preview) fn build_visual_rows(
         .iter()
         .map(|row| {
             let kind = visual_kind(text, format, row, blocks, markdown_blocks, resources);
-            let layout = match &kind {
-                VisualRowKind::Caption => RowLayout {
-                    padding_top: 4.0,
-                    padding_bottom: 8.0,
-                    ..RowLayout::text(12.0, 18.0)
-                },
-                VisualRowKind::Code(ReadingCodeRow::End) => RowLayout::hidden(),
-                _ => PreviewDisplayMap::source_row_layout(
-                    format,
-                    blocks,
-                    markdown_blocks,
-                    row.block_id,
-                ),
-            };
+            let style_kind =
+                visual_row_style_kind(format, &kind, row.block_id, blocks, markdown_blocks);
             VisualRow {
                 id: next_visual_row_id(),
                 source: row.content,
@@ -751,11 +737,70 @@ pub(in crate::preview) fn build_visual_rows(
                 kind,
                 code_language: visual_code_language(format, row.block_id, blocks, markdown_blocks),
                 code_action_range: code_action_range(format, row.block_id, blocks, markdown_blocks),
-                layout,
+                style_kind,
                 render: *row,
             }
         })
         .collect()
+}
+
+fn visual_row_style_kind(
+    format: DocumentFormat,
+    visual: &VisualRowKind,
+    block_id: BlockId,
+    blocks: &BlockArena,
+    markdown_blocks: &[MarkdownBlock],
+) -> RowStyleKind {
+    match visual {
+        VisualRowKind::Caption => return RowStyleKind::Caption,
+        VisualRowKind::Code(ReadingCodeRow::End) | VisualRowKind::Hidden => {
+            return RowStyleKind::Hidden;
+        }
+        _ => {}
+    }
+    match format {
+        DocumentFormat::Org => match &blocks.nodes()[block_id as usize].kind {
+            BlockKind::Heading { level } => {
+                RowStyleKind::Heading((*level).min(u8::MAX as u16) as u8)
+            }
+            BlockKind::BlankLine => RowStyleKind::Blank,
+            BlockKind::Paragraph => RowStyleKind::Paragraph,
+            BlockKind::ListItem => RowStyleKind::List,
+            BlockKind::Keyword => RowStyleKind::Keyword,
+            BlockKind::Image { .. } => RowStyleKind::Image,
+            BlockKind::Planning | BlockKind::FixedWidth | BlockKind::FootnoteDefinition => {
+                RowStyleKind::Metadata
+            }
+            BlockKind::SourceBlock { .. } => RowStyleKind::Code,
+            BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => {
+                RowStyleKind::RawCode
+            }
+            BlockKind::QuoteBlock => RowStyleKind::Quote,
+            BlockKind::VerseBlock => RowStyleKind::Verse,
+            BlockKind::CenterBlock => RowStyleKind::Center,
+            BlockKind::SpecialBlock { .. } => RowStyleKind::Special,
+            BlockKind::Drawer { .. } => RowStyleKind::Drawer,
+            BlockKind::HorizontalRule => RowStyleKind::Rule,
+            BlockKind::Comment | BlockKind::CommentBlock => RowStyleKind::Hidden,
+            BlockKind::TableRow => RowStyleKind::Table,
+        },
+        DocumentFormat::Markdown => match &markdown_blocks[block_id as usize].kind {
+            MarkdownKind::Heading { level } => {
+                RowStyleKind::Heading((*level).min(u8::MAX as u16) as u8)
+            }
+            MarkdownKind::Blank => RowStyleKind::Blank,
+            MarkdownKind::Paragraph => RowStyleKind::Paragraph,
+            MarkdownKind::ListItem => RowStyleKind::List,
+            MarkdownKind::Quote => RowStyleKind::CompactQuote,
+            MarkdownKind::Code { role, .. } => match role {
+                crate::preview::CodeRowRole::Close => RowStyleKind::Hidden,
+                _ => RowStyleKind::Code,
+            },
+            MarkdownKind::TableRow => RowStyleKind::Table,
+            MarkdownKind::HorizontalRule => RowStyleKind::Rule,
+            MarkdownKind::Image { .. } => RowStyleKind::Image,
+        },
+    }
 }
 
 fn code_action_range(
@@ -807,10 +852,16 @@ fn code_action_range(
 }
 
 fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
-    if old.layout != new.layout {
+    if old.style_kind != new.style_kind {
         return false;
     }
     match (&old.kind, &new.kind) {
+        (VisualRowKind::List(old), VisualRowKind::List(new)) => {
+            old.marker == new.marker
+                && old.indent == new.indent
+                && old.checkbox.is_some() == new.checkbox.is_some()
+                && old.text_signature == new.text_signature
+        }
         (VisualRowKind::Table(old), VisualRowKind::Table(new)) => {
             old.table().same_geometry(new.table())
         }
@@ -849,14 +900,7 @@ fn visual_kind(
     match format {
         DocumentFormat::Org => match blocks.nodes()[block_id as usize].kind {
             BlockKind::Heading { level } => VisualRowKind::Heading(level.min(4) as u8),
-            BlockKind::ListItem => {
-                let parts = parse_list_item(&text.copy_range(row.content.range));
-                VisualRowKind::List(ReadingListMarker {
-                    marker: Arc::from(parts.marker),
-                    checkbox: parts.checkbox,
-                    indent: reading_indent(&parts.indent),
-                })
-            }
+            BlockKind::ListItem => list_visual_kind(&text.copy_range(row.content.range)),
             BlockKind::Keyword
                 if text
                     .copy_range(row.content.range)
@@ -878,14 +922,7 @@ fn visual_kind(
         },
         DocumentFormat::Markdown => match markdown_blocks[block_id as usize].kind {
             MarkdownKind::Heading { level } => VisualRowKind::Heading(level.min(4) as u8),
-            MarkdownKind::ListItem => {
-                let parts = parse_list_item(&text.copy_range(row.content.range));
-                VisualRowKind::List(ReadingListMarker {
-                    marker: Arc::from(parts.marker),
-                    checkbox: parts.checkbox,
-                    indent: reading_indent(&parts.indent),
-                })
-            }
+            MarkdownKind::ListItem => list_visual_kind(&text.copy_range(row.content.range)),
             MarkdownKind::Quote => VisualRowKind::Quote,
             MarkdownKind::Image { .. } => VisualRowKind::Image { dimensions: None },
             MarkdownKind::Code { role, .. } => VisualRowKind::Code(match role {
@@ -898,6 +935,19 @@ fn visual_kind(
             _ => VisualRowKind::Text,
         },
     }
+}
+
+fn list_visual_kind(source: &str) -> VisualRowKind {
+    let parts = parse_list_item(source);
+    let mut text_hasher = std::collections::hash_map::DefaultHasher::new();
+    parts.term.hash(&mut text_hasher);
+    parts.body.hash(&mut text_hasher);
+    VisualRowKind::List(ReadingListMarker {
+        marker: Arc::from(parts.marker),
+        checkbox: parts.checkbox,
+        indent: reading_indent(&parts.indent),
+        text_signature: text_hasher.finish(),
+    })
 }
 
 fn reading_indent(indent: &str) -> u16 {
@@ -949,7 +999,7 @@ mod tests {
             kind: VisualRowKind::Text,
             code_language: None,
             code_action_range: None,
-            layout: RowLayout::text(14.0, 22.0),
+            style_kind: RowStyleKind::Paragraph,
             render: PreviewRow {
                 block_id: index as u32,
                 content: RevisionRange::new(
@@ -1037,7 +1087,7 @@ mod tests {
             kind: VisualRowKind::Text,
             code_language: None,
             code_action_range: None,
-            layout: RowLayout::text(14.0, 22.0),
+            style_kind: RowStyleKind::Paragraph,
             render: row(1, Revision(1)).render,
         };
         let (next, patch) = snapshot
@@ -1065,15 +1115,6 @@ mod tests {
             latest.source_row(2).unwrap().content.range,
             ByteRange::new(24, 29)
         );
-
-        let themed = latest.with_theme_revision(7);
-        assert_eq!(themed.revisions.geometry, latest.revisions.geometry);
-        assert_eq!(themed.revisions.theme, 7);
-        assert_eq!(themed.revisions.paint, latest.revisions.paint + 1);
-        assert!(Arc::ptr_eq(
-            &themed.rows.chunks()[0],
-            &latest.rows.chunks()[0]
-        ));
     }
 
     #[test]

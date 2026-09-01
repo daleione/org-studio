@@ -3,30 +3,34 @@ use smallvec::SmallVec;
 use super::{
     display_map::{PreviewDisplayMap, PreviewLineKind, kind_color},
     projection::{ReadingCodeRow, VisualRowKind},
+    style::{CodeBlockVariant, PreviewStyle, TableVariant},
     table::TableRowProjection,
 };
-use crate::theme::current_theme;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::preview) enum PaintToken {
     BackgroundAlt,
+    SurfaceElevated,
     CodeBackground,
     CodeBlockAccent,
     Border,
     Attribute,
+    QuoteBorder,
     Heading(u8),
 }
 
 impl PaintToken {
-    pub(in crate::preview) fn resolve(self) -> u32 {
-        let theme = current_theme();
+    pub(in crate::preview) fn resolve(self, style: PreviewStyle) -> u32 {
+        let palette = style.palette;
         match self {
-            Self::BackgroundAlt => theme.background_alt,
-            Self::CodeBackground => theme.code_background,
-            Self::CodeBlockAccent => theme.code_block_accent,
-            Self::Border => theme.border,
-            Self::Attribute => theme.attribute,
-            Self::Heading(level) => theme.heading[level.min(3) as usize],
+            Self::BackgroundAlt => palette.surface,
+            Self::SurfaceElevated => palette.surface_elevated,
+            Self::CodeBackground => palette.code_background,
+            Self::CodeBlockAccent => palette.code_block_accent,
+            Self::Border => palette.border,
+            Self::Attribute => palette.attribute,
+            Self::QuoteBorder => palette.quote_border,
+            Self::Heading(level) => palette.heading[level.min(3) as usize],
         }
     }
 }
@@ -88,6 +92,7 @@ pub(in crate::preview) fn resolve_visual_row(
     row: usize,
     target_width: f32,
     target_font_px: f32,
+    style: PreviewStyle,
 ) -> VisualRowRecipe {
     let visual = model
         .projection
@@ -107,26 +112,43 @@ pub(in crate::preview) fn resolve_visual_row(
             primitives.push(VisualPrimitive::Rect {
                 x: 2.0,
                 width: PrimitiveWidth::Remaining { right_inset: 2.0 },
-                color: PaintToken::CodeBackground,
+                color: if style.variants.code_block == CodeBlockVariant::Card {
+                    PaintToken::SurfaceElevated
+                } else {
+                    PaintToken::CodeBackground
+                },
             });
-            primitives.push(VisualPrimitive::VerticalLine {
-                x: 2.0,
-                color: PaintToken::CodeBlockAccent,
-            });
+            if style.variants.code_block == CodeBlockVariant::AccentBar {
+                primitives.push(VisualPrimitive::VerticalLine {
+                    x: 2.0,
+                    color: PaintToken::CodeBlockAccent,
+                });
+            } else {
+                primitives.push(VisualPrimitive::VerticalLine {
+                    x: 2.0,
+                    color: PaintToken::Border,
+                });
+                primitives.push(VisualPrimitive::VerticalLine {
+                    x: (target_width - 2.0).max(2.0),
+                    color: PaintToken::Border,
+                });
+            }
             VisualContent::Text
         }
         VisualRowKind::Table(table) => {
-            primitives.push(VisualPrimitive::Rect {
-                x: 2.0,
-                width: PrimitiveWidth::Remaining { right_inset: 2.0 },
-                color: PaintToken::BackgroundAlt,
-            });
+            if style.variants.table == TableVariant::Grid || table.is_header() {
+                primitives.push(VisualPrimitive::Rect {
+                    x: 2.0,
+                    width: PrimitiveWidth::Remaining { right_inset: 2.0 },
+                    color: PaintToken::BackgroundAlt,
+                });
+            }
             VisualContent::Table(table.clone())
         }
         VisualRowKind::Quote => {
             primitives.push(VisualPrimitive::VerticalLine {
                 x: 2.0,
-                color: PaintToken::Heading(1),
+                color: PaintToken::QuoteBorder,
             });
             VisualContent::Text
         }
@@ -165,8 +187,11 @@ pub(in crate::preview) fn resolve_visual_row(
     };
     VisualRowRecipe {
         kind,
-        color: kind_color(kind),
-        indent: semantic_indent + (visual.layout.padding_left * target_font_px / 14.0).round(),
+        color: kind_color(kind, style),
+        indent: semantic_indent
+            + (style.row_layout(visual.style_kind).padding_left * target_font_px
+                / style.typography.body_size)
+                .round(),
         folded_ellipsis: matches!(visual.kind, VisualRowKind::Heading(_)),
         primitives,
         content,

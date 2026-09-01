@@ -739,12 +739,17 @@ impl WorkspaceWindow {
         });
         let status_popover = status_snapshot.as_ref().and_then(|snapshot| {
             self.status.popover_for(snapshot.pane).map(|popover| {
+                let layout = self.status_layout(snapshot, viewport_width, window);
+                let style_popover_left =
+                    super::status_line::reading_style_popover_left(snapshot, &layout, window);
                 super::status_line::render_status_popover(
                     popover,
                     Some(snapshot),
                     self.status.settings(),
                     entity.clone(),
                     self.language,
+                    viewport_width,
+                    style_popover_left,
                 )
             })
         });

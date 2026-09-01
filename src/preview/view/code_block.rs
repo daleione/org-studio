@@ -2,11 +2,9 @@ use std::{ops::Range, sync::Arc};
 
 use gpui::{FontWeight, HighlightStyle, SharedString, StyledText, div, prelude::*, px, rgb};
 
-use crate::{
-    preview::{
-        CodeHighlightSpan, CodeRowRole, display_map::RowLayout, view::styled_text::styled_code_runs,
-    },
-    theme::current_theme,
+use crate::preview::{
+    CodeHighlightSpan, CodeRowRole, PreviewStyle, display_map::RowLayout, style::CodeBlockVariant,
+    view::styled_text::styled_code_runs,
 };
 
 pub(super) fn render_code_row(
@@ -14,17 +12,19 @@ pub(super) fn render_code_row(
     code_spans: Arc<[CodeHighlightSpan]>,
     layout: RowLayout,
     role: CodeRowRole,
+    card_bottom: bool,
+    style: PreviewStyle,
 ) -> gpui::Div {
-    let theme = current_theme();
+    let palette = style.palette;
     let content = if role.is_boundary() {
-        styled_code_boundary(text, role)
+        styled_code_boundary(text, role, style)
     } else {
-        styled_code_runs(text, code_spans)
+        styled_code_runs(text, code_spans, style)
     };
     let background = if role.is_boundary() {
-        rgb(theme.code_background).blend(rgb(theme.code_boundary_background).alpha(0.62))
+        rgb(palette.code_background).blend(rgb(palette.code_boundary_background).alpha(0.62))
     } else {
-        rgb(theme.code_background)
+        rgb(palette.code_background)
     };
 
     div()
@@ -33,22 +33,41 @@ pub(super) fn render_code_row(
         .pr(px(layout.padding_right))
         .pt(px(layout.padding_top))
         .pb(px(layout.padding_bottom))
-        .border_l_2()
-        .border_color(rgb(theme.code_block_accent))
+        .when(
+            style.variants.code_block == CodeBlockVariant::AccentBar,
+            |element| {
+                element
+                    .border_l_2()
+                    .border_color(rgb(palette.code_block_accent))
+            },
+        )
+        .when(
+            style.variants.code_block == CodeBlockVariant::Card,
+            |element| {
+                element
+                    .border_l_1()
+                    .border_r_1()
+                    .border_color(rgb(palette.border))
+            },
+        )
+        .when(
+            style.variants.code_block == CodeBlockVariant::Card && card_bottom,
+            |element| element.border_b_1().rounded_b(px(style.spacing.radius)),
+        )
         .bg(background)
         .text_color(rgb(if role.is_boundary() {
-            theme.code_boundary
+            palette.code_boundary
         } else {
-            theme.code_foreground
+            palette.code_foreground
         }))
-        .font_family("Menlo")
+        .font_family(style.typography.code_family)
         .text_size(px(layout.font_size))
         .line_height(px(layout.line_height))
         .child(content)
 }
 
-fn styled_code_boundary(text: SharedString, role: CodeRowRole) -> StyledText {
-    let theme = current_theme();
+fn styled_code_boundary(text: SharedString, role: CodeRowRole, style: PreviewStyle) -> StyledText {
+    let palette = style.palette;
     let mut highlights = Vec::new();
     if role == CodeRowRole::Open
         && let Some((language, arguments)) = fence_metadata_ranges(&text)
@@ -56,7 +75,7 @@ fn styled_code_boundary(text: SharedString, role: CodeRowRole) -> StyledText {
         highlights.push((
             language,
             HighlightStyle {
-                color: Some(rgb(theme.date).into()),
+                color: Some(rgb(palette.date).into()),
                 font_weight: Some(FontWeight::SEMIBOLD),
                 ..Default::default()
             },
@@ -65,7 +84,7 @@ fn styled_code_boundary(text: SharedString, role: CodeRowRole) -> StyledText {
             highlights.push((
                 arguments,
                 HighlightStyle {
-                    color: Some(rgb(theme.meta).into()),
+                    color: Some(rgb(palette.meta).into()),
                     ..Default::default()
                 },
             ));

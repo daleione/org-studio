@@ -2,7 +2,7 @@ use super::{
     Arc, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context, DocumentFormat,
     FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
     Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager, PreviewLoadState,
-    PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
+    PreviewRow, PreviewSnapshot, PreviewStyle, QUIT_APPLICATION_COMMAND, QuitApplication,
     RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
     SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome,
     ShowReading, ShowSplit, StyledText, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
@@ -23,6 +23,7 @@ mod styled_text;
 struct ReadingRowContext<'a> {
     available_width: f32,
     zoom: f32,
+    style: PreviewStyle,
     table_scroll: Option<&'a gpui::ScrollHandle>,
 }
 
@@ -42,8 +43,10 @@ struct ReadingInteraction {
 struct ReadingRowHost<'a> {
     available_width: f32,
     zoom: f32,
+    style: PreviewStyle,
     table_scroll_handles: &'a std::collections::HashMap<super::BlockId, gpui::ScrollHandle>,
     interaction: Option<&'a ReadingInteraction>,
+    extra_bottom_padding: bool,
 }
 use code_block::render_code_row;
 pub(super) use document::{ReadingRenderOptions, render_reading_document};

@@ -261,7 +261,11 @@ impl WorkspaceWindow {
         pane: crate::app::PaneSide,
         cx: &mut Context<Self>,
     ) {
+        let dismissed_popover = self.status.dismiss_popover();
         if self.document_workspace.active_pane == pane {
+            if dismissed_popover {
+                cx.notify();
+            }
             return;
         }
         let previous = self.document_workspace.active_pane;
@@ -350,7 +354,8 @@ impl WorkspaceWindow {
             return;
         }
         if event.keystroke.key == "escape"
-            && (self.file_manager.dismiss_context_menu()
+            && (self.status.dismiss_popover()
+                || self.file_manager.dismiss_context_menu()
                 || self.cancel_minimap_interaction(cx)
                 || self.cancel_sidebar_resize()
                 || self.cancel_split_resize())
@@ -556,5 +561,40 @@ impl WorkspaceWindow {
     pub(in crate::preview) fn cancel_key_feedback(&mut self) {
         self.key_feedback_request = self.key_feedback_request.wrapping_add(1);
         self.key_feedback_task = None;
+    }
+
+    pub(in crate::preview) fn select_reading_style(
+        &mut self,
+        style_id: super::super::PreviewStyleId,
+        cx: &mut Context<Self>,
+    ) {
+        let changed = self.apply_reading_style(style_id, cx);
+        self.status.dismiss_popover();
+        if changed {
+            self.save_preview_settings();
+        }
+        cx.notify();
+    }
+
+    pub(in crate::preview) fn apply_reading_style(
+        &mut self,
+        style_id: super::super::PreviewStyleId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.reading_style == style_id {
+            return false;
+        }
+        let previous = *super::super::preview_style(self.reading_style);
+        let next = *super::super::preview_style(style_id);
+        self.reading_style = style_id;
+        self.status.clear_layout_cache();
+        if let Some(ready) = self.state.ready() {
+            for pane in [crate::app::PaneSide::Left, crate::app::PaneSide::Right] {
+                if let Some(panel) = ready.readers.get(pane).as_ref() {
+                    panel.update(cx, |panel, cx| panel.change_style(previous, next, cx));
+                }
+            }
+        }
+        true
     }
 }

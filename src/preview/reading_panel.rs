@@ -149,6 +149,39 @@ impl ReadingPreviewPanel {
         }
     }
 
+    pub(in crate::preview) fn change_style(
+        &mut self,
+        previous: super::PreviewStyle,
+        next: super::PreviewStyle,
+        cx: &mut Context<Self>,
+    ) {
+        let layout_changed = previous.layout_key() != next.layout_key();
+        let paint_changed = previous.paint_key() != next.paint_key();
+        if !layout_changed && !paint_changed {
+            return;
+        }
+        self.discard_fold_animation();
+        let was_at_bottom = layout_changed && self.viewport_reaches_document_end();
+        let source_anchor = layout_changed.then(|| self.top_source_anchor()).flatten();
+        if layout_changed {
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+            self.list_state
+                .remeasure_items(0..self.list_state.item_count());
+            if was_at_bottom && self.list_state.item_count() > 0 {
+                self.list_state.scroll_to(ListOffset {
+                    item_ix: self.list_state.item_count() - 1,
+                    offset_in_item: px(0.0),
+                });
+            } else if let Some((offset, offset_in_item)) = source_anchor {
+                self.scroll_to_source_offset_with_offset(offset, offset_in_item);
+            }
+        }
+        self.minimap_pending_seek = None;
+        self.minimap_seek_scheduled = false;
+        self.minimap_state.invalidate_style(layout_changed);
+        cx.notify();
+    }
+
     pub(in crate::preview) fn show_copy_feedback(
         &mut self,
         target_range: crate::document::ByteRange,
@@ -290,9 +323,10 @@ impl ReadingPreviewPanel {
         self.list_state.scroll_by(amount);
     }
 
-    pub(in crate::preview) fn replace_document(
+    pub(in crate::preview) fn replace_document_with_style(
         &mut self,
         document: Arc<PreviewSnapshot>,
+        style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
         let source_anchor = self.top_source_anchor();
@@ -400,6 +434,11 @@ impl ReadingPreviewPanel {
             } => Some((patch.clone(), *reused_chunks, *total_chunks)),
             super::DerivedUpdate::Full => None,
         };
+        let invalidates_geometry = incremental_update.as_ref().is_none_or(|(patch, _, _)| {
+            patch
+                .invalidation
+                .contains(super::projection::InvalidationFlags::GEOMETRY)
+        });
         let preserves_visible_rows = incremental_update.is_some()
             && next_visible_rows.as_slice() == previous_visible_rows.as_slice();
         self.discard_fold_animation();
@@ -419,7 +458,9 @@ impl ReadingPreviewPanel {
         self.global_visibility = next_global_visibility;
         self.global_cycle_contiguous = next_global_cycle_contiguous;
         self.local_cycle_continuation = next_local_cycle;
-        self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        if invalidates_geometry {
+            self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        }
         self.minimap_pending_seek = None;
         self.minimap_seek_scheduled = false;
         if preserves_visible_rows {
@@ -434,15 +475,22 @@ impl ReadingPreviewPanel {
         }
         if let Some((patch, reused_chunks, total_chunks)) = incremental_update {
             if preserves_visible_rows {
-                let start = self
-                    .visible_rows
-                    .partition_point(|row| *row < patch.new_visual.start);
-                let end = self
-                    .visible_rows
-                    .partition_point(|row| *row < patch.new_visual.end);
-                self.list_state.remeasure_items(start..end);
-                self.minimap_state
-                    .apply_document_patch(&self.document, &patch, &self.visible_rows);
+                if invalidates_geometry {
+                    let start = self
+                        .visible_rows
+                        .partition_point(|row| *row < patch.new_visual.start);
+                    let end = self
+                        .visible_rows
+                        .partition_point(|row| *row < patch.new_visual.end);
+                    self.list_state.remeasure_items(start..end);
+                }
+                self.minimap_state.apply_document_patch(
+                    &self.document,
+                    &patch,
+                    &self.visible_rows,
+                    self.zoom(),
+                    style,
+                );
             }
             if minimap::minimap_perf_enabled() {
                 eprintln!(
@@ -544,6 +592,20 @@ impl ReadingPreviewPanel {
             .map(|row| (row.content.range.start, scroll_top.offset_in_item))
     }
 
+    fn viewport_reaches_document_end(&self) -> bool {
+        let count = self.list_state.item_count();
+        if count == 0 {
+            return true;
+        }
+        let viewport = self.list_state.viewport_bounds();
+        if f32::from(viewport.size.height) <= 0.0 {
+            return false;
+        }
+        self.list_state
+            .bounds_for_item(count - 1)
+            .is_some_and(|bounds| bounds.bottom() <= viewport.bottom() + px(0.5))
+    }
+
     fn scroll_to_source_offset_with_offset(
         &mut self,
         offset: crate::document::ByteOffset,
@@ -637,6 +699,7 @@ impl ReadingPreviewPanel {
         block_id: BlockId,
         viewport_height: f32,
         available_width: f32,
+        style: super::PreviewStyle,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
@@ -651,6 +714,7 @@ impl ReadingPreviewPanel {
                 projection.fold_markers,
                 viewport_height,
                 available_width,
+                style,
                 window,
                 cx,
             );
@@ -695,6 +759,7 @@ impl ReadingPreviewPanel {
         fold_markers: HashSet<BlockId>,
         viewport_height: f32,
         available_width: f32,
+        style: super::PreviewStyle,
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
@@ -712,6 +777,8 @@ impl ReadingPreviewPanel {
             list_state: &self.list_state,
             viewport_height,
             available_width,
+            zoom: self.zoom(),
+            style,
             measurement,
         }) else {
             self.apply_fold_projection(visible_rows, fold_markers);
@@ -823,6 +890,7 @@ impl ReadingPreviewPanel {
         &mut self,
         viewport_height: f32,
         available_width: f32,
+        style: super::PreviewStyle,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -836,6 +904,7 @@ impl ReadingPreviewPanel {
             projection.fold_markers,
             viewport_height,
             available_width,
+            style,
             Some(window),
             cx,
         );

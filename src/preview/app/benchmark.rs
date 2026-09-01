@@ -7,6 +7,12 @@ pub(crate) struct ScrollBenchmark {
     pub(in crate::preview) scroll_pixels: f32,
     pub(in crate::preview) samples: Vec<Duration>,
     pub(in crate::preview) last_frame: Instant,
+    pub(in crate::preview) style_switches_remaining: usize,
+    pub(in crate::preview) style_switch_interval: usize,
+    pub(in crate::preview) style_switch_count: usize,
+    pub(in crate::preview) resize_narrow_width: f32,
+    pub(in crate::preview) resize_wide_width: f32,
+    pub(in crate::preview) resize_to_wide: bool,
 }
 
 impl WorkspaceWindow {
@@ -56,6 +62,21 @@ impl WorkspaceWindow {
                 .samples
                 .push(now.duration_since(benchmark.last_frame));
             benchmark.last_frame = now;
+            let should_switch_style = benchmark.style_switches_remaining > 0
+                && benchmark
+                    .samples
+                    .len()
+                    .is_multiple_of(benchmark.style_switch_interval);
+            let resize_width = should_switch_style.then(|| {
+                benchmark.style_switches_remaining -= 1;
+                benchmark.style_switch_count += 1;
+                benchmark.resize_to_wide = !benchmark.resize_to_wide;
+                if benchmark.resize_to_wide {
+                    benchmark.resize_wide_width
+                } else {
+                    benchmark.resize_narrow_width
+                }
+            });
             if benchmark.samples.len() >= benchmark.target_frames {
                 let mut samples = benchmark.samples.clone();
                 samples.sort_unstable();
@@ -102,11 +123,30 @@ impl WorkspaceWindow {
                     over_12_5,
                     over_16_67,
                 );
+                eprintln!(
+                    "org_preview_style_gate switches={} expected={} final_style={}",
+                    benchmark.style_switch_count,
+                    benchmark.style_switch_count + benchmark.style_switches_remaining,
+                    this.reading_style.as_str(),
+                );
                 crate::perf_tracing::report();
                 this.scroll_benchmark = None;
                 cx.quit();
             } else {
                 let scroll_pixels = benchmark.scroll_pixels;
+                if let Some(width) = resize_width {
+                    let next_style = match this.reading_style {
+                        super::super::PreviewStyleId::Base => {
+                            super::super::PreviewStyleId::WarmClay
+                        }
+                        super::super::PreviewStyleId::WarmClay => {
+                            super::super::PreviewStyleId::Base
+                        }
+                    };
+                    this.apply_reading_style(next_style, cx);
+                    let viewport = window.viewport_size();
+                    window.resize(gpui::size(px(width), viewport.height));
+                }
                 if let Some(panel) = this.preview_panel() {
                     panel.update(cx, |panel, _| panel.scroll_by(px(scroll_pixels)));
                 }

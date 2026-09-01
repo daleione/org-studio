@@ -6,6 +6,10 @@ use crate::preview::table::test_table_projection;
 use crate::{document::Revision, preview::layout::LayoutKey};
 use unicode_segmentation::UnicodeSegmentation;
 
+fn base_style() -> crate::preview::PreviewStyle {
+    *crate::preview::preview_style(crate::preview::PreviewStyleId::Base)
+}
+
 fn test_line_index(
     width: u16,
     rows_signature: u64,
@@ -291,6 +295,8 @@ fn fold_projection_reuses_exact_minimap_measurements() {
         MinimapDensity::Comfortable,
         document.revision,
         1,
+        1.0,
+        base_style(),
     );
 
     let mut builder = MinimapLineIndexBuilder::rebased(
@@ -300,6 +306,8 @@ fn fold_projection_reuses_exact_minimap_measurements() {
         800.0,
         &previous_rows,
         &previous_projection,
+        1.0,
+        base_style(),
     );
 
     assert_eq!(builder.exact_rows, 2);
@@ -498,12 +506,12 @@ fn display_run_cache_is_strictly_bounded() {
 #[test]
 fn raster_tile_key_rejects_fold_and_resize_reuse() {
     let density = MinimapDensity::Compact;
-    let original = tile_key(&[0, 1, 2, 3], 0, 96, 0, 10, 2.0, density);
-    let folded = tile_key(&[0, 3], 0, 96, 1, 10, 2.0, density);
-    let resized = tile_key(&[0, 1, 2, 3], 0, 72, 0, 11, 2.0, density);
-    let rewrapped = tile_key(&[0, 1, 2, 3], 0, 96, 0, 12, 2.0, density);
-    let next_tile = tile_key(&[128, 129], 128, 96, 0, 10, 2.0, density);
-    let other_scale = tile_key(&[0, 1, 2, 3], 0, 96, 0, 10, 1.0, density);
+    let original = tile_key(&[0, 1, 2, 3], 0, 96, 0, 10, 2.0, density, base_style());
+    let folded = tile_key(&[0, 3], 0, 96, 1, 10, 2.0, density, base_style());
+    let resized = tile_key(&[0, 1, 2, 3], 0, 72, 0, 11, 2.0, density, base_style());
+    let rewrapped = tile_key(&[0, 1, 2, 3], 0, 96, 0, 12, 2.0, density, base_style());
+    let next_tile = tile_key(&[128, 129], 128, 96, 0, 10, 2.0, density, base_style());
+    let other_scale = tile_key(&[0, 1, 2, 3], 0, 96, 0, 10, 1.0, density, base_style());
     let comfortable = tile_key(
         &[0, 1, 2, 3],
         0,
@@ -512,6 +520,17 @@ fn raster_tile_key_rejects_fold_and_resize_reuse() {
         10,
         2.0,
         MinimapDensity::Comfortable,
+        base_style(),
+    );
+    let warm = tile_key(
+        &[0, 1, 2, 3],
+        0,
+        96,
+        0,
+        10,
+        2.0,
+        density,
+        *crate::preview::preview_style(crate::preview::PreviewStyleId::WarmClay),
     );
     assert_ne!(original, folded);
     assert_ne!(original, resized);
@@ -519,14 +538,25 @@ fn raster_tile_key_rejects_fold_and_resize_reuse() {
     assert_ne!(original, next_tile);
     assert_ne!(original, other_scale);
     assert_ne!(original, comfortable);
+    assert_ne!(original, warm);
 }
 
 #[test]
 fn fold_refresh_keeps_the_previous_tile_until_its_replacement_is_ready() {
     let density = MinimapDensity::Compact;
-    let previous = tile_key(&[10, 11, 12], 128, 96, 0, 1, 2.0, density);
-    let folded = tile_key(&[10, 42], 128, 96, 1, 2, 2.0, density);
-    let another_slot = tile_key(&[200, 201], 256, 96, 1, 2, 2.0, density);
+    let previous = tile_key(&[10, 11, 12], 128, 96, 0, 1, 2.0, density, base_style());
+    let folded = tile_key(&[10, 42], 128, 96, 1, 2, 2.0, density, base_style());
+    let themed = tile_key(
+        &[10, 11, 12],
+        128,
+        96,
+        0,
+        1,
+        2.0,
+        density,
+        *crate::preview::preview_style(crate::preview::PreviewStyleId::WarmClay),
+    );
+    let another_slot = tile_key(&[200, 201], 256, 96, 1, 2, 2.0, density, base_style());
     let image = Arc::new(RenderImage::new(SmallVec::from_elem(
         Frame::new(RgbaImage::new(1, 1)),
         1,
@@ -544,7 +574,53 @@ fn fold_refresh_keeps_the_previous_tile_until_its_replacement_is_ready() {
         fallback.is_some_and(|fallback| Arc::ptr_eq(&fallback, &image)),
         "the last image in the same tile slot should remain paintable"
     );
+    assert!(cache.image_or_fallback(themed).0.is_none());
     assert!(cache.image_or_fallback(another_slot).0.is_none());
+}
+
+#[test]
+fn style_invalidation_retains_the_previous_complete_tile_frame() {
+    let state = MinimapState::new();
+    let key = tile_key(
+        &[0, 1],
+        0,
+        96,
+        0,
+        1,
+        2.0,
+        MinimapDensity::Compact,
+        base_style(),
+    );
+    let image = Arc::new(RenderImage::new(SmallVec::from_elem(
+        Frame::new(RgbaImage::new(1, 1)),
+        1,
+    )));
+    state
+        .raster_tiles
+        .lock()
+        .unwrap()
+        .insert_batch(vec![(key, image.clone())], &[key]);
+    state
+        .retained_style_frame
+        .lock()
+        .unwrap()
+        .push(RasterTilePaint {
+            image,
+            y: 0.0,
+            width: 96.0,
+            height: 10.0,
+        });
+
+    state.invalidate_style(false);
+
+    assert!(state.raster_tiles.lock().unwrap().entries.is_empty());
+    assert!(state.raster_tiles.lock().unwrap().in_flight.is_empty());
+    assert!(
+        state
+            .retain_style_frame
+            .load(std::sync::atomic::Ordering::Acquire)
+    );
+    assert_eq!(state.retained_style_frame.lock().unwrap().len(), 1);
 }
 
 #[test]
@@ -560,8 +636,26 @@ fn raster_tile_cache_and_in_flight_sets_are_bounded_by_design() {
         * RasterTileCache::CAPACITY as f32;
     assert!(retina_maximum_bytes < 30_000_000.0);
 
-    let first = tile_key(&[0], 0, 96, 0, 1, 2.0, MinimapDensity::Compact);
-    let second = tile_key(&[128], 128, 96, 0, 1, 2.0, MinimapDensity::Compact);
+    let first = tile_key(
+        &[0],
+        0,
+        96,
+        0,
+        1,
+        2.0,
+        MinimapDensity::Compact,
+        base_style(),
+    );
+    let second = tile_key(
+        &[128],
+        128,
+        96,
+        0,
+        1,
+        2.0,
+        MinimapDensity::Compact,
+        base_style(),
+    );
     let mut cache = RasterTileCache {
         entries: HashMap::new(),
         order: VecDeque::new(),
@@ -580,7 +674,7 @@ fn complete_visible_batch_is_published_without_internal_eviction() {
     let keys = (0..RasterTileCache::CAPACITY + 1)
         .map(|index| {
             let row = index * RASTER_TILE_ROWS;
-            tile_key(&[row], row, 96, 0, 1, 2.0, density)
+            tile_key(&[row], row, 96, 0, 1, 2.0, density, base_style())
         })
         .collect::<Vec<_>>();
     let mut cache = RasterTileCache {
@@ -1197,7 +1291,7 @@ fn inline_display_runs_cover_the_same_rendered_text() {
     };
     let mut base_font = font("Menlo");
     base_font.weight = FontWeight::BLACK;
-    let runs = minimap_text_runs(PreviewLineKind::Text, &line, base_font);
+    let runs = minimap_text_runs(PreviewLineKind::Text, &line, base_font, base_style());
     assert_eq!(
         runs.iter().map(|run| run.len).sum::<usize>(),
         line.text.len()
@@ -1233,6 +1327,19 @@ fn minimap_font_has_black_weight_and_cjk_fallback() {
             .fallback_list()
             .iter()
             .any(|name| name == "Apple Color Emoji")
+    );
+
+    let warm = crate::preview::display_map::preview_minimap_font(
+        *crate::preview::preview_style(crate::preview::PreviewStyleId::WarmClay),
+        PreviewLineKind::Text,
+    );
+    assert_eq!(warm.family.as_ref(), "System Font");
+    assert!(
+        warm.fallbacks
+            .expect("warm fallbacks")
+            .fallback_list()
+            .iter()
+            .any(|name| name == "PingFang SC")
     );
 }
 
@@ -1296,6 +1403,8 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         MinimapDensity::Comfortable,
         previous.revision,
         0,
+        1.0,
+        base_style(),
     );
     let index = model.estimated_minimap_line_index(
         &presentation,
@@ -1304,6 +1413,8 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         800.0,
         MinimapDensity::Comfortable,
         key.layout,
+        1.0,
+        base_style(),
     );
     let old_projection = index.projection.clone();
     let state = MinimapState::new();
@@ -1311,7 +1422,7 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         presentation_rows: presentation.clone(),
         index,
     });
-    state.apply_document_patch(&next, patch, &presentation);
+    state.apply_document_patch(&next, patch, &presentation, 1.0, base_style());
     let cached = state.line_index.lock().unwrap();
     let patched = cached.as_ref().unwrap();
     assert_eq!(patched.index.layout.document_revision, next.revision);
@@ -1338,6 +1449,8 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         MinimapDensity::Comfortable,
         previous.revision,
         1,
+        1.0,
+        base_style(),
     );
     let folded_index = model.estimated_minimap_line_index(
         &folded_presentation,
@@ -1346,18 +1459,82 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         800.0,
         MinimapDensity::Comfortable,
         folded_key.layout,
+        1.0,
+        base_style(),
     );
     *state.line_index.lock().unwrap() = Some(CachedMinimapLineIndex {
         presentation_rows: folded_presentation.clone(),
         index: folded_index,
     });
-    state.apply_document_patch(&next, patch, &folded_presentation);
+    state.apply_document_patch(&next, patch, &folded_presentation, 1.0, base_style());
     let cached = state.line_index.lock().unwrap();
     let patched = cached
         .as_ref()
         .expect("unchanged folds should support a local minimap patch");
     assert_eq!(patched.index.layout.document_revision, next.revision);
     assert_eq!(patched.index.projection.rows, folded_presentation.len());
+}
+
+#[test]
+fn checkbox_paint_patch_keeps_exact_minimap_projection() {
+    use crate::document::{ByteRange, DocumentBuffer, EditTransaction, TextEdit, TextSnapshot};
+    use crate::preview::{
+        DerivedUpdate,
+        loading::{derive_preview, derive_preview_incremental},
+    };
+
+    let mut buffer = DocumentBuffer::from_utf8(b"- [ ] task\n".to_vec()).unwrap();
+    let before = buffer.snapshot();
+    let previous = derive_preview(std::path::PathBuf::from("checkbox.org"), before.clone());
+    let presentation = Arc::new(vec![0]);
+    let model = previous.display_map.as_deref().unwrap();
+    let key = MinimapLineIndexKey::new(
+        &presentation,
+        800.0,
+        MinimapDensity::Comfortable,
+        previous.revision,
+        0,
+        1.0,
+        base_style(),
+    );
+    let index = model.estimated_minimap_line_index(
+        &presentation,
+        key.width,
+        1,
+        800.0,
+        MinimapDensity::Comfortable,
+        key.layout,
+        1.0,
+        base_style(),
+    );
+    let exact_projection = index.projection.clone();
+    let state = MinimapState::new();
+    *state.line_index.lock().unwrap() = Some(CachedMinimapLineIndex {
+        presentation_rows: presentation.clone(),
+        index,
+    });
+    let delta = buffer
+        .commit(EditTransaction::new(
+            before.revision(),
+            vec![TextEdit::new(ByteRange::new(3, 4), "X")],
+        ))
+        .unwrap();
+    let next = derive_preview_incremental(
+        std::path::PathBuf::from("checkbox.org"),
+        buffer.snapshot(),
+        Some(&previous),
+        &[delta],
+    );
+    let DerivedUpdate::Incremental { patch, .. } = &next.update else {
+        panic!("checkbox edit should stay incremental");
+    };
+
+    state.apply_document_patch(&next, patch, &presentation, 1.0, base_style());
+
+    let cached = state.line_index.lock().unwrap();
+    let patched = cached.as_ref().unwrap();
+    assert_eq!(patched.index.layout.document_revision, next.revision);
+    assert!(Arc::ptr_eq(&exact_projection, &patched.index.projection));
 }
 #[cfg(test)]
 fn composite_rgb(foreground: u32, background: u32, alpha: f32) -> u32 {

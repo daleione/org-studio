@@ -928,6 +928,47 @@ mod tests {
     }
 
     #[test]
+    fn checkbox_state_edit_is_paint_only() {
+        let mut buffer = DocumentBuffer::from_utf8(b"- [ ] task\n".to_vec()).unwrap();
+        let before = buffer.snapshot();
+        let previous = derive_preview(PathBuf::from("checkbox.org"), before.clone());
+        let delta = buffer
+            .commit(EditTransaction::new(
+                before.revision(),
+                vec![TextEdit::new(ByteRange::new(3, 4), "X")],
+            ))
+            .unwrap();
+        let next = derive_preview_incremental(
+            PathBuf::from("checkbox.org"),
+            buffer.snapshot(),
+            Some(&previous),
+            &[delta],
+        );
+        let DerivedUpdate::Incremental { patch, .. } = &next.update else {
+            panic!("checkbox state should use an incremental projection");
+        };
+
+        assert!(
+            patch
+                .invalidation
+                .contains(super::super::projection::InvalidationFlags::PAINT)
+        );
+        assert!(
+            !patch
+                .invalidation
+                .contains(super::super::projection::InvalidationFlags::GEOMETRY)
+        );
+        assert_eq!(
+            next.projection.revisions.geometry,
+            previous.projection.revisions.geometry
+        );
+        assert_ne!(
+            next.projection.revisions.paint,
+            previous.projection.revisions.paint
+        );
+    }
+
+    #[test]
     fn incremental_projection_matches_full_build_and_reuses_untouched_chunks() {
         let source = (0..400)
             .map(|index| format!("* Heading {index}\nbody {index}\n"))

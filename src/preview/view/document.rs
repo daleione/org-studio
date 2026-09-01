@@ -1,16 +1,17 @@
 use super::{
     Arc, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FontWeight, Instant,
     PreviewRow, PreviewSnapshot, ReadingInteraction, ReadingRowContext, ReadingRowHost,
-    WorkspaceWindow, current_theme, div, img, minimap, px, render_code_row, render_markdown_block,
+    WorkspaceWindow, div, img, minimap, px, render_code_row, render_markdown_block,
     render_table_row, resolve_image_path, rgb, styled_inline_runs,
 };
 use crate::preview::BlockId;
 use crate::preview::{
     CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
     display_map::{DisplayRuns, PreviewLineKind},
-    layout::{READING_FRAME_MAX_WIDTH, reading_content_width},
+    layout::reading_content_width,
     org_line::{CheckboxState, parse_heading},
     projection::{ReadingCodeRow, ReadingListMarker, VisualRowKind},
+    style::CodeBlockVariant,
 };
 use gpui::{list, prelude::*};
 
@@ -22,6 +23,7 @@ pub(in crate::preview) struct ReadingRenderOptions {
     pub(in crate::preview) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
     pub(in crate::preview) generation: u64,
     pub(in crate::preview) opened_at: Instant,
+    pub(in crate::preview) style: super::PreviewStyle,
 }
 
 pub(in crate::preview) fn render_reading_document(
@@ -51,13 +53,13 @@ pub(in crate::preview) fn render_reading_document(
         minimap_thumb_visibility,
         generation,
         opened_at,
+        style,
     } = options;
-    let theme = current_theme();
+    let palette = style.palette;
     let reading_display_map = document.display_map.clone();
     let minimap_list_state = list_state.clone();
     let minimap_entity = panel_entity.clone();
     let minimap_resize_entity = workspace_entity.clone();
-    let rendered_item_count = list_state.item_count();
     let allow_minimap_refinement = fold_animation.is_none();
     let interaction = ReadingInteraction {
         panel: panel_entity.clone(),
@@ -73,7 +75,8 @@ pub(in crate::preview) fn render_reading_document(
         .size_full()
         .flex()
         .relative()
-        .bg(rgb(theme.background))
+        .bg(rgb(palette.background))
+        .font_family(style.typography.body_family)
         .child(
             div()
                 .flex_1()
@@ -91,7 +94,7 @@ pub(in crate::preview) fn render_reading_document(
                     list(list_state, move |index, _window, _cx| {
                         let available_width = {
                             let minimap = if minimap_visible { minimap_width } else { 0.0 };
-                            reading_content_width(pane_width, minimap)
+                            reading_content_width(pane_width, minimap, style)
                         };
                         if let Some(animation) = fold_animation.as_ref()
                             && let Some(shell) = animation.segment_at(index)
@@ -103,6 +106,7 @@ pub(in crate::preview) fn render_reading_document(
                                 shell.clone(),
                                 available_width,
                                 zoom,
+                                style,
                                 table_scroll_handles.clone(),
                             )
                             .into_any_element();
@@ -136,13 +140,14 @@ pub(in crate::preview) fn render_reading_document(
                             ReadingRowHost {
                                 available_width,
                                 zoom,
+                                style,
                                 table_scroll_handles: &table_scroll_handles,
                                 interaction: Some(&interaction),
+                                extra_bottom_padding: row_index + 1 == visible_rows.len()
+                                    && actual_index + 1 < document.projection.rows.len(),
                             },
                         )
                         .id(("reading-row", actual_index))
-                        .when(index == 0, |element| element.pt_1())
-                        .when(index + 1 == rendered_item_count, |element| element.pb_2())
                         .when(is_heading, |element| {
                             element.cursor_pointer().on_click(move |_, window, cx| {
                                 let viewport_height = f32::from(window.viewport_size().height);
@@ -151,6 +156,7 @@ pub(in crate::preview) fn render_reading_document(
                                         row.block_id,
                                         viewport_height,
                                         available_width,
+                                        style,
                                         Some(window),
                                         cx,
                                     );
@@ -179,6 +185,8 @@ pub(in crate::preview) fn render_reading_document(
                     minimap_thumb_visibility,
                     generation,
                     geometry_revision,
+                    zoom,
+                    style,
                     allow_minimap_refinement,
                     opened_at,
                     move |_source_target, offset, window, cx| {
@@ -202,11 +210,12 @@ pub(in crate::preview) fn render_reading_document(
                     .bottom_0()
                     .right(px(width))
                     .w(px(1.0))
-                    .bg(rgb(theme.heading[0])),
+                    .bg(rgb(palette.accent)),
             )
         })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_fold_shell(
     document: Arc<PreviewSnapshot>,
     direction: FoldDirection,
@@ -214,6 +223,7 @@ fn render_fold_shell(
     shell: FoldSegment,
     available_width: f32,
     zoom: f32,
+    style: super::PreviewStyle,
     table_scroll_handles: Arc<std::collections::HashMap<BlockId, gpui::ScrollHandle>>,
 ) -> gpui::Div {
     let distance = shell.distance;
@@ -223,7 +233,14 @@ fn render_fold_shell(
         .iter()
         .copied()
         .map(|row| {
-            render_fold_shell_row(&document, row, available_width, zoom, &table_scroll_handles)
+            render_fold_shell_row(
+                &document,
+                row,
+                available_width,
+                zoom,
+                style,
+                &table_scroll_handles,
+            )
         })
         .collect::<Vec<_>>();
     div()
@@ -253,6 +270,7 @@ fn render_fold_shell_row(
     actual_index: usize,
     available_width: f32,
     zoom: f32,
+    style: super::PreviewStyle,
     table_scroll_handles: &std::collections::HashMap<BlockId, gpui::ScrollHandle>,
 ) -> gpui::Div {
     let row = document
@@ -267,8 +285,10 @@ fn render_fold_shell_row(
         ReadingRowHost {
             available_width,
             zoom,
+            style,
             table_scroll_handles,
             interaction: None,
+            extra_bottom_padding: false,
         },
     )
 }
@@ -283,10 +303,21 @@ fn render_reading_row(
     let ReadingRowHost {
         available_width,
         zoom,
+        style,
         table_scroll_handles,
         interaction,
+        extra_bottom_padding,
     } = host;
-    let minimum_height = match &document
+    let display_map = document
+        .display_map
+        .as_ref()
+        .expect("reading display map must exist after loading");
+    let mut row_layout = display_map.layout(actual_index, style);
+    if extra_bottom_padding {
+        row_layout.margin_bottom += style.spacing.content_padding_bottom;
+    }
+    let row_layout = row_layout.scaled(zoom);
+    let content_minimum_height = match &document
         .projection
         .rows
         .get(actual_index)
@@ -295,8 +326,9 @@ fn render_reading_row(
     {
         VisualRowKind::Table(table) if table.is_separator() => 2.0,
         VisualRowKind::Code(ReadingCodeRow::End) => 0.0,
-        _ => 24.0,
+        _ => row_layout.min_height,
     };
+    let minimum_height = content_minimum_height + row_layout.margin_top + row_layout.margin_bottom;
     let table_scroll = match &document
         .projection
         .rows
@@ -310,6 +342,7 @@ fn render_reading_row(
     let context = ReadingRowContext {
         available_width,
         zoom,
+        style,
         table_scroll,
     };
     div()
@@ -321,12 +354,14 @@ fn render_reading_row(
         .child(
             div()
                 .w_full()
-                .max_w(px(READING_FRAME_MAX_WIDTH))
+                .max_w(px(available_width + style.spacing.horizontal_padding))
                 .min_w_0()
                 .min_h(px(minimum_height))
                 .flex()
                 .items_center()
-                .px_6()
+                .px(px(style.spacing.horizontal_padding * 0.5))
+                .pt(px(row_layout.margin_top))
+                .pb(px(row_layout.margin_bottom))
                 .child(
                     div()
                         .w_full()
@@ -363,18 +398,19 @@ fn render_block(
     context: ReadingRowContext<'_>,
     interaction: Option<&ReadingInteraction>,
 ) -> gpui::Div {
-    let theme = current_theme();
+    let style = context.style;
+    let palette = style.palette;
     let display_map = document
         .display_map
         .as_ref()
         .expect("reading display map must exist after loading");
     let display_runs = display_map.runs(display_row);
-    let row_layout = display_map.layout(display_row).scaled(context.zoom);
+    let row_layout = display_map.layout(display_row, style).scaled(context.zoom);
     if row.blank {
         return div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)));
     }
     let text = display_runs.text.clone();
-    let inline = || reading_inline(document, display_row, &display_runs, interaction);
+    let inline = || reading_inline(document, display_row, &display_runs, style, interaction);
     if matches!(display_map.row_kind(display_row), PreviewLineKind::Caption) {
         return div()
             .w_full()
@@ -383,7 +419,7 @@ fn render_block(
             .text_center()
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.meta))
+            .text_color(rgb(palette.meta))
             .child(inline());
     }
 
@@ -406,12 +442,16 @@ fn render_block(
                 } else {
                     FontWeight::MEDIUM
                 })
-                .text_color(rgb(theme.heading[heading_index.min(3)]))
-                .children(parts.todo.map(|todo| reading_chip(todo, theme.keyword)))
+                .text_color(rgb(palette.heading[heading_index.min(3)]))
                 .children(
                     parts
-                        .priority
-                        .map(|priority| reading_chip(format!("P{priority}"), theme.attribute)),
+                        .todo
+                        .map(|todo| reading_chip(todo, palette.keyword, style)),
+                )
+                .children(
+                    parts.priority.map(|priority| {
+                        reading_chip(format!("P{priority}"), palette.attribute, style)
+                    }),
                 )
                 .child(
                     div()
@@ -424,24 +464,28 @@ fn render_block(
                             element.child(
                                 div()
                                     .flex_none()
-                                    .text_color(rgb(theme.keyword))
+                                    .text_color(rgb(palette.keyword))
                                     .child("..."),
                             )
                         }),
                 )
-                .children(parts.cookie.map(|cookie| reading_chip(cookie, theme.meta)))
+                .children(
+                    parts
+                        .cookie
+                        .map(|cookie| reading_chip(cookie, palette.meta, style)),
+                )
                 .children(
                     parts
                         .tags
                         .into_iter()
-                        .map(|tag| reading_chip(tag, theme.link)),
+                        .map(|tag| reading_chip(tag, palette.link, style)),
                 )
         }
         BlockKind::Paragraph => {
             let paragraph = div()
                 .text_size(px(row_layout.font_size))
                 .line_height(px(row_layout.line_height))
-                .text_color(rgb(theme.foreground))
+                .text_color(rgb(palette.foreground))
                 .child(inline());
             #[allow(clippy::if_same_then_else)]
             if row.continuation {
@@ -471,7 +515,12 @@ fn render_block(
                     .flex()
                     .items_start()
                     .justify_start()
-                    .child(img(source).w(px(width)).h(px(height)))
+                    .child(
+                        img(source)
+                            .w(px(width))
+                            .h(px(height))
+                            .rounded(px(style.spacing.radius)),
+                    )
                     .when_some(action.zip(interaction), |element, (action, interaction)| {
                         element.cursor_pointer().on_click(move |_, window, cx| {
                             interaction.workspace.update(cx, |workspace, cx| {
@@ -490,7 +539,7 @@ fn render_block(
             .font_family("Menlo")
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.date))
+            .text_color(rgb(palette.date))
             .child(text),
         BlockKind::ListItem => render_list_item(
             document,
@@ -498,22 +547,30 @@ fn render_block(
             inline(),
             row_layout.font_size,
             row_layout.line_height,
+            style,
             interaction,
         ),
         BlockKind::FixedWidth => div()
             .font_family("Menlo")
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.code_foreground))
+            .text_color(rgb(palette.code_foreground))
             .child(text),
         BlockKind::FootnoteDefinition => div()
             .font_family("Menlo")
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.link))
+            .text_color(rgb(palette.link))
             .child(text),
         BlockKind::TableRow => display_map.table_projection(display_row).map_or_else(
-            || reading_fallback(text.clone(), row_layout.font_size, row_layout.line_height),
+            || {
+                reading_fallback(
+                    text.clone(),
+                    row_layout.font_size,
+                    row_layout.line_height,
+                    style,
+                )
+            },
             |projection| {
                 render_table_row(
                     &text,
@@ -523,6 +580,7 @@ fn render_block(
                     context.zoom,
                     display_row,
                     context.table_scroll,
+                    style,
                 )
             },
         ),
@@ -534,6 +592,8 @@ fn render_block(
                     crate::preview::code_action(document, display_row),
                     interaction,
                     display_row,
+                    false,
+                    style,
                 ))
             })
             .child(render_code_row(
@@ -541,6 +601,12 @@ fn render_block(
                 display_runs.code_spans,
                 row_layout,
                 CodeRowRole::Body,
+                document
+                    .projection
+                    .rows
+                    .get(display_row + 1)
+                    .is_none_or(|next| next.block_id != row.block_id),
+                style,
             )),
         BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
             .min_h(px(row_layout.min_height))
@@ -548,36 +614,41 @@ fn render_block(
             .pr(px(row_layout.padding_right))
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
-            .bg(rgb(theme.code_background))
-            .font_family("Menlo")
+            .bg(rgb(palette.code_background))
+            .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.code_foreground))
+            .text_color(rgb(palette.code_foreground))
             .child(text),
         BlockKind::QuoteBlock => div()
             .pl(px(row_layout.padding_left))
             .pr(px(row_layout.padding_right))
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
-            .border_l_2()
-            .border_color(rgb(theme.heading[1]))
-            .text_color(rgb(theme.quote))
+            .when(style.spacing.quote_line_width >= 4.0, |element| {
+                element.border_l_4()
+            })
+            .when(style.spacing.quote_line_width < 4.0, |element| {
+                element.border_l_2()
+            })
+            .border_color(rgb(palette.quote_border))
+            .text_color(rgb(palette.quote))
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .child(text),
         BlockKind::VerseBlock => div()
             .pl(px(row_layout.padding_left))
-            .font_family("Menlo")
+            .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.quote))
+            .text_color(rgb(palette.quote))
             .child(text),
         BlockKind::CenterBlock => div()
             .w_full()
             .text_center()
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.foreground))
+            .text_color(rgb(palette.foreground))
             .child(text),
         BlockKind::SpecialBlock { name } => div()
             .min_h(px(row_layout.min_height))
@@ -585,9 +656,9 @@ fn render_block(
             .pr(px(row_layout.padding_right))
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
-            .bg(rgb(theme.code_background))
-            .text_color(rgb(theme.attribute))
-            .font_family("Menlo")
+            .bg(rgb(palette.code_background))
+            .text_color(rgb(palette.attribute))
+            .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .child(format!("{name}: {text}")),
@@ -596,38 +667,39 @@ fn render_block(
             .pr(px(row_layout.padding_right))
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
-            .bg(rgb(theme.background_alt))
-            .font_family("Menlo")
+            .bg(rgb(palette.surface))
+            .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.meta))
+            .text_color(rgb(palette.meta))
             .child(text),
         BlockKind::Keyword => div()
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
-            .font_family("Menlo")
+            .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.meta))
+            .text_color(rgb(palette.meta))
             .child(text),
         BlockKind::Comment | BlockKind::CommentBlock => div(),
         BlockKind::HorizontalRule => div()
-            .mt(px(row_layout.margin_top))
-            .mb(px(row_layout.margin_bottom))
             .h(px(row_layout.fixed_height.unwrap_or(1.0)))
             .w_full()
-            .bg(rgb(theme.border)),
+            .bg(rgb(palette.border)),
     }
 }
 
-fn reading_chip(text: impl Into<gpui::SharedString>, color: u32) -> gpui::Div {
-    let theme = current_theme();
+fn reading_chip(
+    text: impl Into<gpui::SharedString>,
+    color: u32,
+    style: super::PreviewStyle,
+) -> gpui::Div {
     div()
         .flex_none()
         .px_1()
         .rounded_sm()
-        .bg(rgb(theme.background_alt))
-        .font_family("Menlo")
+        .bg(rgb(style.palette.surface))
+        .font_family(style.typography.code_family)
         .text_size(px(10.0))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
@@ -640,9 +712,10 @@ pub(super) fn render_list_item(
     content: gpui::AnyElement,
     font_size: f32,
     line_height: f32,
+    style: super::PreviewStyle,
     interaction: Option<&ReadingInteraction>,
 ) -> gpui::Div {
-    let theme = current_theme();
+    let palette = style.palette;
     let marker = match &document
         .projection
         .rows
@@ -652,7 +725,7 @@ pub(super) fn render_list_item(
     {
         VisualRowKind::List(marker) => marker,
         _ => {
-            return reading_fallback(content, font_size, line_height);
+            return reading_fallback(content, font_size, line_height, style);
         }
     };
     div()
@@ -663,11 +736,12 @@ pub(super) fn render_list_item(
         .gap_2()
         .text_size(px(font_size))
         .line_height(px(line_height))
-        .text_color(rgb(theme.foreground))
+        .text_color(rgb(palette.foreground))
         .child(reading_list_marker(
             document,
             display_row,
             marker,
+            style,
             interaction,
         ))
         .child(div().flex_1().min_w_0().child(content))
@@ -677,9 +751,10 @@ fn reading_list_marker(
     document: &PreviewSnapshot,
     display_row: usize,
     marker: &ReadingListMarker,
+    style: super::PreviewStyle,
     interaction: Option<&ReadingInteraction>,
 ) -> gpui::Stateful<gpui::Div> {
-    let theme = current_theme();
+    let palette = style.palette;
     if let Some(state) = &marker.checkbox {
         let action = document
             .projection
@@ -697,31 +772,31 @@ fn reading_list_marker(
         });
         let (label, foreground, background) = match action_state {
             Some(crate::preview::PreviewActionVisualState::Pending) => {
-                ("…", theme.foreground_dim, theme.background_alt)
+                ("…", palette.foreground_dim, palette.surface)
             }
             Some(crate::preview::PreviewActionVisualState::Failed) => {
-                ("!", theme.background, theme.keyword)
+                ("!", palette.accent_contrast, palette.keyword)
             }
             None => match state {
-                CheckboxState::Empty => ("", theme.foreground_dim, theme.background),
-                CheckboxState::Partial => ("−", theme.background, theme.attribute),
-                CheckboxState::Checked => ("✓", theme.background, theme.heading[1]),
+                CheckboxState::Empty => ("", palette.foreground_dim, palette.background),
+                CheckboxState::Partial => ("−", palette.accent_contrast, palette.attribute),
+                CheckboxState::Checked => ("✓", palette.accent_contrast, palette.accent),
             },
         };
         let interaction = interaction.cloned();
         return div()
             .id(("reading-checkbox", display_row))
             .mt(px(3.0))
-            .size(px(16.0))
+            .size(px(style.spacing.checkbox_size))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded_sm()
+            .rounded(px(style.spacing.radius.clamp(2.0, 3.0)))
             .border_1()
             .border_color(rgb(foreground))
             .bg(rgb(background))
-            .font_family("Menlo")
+            .font_family(style.typography.code_family)
             .text_size(px(11.0))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(foreground))
@@ -754,7 +829,7 @@ fn reading_list_marker(
         .when(ordered, |element| element.pr_1().text_right())
         .when(!ordered, |element| element.text_center())
         .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(theme.heading[2]))
+        .text_color(rgb(palette.accent_text))
         .child(label)
 }
 
@@ -771,8 +846,10 @@ pub(super) fn reading_code_label(
     action: Option<crate::preview::PreviewAction>,
     interaction: Option<&ReadingInteraction>,
     display_row: usize,
+    card_bottom: bool,
+    style: super::PreviewStyle,
 ) -> gpui::Stateful<gpui::Div> {
-    let theme = current_theme();
+    let palette = style.palette;
     let copy_feedback = action.as_ref().and_then(|action| {
         interaction.and_then(|interaction| {
             interaction
@@ -782,9 +859,9 @@ pub(super) fn reading_code_label(
         })
     });
     let (copy_label, copy_color) = match copy_feedback {
-        Some(crate::preview::CopyFeedbackState::Succeeded) => ("Copied ✓", theme.heading[1]),
-        Some(crate::preview::CopyFeedbackState::Failed) => ("Copy failed", theme.keyword),
-        None => ("Copy", theme.meta),
+        Some(crate::preview::CopyFeedbackState::Succeeded) => ("Copied ✓", palette.accent),
+        Some(crate::preview::CopyFeedbackState::Failed) => ("Copy failed", palette.keyword),
+        None => ("Copy", palette.meta),
     };
     let interaction = interaction.cloned();
     div()
@@ -794,12 +871,38 @@ pub(super) fn reading_code_label(
         .px_3()
         .flex()
         .items_center()
-        .border_l_2()
-        .border_color(rgb(theme.code_block_accent))
-        .bg(rgb(theme.code_boundary_background))
-        .font_family("Menlo")
+        .when(
+            style.variants.code_block == CodeBlockVariant::AccentBar,
+            |element| {
+                element
+                    .border_l_2()
+                    .border_color(rgb(palette.code_block_accent))
+            },
+        )
+        .when(
+            style.variants.code_block == CodeBlockVariant::Card,
+            |element| {
+                element
+                    .border_1()
+                    .border_color(rgb(palette.border))
+                    .when(!card_bottom, |element| {
+                        element.border_b_0().rounded_t(px(style.spacing.radius))
+                    })
+                    .when(card_bottom, |element| {
+                        element.rounded(px(style.spacing.radius))
+                    })
+            },
+        )
+        .bg(rgb(
+            if style.variants.code_block == CodeBlockVariant::Card {
+                palette.surface_elevated
+            } else {
+                palette.code_boundary_background
+            },
+        ))
+        .font_family(style.typography.code_family)
         .text_size(px(10.0))
-        .text_color(rgb(theme.meta))
+        .text_color(rgb(palette.meta))
         .justify_between()
         .child(language.unwrap_or("code").to_owned())
         .when_some(action.zip(interaction), |element, (action, interaction)| {
@@ -814,10 +917,10 @@ pub(super) fn reading_code_label(
                     .justify_center()
                     .cursor_pointer()
                     .text_color(rgb(copy_color))
-                    .hover(|element| element.bg(rgb(theme.background_alt)))
-                    .active(|element| element.bg(rgb(theme.code_block_accent)).opacity(0.62))
+                    .hover(|element| element.bg(rgb(palette.surface)))
+                    .active(|element| element.bg(rgb(palette.code_block_accent)).opacity(0.62))
                     .when(copy_feedback.is_some(), |element| {
-                        element.bg(rgb(theme.background_alt))
+                        element.bg(rgb(palette.surface))
                     })
                     .child(copy_label)
                     .on_click(move |_, window, cx| {
@@ -838,9 +941,10 @@ pub(super) fn reading_inline(
     document: &PreviewSnapshot,
     display_row: usize,
     runs: &DisplayRuns,
+    style: super::PreviewStyle,
     interaction: Option<&ReadingInteraction>,
 ) -> gpui::AnyElement {
-    let styled = styled_inline_runs(runs.text.clone(), runs.inline_spans.clone());
+    let styled = styled_inline_runs(runs.text.clone(), runs.inline_spans.clone(), style);
     let Some(interaction) = interaction.cloned() else {
         return styled.into_any_element();
     };
@@ -881,11 +985,12 @@ pub(super) fn reading_fallback(
     content: impl IntoElement,
     font_size: f32,
     line_height: f32,
+    style: super::PreviewStyle,
 ) -> gpui::Div {
     div()
         .text_size(px(font_size))
         .line_height(px(line_height))
-        .text_color(rgb(current_theme().foreground))
+        .text_color(rgb(style.palette.foreground))
         .child(content)
 }
 

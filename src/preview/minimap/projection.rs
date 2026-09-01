@@ -7,7 +7,10 @@ use std::{
 
 use crate::{
     document::Revision,
-    preview::layout::{LayoutKey, LayoutSnapshot, ResolvedRow},
+    preview::{
+        PreviewStyle,
+        layout::{LayoutKey, LayoutSnapshot, ResolvedRow},
+    },
 };
 use gpui::{ListOffset, px};
 
@@ -83,6 +86,8 @@ impl MinimapLineIndexKey {
         density: MinimapDensity,
         document_revision: Revision,
         geometry_revision: u64,
+        zoom: f32,
+        style: PreviewStyle,
     ) -> Self {
         Self {
             presentation_rows: Arc::as_ptr(presentation_rows) as usize,
@@ -91,7 +96,7 @@ impl MinimapLineIndexKey {
             layout: LayoutKey {
                 document_revision,
                 content_width_px: available_width.round().clamp(1.0, u16::MAX as f32) as u16,
-                text_metrics_revision: 0,
+                text_metrics_revision: style.layout_key() ^ u64::from(zoom.to_bits()),
                 fold_revision: geometry_revision,
             },
         }
@@ -105,6 +110,8 @@ impl MinimapLineIndexBuilder {
         presentation_rows: Arc<Vec<usize>>,
         available_width: f32,
         density: MinimapDensity,
+        zoom: f32,
+        style: PreviewStyle,
     ) -> MinimapLineIndexBuilder {
         let started_at = Instant::now();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -117,6 +124,8 @@ impl MinimapLineIndexBuilder {
             available_width,
             density,
             key.layout,
+            zoom,
+            style,
         );
         Self {
             key,
@@ -136,6 +145,7 @@ impl MinimapLineIndexBuilder {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn rebased(
         model: &PreviewDisplayMap,
         key: MinimapLineIndexKey,
@@ -143,6 +153,8 @@ impl MinimapLineIndexBuilder {
         available_width: f32,
         previous_rows: &[usize],
         previous_projection: &LayoutSnapshot,
+        zoom: f32,
+        style: PreviewStyle,
     ) -> Self {
         let started_at = Instant::now();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -170,15 +182,34 @@ impl MinimapLineIndexBuilder {
             let mut previous_cursor = common_prefix;
             let replacements = presentation_rows[common_prefix..next_end]
                 .iter()
-                .map(|row| {
+                .enumerate()
+                .map(|(offset, row)| {
+                    let presentation_index = common_prefix + offset;
                     while previous_cursor < previous_end && previous_rows[previous_cursor] < *row {
                         previous_cursor += 1;
                     }
-                    if previous_cursor < previous_end && previous_rows[previous_cursor] == *row {
-                        previous_projection.measure(previous_cursor)
+                    let measure = if previous_cursor < previous_end
+                        && previous_rows[previous_cursor] == *row
+                    {
+                        model.without_presentation_tail_padding(
+                            *row,
+                            previous_cursor,
+                            previous_rows.len(),
+                            zoom,
+                            style,
+                            previous_projection.measure(previous_cursor),
+                        )
                     } else {
-                        model.estimated_measure(*row, available_width)
-                    }
+                        model.estimated_measure(*row, available_width, zoom, style)
+                    };
+                    model.with_presentation_tail_padding(
+                        *row,
+                        presentation_index,
+                        presentation_rows.len(),
+                        zoom,
+                        style,
+                        measure,
+                    )
                 })
                 .collect();
             Arc::new(previous_projection.replacing_range(common_prefix..previous_end, replacements))
@@ -186,7 +217,18 @@ impl MinimapLineIndexBuilder {
             Arc::new(LayoutSnapshot::new(
                 presentation_rows
                     .iter()
-                    .map(|row| model.estimated_measure(*row, available_width))
+                    .enumerate()
+                    .map(|(index, row)| {
+                        let measure = model.estimated_measure(*row, available_width, zoom, style);
+                        model.with_presentation_tail_padding(
+                            *row,
+                            index,
+                            presentation_rows.len(),
+                            zoom,
+                            style,
+                            measure,
+                        )
+                    })
                     .collect(),
             ))
         };
@@ -360,6 +402,7 @@ impl MinimapLineIndex {
 }
 
 impl PreviewDisplayMap {
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn estimated_minimap_line_index(
         &self,
         presentation_rows: &[usize],
@@ -368,11 +411,21 @@ impl PreviewDisplayMap {
         available_width: f32,
         density: MinimapDensity,
         layout: LayoutKey,
+        zoom: f32,
+        style: PreviewStyle,
     ) -> MinimapLineIndex {
         let mut measures = Vec::with_capacity(presentation_rows.len());
 
-        for &row in presentation_rows {
-            measures.push(self.estimated_measure(row, available_width));
+        for (index, &row) in presentation_rows.iter().enumerate() {
+            let measure = self.estimated_measure(row, available_width, zoom, style);
+            measures.push(self.with_presentation_tail_padding(
+                row,
+                index,
+                presentation_rows.len(),
+                zoom,
+                style,
+                measure,
+            ));
         }
 
         let projection = Arc::new(LayoutSnapshot::new(measures));
@@ -386,6 +439,7 @@ impl PreviewDisplayMap {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn advance_minimap_line_index(
         &self,
         state: &super::MinimapState,
@@ -393,6 +447,8 @@ impl PreviewDisplayMap {
         available_width: f32,
         density: MinimapDensity,
         refinement: MinimapRefinement,
+        zoom: f32,
+        style: PreviewStyle,
         text_system: &gpui::WindowTextSystem,
     ) -> MinimapLineIndexProgress {
         let key = MinimapLineIndexKey::new(
@@ -401,6 +457,8 @@ impl PreviewDisplayMap {
             density,
             self.projection.revision,
             refinement.geometry_revision,
+            zoom,
+            style,
         );
         let cached = state
             .line_index
@@ -409,7 +467,7 @@ impl PreviewDisplayMap {
             .as_ref()
             .filter(|cached| {
                 Arc::ptr_eq(&cached.presentation_rows, presentation_rows)
-                    && cached.index.width == key.width
+                    && cached.index.layout == key.layout
                     && cached.index.density == density
             })
             .map(|cached| cached.index.clone());
@@ -429,7 +487,7 @@ impl PreviewDisplayMap {
             let reusable_build = build.as_ref().and_then(|builder| {
                 (builder.key.width == key.width
                     && builder.key.density == key.density
-                    && builder.key.layout.document_revision == key.layout.document_revision)
+                    && builder.key.layout == key.layout)
                     .then(|| {
                         (
                             builder.presentation_rows.clone(),
@@ -446,7 +504,7 @@ impl PreviewDisplayMap {
                     .filter(|cached| {
                         cached.index.width == key.width
                             && cached.index.density == key.density
-                            && cached.index.layout.document_revision == key.layout.document_revision
+                            && cached.index.layout == key.layout
                     })
                     .map(|cached| {
                         (
@@ -464,6 +522,8 @@ impl PreviewDisplayMap {
                         available_width,
                         &previous_rows,
                         &previous_projection,
+                        zoom,
+                        style,
                     )
                 } else {
                     MinimapLineIndexBuilder::new(
@@ -472,6 +532,8 @@ impl PreviewDisplayMap {
                         presentation_rows.clone(),
                         available_width,
                         density,
+                        zoom,
+                        style,
                     )
                 },
             );
@@ -514,11 +576,19 @@ impl PreviewDisplayMap {
                 break;
             };
             let row = builder.presentation_rows[projection_row];
-            let lines = self.display_lines(row, available_width, text_system);
+            let lines = self.display_lines(row, available_width, zoom, style, text_system);
             let count = lines.ranges.len().max(1);
+            let measure = ResolvedRow::new(count, lines.parent_height, true);
             builder.pending_updates.push((
                 projection_row,
-                ResolvedRow::new(count, lines.parent_height, true),
+                self.with_presentation_tail_padding(
+                    row,
+                    projection_row,
+                    builder.presentation_rows.len(),
+                    zoom,
+                    style,
+                    measure,
+                ),
             ));
             builder.mark_exact(projection_row);
             processed += 1;

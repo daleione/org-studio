@@ -102,19 +102,45 @@ impl WorkspaceWindow {
                 .ok()
                 .and_then(|value| value.parse().ok())
                 .filter(|frames| *frames > 0)
-                .map(|target_frames| ScrollBenchmark {
-                    target_frames,
-                    warmup_remaining: std::env::var("ORG_STUDIO_SCROLL_BENCH_WARMUP_FRAMES")
+                .map(|target_frames| {
+                    let style_switches = std::env::var("ORG_STUDIO_STYLE_BENCH_SWITCHES")
                         .ok()
                         .and_then(|value| value.parse().ok())
-                        .unwrap_or(0),
-                    sampling_started: false,
-                    scroll_pixels: std::env::var("ORG_STUDIO_SCROLL_BENCH_PIXELS")
-                        .ok()
-                        .and_then(|value| value.parse().ok())
-                        .unwrap_or(640.0),
-                    samples: Vec::with_capacity(target_frames),
-                    last_frame: Instant::now(),
+                        .unwrap_or(0);
+                    ScrollBenchmark {
+                        target_frames,
+                        warmup_remaining: std::env::var("ORG_STUDIO_SCROLL_BENCH_WARMUP_FRAMES")
+                            .ok()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(0),
+                        sampling_started: false,
+                        scroll_pixels: std::env::var("ORG_STUDIO_SCROLL_BENCH_PIXELS")
+                            .ok()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(640.0),
+                        samples: Vec::with_capacity(target_frames),
+                        last_frame: Instant::now(),
+                        style_switches_remaining: style_switches,
+                        // Leave one interval after the last switch so the final
+                        // frame measures the settled style instead of quitting
+                        // during the resize transaction.
+                        style_switch_interval: target_frames
+                            .checked_div(style_switches.saturating_add(1))
+                            .unwrap_or(target_frames)
+                            .max(1),
+                        style_switch_count: 0,
+                        resize_narrow_width: std::env::var("ORG_STUDIO_STYLE_BENCH_NARROW_WIDTH")
+                            .ok()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(760.0),
+                        resize_wide_width: std::env::var("ORG_STUDIO_STYLE_BENCH_WIDE_WIDTH")
+                            .ok()
+                            .and_then(|value| value.parse().ok())
+                            .unwrap_or(1400.0),
+                        // The style gate starts at its configured wide width;
+                        // the first switch must exercise the narrow layout.
+                        resize_to_wide: true,
+                    }
                 }),
             which_key_task: None,
             which_key_request: 0,
@@ -134,6 +160,7 @@ impl WorkspaceWindow {
             ),
             minimap_width: crate::settings::initial_minimap_width(preview_settings.minimap_width),
             minimap_resize_preview: None,
+            reading_style: preview_settings.reading_style,
             status: super::status_line::StatusLineHost::new(preview_settings.status_line),
         }
     }
@@ -256,7 +283,10 @@ impl WorkspaceWindow {
                     || current.path != document.path
                 {
                     let document = document.clone();
-                    panel.update(cx, |panel, cx| panel.replace_document(document, cx));
+                    let style = *super::preview_style(self.reading_style);
+                    panel.update(cx, |panel, cx| {
+                        panel.replace_document_with_style(document, style, cx)
+                    });
                 }
             } else {
                 let document = document.clone();
@@ -314,6 +344,7 @@ impl WorkspaceWindow {
             minimap_thumb_visibility: self.minimap_thumb_visibility,
             minimap_width: self.minimap_width,
             sidebar_width: self.file_manager.sidebar_width(),
+            reading_style: self.reading_style,
             status_line: self.status.settings(),
         }
         .save_async();
@@ -505,6 +536,8 @@ impl WorkspaceWindow {
             return content;
         };
         let layout = self.status_layout(&snapshot, editor_width, window);
+        let style_popover_left =
+            super::status_line::reading_style_popover_left(&snapshot, &layout, window);
         let status_popover = self.status.popover_for(snapshot.pane);
         div()
             .relative()
@@ -525,6 +558,8 @@ impl WorkspaceWindow {
                     self.status.settings(),
                     entity,
                     self.language,
+                    editor_width,
+                    style_popover_left,
                 ))
             })
     }
@@ -630,6 +665,8 @@ impl WorkspaceWindow {
             return div().w(px(render.width)).h_full().min_w_0().child(content);
         };
         let layout = self.status_layout(&snapshot, render.width, render.window);
+        let style_popover_left =
+            super::status_line::reading_style_popover_left(&snapshot, &layout, render.window);
         let status_popover = self.status.popover_for(snapshot.pane);
         div()
             .w(px(render.width))
@@ -655,6 +692,8 @@ impl WorkspaceWindow {
                     self.status.settings(),
                     entity,
                     self.language,
+                    render.width,
+                    style_popover_left,
                 ))
             })
     }
@@ -707,6 +746,7 @@ impl WorkspaceWindow {
                 minimap_thumb_visibility: self.minimap_thumb_visibility,
                 generation: self.generation,
                 opened_at: self.opened_at.unwrap_or_else(Instant::now),
+                style: *super::preview_style(self.reading_style),
             },
         )
     }
@@ -746,11 +786,16 @@ impl WorkspaceWindow {
         } else {
             0.0
         };
-        let available_width = super::layout::reading_content_width(pane_width, minimap_space);
+        let available_width = super::layout::reading_content_width(
+            pane_width,
+            minimap_space,
+            *super::preview_style(self.reading_style),
+        );
         panel.update(cx, |panel, cx| {
             panel.cycle_global_visibility_animated(
                 f32::from(viewport.height),
                 available_width,
+                *super::preview_style(self.reading_style),
                 window,
                 cx,
             )

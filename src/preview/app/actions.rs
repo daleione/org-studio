@@ -85,14 +85,7 @@ impl WorkspaceWindow {
         };
         session.update(cx, |session, cx| {
             let (range, source) = validate_target(session, target)?;
-            if source != expected {
-                return Err("Checkbox changed before the action completed");
-            }
-            if crate::org_syntax::command::checkbox_token(&source)
-                .is_none_or(|(local, _)| local.start != 0 || local.end != source.len())
-            {
-                return Err("Checkbox target is ambiguous");
-            }
+            validate_checkbox_source(&source, expected)?;
             let revision = session.revision();
             let snapshot = session.snapshot();
             let Some(edits) = crate::org_syntax::command::checkbox_transaction(&snapshot, range)
@@ -289,9 +282,19 @@ fn validate_target(
     Ok((mapped.range, source))
 }
 
+fn validate_checkbox_source(source: &str, expected: &str) -> Result<(), &'static str> {
+    if source != expected {
+        return Err("Checkbox changed before the action completed");
+    }
+    if !crate::org_syntax::command::is_checkbox_state_token(source) {
+        return Err("Checkbox target is ambiguous");
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::split_link_target;
+    use super::{split_link_target, validate_checkbox_source};
 
     #[test]
     fn link_target_preserves_cross_file_anchors() {
@@ -304,5 +307,20 @@ mod tests {
             ("notes.md", Some("section"))
         );
         assert_eq!(split_link_target("#section"), ("#section", None));
+    }
+
+    #[test]
+    fn exact_checkbox_tokens_are_valid_action_targets() {
+        for token in ["[ ]", "[-]", "[X]", "[x]"] {
+            assert_eq!(validate_checkbox_source(token, token), Ok(()));
+        }
+        assert_eq!(
+            validate_checkbox_source("literal [ ]", "literal [ ]"),
+            Err("Checkbox target is ambiguous")
+        );
+        assert_eq!(
+            validate_checkbox_source("[X]", "[ ]"),
+            Err("Checkbox changed before the action completed")
+        );
     }
 }

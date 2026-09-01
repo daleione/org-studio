@@ -121,7 +121,7 @@ fn markdown_closing_fence_is_zero_height_in_reading() {
             )
         })
         .expect("fixture has a closing fence");
-    assert_eq!(closing.layout.fixed_height, Some(0.0));
+    assert_eq!(closing.style_kind, super::style::RowStyleKind::Hidden);
 }
 
 #[test]
@@ -220,6 +220,22 @@ fn eager_layout_is_limited_to_small_documents() {
     assert!(!should_eagerly_measure_rows(MAX_EAGER_LAYOUT_ROWS + 1));
 }
 
+#[test]
+fn folded_tail_keeps_reading_bottom_padding_in_minimap_geometry() {
+    let document =
+        loaded_document("folded-tail.org", "* Heading\nbody\n* Hidden tail\nlast\n").into_preview();
+    let display_map = document.display_map.as_ref().unwrap();
+    let style = *super::preview_style(super::PreviewStyleId::WarmClay);
+    let measure = display_map.estimated_measure(0, 760.0, 1.0, style);
+    let padded = display_map.with_presentation_tail_padding(0, 0, 1, 1.0, style, measure);
+
+    assert_eq!(
+        padded.pixels - measure.pixels,
+        style.spacing.content_padding_bottom
+    );
+    assert_eq!(padded.display_lines, measure.display_lines);
+}
+
 fn loaded_document(path: &str, source: &str) -> super::LoadedDocument {
     let path = std::path::PathBuf::from(path);
     let session =
@@ -293,6 +309,68 @@ fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::Te
         let ready = workspace.state.ready().unwrap();
         assert_eq!(ready.readers.left.as_ref().unwrap().read(cx).zoom(), 1.25);
         assert_eq!(ready.readers.right.as_ref().unwrap().read(cx).zoom(), 0.9);
+    });
+}
+
+#[gpui::test]
+fn reading_style_switch_reuses_projection_and_invalidates_geometry_once(
+    cx: &mut gpui::TestAppContext,
+) {
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("style-switch.org", "* Heading\nbody\n")),
+            cx,
+        ));
+        let panel = workspace
+            .state
+            .ready()
+            .unwrap()
+            .readers
+            .right
+            .as_ref()
+            .unwrap()
+            .clone();
+        let original = panel.read(cx).document().clone();
+        let initial = panel.read(cx).render_state().geometry_revision;
+        let base = *super::preview_style(super::PreviewStyleId::Base);
+        let warm = *super::preview_style(super::PreviewStyleId::WarmClay);
+
+        panel.update(cx, |panel, cx| panel.change_style(base, base, cx));
+        assert_eq!(panel.read(cx).render_state().geometry_revision, initial);
+
+        let mut paint_only = base;
+        paint_only.id = super::PreviewStyleId::WarmClay;
+        paint_only.palette.background ^= 0x00010101;
+        assert_eq!(base.layout_key(), paint_only.layout_key());
+        assert_ne!(base.paint_key(), paint_only.paint_key());
+        panel.update(cx, |panel, cx| panel.change_style(base, paint_only, cx));
+        let paint_state = panel.read(cx).render_state();
+        assert_eq!(paint_state.geometry_revision, initial);
+        assert_eq!(
+            paint_state
+                .minimap_state
+                .raster_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+            1,
+        );
+
+        panel.update(cx, |panel, cx| panel.change_style(paint_only, warm, cx));
+        let state = panel.read(cx).render_state();
+        assert_eq!(state.geometry_revision, initial.wrapping_add(1));
+        assert_eq!(
+            state
+                .minimap_state
+                .raster_epoch
+                .load(std::sync::atomic::Ordering::Acquire),
+            2,
+        );
+        assert!(std::sync::Arc::ptr_eq(&original, &state.document));
+        assert!(std::sync::Arc::ptr_eq(
+            &original.projection,
+            &state.document.projection,
+        ));
     });
 }
 
@@ -615,7 +693,11 @@ fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui:
         )
     });
     panel.update(cx, |panel, cx| {
-        panel.replace_document(std::sync::Arc::new(next), cx);
+        panel.replace_document_with_style(
+            std::sync::Arc::new(next),
+            *super::preview_style(super::PreviewStyleId::Base),
+            cx,
+        );
         assert!(panel.list_state().is_scrollbar_dragging());
         assert_eq!(panel.fold_markers().len(), 1);
         assert!(panel.fold_markers().contains(&folded));
@@ -1034,7 +1116,14 @@ fn toggle_panel_fold_animated(
     cx: &mut gpui::App,
 ) {
     app.preview_panel().unwrap().update(cx, |panel, cx| {
-        panel.toggle_fold_animated(block_id, viewport_height, available_width, window, cx);
+        panel.toggle_fold_animated(
+            block_id,
+            viewport_height,
+            available_width,
+            *super::preview_style(super::PreviewStyleId::Base),
+            window,
+            cx,
+        );
     });
 }
 
@@ -1228,7 +1317,7 @@ fn hiding_reading_preserves_its_view_state_but_rejects_a_new_hidden_projection(
 }
 
 #[gpui::test]
-fn lagging_reading_without_an_editor_keeps_one_coherent_preview_status(
+fn lagging_reading_keeps_preview_status_even_when_the_pane_retains_an_editor(
     cx: &mut gpui::TestAppContext,
 ) {
     let path = std::env::temp_dir().join(format!(
@@ -1242,6 +1331,9 @@ fn lagging_reading_without_an_editor_keeps_one_coherent_preview_status(
     let session = workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(0, Ok(loaded), cx));
         workspace.activate_pane(crate::app::PaneSide::Right, cx);
+        workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+        workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+        assert!(workspace.state.ready().unwrap().editors.right.is_some());
         workspace.document_session().unwrap().clone()
     });
     session.update(cx, |session, cx| {
@@ -1268,6 +1360,7 @@ fn lagging_reading_without_an_editor_keeps_one_coherent_preview_status(
             .document_status_snapshot(crate::app::PaneSide::Right, cx)
             .unwrap();
         assert!(!status.uses_editor_viewport());
+        assert_eq!(status.transient_text(), Some("Modified"));
     });
 }
 
@@ -2624,11 +2717,15 @@ fn markdown_parent_and_minimap_share_identical_display_runs() {
     let document = super::load_document(path.clone()).unwrap().into_preview();
     let _ = std::fs::remove_file(path);
     let display_map = document.display_map.as_ref().unwrap();
-    let heading_layout = display_map.layout(0);
-    assert_eq!(heading_layout.font_size, 22.0);
-    assert_eq!(heading_layout.line_height, 24.0);
-    let blank_layout = display_map.layout(1);
-    assert_eq!(blank_layout.fixed_height, Some(24.0));
+    let style = *super::preview_style(super::PreviewStyleId::Base);
+    let heading_layout = display_map.layout(0, style);
+    assert_eq!(heading_layout.font_size, style.typography.heading_sizes[0]);
+    assert_eq!(
+        heading_layout.line_height,
+        style.typography.heading_line_heights[0]
+    );
+    let blank_layout = display_map.layout(1, style);
+    assert_eq!(blank_layout.fixed_height, Some(style.spacing.block_gap));
 
     let heading =
         super::parse_document_inline(super::DocumentFormat::Markdown, "**标题** and *italic*");
@@ -2648,10 +2745,15 @@ fn markdown_parent_and_minimap_share_identical_display_runs() {
         })
         .expect("code row");
     assert!(!display_map.runs(code_row).code_spans.is_empty());
-    let code_layout = display_map.layout(code_row);
+    let code_layout = display_map.layout(code_row, style);
     assert_eq!(code_layout.padding_left, 16.0);
     assert_eq!(code_layout.padding_right, 16.0);
-    assert_eq!(code_layout.min_height, 24.0);
+    assert_eq!(
+        code_layout.min_height,
+        style
+            .row_layout(super::style::RowStyleKind::Code)
+            .min_height
+    );
 }
 
 #[test]
@@ -2668,11 +2770,15 @@ fn org_parent_and_minimap_share_identical_display_runs() {
     let document = super::load_document(path.clone()).unwrap().into_preview();
     let _ = std::fs::remove_file(path);
     let display_map = document.display_map.as_ref().unwrap();
-    let heading_layout = display_map.layout(0);
-    assert_eq!(heading_layout.font_size, 22.0);
-    assert_eq!(heading_layout.line_height, 24.0);
-    let blank_layout = display_map.layout(1);
-    assert_eq!(blank_layout.fixed_height, Some(24.0));
+    let style = *super::preview_style(super::PreviewStyleId::Base);
+    let heading_layout = display_map.layout(0, style);
+    assert_eq!(heading_layout.font_size, style.typography.heading_sizes[0]);
+    assert_eq!(
+        heading_layout.line_height,
+        style.typography.heading_line_heights[0]
+    );
+    let blank_layout = display_map.layout(1, style);
+    assert_eq!(blank_layout.fixed_height, Some(style.spacing.block_gap));
     let source = document
         .text
         .copy_range(document.projection.rows.get(0).unwrap().source.range)
@@ -2690,9 +2796,16 @@ fn org_parent_and_minimap_share_identical_display_runs() {
         .position(|row| document.text.copy_range(row.source.range).contains("let n"))
         .expect("code row");
     assert!(!display_map.runs(code_row).code_spans.is_empty());
-    let code_layout = display_map.layout(code_row);
+    let code_layout = display_map.layout(code_row, style);
     assert_eq!(code_layout.padding_left, 16.0);
     assert_eq!(code_layout.padding_right, 16.0);
-    assert_eq!(code_layout.line_height, 19.0);
-    assert_eq!(code_layout.min_height, 24.0);
+    let expected_code_layout = style.row_layout(super::style::RowStyleKind::Code);
+    assert_eq!(code_layout.font_size, expected_code_layout.font_size);
+    assert_eq!(code_layout.line_height, expected_code_layout.line_height);
+    assert_eq!(code_layout.min_height, expected_code_layout.min_height);
+    assert_eq!(code_layout.padding_top, expected_code_layout.padding_top);
+    assert_eq!(
+        code_layout.padding_bottom,
+        expected_code_layout.padding_bottom
+    );
 }

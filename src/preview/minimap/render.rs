@@ -9,12 +9,11 @@ use std::{
     time::Instant,
 };
 
+use crate::preview::PreviewStyle;
 use gpui::{
     BorderStyle, Bounds, Corners, CursorStyle, DispatchPhase, ListOffset, ListState, MouseButton,
     MouseMoveEvent, MouseUpEvent, canvas, div, fill, outline, point, prelude::*, px, rgba,
 };
-
-use crate::theme::current_theme;
 
 use super::projection::MinimapRefinement;
 use super::{
@@ -41,6 +40,8 @@ pub fn render(
     thumb_visibility: crate::settings::MinimapThumbVisibility,
     generation: u64,
     geometry_revision: u64,
+    zoom: f32,
+    style: PreviewStyle,
     allow_projection_refinement: bool,
     opened_at: Instant,
     on_seek: impl Fn(
@@ -51,7 +52,7 @@ pub fn render(
     ) + 'static,
     on_width_change: impl Fn(MinimapWidthChange, &mut gpui::Window, &mut gpui::App) + 'static,
 ) -> impl IntoElement {
-    let theme = current_theme();
+    let palette = style.palette;
     let density = MinimapDensity::for_width(minimap_width);
     let minimap_line_height = density.line_height();
     let minimap_edge_padding = density.edge_padding();
@@ -93,7 +94,7 @@ pub fn render(
             let width = f32::from(bounds.size.width).ceil().max(1.0) as usize;
             let scale_factor = window.scale_factor().max(1.0);
             let parent_width =
-                crate::preview::layout::reading_content_width(editor_width, minimap_width);
+                crate::preview::layout::reading_content_width(editor_width, minimap_width, style);
             let priority_row = shape_list
                 .logical_scroll_top()
                 .item_ix
@@ -120,6 +121,8 @@ pub fn render(
                         allow: allow_projection_refinement && !interaction_active,
                         geometry_revision,
                     },
+                    zoom,
+                    style,
                     window.text_system(),
                 )
             };
@@ -183,7 +186,13 @@ pub fn render(
                 0,
                 |index| {
                     shape_model
-                        .display_lines(shape_rows[index], parent_width, window.text_system())
+                        .display_lines(
+                            shape_rows[index],
+                            parent_width,
+                            zoom,
+                            style,
+                            window.text_system(),
+                        )
                         .ranges
                         .len()
                 },
@@ -204,7 +213,13 @@ pub fn render(
                     .iter()
                     .map(|&row| {
                         let mut lines =
-                            shape_model.display_lines(row, parent_width, window.text_system());
+                            shape_model.display_lines(
+                                row,
+                                parent_width,
+                                zoom,
+                                style,
+                                window.text_system(),
+                            );
                         let block_id = shape_model.source_row(row).block_id;
                         if shape_folded.contains(&block_id)
                             && matches!(shape_model.row_kind(row), PreviewLineKind::Heading(_))
@@ -268,6 +283,7 @@ pub fn render(
                     wrap_hasher.finish(),
                     scale_factor,
                     density,
+                    style,
                 );
                 visible_keys.push(key);
                 let (image, is_missing) = shape_state
@@ -302,6 +318,7 @@ pub fn render(
                 .expect("minimap raster tile cache poisoned")
                 .reserve(&request_keys);
             if should_spawn {
+                let raster_epoch = shape_state.raster_epoch.load(Ordering::Acquire);
                 let tile_model = shape_model.clone();
                 let tile_state = shape_state.clone();
                 let tile_folded = shape_folded.clone();
@@ -317,6 +334,7 @@ pub fn render(
                             &tile_folded,
                             scale_factor,
                             density,
+                            style,
                         );
                         if minimap_perf_enabled() {
                             let first = !tile_state
@@ -340,18 +358,18 @@ pub fn render(
                         }
                         completed.push((request.key, rasterized.image));
                     }
+                    if tile_state.raster_epoch.load(Ordering::Acquire) != raster_epoch {
+                        return;
+                    }
                     let completed_count = completed.len();
                     tile_state
                         .raster_tiles
                         .lock()
                         .expect("minimap raster tile cache poisoned")
                         .insert_batch(completed, &visible_keys);
-                    // Publish a complete visible minimap frame as one unit. The preview keeps its
-                    // loading cover in place until this release store, so users never see the
-                    // document appear first and the minimap fill one or two frames later.
-                    tile_state
-                        .initial_visible_batch_ready
-                        .store(true, Ordering::Release);
+                    // `insert_batch` publishes the complete visible replacement while the cache
+                    // lock is held. Shape keeps painting the retained previous frame until this
+                    // point, so no partial style frame is exposed.
                     if minimap_perf_enabled() && atomic_batch {
                         eprintln!(
                             "org_studio_minimap_tile_batch_ready tiles={} since_open_ms={:.3}",
@@ -365,6 +383,23 @@ pub fn render(
                     cx.refresh();
                 })
                 .detach();
+            }
+            if request_count == 0 && !tiles.is_empty() {
+                *shape_state
+                    .retained_style_frame
+                    .lock()
+                    .expect("retained minimap frame poisoned") = tiles.iter().cloned().collect();
+                shape_state
+                    .retain_style_frame
+                    .store(false, Ordering::Release);
+            } else if shape_state.retain_style_frame.load(Ordering::Acquire) {
+                tiles = shape_state
+                    .retained_style_frame
+                    .lock()
+                    .expect("retained minimap frame poisoned")
+                    .iter()
+                    .cloned()
+                    .collect();
             }
             tiles
         },
@@ -443,11 +478,11 @@ pub fn render(
             );
             window.paint_quad(fill(
                 thumb_bounds,
-                rgba((theme.foreground << 8) | fill_alpha),
+                rgba((palette.foreground << 8) | fill_alpha),
             ));
             window.paint_quad(outline(
                 thumb_bounds,
-                rgba((theme.foreground << 8) | border_alpha),
+                rgba((palette.foreground << 8) | border_alpha),
                 BorderStyle::default(),
             ));
 
@@ -591,8 +626,8 @@ pub fn render(
         .relative()
         .overflow_hidden()
         .border_l_1()
-        .border_color(gpui::rgb(theme.border))
-        .bg(gpui::rgb(theme.background_alt))
+        .border_color(gpui::rgb(palette.border))
+        .bg(gpui::rgb(palette.surface))
         .cursor_pointer()
         .on_hover(move |is_hovered, window, _| {
             if hover_state.swap(*is_hovered, Ordering::Relaxed) != *is_hovered {

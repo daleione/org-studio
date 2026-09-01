@@ -1,13 +1,16 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, Mutex, atomic::AtomicBool},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicU64, Ordering},
+    },
 };
 
 use super::{
     CachedMinimapLineIndex, MinimapDragSession, MinimapInteractionAnchor, MinimapLineIndexBuilder,
-    RasterTileCache,
+    RasterTileCache, RasterTilePaint,
 };
-use crate::preview::{PreviewSnapshot, projection::VisualPatch};
+use crate::preview::{PreviewSnapshot, PreviewStyle, projection::VisualPatch};
 
 pub(in crate::preview) struct MinimapState {
     pub(in crate::preview) line_index: Mutex<Option<CachedMinimapLineIndex>>,
@@ -16,7 +19,9 @@ pub(in crate::preview) struct MinimapState {
     pub(in crate::preview) drag: Arc<Mutex<Option<MinimapDragSession>>>,
     pub(in crate::preview) resize_drag: Arc<Mutex<Option<ResizeSession>>>,
     pub(in crate::preview) interaction_anchor: Arc<Mutex<Option<MinimapInteractionAnchor>>>,
-    pub(in crate::preview) initial_visible_batch_ready: AtomicBool,
+    pub(in crate::preview) retained_style_frame: Mutex<Vec<RasterTilePaint>>,
+    pub(in crate::preview) retain_style_frame: AtomicBool,
+    pub(in crate::preview) raster_epoch: AtomicU64,
     pub(in crate::preview) perf: PerfState,
 }
 
@@ -33,7 +38,9 @@ impl MinimapState {
             drag: Arc::new(Mutex::new(None)),
             resize_drag: Arc::new(Mutex::new(None)),
             interaction_anchor: Arc::new(Mutex::new(None)),
-            initial_visible_batch_ready: AtomicBool::new(false),
+            retained_style_frame: Mutex::new(Vec::new()),
+            retain_style_frame: AtomicBool::new(false),
+            raster_epoch: AtomicU64::new(0),
             perf: PerfState::new(),
         }
     }
@@ -58,11 +65,39 @@ impl MinimapState {
         was_dragging || was_resizing
     }
 
+    pub(in crate::preview) fn invalidate_style(&self, layout_changed: bool) {
+        self.raster_epoch.fetch_add(1, Ordering::AcqRel);
+        self.cancel_interaction();
+        if layout_changed {
+            *self.line_index.lock().expect("minimap line index poisoned") = None;
+            *self
+                .line_index_build
+                .lock()
+                .expect("minimap line-index builder poisoned") = None;
+        }
+        let mut tiles = self
+            .raster_tiles
+            .lock()
+            .expect("minimap raster tile cache poisoned");
+        let has_retained_frame = !self
+            .retained_style_frame
+            .lock()
+            .expect("retained minimap frame poisoned")
+            .is_empty();
+        self.retain_style_frame
+            .store(has_retained_frame, Ordering::Release);
+        tiles.entries.clear();
+        tiles.order.clear();
+        tiles.in_flight.clear();
+    }
+
     pub(in crate::preview) fn apply_document_patch(
         &self,
         document: &PreviewSnapshot,
         patch: &VisualPatch,
         presentation_rows: &Arc<Vec<usize>>,
+        zoom: f32,
+        style: PreviewStyle,
     ) {
         *self
             .line_index_build
@@ -78,6 +113,17 @@ impl MinimapState {
             *cached = None;
             return;
         }
+        if !patch
+            .invalidation
+            .contains(crate::preview::projection::InvalidationFlags::GEOMETRY)
+        {
+            // Paint-only edits (notably Checkbox state changes) retain every
+            // exact row measure. Replacing them with estimates makes the thumb
+            // move once for the estimate and again when shaping converges.
+            index.index.layout.document_revision = document.revision;
+            index.presentation_rows = presentation_rows.clone();
+            return;
+        }
         let Some(display_map) = document.display_map.as_deref() else {
             *cached = None;
             return;
@@ -88,9 +134,19 @@ impl MinimapState {
             .iter()
             .enumerate()
             .map(|(offset, row)| {
+                let presentation_index = start + offset;
+                let measure =
+                    display_map.estimated_measure(*row, index.index.width as f32, zoom, style);
                 (
-                    start + offset,
-                    display_map.estimated_measure(*row, index.index.width as f32),
+                    presentation_index,
+                    display_map.with_presentation_tail_padding(
+                        *row,
+                        presentation_index,
+                        presentation_rows.len(),
+                        zoom,
+                        style,
+                        measure,
+                    ),
                 )
             })
             .collect::<Vec<_>>();

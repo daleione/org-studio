@@ -14,13 +14,13 @@ use unicode_width::UnicodeWidthStr;
 use crate::{
     org_syntax::inline::InlineKind,
     preview::{
+        PreviewStyle,
         table::Alignment,
         visual_recipe::{
             PrimitiveWidth, VisualContent as RowContent, VisualPrimitive as RowPrimitive,
             resolve_visual_row,
         },
     },
-    theme::current_theme,
 };
 
 use super::{
@@ -72,9 +72,10 @@ impl RasterTileCache {
                     && candidate.scale_factor_x100 == key.scale_factor_x100
             })
             .or_else(|| {
-                // Folding changes row identity and fold signatures. Keep the image previously
-                // painted in the same tile slot until the replacement batch is ready, rather
-                // than exposing the empty canvas between the two frames.
+                // Folding replaces a complete visible batch. Keep the image previously painted
+                // in the same tile slot until that batch is ready, rather than exposing an empty
+                // canvas between the two frames. Style changes retain a whole paint frame in
+                // MinimapState because their row geometry may differ.
                 self.order.iter().rev().find(|candidate| {
                     candidate.tile_start == key.tile_start
                         && candidate.width == key.width
@@ -170,16 +171,7 @@ impl RasterRow {
     }
 }
 
-pub(in crate::preview) fn theme_signature() -> u64 {
-    let theme = current_theme();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    theme.background_alt.hash(&mut hasher);
-    theme.foreground.hash(&mut hasher);
-    theme.code_background.hash(&mut hasher);
-    theme.heading.hash(&mut hasher);
-    hasher.finish()
-}
-
+#[allow(clippy::too_many_arguments)]
 pub(in crate::preview) fn tile_key(
     rows: &[usize],
     tile_start: usize,
@@ -188,6 +180,7 @@ pub(in crate::preview) fn tile_key(
     wrap_signature: u64,
     scale_factor: f32,
     density: MinimapDensity,
+    style: PreviewStyle,
 ) -> RasterTileKey {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     rows.hash(&mut hasher);
@@ -196,7 +189,7 @@ pub(in crate::preview) fn tile_key(
         first_row_id: rows.first().copied().unwrap_or(0),
         row_signature: hasher.finish(),
         width: width.min(u16::MAX as usize) as u16,
-        theme_signature: theme_signature(),
+        theme_signature: style.paint_key(),
         folded_signature,
         wrap_signature,
         scale_factor_x100: (scale_factor * 100.0).round().clamp(1.0, u16::MAX as f32) as u16,
@@ -265,29 +258,38 @@ pub(in crate::preview) fn cosmic_color(rgb: u32) -> cosmic_text::Color {
     cosmic_text::Color::rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
-pub(in crate::preview) fn syntax_color(kind: crate::preview::CodeHighlightKind) -> u32 {
-    let theme = current_theme();
+pub(in crate::preview) fn syntax_color(
+    kind: crate::preview::CodeHighlightKind,
+    style: PreviewStyle,
+) -> u32 {
+    let palette = style.palette;
     match kind {
-        crate::preview::CodeHighlightKind::Attribute => theme.attribute,
+        crate::preview::CodeHighlightKind::Attribute => palette.attribute,
         crate::preview::CodeHighlightKind::Boolean
-        | crate::preview::CodeHighlightKind::Constant => theme.constant,
-        crate::preview::CodeHighlightKind::Comment => theme.comment,
-        crate::preview::CodeHighlightKind::Function => theme.function,
-        crate::preview::CodeHighlightKind::Keyword => theme.keyword,
-        crate::preview::CodeHighlightKind::Number => theme.number,
+        | crate::preview::CodeHighlightKind::Constant => palette.constant,
+        crate::preview::CodeHighlightKind::Comment => palette.comment,
+        crate::preview::CodeHighlightKind::Function => palette.function,
+        crate::preview::CodeHighlightKind::Keyword => palette.keyword,
+        crate::preview::CodeHighlightKind::Number => palette.number,
         crate::preview::CodeHighlightKind::Operator
-        | crate::preview::CodeHighlightKind::Punctuation => theme.operator,
+        | crate::preview::CodeHighlightKind::Punctuation => palette.operator,
         crate::preview::CodeHighlightKind::Property
-        | crate::preview::CodeHighlightKind::Variable => theme.variable,
-        crate::preview::CodeHighlightKind::String => theme.string,
-        crate::preview::CodeHighlightKind::Type => theme.type_name,
+        | crate::preview::CodeHighlightKind::Variable => palette.variable,
+        crate::preview::CodeHighlightKind::String => palette.string,
+        crate::preview::CodeHighlightKind::Type => palette.type_name,
     }
 }
 
 pub(in crate::preview) fn cosmic_runs(
     kind: PreviewLineKind,
     line: &DisplayRuns,
+    preview_style: PreviewStyle,
 ) -> Vec<(&str, cosmic_text::Attrs<'static>)> {
+    let family = if kind == PreviewLineKind::Code {
+        preview_style.typography.code_family
+    } else {
+        preview_style.typography.body_family
+    };
     let mut boundaries =
         Vec::with_capacity((line.inline_spans.len() + line.code_spans.len()) * 2 + 2);
     boundaries.extend([0, line.text.len()]);
@@ -315,7 +317,8 @@ pub(in crate::preview) fn cosmic_runs(
             {
                 return None;
             }
-            let mut color = kind_color(kind);
+            let palette = preview_style.palette;
+            let mut color = kind_color(kind, preview_style);
             let mut weight = cosmic_text::Weight::BLACK;
             let mut style = cosmic_text::Style::Normal;
             for inline in line
@@ -327,15 +330,13 @@ pub(in crate::preview) fn cosmic_runs(
                 match inline {
                     InlineKind::Bold => weight = cosmic_text::Weight::BLACK,
                     InlineKind::Italic => style = cosmic_text::Style::Italic,
-                    InlineKind::Code | InlineKind::Verbatim => color = current_theme().inline_code,
+                    InlineKind::Code | InlineKind::Verbatim => color = palette.inline_code,
                     InlineKind::Link | InlineKind::FootnoteReference | InlineKind::Underline => {
-                        color = current_theme().link
+                        color = palette.link
                     }
-                    InlineKind::Timestamp => color = current_theme().date,
-                    InlineKind::Target | InlineKind::RadioTarget => {
-                        color = current_theme().attribute
-                    }
-                    InlineKind::Entity | InlineKind::Latex => color = current_theme().constant,
+                    InlineKind::Timestamp => color = palette.date,
+                    InlineKind::Target | InlineKind::RadioTarget => color = palette.attribute,
+                    InlineKind::Entity | InlineKind::Latex => color = palette.constant,
                     InlineKind::Strike => {}
                 }
             }
@@ -344,7 +345,7 @@ pub(in crate::preview) fn cosmic_runs(
                 .iter()
                 .find(|span| span.start < end && span.end > start)
             {
-                color = syntax_color(span.kind);
+                color = syntax_color(span.kind, preview_style);
                 if matches!(span.kind, crate::preview::CodeHighlightKind::Comment) {
                     style = cosmic_text::Style::Italic;
                 }
@@ -352,7 +353,7 @@ pub(in crate::preview) fn cosmic_runs(
             Some((
                 &line.text[start..end],
                 cosmic_text::Attrs::new()
-                    .family(cosmic_text::Family::Name("Menlo"))
+                    .family(cosmic_text::Family::Name(family))
                     .weight(weight)
                     .style(style)
                     .color(cosmic_color(color)),
@@ -427,6 +428,7 @@ pub(in crate::preview) fn prewarm_text_rasterizer() {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::preview) fn rasterize_tile(
     model: &PreviewDisplayMap,
     presentation_rows: &[RasterRow],
@@ -435,6 +437,7 @@ pub(in crate::preview) fn rasterize_tile(
     folded: &HashSet<u32>,
     scale_factor: f32,
     density: MinimapDensity,
+    style: PreviewStyle,
 ) -> RasterizedTile {
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
 
@@ -473,6 +476,7 @@ pub(in crate::preview) fn rasterize_tile(
             document_index,
             logical_width as f32,
             density.font_px(),
+            style,
         );
         let kind = scene.kind;
         let block_id = model.source_row(document_index).block_id;
@@ -508,15 +512,18 @@ pub(in crate::preview) fn rasterize_tile(
                     .ceil()
                     .max(1.0) as usize,
                 primitive_height,
-                token.resolve(),
+                token.resolve(style),
             );
         }
         let attrs = Attrs::new()
-            .family(Family::Name("Menlo"))
+            .family(Family::Name(if kind == PreviewLineKind::Code {
+                style.typography.code_family
+            } else {
+                style.typography.body_family
+            }))
             .weight(cosmic_text::Weight::BLACK);
         let base = Color::rgb((color >> 16) as u8, (color >> 8) as u8, color as u8);
         if let RowContent::Table(projection) = &scene.content {
-            let theme = current_theme();
             let table = crate::preview::table::project_table(
                 projection.table(),
                 parent_width,
@@ -524,21 +531,23 @@ pub(in crate::preview) fn rasterize_tile(
             );
             let columns = &table.columns;
             let table_color = if projection.is_separator() {
-                theme.border
+                style.palette.border
             } else {
-                theme.foreground_dim
+                style.palette.foreground_dim
             };
-            for separator_x in &table.separators {
-                fill_bgra(
-                    &mut pixels,
-                    width as usize,
-                    height as usize,
-                    (*separator_x * scale_factor).round() as usize,
-                    row_y,
-                    1,
-                    row_visual_height,
-                    table_color,
-                );
+            if style.variants.table == crate::preview::style::TableVariant::Grid {
+                for separator_x in &table.separators {
+                    fill_bgra(
+                        &mut pixels,
+                        width as usize,
+                        height as usize,
+                        (*separator_x * scale_factor).round() as usize,
+                        row_y,
+                        1,
+                        row_visual_height,
+                        table_color,
+                    );
+                }
             }
             if projection.is_separator() {
                 let end_x = table
@@ -617,7 +626,12 @@ pub(in crate::preview) fn rasterize_tile(
         let indent = (scene.indent * scale_factor).round() as i32;
         for range in raster_row.lines.ranges.iter().cloned() {
             let segment = slice_display_runs(&display_runs, range);
-            buffer.set_rich_text(cosmic_runs(kind, &segment), &attrs, Shaping::Advanced, None);
+            buffer.set_rich_text(
+                cosmic_runs(kind, &segment, style),
+                &attrs,
+                Shaping::Advanced,
+                None,
+            );
             buffer.shape_until_scroll(font_system, false);
             let segment_y = (line_slot as f32 * physical_line_height).round() as i32;
             buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {

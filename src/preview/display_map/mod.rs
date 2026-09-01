@@ -4,26 +4,21 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-#[cfg(test)]
 use gpui::FontFallbacks;
 use gpui::{FontWeight, SharedString, TextRun, font, px};
 
 use crate::{
     document::SharedTextSnapshot,
-    org_syntax::{
-        BlockArena, BlockKind,
-        inline::{InlineKind, InlineSpan},
-    },
+    org_syntax::inline::{InlineKind, InlineSpan},
     preview::{
         CodeHighlightSpan, DocumentFormat, PreviewRow, PreviewSnapshot, code_highlight_style,
         highlight_code,
-        markdown::{MarkdownBlock, MarkdownKind},
         org_line::{parse_heading, parse_list_item},
         parse_document_inline,
         projection::{ReadingCodeRow, ReadingProjection, VisualRowId, VisualRowKind},
+        style::PreviewStyle,
         table::TableRowProjection,
     },
-    theme::current_theme,
 };
 #[cfg(test)]
 use unicode_segmentation::UnicodeSegmentation;
@@ -69,38 +64,6 @@ impl RowLayout {
             margin_top: 0.0,
             margin_bottom: 0.0,
             fixed_height: None,
-        }
-    }
-
-    pub(super) const fn blank() -> Self {
-        Self {
-            fixed_height: Some(24.0),
-            ..Self::text(14.0, 24.0)
-        }
-    }
-
-    pub(super) const fn image() -> Self {
-        Self {
-            padding_top: 8.0,
-            padding_bottom: 8.0,
-            ..Self::text(14.0, 24.0)
-        }
-    }
-
-    pub(super) const fn rule() -> Self {
-        Self {
-            margin_top: 20.0,
-            margin_bottom: 20.0,
-            fixed_height: Some(1.0),
-            ..Self::text(14.0, 24.0)
-        }
-    }
-
-    pub(super) const fn hidden() -> Self {
-        Self {
-            min_height: 0.0,
-            fixed_height: Some(0.0),
-            ..Self::text(14.0, 0.0)
         }
     }
 
@@ -158,14 +121,14 @@ pub(super) struct DisplayLines {
 }
 
 pub(super) struct DisplayLineCache {
-    entries: HashMap<((VisualRowId, u64), u16), DisplayLines>,
-    order: VecDeque<((VisualRowId, u64), u16)>,
+    entries: HashMap<((VisualRowId, u64), u16, u16, u64), DisplayLines>,
+    order: VecDeque<((VisualRowId, u64), u16, u16, u64)>,
 }
 
 impl DisplayLineCache {
     const CAPACITY: usize = 4096;
 
-    pub(super) fn insert(&mut self, key: ((VisualRowId, u64), u16), lines: DisplayLines) {
+    pub(super) fn insert(&mut self, key: ((VisualRowId, u64), u16, u16, u64), lines: DisplayLines) {
         if self.entries.contains_key(&key) {
             return;
         }
@@ -238,15 +201,25 @@ impl PreviewDisplayMap {
         &self,
         row: usize,
         available_width: f32,
+        zoom: f32,
+        style: PreviewStyle,
         text_system: &gpui::WindowTextSystem,
     ) -> DisplayLines {
         let width_key = available_width.round().clamp(1.0, u16::MAX as f32) as u16;
+        let zoom_key = (zoom.clamp(0.75, 2.0) * 1_000.0)
+            .round()
+            .clamp(1.0, u16::MAX as f32) as u16;
         let visual_row = self
             .projection
             .rows
             .get(row)
             .expect("preview row index is in bounds");
-        let key = ((visual_row.id, visual_row.semantic_revision), width_key);
+        let key = (
+            (visual_row.id, visual_row.semantic_revision),
+            width_key,
+            zoom_key,
+            style.layout_key(),
+        );
         if let Some(lines) = self
             .display_lines
             .lock()
@@ -260,20 +233,26 @@ impl PreviewDisplayMap {
 
         let display = self.runs(row);
         let kind = self.row_kind(row);
-        let layout = self.layout(row);
+        let layout = self.layout(row, style).scaled(zoom);
         if kind == PreviewLineKind::Table {
             let table = self.table_projection(row);
             let line_count = table
-                .map(|table| table.estimated_line_count(&display.text, available_width))
+                .map(|table| {
+                    table.estimated_line_count(&display.text, available_width, zoom, style)
+                })
                 .unwrap_or(1);
             let lines = DisplayLines {
                 ranges: std::iter::once(0..display.text.len())
                     .collect::<Vec<_>>()
                     .into(),
                 parent_height: if table.is_some_and(TableRowProjection::is_separator) {
-                    2.0
+                    2.0 + layout.margin_top + layout.margin_bottom
                 } else {
-                    (line_count as f32 * 21.0 + 16.0).max(38.0)
+                    (line_count as f32 * layout.line_height
+                        + style.spacing.table_cell_y * 2.0 * zoom)
+                        .max(layout.min_height)
+                        + layout.margin_top
+                        + layout.margin_bottom
                 },
             };
             self.display_lines
@@ -282,13 +261,13 @@ impl PreviewDisplayMap {
                 .insert(key, lines.clone());
             return lines;
         }
-        let mut base_font = font("Menlo");
+        let mut base_font = preview_minimap_font(style, kind);
         base_font.weight = match kind {
             PreviewLineKind::Heading(1 | 2) => FontWeight::SEMIBOLD,
             PreviewLineKind::Heading(_) => FontWeight::MEDIUM,
             _ => FontWeight::NORMAL,
         };
-        let text_runs = minimap_text_runs(kind, &display, base_font);
+        let text_runs = minimap_text_runs(kind, &display, base_font, style);
         let marker_width = if matches!(kind, PreviewLineKind::Heading(_)) {
             20.0
         } else {
@@ -347,20 +326,30 @@ impl PreviewDisplayMap {
         lines
     }
 
-    pub(in crate::preview) fn layout(&self, row: usize) -> RowLayout {
-        self.projection
+    pub(in crate::preview) fn layout(&self, row: usize, style: PreviewStyle) -> RowLayout {
+        let visual_row = self
+            .projection
             .rows
             .get(row)
-            .expect("preview row index is in bounds")
-            .layout
+            .expect("preview row index is in bounds");
+        let mut layout = style.row_layout(visual_row.style_kind);
+        if row == 0 {
+            layout.margin_top += style.spacing.content_padding_top;
+        }
+        if row + 1 == self.projection.rows.len() {
+            layout.margin_bottom += style.spacing.content_padding_bottom;
+        }
+        layout
     }
 
     pub(in crate::preview) fn estimated_measure(
         &self,
         row: usize,
         available_width: f32,
+        zoom: f32,
+        style: PreviewStyle,
     ) -> crate::preview::layout::ResolvedRow {
-        let layout = self.layout(row);
+        let layout = self.layout(row, style).scaled(zoom);
         let source_row = self.source_row(row);
         let kind = self.row_kind(row);
         let marker_width = if matches!(kind, PreviewLineKind::Heading(_)) {
@@ -375,7 +364,9 @@ impl PreviewDisplayMap {
         let line_count = if kind == PreviewLineKind::Table {
             let display = self.runs(row);
             self.table_projection(row)
-                .map(|table| table.estimated_line_count(&display.text, available_width))
+                .map(|table| {
+                    table.estimated_line_count(&display.text, available_width, zoom, style)
+                })
                 .unwrap_or(1)
         } else if layout.fixed_height.is_some() || self.image_size(row, available_width).is_some() {
             1
@@ -404,118 +395,43 @@ impl PreviewDisplayMap {
         crate::preview::layout::ResolvedRow::new(line_count, parent_height, false)
     }
 
-    pub(super) fn source_row_layout(
-        format: DocumentFormat,
-        blocks: &BlockArena,
-        markdown_blocks: &[MarkdownBlock],
-        block_id: u32,
-    ) -> RowLayout {
-        match format {
-            DocumentFormat::Org => match &blocks.nodes()[block_id as usize].kind {
-                BlockKind::Heading { level } => RowLayout::text(
-                    match level {
-                        1 => 22.0,
-                        2 => 18.0,
-                        3 => 15.0,
-                        _ => 14.0,
-                    },
-                    24.0,
-                ),
-                BlockKind::BlankLine => RowLayout::blank(),
-                BlockKind::Paragraph => RowLayout::text(14.0, 22.0),
-                BlockKind::ListItem => RowLayout {
-                    padding_left: 8.0,
-                    padding_top: 2.0,
-                    padding_bottom: 2.0,
-                    ..RowLayout::text(15.0, 24.0)
-                },
-                BlockKind::Keyword => RowLayout::text(13.0, 22.0),
-                BlockKind::Image { .. } => RowLayout::image(),
-                BlockKind::Planning | BlockKind::FixedWidth | BlockKind::FootnoteDefinition => {
-                    RowLayout::text(13.0, 22.0)
-                }
-                BlockKind::SourceBlock { .. } => RowLayout {
-                    padding_left: 16.0,
-                    padding_right: 16.0,
-                    padding_top: 2.0,
-                    padding_bottom: 2.0,
-                    ..RowLayout::text(13.0, 19.0)
-                },
-                BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => {
-                    RowLayout {
-                        padding_left: 16.0,
-                        padding_right: 16.0,
-                        padding_top: 2.0,
-                        padding_bottom: 2.0,
-                        ..RowLayout::text(13.0, 21.0)
-                    }
-                }
-                BlockKind::QuoteBlock => RowLayout {
-                    padding_left: 16.0,
-                    padding_right: 8.0,
-                    padding_top: 8.0,
-                    padding_bottom: 8.0,
-                    ..RowLayout::text(16.0, 25.0)
-                },
-                BlockKind::VerseBlock | BlockKind::CenterBlock => RowLayout::text(13.0, 22.0),
-                BlockKind::SpecialBlock { .. } => RowLayout {
-                    padding_left: 16.0,
-                    padding_right: 16.0,
-                    padding_top: 2.0,
-                    padding_bottom: 2.0,
-                    ..RowLayout::text(13.0, 19.0)
-                },
-                BlockKind::Drawer { .. } => RowLayout {
-                    padding_left: 12.0,
-                    padding_right: 12.0,
-                    padding_top: 2.0,
-                    padding_bottom: 2.0,
-                    ..RowLayout::text(12.0, 19.0)
-                },
-                BlockKind::HorizontalRule => RowLayout::rule(),
-                BlockKind::Comment | BlockKind::CommentBlock => RowLayout {
-                    fixed_height: Some(0.0),
-                    ..RowLayout::text(14.0, 24.0)
-                },
-                BlockKind::TableRow => RowLayout::text(13.0, 24.0),
-            },
-            DocumentFormat::Markdown => match &markdown_blocks[block_id as usize].kind {
-                MarkdownKind::Heading { level } => RowLayout::text(
-                    match level {
-                        1 => 22.0,
-                        2 => 18.0,
-                        3 => 15.0,
-                        _ => 14.0,
-                    },
-                    24.0,
-                ),
-                MarkdownKind::Blank => RowLayout::blank(),
-                MarkdownKind::Paragraph => RowLayout::text(14.0, 22.0),
-                MarkdownKind::ListItem => RowLayout {
-                    padding_left: 8.0,
-                    padding_top: 2.0,
-                    padding_bottom: 2.0,
-                    ..RowLayout::text(15.0, 24.0)
-                },
-                MarkdownKind::Quote => RowLayout {
-                    padding_left: 16.0,
-                    padding_right: 8.0,
-                    padding_top: 4.0,
-                    padding_bottom: 4.0,
-                    ..RowLayout::text(15.0, 23.0)
-                },
-                MarkdownKind::Code { .. } => RowLayout {
-                    padding_left: 16.0,
-                    padding_right: 16.0,
-                    padding_top: 2.0,
-                    padding_bottom: 2.0,
-                    ..RowLayout::text(13.0, 19.0)
-                },
-                MarkdownKind::TableRow => RowLayout::text(13.0, 24.0),
-                MarkdownKind::HorizontalRule => RowLayout::rule(),
-                MarkdownKind::Image { .. } => RowLayout::image(),
-            },
+    pub(in crate::preview) fn with_presentation_tail_padding(
+        &self,
+        row: usize,
+        presentation_index: usize,
+        presentation_len: usize,
+        zoom: f32,
+        style: PreviewStyle,
+        measure: crate::preview::layout::ResolvedRow,
+    ) -> crate::preview::layout::ResolvedRow {
+        if presentation_index + 1 != presentation_len || row + 1 == self.projection.rows.len() {
+            return measure;
         }
+        crate::preview::layout::ResolvedRow::new(
+            measure.display_lines as usize,
+            measure.pixels + style.spacing.content_padding_bottom * zoom.clamp(0.75, 2.0),
+            measure.exact,
+        )
+    }
+
+    pub(in crate::preview) fn without_presentation_tail_padding(
+        &self,
+        row: usize,
+        presentation_index: usize,
+        presentation_len: usize,
+        zoom: f32,
+        style: PreviewStyle,
+        measure: crate::preview::layout::ResolvedRow,
+    ) -> crate::preview::layout::ResolvedRow {
+        if presentation_index + 1 != presentation_len || row + 1 == self.projection.rows.len() {
+            return measure;
+        }
+        crate::preview::layout::ResolvedRow::new(
+            measure.display_lines as usize,
+            (measure.pixels - style.spacing.content_padding_bottom * zoom.clamp(0.75, 2.0))
+                .max(0.0),
+            measure.exact,
+        )
     }
 
     pub(in crate::preview) fn table_projection(&self, row: usize) -> Option<&TableRowProjection> {
@@ -710,30 +626,49 @@ pub(super) fn truncate_for_minimap(text: &str) -> String {
     text.graphemes(true).take(MAX_MINIMAP_COLUMNS).collect()
 }
 
-#[cfg(test)]
-pub(super) fn minimap_font() -> gpui::Font {
-    let mut minimap_font = font("Menlo");
-    // Match Zed's 2px BLACK rendering and make CJK/emoji fallback deterministic.
+pub(super) fn preview_minimap_font(style: PreviewStyle, kind: PreviewLineKind) -> gpui::Font {
+    let (family, fallbacks) = if kind == PreviewLineKind::Code {
+        (
+            style.typography.code_family,
+            style.typography.code_fallbacks,
+        )
+    } else {
+        (
+            style.typography.body_family,
+            style.typography.body_fallbacks,
+        )
+    };
+    let mut minimap_font = font(family);
     minimap_font.weight = FontWeight::BLACK;
-    minimap_font.fallbacks = Some(FontFallbacks::from_fonts(vec![
-        "PingFang SC".to_owned(),
-        "Apple Color Emoji".to_owned(),
-    ]));
+    minimap_font.fallbacks = Some(FontFallbacks::from_fonts(
+        fallbacks
+            .iter()
+            .map(|family| (*family).to_owned())
+            .collect(),
+    ));
     minimap_font
 }
 
-pub(super) fn kind_color(kind: PreviewLineKind) -> u32 {
-    let theme = current_theme();
+#[cfg(test)]
+pub(super) fn minimap_font() -> gpui::Font {
+    preview_minimap_font(
+        *crate::preview::preview_style(crate::preview::PreviewStyleId::Base),
+        PreviewLineKind::Text,
+    )
+}
+
+pub(super) fn kind_color(kind: PreviewLineKind, style: PreviewStyle) -> u32 {
+    let palette = style.palette;
     match kind {
-        PreviewLineKind::Heading(level) => theme.heading[level.saturating_sub(1).min(3) as usize],
-        PreviewLineKind::Code => theme.code_boundary,
-        PreviewLineKind::Table => theme.foreground,
-        PreviewLineKind::Quote => theme.quote,
-        PreviewLineKind::List => theme.foreground,
-        PreviewLineKind::Caption => theme.meta,
-        PreviewLineKind::Image => theme.attribute,
-        PreviewLineKind::Rule => theme.border,
-        PreviewLineKind::Text | PreviewLineKind::Blank => theme.foreground,
+        PreviewLineKind::Heading(level) => palette.heading[level.saturating_sub(1).min(3) as usize],
+        PreviewLineKind::Code => palette.code_boundary,
+        PreviewLineKind::Table => palette.foreground,
+        PreviewLineKind::Quote => palette.quote,
+        PreviewLineKind::List => palette.foreground,
+        PreviewLineKind::Caption => palette.meta,
+        PreviewLineKind::Image => palette.attribute,
+        PreviewLineKind::Rule => palette.border,
+        PreviewLineKind::Text | PreviewLineKind::Blank => palette.foreground,
     }
 }
 
@@ -786,6 +721,7 @@ pub(super) fn minimap_text_runs(
     kind: PreviewLineKind,
     line: &DisplayRuns,
     base_font: gpui::Font,
+    preview_style: PreviewStyle,
 ) -> Vec<TextRun> {
     let mut boundaries =
         Vec::with_capacity((line.inline_spans.len() + line.code_spans.len()) * 2 + 2);
@@ -814,7 +750,8 @@ pub(super) fn minimap_text_runs(
                     .filter(|span| span.range.start < end && span.range.end > start)
                     .map(|span| span.kind);
                 let mut run_font = base_font.clone();
-                let mut color: gpui::Hsla = gpui::rgb(kind_color(kind)).into();
+                let palette = preview_style.palette;
+                let mut color: gpui::Hsla = gpui::rgb(kind_color(kind, preview_style)).into();
                 let mut strikethrough = None;
                 let mut underline = None;
                 for kind in kinds {
@@ -823,17 +760,17 @@ pub(super) fn minimap_text_runs(
                         InlineKind::Italic => run_font.style = gpui::FontStyle::Italic,
                         InlineKind::Strike => strikethrough = Some(Default::default()),
                         InlineKind::Code | InlineKind::Verbatim => {
-                            color = gpui::rgb(current_theme().code_foreground).into()
+                            color = gpui::rgb(palette.code_foreground).into()
                         }
                         InlineKind::Link | InlineKind::FootnoteReference => {
-                            color = gpui::rgb(current_theme().link).into()
+                            color = gpui::rgb(palette.link).into()
                         }
-                        InlineKind::Timestamp => color = gpui::rgb(current_theme().date).into(),
+                        InlineKind::Timestamp => color = gpui::rgb(palette.date).into(),
                         InlineKind::Target | InlineKind::RadioTarget => {
-                            color = gpui::rgb(current_theme().attribute).into()
+                            color = gpui::rgb(palette.attribute).into()
                         }
                         InlineKind::Entity | InlineKind::Latex => {
-                            color = gpui::rgb(current_theme().constant).into()
+                            color = gpui::rgb(palette.constant).into()
                         }
                         InlineKind::Underline => underline = Some(Default::default()),
                     }
@@ -843,11 +780,11 @@ pub(super) fn minimap_text_runs(
                     .iter()
                     .find(|span| span.start < end && span.end > start)
                 {
-                    let style = code_highlight_style(span.kind);
-                    if let Some(syntax_color) = style.color {
+                    let highlight = code_highlight_style(span.kind, preview_style);
+                    if let Some(syntax_color) = highlight.color {
                         color = syntax_color;
                     }
-                    if let Some(font_style) = style.font_style {
+                    if let Some(font_style) = highlight.font_style {
                         run_font.style = font_style;
                     }
                 }

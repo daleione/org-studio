@@ -43,6 +43,10 @@ impl StatusLineHost {
         self.popover.take().is_some()
     }
 
+    pub(super) fn clear_layout_cache(&self) {
+        self.layout_cache.borrow_mut().clear();
+    }
+
     pub(super) fn popover_for(&self, pane: PaneId) -> Option<StatusPopover> {
         self.popover
             .as_ref()
@@ -66,6 +70,7 @@ impl StatusLineSnapshot {
             settings,
             host: self.host,
             surface: self.surface,
+            reading_style: self.reading_style,
             language: self.language,
             outline: self.outline.is_some(),
             position_reserve: self
@@ -99,6 +104,11 @@ impl StatusLineSnapshot {
     ) -> StatusLineLayout {
         let mut layout = StatusLineLayout {
             mode: Variant::Full,
+            reading_style: if self.reading_style.is_some() {
+                Variant::Full
+            } else {
+                Variant::Hidden
+            },
             outline: if settings.outline && self.outline.is_some() {
                 Variant::Full
             } else {
@@ -138,6 +148,7 @@ impl StatusLineSnapshot {
                 Degrade::CompactProgress,
                 Degrade::CompactPosition,
                 Degrade::CompactMode,
+                Degrade::CompactReadingStyle,
                 Degrade::HideOutline,
                 Degrade::HideStatistics,
                 Degrade::HideProgress,
@@ -181,6 +192,7 @@ enum Degrade {
     CompactPosition,
     CompactOutline,
     CompactMode,
+    CompactReadingStyle,
     HideProgress,
     HideOutline,
     HidePosition,
@@ -203,6 +215,9 @@ impl StatusLineLayout {
                 self.outline = Variant::Compact
             }
             Degrade::CompactMode if self.mode == Variant::Full => self.mode = Variant::Compact,
+            Degrade::CompactReadingStyle if self.reading_style == Variant::Full => {
+                self.reading_style = Variant::Compact
+            }
             Degrade::HideProgress if self.progress != Variant::Hidden => {
                 self.progress = Variant::Hidden
             }
@@ -221,6 +236,18 @@ impl StatusLineLayout {
             Variant::Full => measure(snapshot.mode_label()) + 28.0,
             Variant::Compact => 30.0,
             Variant::Hidden => 0.0,
+        };
+        let reading_style = match (self.reading_style, snapshot.reading_style) {
+            (Variant::Full, Some(id)) => {
+                measure(super::preview_style(id).name(snapshot.language)) + 24.0
+            }
+            (Variant::Compact, Some(_)) => {
+                measure(match snapshot.language {
+                    Language::Chinese => "样式",
+                    Language::English => "Style",
+                }) + 24.0
+            }
+            _ => 0.0,
         };
         let outline = match (self.outline, snapshot.outline.as_deref()) {
             (Variant::Full, Some(_)) => OUTLINE_FULL_RESERVE,
@@ -250,7 +277,7 @@ impl StatusLineLayout {
             _ => 0.0,
         };
         // More is mandatory. The flexible center keeps a small hit target even when empty.
-        mode + outline + position + progress + statistics + format + 44.0 + 16.0
+        mode + reading_style + outline + position + progress + statistics + format + 44.0 + 16.0
     }
 
     fn resolved_outline_width(
@@ -292,6 +319,21 @@ fn measured_text_width(text: &str, window: &Window) -> f32 {
             .shape_line(text, px(10.0), &[run], None)
             .width,
     )
+}
+
+pub(super) fn reading_style_popover_left(
+    snapshot: &StatusLineSnapshot,
+    layout: &StatusLineLayout,
+    window: &Window,
+) -> f32 {
+    match layout.mode {
+        // Mode margin + padding + dot + gap + measured label. This is the
+        // trailing edge of the mode button and therefore the leading edge of
+        // the adjacent Reading style button.
+        Variant::Full => measured_text_width(snapshot.mode_label(), window) + 37.0,
+        Variant::Compact => 27.0,
+        Variant::Hidden => 8.0,
+    }
 }
 
 fn leaf(path: &str) -> &str {
@@ -426,6 +468,20 @@ pub(super) fn render_status_line(
         .items_center()
         .flex_none()
         .child(mode)
+        .when_some(snapshot.reading_style, |left, style_id| {
+            left.child(
+                status_button(entity.clone(), pane_id, StatusSegment::ReadingStyle)
+                    .child(if layout.reading_style == Variant::Compact {
+                        match snapshot.language {
+                            Language::Chinese => "样式",
+                            Language::English => "Style",
+                        }
+                    } else {
+                        super::preview_style(style_id).name(snapshot.language)
+                    })
+                    .child("⌃"),
+            )
+        })
         .when(layout.outline != Variant::Hidden, |left| {
             match snapshot.outline.as_deref() {
                 Some(outline) => left.child(
@@ -730,6 +786,12 @@ impl WorkspaceWindow {
                 self.status.popover = None;
                 self.toggle_pane_surface(pane_side_for_status(pane), cx);
             }
+            StatusSegment::ReadingStyle => {
+                self.status.popover = Some(StatusPopover {
+                    pane,
+                    content: StatusPopoverContent::ReadingStyle,
+                });
+            }
             StatusSegment::More => {
                 self.status.popover = Some(StatusPopover {
                     pane,
@@ -759,7 +821,7 @@ impl WorkspaceWindow {
                 self.status.settings.statistics = !self.status.settings.statistics
             }
             StatusSegment::Format => self.status.settings.format = !self.status.settings.format,
-            StatusSegment::Mode | StatusSegment::More => return,
+            StatusSegment::Mode | StatusSegment::ReadingStyle | StatusSegment::More => return,
         }
         self.save_preview_settings();
         cx.notify();
@@ -865,6 +927,7 @@ fn render_document_statistics(
 fn segment_title(segment: StatusSegment, language: Language) -> &'static str {
     match (language, segment) {
         (Language::Chinese, StatusSegment::Mode) => "工作模式",
+        (Language::Chinese, StatusSegment::ReadingStyle) => "阅读主题",
         (Language::Chinese, StatusSegment::Outline) => "大纲位置",
         (Language::Chinese, StatusSegment::Position) => "位置",
         (Language::Chinese, StatusSegment::Progress) => "文档进度",
@@ -872,6 +935,7 @@ fn segment_title(segment: StatusSegment, language: Language) -> &'static str {
         (Language::Chinese, StatusSegment::Format) => "文件格式",
         (Language::Chinese, StatusSegment::More) => "更多",
         (Language::English, StatusSegment::Mode) => "Working mode",
+        (Language::English, StatusSegment::ReadingStyle) => "Reading theme",
         (Language::English, StatusSegment::Outline) => "Outline",
         (Language::English, StatusSegment::Position) => "Position",
         (Language::English, StatusSegment::Progress) => "Document progress",
@@ -931,6 +995,9 @@ fn info_text(
         StatusSegment::Statistics => snapshot.statistics.as_deref().map(str::to_owned),
         StatusSegment::Format => snapshot.format.map(format_label).map(str::to_owned),
         StatusSegment::Mode => Some(snapshot.mode_label().to_owned()),
+        StatusSegment::ReadingStyle => snapshot
+            .reading_style
+            .map(|id| super::preview_style(id).name(language).to_owned()),
         StatusSegment::More => None,
     });
     match (language, value) {
@@ -951,6 +1018,7 @@ mod tests {
             language: Language::Chinese,
             host: StatusHost::Preview,
             surface: crate::app::PaneSurface::Reading,
+            reading_style: Some(crate::preview::PreviewStyleId::Base),
             outline: Some("性能优化 / Minimap".into()),
             position: Some(StatusPosition::PreviewSource {
                 line: 259,
@@ -983,10 +1051,24 @@ mod tests {
 
         let narrow = snapshot().layout(210.0, settings);
         assert_ne!(narrow.mode, Variant::Hidden);
+        assert_eq!(narrow.reading_style, Variant::Compact);
         assert_ne!(narrow.position, Variant::Hidden);
         assert!(narrow.overflow.len() >= 2);
         assert!(!narrow.overflow.contains(&StatusSegment::Mode));
         assert!(!narrow.overflow.contains(&StatusSegment::More));
+    }
+
+    #[test]
+    fn reading_style_popover_is_dismissed_before_escape_changes_surface() {
+        let mut host = StatusLineHost::new(StatusLineSettings::default());
+        host.popover = Some(StatusPopover {
+            pane: PaneId(7),
+            content: StatusPopoverContent::ReadingStyle,
+        });
+
+        assert!(host.dismiss_popover());
+        assert!(host.popover.is_none());
+        assert!(!host.dismiss_popover());
     }
 
     #[test]

@@ -3,13 +3,29 @@ use std::{ops::Range, sync::Arc};
 use crate::document::Revision;
 
 const LAYOUT_CHUNK_ROWS: usize = 256;
-pub(in crate::preview) const READING_FRAME_MAX_WIDTH: f32 = 960.0;
-const READING_HORIZONTAL_PADDING: f32 = 48.0;
 const READING_MIN_CONTENT_WIDTH: f32 = 120.0;
 
-pub(in crate::preview) fn reading_content_width(pane_width: f32, minimap_width: f32) -> f32 {
-    ((pane_width - minimap_width).min(READING_FRAME_MAX_WIDTH) - READING_HORIZONTAL_PADDING)
+pub(in crate::preview) fn reading_content_width(
+    pane_width: f32,
+    minimap_width: f32,
+    style: super::style::PreviewStyle,
+) -> f32 {
+    (reading_frame_width(pane_width, minimap_width, style) - style.spacing.horizontal_padding)
         .max(READING_MIN_CONTENT_WIDTH)
+}
+
+pub(in crate::preview) fn reading_frame_width(
+    pane_width: f32,
+    minimap_width: f32,
+    style: super::style::PreviewStyle,
+) -> f32 {
+    let available = (pane_width - minimap_width).max(0.0);
+    let fluid = available * style.spacing.wide_pane_fill;
+    let readable_floor = available.min(style.spacing.content_min_width);
+    fluid
+        .max(readable_floor)
+        .min(style.spacing.content_max_width)
+        .min(available)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -286,9 +302,16 @@ mod tests {
 
     #[test]
     fn reading_content_width_matches_the_rendered_frame_and_padding() {
-        assert_eq!(reading_content_width(2_000.0, 0.0), 912.0);
-        assert_eq!(reading_content_width(800.0, 100.0), 652.0);
-        assert_eq!(reading_content_width(140.0, 0.0), 120.0);
+        let style = *super::super::preview_style(super::super::PreviewStyleId::Base);
+        assert_eq!(reading_content_width(2_000.0, 0.0, style), 912.0);
+        assert_eq!(reading_content_width(800.0, 100.0, style), 652.0);
+        assert_eq!(reading_content_width(140.0, 0.0, style), 120.0);
+
+        let warm = *super::super::preview_style(super::super::PreviewStyleId::WarmClay);
+        assert_eq!(reading_frame_width(700.0, 0.0, warm), 700.0);
+        assert_eq!(reading_frame_width(1_000.0, 0.0, warm), 780.0);
+        assert_eq!(reading_frame_width(2_000.0, 0.0, warm), 1120.0);
+        assert_eq!(reading_content_width(2_000.0, 0.0, warm), 1088.0);
     }
 
     #[test]
