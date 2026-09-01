@@ -6,6 +6,14 @@ use std::ops::Range;
 use crate::document::Revision;
 
 const LAYOUT_CHUNK_ROWS: usize = 256;
+pub(in crate::preview) const READING_FRAME_MAX_WIDTH: f32 = 960.0;
+const READING_HORIZONTAL_PADDING: f32 = 48.0;
+const READING_MIN_CONTENT_WIDTH: f32 = 120.0;
+
+pub(in crate::preview) fn reading_content_width(pane_width: f32, minimap_width: f32) -> f32 {
+    ((pane_width - minimap_width).min(READING_FRAME_MAX_WIDTH) - READING_HORIZONTAL_PADDING)
+        .max(READING_MIN_CONTENT_WIDTH)
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::preview) struct ResolvedRow {
@@ -269,6 +277,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+
+    #[test]
+    fn reading_content_width_matches_the_rendered_frame_and_padding() {
+        assert_eq!(reading_content_width(2_000.0, 0.0), 912.0);
+        assert_eq!(reading_content_width(800.0, 100.0), 652.0);
+        assert_eq!(reading_content_width(140.0, 0.0), 120.0);
+    }
 
     #[test]
     fn local_geometry_patch_reuses_more_than_ninety_nine_percent_of_large_layout_chunks() {

@@ -7,7 +7,7 @@ use super::{MIN_THUMB_PX, MinimapDensity, MinimapDragSession, MinimapLineIndex};
 use super::{MINIMAP_EDGE_PADDING_PX, MINIMAP_LINE_HEIGHT_PX, PREVIEW_BASE_ROW_PX};
 use crate::preview::{
     coordinates::{Bias, SourcePoint},
-    projection::{PreviewProjectionSnapshot, VisualRowId},
+    projection::{ReadingProjection, VisualRowId},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -268,7 +268,7 @@ pub(in crate::preview) struct MinimapSourceTarget {
 }
 
 pub(in crate::preview) fn source_target_for_list_offset(
-    projection: &PreviewProjectionSnapshot,
+    projection: &ReadingProjection,
     presentation_rows: &[usize],
     offset: ListOffset,
     bias: Bias,

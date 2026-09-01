@@ -2,11 +2,11 @@ use super::{
     Arc, BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
     ContentRoute, Context, Duration, EmacsOutcome, InitialDocumentLoad, Instant, InvocationOrigin,
     KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, PathBuf, PathPromptOptions, PrefixArgument,
-    PreviewLoadState, PreviewRenderOptions, Window, WorkspaceLoadedDocument, WorkspaceWindow,
+    PreviewLoadState, ReadingRenderOptions, Window, WorkspaceLoadedDocument, WorkspaceWindow,
     accept_generation, built_in_contexts, command_count, compile_input_profile,
     configured_minimap_visible, current_theme, dired_bindings, document_input,
-    load_workspace_document, minimap, preview_bindings, px, render_document, render_home,
-    render_loading, split_layout, workspace_bindings,
+    load_workspace_document, minimap, preview_bindings, px, render_home, render_loading,
+    render_reading_document, split_layout, workspace_bindings,
 };
 use crate::app::{DocumentViewPreferences, DocumentWorkspaceState, PaneSide, PaneSurface};
 use gpui::{div, prelude::*, rgb};
@@ -189,7 +189,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn preview_panel(&self) -> Option<gpui::Entity<super::PreviewPanel>> {
+    pub(super) fn preview_panel(&self) -> Option<gpui::Entity<super::ReadingPreviewPanel>> {
         let active = self.document_workspace.active_pane;
         if matches!(
             self.document_workspace.active_surface(),
@@ -207,7 +207,7 @@ impl WorkspaceWindow {
     pub(super) fn preview_panel_for(
         &self,
         pane: PaneSide,
-    ) -> Option<gpui::Entity<super::PreviewPanel>> {
+    ) -> Option<gpui::Entity<super::ReadingPreviewPanel>> {
         self.state
             .ready()
             .and_then(|document| document.readers.get(pane).clone())
@@ -255,7 +255,7 @@ impl WorkspaceWindow {
             } else {
                 let document = document.clone();
                 *ready.readers.get_mut(pane) =
-                    Some(cx.new(move |_| super::PreviewPanel::new(document, list_overdraw)));
+                    Some(cx.new(move |_| super::ReadingPreviewPanel::new(document, list_overdraw)));
             }
         }
         true
@@ -616,7 +616,7 @@ impl WorkspaceWindow {
                 |editor| div().size_full().child(editor.clone()),
             ),
             PaneSurface::Reading => {
-                self.render_preview(ready, entity.clone(), pane, render, self.minimap_visible)
+                self.render_reading(ready, entity.clone(), pane, render, self.minimap_visible)
             }
         };
         let Some(snapshot) = self.document_status_snapshot(pane, render.cx) else {
@@ -652,7 +652,7 @@ impl WorkspaceWindow {
             })
     }
 
-    fn render_preview(
+    fn render_reading(
         &self,
         ready: &super::ReadyDocument,
         entity: gpui::Entity<Self>,
@@ -667,7 +667,7 @@ impl WorkspaceWindow {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(current_theme().foreground_dim))
-                .child("Updating Preview…");
+                .child("Preparing Reading…");
         };
         let panel = panel_entity.read(render.cx);
         let session = ready.session.read(render.cx);
@@ -683,18 +683,18 @@ impl WorkspaceWindow {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(current_theme().foreground_dim))
-                .child("Updating Preview…");
+                .child("Preparing Reading…");
         }
         // A previous revision is still a complete, internally coherent immutable snapshot.
         // Keep painting it until the derived projection is atomically replaced. Each pane owns
         // its viewport, so publication never needs to coordinate scroll state across panes.
-        render_document(
+        render_reading_document(
             panel.render_state(),
             panel_entity.clone(),
             entity,
-            PreviewRenderOptions {
+            ReadingRenderOptions {
                 minimap_visible,
-                editor_width: render.width,
+                pane_width: render.width,
                 minimap_width: render.minimap_width,
                 minimap_resize_preview: self.minimap_resize_preview,
                 minimap_thumb_visibility: self.minimap_thumb_visibility,
@@ -739,7 +739,7 @@ impl WorkspaceWindow {
         } else {
             0.0
         };
-        let available_width = (pane_width - 110.0 - minimap_space).max(120.0);
+        let available_width = super::layout::reading_content_width(pane_width, minimap_space);
         panel.update(cx, |panel, cx| {
             panel.cycle_global_visibility_animated(
                 f32::from(viewport.height),

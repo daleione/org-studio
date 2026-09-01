@@ -2,7 +2,7 @@ use smallvec::SmallVec;
 
 use super::{
     display_map::{PreviewDisplayMap, PreviewLineKind, kind_color},
-    projection::VisualRowKind,
+    projection::{ReadingCodeRow, VisualRowKind},
     table::TableRowProjection,
 };
 use crate::theme::current_theme;
@@ -96,13 +96,14 @@ pub(in crate::preview) fn resolve_visual_row(
         .expect("preview row in bounds");
     let kind = model.row_kind(row);
     let semantic_indent = match visual.kind {
-        VisualRowKind::Heading(_) | VisualRowKind::List => 6.0,
+        VisualRowKind::Heading(_) | VisualRowKind::List(_) => 6.0,
         VisualRowKind::Quote => 7.0,
         _ => 4.0,
     };
     let mut primitives = SmallVec::new();
     let content = match &visual.kind {
-        VisualRowKind::Code => {
+        VisualRowKind::Code(ReadingCodeRow::End) => VisualContent::None,
+        VisualRowKind::Code(_) => {
             primitives.push(VisualPrimitive::Rect {
                 x: 2.0,
                 width: PrimitiveWidth::Remaining { right_inset: 2.0 },
@@ -137,11 +138,14 @@ pub(in crate::preview) fn resolve_visual_row(
             });
             VisualContent::None
         }
-        VisualRowKind::Image { width, height } => {
-            let fitted = super::fitted_image_size(*width, *height, target_width.max(10.0) - 10.0);
+        VisualRowKind::Image { dimensions } => {
+            let fitted_width =
+                dimensions.map_or(target_width.max(10.0) - 10.0, |(width, height)| {
+                    super::fitted_image_size(width, height, target_width.max(10.0) - 10.0).0
+                });
             primitives.push(VisualPrimitive::Rect {
                 x: 5.0,
-                width: PrimitiveWidth::Fixed(fitted.0),
+                width: PrimitiveWidth::Fixed(fitted_width),
                 color: PaintToken::Attribute,
             });
             VisualContent::None
@@ -155,7 +159,9 @@ pub(in crate::preview) fn resolve_visual_row(
             VisualContent::Text
         }
         VisualRowKind::Hidden | VisualRowKind::Blank => VisualContent::None,
-        VisualRowKind::Text | VisualRowKind::List => VisualContent::Text,
+        VisualRowKind::Text | VisualRowKind::List(_) | VisualRowKind::Caption => {
+            VisualContent::Text
+        }
     };
     VisualRowRecipe {
         kind,

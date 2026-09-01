@@ -1,13 +1,13 @@
 use super::{
     Arc, BlockKind, BlockNode, CodeHighlightKind, CodeHighlightSpan, Context, DocumentFormat,
     FoldDirection, FoldSegment, FontStyle, FontWeight, HighlightStyle, InlineKind, InlineSpan,
-    InlineText, Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager,
-    PreviewLoadState, PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
+    Instant, IntoElement, OPEN_DOCUMENT_COMMAND, OpenDocument, OpenFileManager, PreviewLoadState,
+    PreviewRow, PreviewSnapshot, QUIT_APPLICATION_COMMAND, QuitApplication,
     RELOAD_DOCUMENT_COMMAND, ReloadDocument, Render, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
     SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome,
     ShowReading, ShowSplit, StyledText, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
-    UseEnglish, Window, WorkspaceWindow, current_theme, div, img, markdown, minimap, parse_inline,
-    px, render_table_row, resolve_image_path, rgb,
+    UseEnglish, Window, WorkspaceWindow, current_theme, div, img, markdown, minimap, px,
+    render_table_row, resolve_image_path, rgb,
 };
 use super::{EXPORT_DOCUMENT_COMMAND, ExportDocument, export_ui::render_export_panel};
 use gpui::{CursorStyle, ExternalPaths, MouseButton, prelude::*};
@@ -18,14 +18,20 @@ mod home;
 mod markdown_block;
 mod overlays;
 mod styled_text;
-use code_block::{org_code_row_role, render_code_row};
-pub(super) use document::{PreviewRenderOptions, render_document};
+
+#[derive(Clone, Copy)]
+struct ReadingRowContext<'a> {
+    available_width: f32,
+    zoom: f32,
+    table_scroll: Option<&'a gpui::ScrollHandle>,
+}
+use code_block::render_code_row;
+pub(super) use document::{ReadingRenderOptions, render_reading_document};
 pub(super) use home::{render_home, render_loading};
-pub(super) use markdown_block::parse_document_inline;
 use markdown_block::render_markdown_block;
 use overlays::{dired_help_window, which_key_window};
 pub(super) use styled_text::code_highlight_style;
-use styled_text::styled_inline_runs;
+pub(in crate::preview) use styled_text::styled_inline_runs;
 
 impl Render for WorkspaceWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {

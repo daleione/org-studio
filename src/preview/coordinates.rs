@@ -1,6 +1,6 @@
 use crate::document::{ByteOffset, Revision};
 
-use super::projection::{PreviewProjectionSnapshot, VisualRowId};
+use super::projection::{ReadingProjection, VisualRowId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::preview) enum Bias {
@@ -36,7 +36,7 @@ pub(in crate::preview) enum PointMapError {
     OffsetOutsideRow,
 }
 
-impl PreviewProjectionSnapshot {
+impl ReadingProjection {
     pub(in crate::preview) fn source_to_visual(
         &self,
         point: SourcePoint,

@@ -45,11 +45,10 @@ mod fold_transition;
 mod folding;
 mod markdown;
 mod minimap;
-#[cfg(test)]
 mod org_line;
 mod overlay;
-mod panel;
 mod projection;
+mod reading_panel;
 mod rows;
 mod save;
 mod split_layout;
@@ -69,9 +68,9 @@ use folding::{
     cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
     global_org_visibility, visible_markdown_row_indices, visible_row_indices,
 };
-pub(crate) use panel::PreviewPanel;
-use panel::PreviewRenderState;
 use projection::build_projection_snapshot;
+pub(crate) use reading_panel::ReadingPreviewPanel;
+use reading_panel::ReadingRenderState;
 use rows::build_preview_rows;
 pub(crate) use save::{PendingTransition, SaveHost, SaveInteraction, SaveStatus};
 pub(crate) use split_layout::ResizeSession as SplitResizeSession;
@@ -92,6 +91,16 @@ use crate::{
     },
     theme::current_theme,
 };
+
+pub(in crate::preview) fn parse_document_inline(
+    format: DocumentFormat,
+    source: &str,
+) -> InlineText {
+    match format {
+        DocumentFormat::Org => parse_inline(source),
+        DocumentFormat::Markdown => markdown::parse_markdown_inline(source),
+    }
+}
 
 const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
 const SHOW_HOME_COMMAND: &str = "org-studio.workspace.show-home";
@@ -206,7 +215,7 @@ pub(crate) enum PreviewLoadState {
 pub(crate) struct ReadyDocument {
     session: gpui::Entity<crate::document::DocumentSession>,
     editors: PanePair<Option<gpui::Entity<crate::editor::SemanticEditor>>>,
-    readers: PanePair<Option<gpui::Entity<PreviewPanel>>>,
+    readers: PanePair<Option<gpui::Entity<ReadingPreviewPanel>>>,
     notice: Option<Arc<str>>,
 }
 

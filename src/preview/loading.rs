@@ -16,7 +16,9 @@ use crate::{
 use super::{
     DerivedUpdate, DocumentFormat, LoadMetrics, LoadedDocument, PreviewSnapshot, ReloadedDocument,
     build_markdown_table_styles, build_preview_rows, build_projection_snapshot, build_table_styles,
-    markdown, projection::build_visual_rows, rows::build_preview_rows_in_range,
+    markdown,
+    projection::{ReadingProjectionResources, build_visual_rows},
+    rows::build_preview_rows_in_range,
 };
 
 const TABLE_DEPENDENCY: u8 = 1 << 0;
@@ -225,7 +227,7 @@ struct IncrementalPreview {
     blocks: Arc<BlockArena>,
     markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     outline_paths: Arc<Vec<Option<Arc<str>>>>,
-    projection: Arc<super::projection::PreviewProjectionSnapshot>,
+    projection: Arc<super::projection::ReadingProjection>,
     syntax_elapsed: Duration,
     syntax_reparsed_bytes: u64,
     patch: super::projection::VisualPatch,
@@ -314,13 +316,16 @@ fn build_preview(
         DocumentFormat::Markdown => Arc::new(build_markdown_image_sizes(&path, &markdown_blocks)),
     };
     let projection = build_projection_snapshot(
+        text.as_ref(),
         text.revision(),
         format,
         rows.clone(),
         &blocks,
         &markdown_blocks,
-        &table_projections,
-        &image_sizes,
+        ReadingProjectionResources {
+            tables: &table_projections,
+            images: &image_sizes,
+        },
     );
 
     let mut document = PreviewSnapshot {
@@ -551,13 +556,16 @@ fn build_markdown_incremental(
         })?;
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let replacements = build_visual_rows(
+        text.as_ref(),
         text.revision(),
         DocumentFormat::Markdown,
         &rows[block_range],
         &BlockArena::default(),
         &markdown_blocks,
-        &HashMap::new(),
-        &HashMap::new(),
+        ReadingProjectionResources {
+            tables: &HashMap::new(),
+            images: &HashMap::new(),
+        },
     );
     if replacements.len() != old_visual.len() {
         return None;
@@ -662,13 +670,16 @@ fn build_org_incremental(
         return None;
     }
     let replacements = build_visual_rows(
+        text.as_ref(),
         text.revision(),
         DocumentFormat::Org,
         &rows,
         &blocks,
         &[],
-        &HashMap::new(),
-        &HashMap::new(),
+        ReadingProjectionResources {
+            tables: &HashMap::new(),
+            images: &HashMap::new(),
+        },
     );
     let (projection, patch) = previous
         .projection
@@ -789,7 +800,7 @@ fn markdown_dependency(block: Option<&markdown::MarkdownBlock>) -> u8 {
 }
 
 fn expanded_visual_range_by_dependency(
-    projection: &super::projection::PreviewProjectionSnapshot,
+    projection: &super::projection::ReadingProjection,
     affected: std::ops::Range<usize>,
     old_dependency: impl Fn(usize) -> u8,
     new_dependency: impl Fn(usize) -> u8,
@@ -963,7 +974,6 @@ mod tests {
             let actual = incremental.projection.source_row(index).unwrap();
             assert_eq!(actual.block_id, expected.block_id);
             assert_eq!(actual.continuation, expected.continuation);
-            assert_eq!(actual.show_line_number, expected.show_line_number);
             assert_eq!(actual.blank, expected.blank);
             assert_eq!(
                 incremental.text.copy_range(actual.content.range),
@@ -1260,7 +1270,7 @@ mod tests {
     }
 
     #[test]
-    fn source_language_edit_patches_every_physical_code_row() {
+    fn source_language_edit_patches_every_reading_code_row() {
         let source = "* Code\n#+begin_src rust\nfn one() {}\nfn two() {}\n#+end_src\nafter\n";
         let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
         let before = buffer.snapshot();
@@ -1285,9 +1295,9 @@ mod tests {
             .projection
             .rows
             .iter()
-            .filter(|row| matches!(row.kind, super::super::projection::VisualRowKind::Code))
+            .filter(|row| matches!(row.kind, super::super::projection::VisualRowKind::Code(_)))
             .collect::<Vec<_>>();
-        assert_eq!(code_rows.len(), 4);
+        assert_eq!(code_rows.len(), 2);
         assert!(
             code_rows
                 .iter()
@@ -1297,11 +1307,11 @@ mod tests {
 
     #[cfg(feature = "benchmarks")]
     #[test]
-    fn phase_e_fifty_mib_incremental_probe() {
-        let path = std::env::var_os("ORG_STUDIO_PHASE_E_FIXTURE")
+    fn reading_fifty_mib_incremental_probe() {
+        let path = std::env::var_os("ORG_STUDIO_READING_FIXTURE")
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("target/perf-fixtures/org-preview-50m.org"));
-        let target_p95_ms = std::env::var("ORG_STUDIO_PHASE_E_TARGET_P95_MS")
+        let target_p95_ms = std::env::var("ORG_STUDIO_READING_TARGET_P95_MS")
             .ok()
             .and_then(|value| value.parse::<f64>().ok())
             .unwrap_or(150.0);
@@ -1355,7 +1365,7 @@ mod tests {
             samples[index].as_secs_f64() * 1_000.0
         };
         eprintln!(
-            "phase_e_50m samples={} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3} max_reparsed_bytes={} total_bytes={} min_reused_chunks={} total_chunks={} last_parse_ms={:.3} last_display_map_ms={:.3}",
+            "reading_50m samples={} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3} max_reparsed_bytes={} total_bytes={} min_reused_chunks={} total_chunks={} last_parse_ms={:.3} last_display_map_ms={:.3}",
             samples.len(),
             percentile_ms(0.50),
             percentile_ms(0.95),
@@ -1381,7 +1391,7 @@ mod tests {
 
     #[cfg(feature = "benchmarks")]
     #[test]
-    fn phase_e_ten_mib_markdown_incremental_gate() {
+    fn reading_ten_mib_markdown_incremental_gate() {
         const TARGET_BYTES: usize = 10 * 1024 * 1024;
         let section = "# Stable heading\nbody text for incremental markdown editing\n\n";
         let mut source = String::with_capacity(TARGET_BYTES + section.len());
@@ -1421,7 +1431,7 @@ mod tests {
         }
         samples.sort_unstable();
         let p95_ms = samples[9].as_secs_f64() * 1_000.0;
-        eprintln!("phase_e_markdown_10m samples=10 p95_ms={p95_ms:.3}");
+        eprintln!("reading_markdown_10m samples=10 p95_ms={p95_ms:.3}");
         assert!(
             p95_ms <= 150.0,
             "10 MiB Markdown incremental p95 {p95_ms:.3} ms exceeds 150 ms budget"

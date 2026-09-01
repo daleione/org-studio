@@ -13,6 +13,151 @@ use crate::{
 };
 use gpui::AppContext;
 
+fn reading_semantic_golden(document: &super::PreviewSnapshot) -> String {
+    use super::{
+        CodeRowRole, DocumentFormat,
+        markdown::MarkdownKind,
+        projection::{ReadingCodeRow, VisualRowKind},
+    };
+
+    let display_map = document.display_map.as_ref().unwrap();
+    let mut output = String::new();
+    for (index, visual) in document.projection.rows.iter().enumerate() {
+        let runs = display_map.runs(index);
+        let text = runs.text.as_ref();
+        let line = match &visual.kind {
+            VisualRowKind::Blank | VisualRowKind::Hidden | VisualRowKind::Rule => continue,
+            VisualRowKind::Heading(level) => format!("heading-{level}:{text}"),
+            VisualRowKind::List(marker) => {
+                let state = match marker.checkbox {
+                    Some(super::org_line::CheckboxState::Empty) => "empty",
+                    Some(super::org_line::CheckboxState::Partial) => "partial",
+                    Some(super::org_line::CheckboxState::Checked) => "checked",
+                    None => "none",
+                };
+                format!("list:{state}:{text}")
+            }
+            VisualRowKind::Caption => format!("caption:{text}"),
+            VisualRowKind::Quote => format!("quote:{text}"),
+            VisualRowKind::Code(ReadingCodeRow::End) => continue,
+            VisualRowKind::Code(_) => {
+                let language = visual.code_language.as_deref().unwrap_or("code");
+                if document.format == DocumentFormat::Markdown {
+                    match document.markdown_blocks[visual.block_id as usize].kind {
+                        MarkdownKind::Code {
+                            role: CodeRowRole::Open,
+                            ..
+                        } => format!("code-open:{language}"),
+                        MarkdownKind::Code {
+                            role: CodeRowRole::Close,
+                            ..
+                        } => "code-close".to_owned(),
+                        _ => format!("code-body:{language}:{text}"),
+                    }
+                } else {
+                    format!("code-body:{language}:{text}")
+                }
+            }
+            VisualRowKind::Table(table) if table.is_separator() => "table-separator".to_owned(),
+            VisualRowKind::Table(table) => {
+                let cells = table
+                    .cells()
+                    .iter()
+                    .map(|cell| cell.text(text))
+                    .collect::<Vec<_>>()
+                    .join("|");
+                format!(
+                    "table-{}:{cells}",
+                    if table.is_header() { "header" } else { "body" }
+                )
+            }
+            VisualRowKind::Image { .. } => "image".to_owned(),
+            VisualRowKind::Text => format!("text:{text}"),
+        };
+        output.push_str(&line);
+        output.push('\n');
+    }
+    output
+}
+
+#[test]
+fn org_reading_semantics_match_golden() {
+    let document = loaded_document(
+        "reading-basic.org",
+        include_str!("../../tests/fixtures/reading-basic.org"),
+    )
+    .into_preview();
+    assert_eq!(
+        reading_semantic_golden(&document),
+        include_str!("../../tests/goldens/reading-basic-org.txt")
+    );
+}
+
+#[test]
+fn markdown_reading_semantics_match_golden() {
+    let document = loaded_document(
+        "reading-basic.md",
+        include_str!("../../tests/fixtures/reading-basic.md"),
+    )
+    .into_preview();
+    assert_eq!(
+        reading_semantic_golden(&document),
+        include_str!("../../tests/goldens/reading-basic-md.txt")
+    );
+}
+
+#[test]
+fn markdown_closing_fence_is_zero_height_in_reading() {
+    let document = loaded_document("code.md", "```rust\nlet value = 1;\n```\n").into_preview();
+    let closing = document
+        .projection
+        .rows
+        .iter()
+        .find(|row| {
+            matches!(
+                row.kind,
+                super::projection::VisualRowKind::Code(super::projection::ReadingCodeRow::End)
+            )
+        })
+        .expect("fixture has a closing fence");
+    assert_eq!(closing.layout.fixed_height, Some(0.0));
+}
+
+#[test]
+fn malformed_reading_input_falls_back_without_building_a_second_document_model() {
+    let document = loaded_document(
+        "malformed.org",
+        "* Heading\n| unfinished table\n#+begin_src rust\nlet value = 1;\n",
+    )
+    .into_preview();
+    let display_map = document.display_map.as_ref().unwrap();
+
+    assert_eq!(display_map.projection.revision, document.revision);
+    assert_eq!(
+        display_map.projection.rows.len(),
+        document.projection.rows.len()
+    );
+    for row in 0..document.projection.rows.len() {
+        let _ = display_map.runs(row);
+    }
+}
+
+#[test]
+fn large_reading_projection_keeps_display_materialization_viewport_bounded() {
+    let source = (0..20_000)
+        .map(|index| format!("* Heading {index}\nbody {index}\n"))
+        .collect::<String>();
+    let document = loaded_document("large-reading.org", &source).into_preview();
+    let display_map = document.display_map.as_ref().unwrap();
+
+    assert!(document.projection.chunk_count() > 100);
+    assert!(display_map.display_runs.lock().unwrap().entries.is_empty());
+    for row in 10_000..10_032 {
+        let _ = display_map.runs(row);
+    }
+    assert_eq!(display_map.display_runs.lock().unwrap().entries.len(), 32);
+}
+
 fn visible_source_lines(
     app: &super::WorkspaceWindow,
     document: &super::PreviewSnapshot,
@@ -86,6 +231,37 @@ fn opening_split_from_single_reading_reuses_the_current_snapshot(cx: &mut gpui::
             .document()
             .clone();
         assert!(std::sync::Arc::ptr_eq(&left, &right));
+    });
+}
+
+#[gpui::test]
+fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::TestAppContext) {
+    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("pane-zoom.org", "* Heading\nbody\n")),
+            cx,
+        ));
+        workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
+        let ready = workspace.state.ready().unwrap();
+        ready.readers.left.as_ref().unwrap().update(cx, |panel, _| {
+            assert!(panel.set_zoom(1.25));
+        });
+        ready
+            .readers
+            .right
+            .as_ref()
+            .unwrap()
+            .update(cx, |panel, _| {
+                assert!(panel.set_zoom(0.9));
+            });
+
+        workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
+        workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
+        let ready = workspace.state.ready().unwrap();
+        assert_eq!(ready.readers.left.as_ref().unwrap().read(cx).zoom(), 1.25);
+        assert_eq!(ready.readers.right.as_ref().unwrap().read(cx).zoom(), 0.9);
     });
 }
 
@@ -377,7 +553,7 @@ fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui:
                 && previous.text.copy_range(block.content) == "Heading 200"
         })
         .unwrap() as crate::org_syntax::BlockId;
-    let panel = cx.new(|_| super::PreviewPanel::new(std::sync::Arc::new(previous), 80.0));
+    let panel = cx.new(|_| super::ReadingPreviewPanel::new(std::sync::Arc::new(previous), 80.0));
     panel.update(cx, |panel, _| {
         panel.toggle_fold(folded);
         panel.list_state().scrollbar_drag_started();

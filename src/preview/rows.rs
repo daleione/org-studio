@@ -33,8 +33,12 @@ pub(super) fn build_preview_rows_in_range(
                 | BlockKind::CenterBlock
                 | BlockKind::ExportBlock { .. }
                 | BlockKind::SpecialBlock { .. }
-                | BlockKind::Raw
         ) {
+            push_physical_rows(text, block_id, block.content, false, &mut rows);
+            continue;
+        }
+
+        if matches!(block.kind, BlockKind::Raw) {
             push_physical_rows(text, block_id, block.source, false, &mut rows);
             continue;
         }
@@ -44,7 +48,6 @@ pub(super) fn build_preview_rows_in_range(
                 block_id,
                 content: text.revision_range(block.content),
                 continuation: false,
-                show_line_number: true,
                 blank: true,
             });
             continue;
@@ -55,7 +58,6 @@ pub(super) fn build_preview_rows_in_range(
                 block_id,
                 content: text.revision_range(block.content),
                 continuation: false,
-                show_line_number: true,
                 blank: false,
             });
             continue;
@@ -73,6 +75,15 @@ fn push_physical_rows(
     blank: bool,
     rows: &mut Vec<PreviewRow>,
 ) {
+    if range.is_empty() {
+        rows.push(PreviewRow {
+            block_id,
+            content: text.revision_range(range),
+            continuation: false,
+            blank,
+        });
+        return;
+    }
     let source = text.copy_range(range);
     let mut start = 0;
     let mut continuation = false;
@@ -90,7 +101,6 @@ fn push_physical_rows(
             block_id,
             content: text.revision_range(ByteRange::new(global_start, range.start.0 + end as u64)),
             continuation,
-            show_line_number: true,
             blank,
         });
         continuation = true;
@@ -143,7 +153,7 @@ mod tests {
     }
 
     #[test]
-    fn org_source_block_preserves_both_fences_and_their_line_numbers() {
+    fn org_source_block_projects_only_reading_content() {
         let text = DocumentSnapshot::from_utf8(
             b"before\n#+begin_src rust\n    let value = 1;\n#+end_src\nafter\n".to_vec(),
         )
@@ -151,14 +161,12 @@ mod tests {
         let blocks = parse(&text);
         let rows = build_preview_rows(&text, &blocks);
 
-        assert_eq!(text.copy_range(rows[1].content.range), "#+begin_src rust");
-        assert_eq!(text.copy_range(rows[2].content.range), "    let value = 1;");
-        assert_eq!(text.copy_range(rows[3].content.range), "#+end_src");
+        assert_eq!(text.copy_range(rows[1].content.range), "    let value = 1;");
         assert_eq!(
             rows.iter()
                 .map(|row| text.line_of_byte(row.content.range.start) + 1)
                 .collect::<Vec<_>>(),
-            vec![1, 2, 3, 4, 5]
+            vec![1, 3, 5]
         );
     }
 }

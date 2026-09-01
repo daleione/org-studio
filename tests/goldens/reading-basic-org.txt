@@ -1,0 +1,12 @@
+heading-1:Reading Preview
+text:Paragraph with bold and link.
+list:empty:open
+list:partial:partial
+list:checked:done
+table-header:Name|Score
+table-separator
+table-body:Ada|42
+caption:Architecture
+image
+code-body:rust:let answer = 42;
+quote:Quoted text

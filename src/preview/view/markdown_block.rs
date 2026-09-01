@@ -1,35 +1,26 @@
+use super::document::{reading_code_label, reading_fallback, render_list_item};
 use super::{
-    Arc, DocumentFormat, FontWeight, InlineText, PreviewSnapshot, current_theme, div, img,
-    markdown, parse_inline, px, render_code_row, render_table_row, resolve_image_path, rgb,
-    styled_inline_runs,
+    Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingRowContext, current_theme, div, img,
+    markdown, px, render_code_row, render_table_row, resolve_image_path, rgb, styled_inline_runs,
 };
+use crate::preview::CodeRowRole;
 use gpui::prelude::*;
-
-pub(in crate::preview) fn parse_document_inline(
-    format: DocumentFormat,
-    source: &str,
-) -> InlineText {
-    match format {
-        DocumentFormat::Org => parse_inline(source),
-        DocumentFormat::Markdown => markdown::parse_markdown_inline(source),
-    }
-}
 
 pub(super) fn render_markdown_block(
     document: &Arc<PreviewSnapshot>,
     display_row: usize,
     block: &markdown::MarkdownBlock,
     is_folded: bool,
-    available_width: f32,
+    context: ReadingRowContext<'_>,
 ) -> gpui::Div {
     use markdown::MarkdownKind;
     let theme = current_theme();
     let display_map = document
         .display_map
         .as_ref()
-        .expect("preview display map must exist after loading");
+        .expect("reading display map must exist after loading");
     let display_runs = display_map.runs(display_row);
-    let row_layout = display_map.layout(display_row);
+    let row_layout = display_map.layout(display_row).scaled(context.zoom);
     let text = display_runs.text.clone();
     let inline = || styled_inline_runs(text.clone(), display_runs.inline_spans.clone());
     match &block.kind {
@@ -41,7 +32,6 @@ pub(super) fn render_markdown_block(
             div()
                 .flex()
                 .items_center()
-                .gap_1()
                 .text_size(px(row_layout.font_size))
                 .line_height(px(row_layout.line_height))
                 .font_weight(if *level <= 2 {
@@ -50,12 +40,6 @@ pub(super) fn render_markdown_block(
                     FontWeight::MEDIUM
                 })
                 .text_color(rgb(theme.heading[index]))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_size(px(13.0))
-                        .child(format!("{} ", theme.heading_bullets[index])),
-                )
                 .child(
                     div()
                         .flex_1()
@@ -77,11 +61,13 @@ pub(super) fn render_markdown_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .child(inline()),
-        MarkdownKind::ListItem => div()
-            .pl(px(row_layout.padding_left))
-            .text_size(px(row_layout.font_size))
-            .line_height(px(row_layout.line_height))
-            .child(inline()),
+        MarkdownKind::ListItem => render_list_item(
+            document,
+            display_row,
+            inline(),
+            row_layout.font_size,
+            row_layout.line_height,
+        ),
         MarkdownKind::Quote => div()
             .pl(px(row_layout.padding_left))
             .pr(px(row_layout.padding_right))
@@ -93,14 +79,24 @@ pub(super) fn render_markdown_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .child(inline()),
-        MarkdownKind::Code { role, .. } => {
-            render_code_row(text, display_runs.code_spans, row_layout, *role)
-        }
-        MarkdownKind::TableRow => render_table_row(
-            &text,
-            display_map
-                .table_projection(display_row)
-                .expect("markdown table row projection must exist"),
+        MarkdownKind::Code { language, role } => match role {
+            CodeRowRole::Open => reading_code_label(language.as_deref()),
+            CodeRowRole::Close => div().h(px(0.0)),
+            CodeRowRole::Body => render_code_row(text, display_runs.code_spans, row_layout, *role),
+        },
+        MarkdownKind::TableRow => display_map.table_projection(display_row).map_or_else(
+            || reading_fallback(text.clone(), row_layout.font_size, row_layout.line_height),
+            |projection| {
+                render_table_row(
+                    &text,
+                    projection,
+                    DocumentFormat::Markdown,
+                    context.available_width,
+                    context.zoom,
+                    display_row,
+                    context.table_scroll,
+                )
+            },
         ),
         MarkdownKind::HorizontalRule => div()
             .mt(px(row_layout.margin_top))
@@ -110,7 +106,7 @@ pub(super) fn render_markdown_block(
             .bg(rgb(theme.border)),
         MarkdownKind::Image { path } => {
             let source = resolve_image_path(&document.path, path);
-            let fitted = display_map.image_size(display_row, available_width);
+            let fitted = display_map.image_size(display_row, context.available_width);
             div()
                 .w_full()
                 .pt(px(row_layout.padding_top))
@@ -120,7 +116,7 @@ pub(super) fn render_markdown_block(
                 .child(if let Some((width, height)) = fitted {
                     img(source).w(px(width)).h(px(height))
                 } else {
-                    img(source).max_w(px(available_width.min(960.0)))
+                    img(source).max_w(px(context.available_width.min(960.0)))
                 })
         }
     }

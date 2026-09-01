@@ -124,7 +124,7 @@ impl WorkspaceWindow {
     fn preview_status_snapshot(
         &self,
         pane: PaneId,
-        panel: &gpui::Entity<super::super::PreviewPanel>,
+        panel: &gpui::Entity<super::super::ReadingPreviewPanel>,
         cx: &gpui::App,
     ) -> StatusLineSnapshot {
         let panel = panel.read(cx);

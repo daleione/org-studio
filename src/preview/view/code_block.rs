@@ -47,16 +47,6 @@ pub(super) fn render_code_row(
         .child(content)
 }
 
-pub(super) fn org_code_row_role(source: &str, continuation: bool) -> CodeRowRole {
-    if !continuation {
-        CodeRowRole::Open
-    } else if source.trim().eq_ignore_ascii_case("#+end_src") {
-        CodeRowRole::Close
-    } else {
-        CodeRowRole::Body
-    }
-}
-
 fn styled_code_boundary(text: SharedString, role: CodeRowRole) -> StyledText {
     let theme = current_theme();
     let mut highlights = Vec::new();
@@ -118,20 +108,6 @@ fn fence_metadata_ranges(source: &str) -> Option<(Range<usize>, Option<Range<usi
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn recognizes_org_source_boundaries_without_hiding_source_rows() {
-        assert_eq!(
-            org_code_row_role("  #+BEGIN_SRC rust", false),
-            CodeRowRole::Open
-        );
-        assert_eq!(
-            org_code_row_role("#+begin_src nested", true),
-            CodeRowRole::Body
-        );
-        assert_eq!(org_code_row_role("let x = 1;", true), CodeRowRole::Body);
-        assert_eq!(org_code_row_role("#+end_src", true), CodeRowRole::Close);
-    }
 
     #[test]
     fn locates_markdown_and_org_language_metadata() {

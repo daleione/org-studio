@@ -1,4 +1,4 @@
-use super::{display_map, markdown, minimap, projection::PreviewProjectionSnapshot};
+use super::{display_map, markdown, minimap, projection::ReadingProjection};
 use crate::{
     document::{
         DocumentId, DocumentSession, PreparedReload, Revision, RevisionRange, SharedTextSnapshot,
@@ -22,7 +22,7 @@ pub struct PreviewSnapshot {
     pub blocks: Arc<BlockArena>,
     pub(in crate::preview) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     pub(in crate::preview) outline_paths: Arc<Vec<Option<Arc<str>>>>,
-    pub(in crate::preview) projection: Arc<PreviewProjectionSnapshot>,
+    pub(in crate::preview) projection: Arc<ReadingProjection>,
     pub(in crate::preview) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
     pub statistics: TextStatistics,
     pub metrics: LoadMetrics,
@@ -222,7 +222,6 @@ pub(super) struct PreviewRow {
     pub(super) block_id: BlockId,
     pub(super) content: RevisionRange,
     pub(super) continuation: bool,
-    pub(super) show_line_number: bool,
     pub(super) blank: bool,
 }
 

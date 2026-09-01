@@ -18,8 +18,9 @@ use crate::{
         CodeHighlightSpan, DocumentFormat, PreviewRow, PreviewSnapshot, code_highlight_style,
         highlight_code,
         markdown::{MarkdownBlock, MarkdownKind},
+        org_line::{parse_heading, parse_list_item},
         parse_document_inline,
-        projection::{PreviewProjectionSnapshot, VisualRowId, VisualRowKind},
+        projection::{ReadingCodeRow, ReadingProjection, VisualRowId, VisualRowKind},
         table::TableRowProjection,
     },
     theme::current_theme,
@@ -33,6 +34,7 @@ pub(super) enum PreviewLineKind {
     Text,
     Heading(u8),
     List,
+    Caption,
     Quote,
     Code,
     Table,
@@ -93,6 +95,30 @@ impl RowLayout {
             ..Self::text(14.0, 24.0)
         }
     }
+
+    pub(super) const fn hidden() -> Self {
+        Self {
+            min_height: 0.0,
+            fixed_height: Some(0.0),
+            ..Self::text(14.0, 0.0)
+        }
+    }
+
+    pub(super) fn scaled(self, scale: f32) -> Self {
+        let scale = scale.clamp(0.75, 2.0);
+        Self {
+            font_size: self.font_size * scale,
+            line_height: self.line_height * scale,
+            min_height: self.min_height * scale,
+            padding_left: self.padding_left * scale,
+            padding_right: self.padding_right * scale,
+            padding_top: self.padding_top * scale,
+            padding_bottom: self.padding_bottom * scale,
+            margin_top: self.margin_top * scale,
+            margin_bottom: self.margin_bottom * scale,
+            fixed_height: self.fixed_height.map(|height| height * scale),
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -105,7 +131,7 @@ pub(in crate::preview) struct DisplayRuns {
 pub(in crate::preview) struct PreviewDisplayMap {
     pub(super) text: SharedTextSnapshot,
     pub(super) format: DocumentFormat,
-    pub(super) projection: Arc<PreviewProjectionSnapshot>,
+    pub(super) projection: Arc<ReadingProjection>,
     pub(super) display_runs: Mutex<DisplayRunCache>,
     pub(super) display_lines: Mutex<DisplayLineCache>,
 }
@@ -229,14 +255,19 @@ impl PreviewDisplayMap {
         let kind = self.row_kind(row);
         let layout = self.layout(row);
         if kind == PreviewLineKind::Table {
-            // A table row is laid out from its parsed cells and shared column geometry, not by
-            // wrapping the source `| ... |` text. Keeping it to one display line matches the
-            // preview row and prevents the minimap from inventing extra rows from markup width.
+            let table = self.table_projection(row);
+            let line_count = table
+                .map(|table| table.estimated_line_count(&display.text, available_width))
+                .unwrap_or(1);
             let lines = DisplayLines {
                 ranges: std::iter::once(0..display.text.len())
                     .collect::<Vec<_>>()
                     .into(),
-                parent_height: layout.min_height.max(layout.line_height),
+                parent_height: if table.is_some_and(TableRowProjection::is_separator) {
+                    2.0
+                } else {
+                    (line_count as f32 * 21.0 + 16.0).max(38.0)
+                },
             };
             self.display_lines
                 .lock()
@@ -309,13 +340,6 @@ impl PreviewDisplayMap {
         lines
     }
 
-    pub(in crate::preview) fn is_table(&self, row: usize) -> bool {
-        self.projection
-            .rows
-            .get(row)
-            .is_some_and(|_| self.row_kind(row) == PreviewLineKind::Table)
-    }
-
     pub(in crate::preview) fn layout(&self, row: usize) -> RowLayout {
         self.projection
             .rows
@@ -341,15 +365,26 @@ impl PreviewDisplayMap {
             (available_width - layout.padding_left - layout.padding_right - marker_width).max(1.0);
         let source_bytes = source_row.content.range.len() as f32;
         let estimated_text_width = source_bytes * layout.font_size * 0.5;
-        let line_count =
-            if layout.fixed_height.is_some() || self.image_size(row, available_width).is_some() {
-                1
-            } else {
-                (estimated_text_width / wrap_width).ceil().max(1.0) as usize
-            };
+        let line_count = if kind == PreviewLineKind::Table {
+            let display = self.runs(row);
+            self.table_projection(row)
+                .map(|table| table.estimated_line_count(&display.text, available_width))
+                .unwrap_or(1)
+        } else if layout.fixed_height.is_some() || self.image_size(row, available_width).is_some() {
+            1
+        } else {
+            (estimated_text_width / wrap_width).ceil().max(1.0) as usize
+        };
         let parent_height = self
             .image_size(row, available_width)
             .map(|(_, height)| height + layout.padding_top + layout.padding_bottom)
+            .or_else(|| {
+                (kind == PreviewLineKind::Table
+                    && self
+                        .table_projection(row)
+                        .is_some_and(TableRowProjection::is_separator))
+                .then_some(2.0)
+            })
             .or(layout.fixed_height)
             .unwrap_or_else(|| {
                 (line_count as f32 * layout.line_height
@@ -382,9 +417,12 @@ impl PreviewDisplayMap {
                 BlockKind::BlankLine => RowLayout::blank(),
                 BlockKind::Paragraph => RowLayout::text(14.0, 22.0),
                 BlockKind::ListItem => RowLayout {
-                    padding_left: 4.0,
-                    ..RowLayout::text(14.0, 22.0)
+                    padding_left: 8.0,
+                    padding_top: 2.0,
+                    padding_bottom: 2.0,
+                    ..RowLayout::text(15.0, 24.0)
                 },
+                BlockKind::Keyword => RowLayout::text(13.0, 22.0),
                 BlockKind::Image { .. } => RowLayout::image(),
                 BlockKind::Planning | BlockKind::FixedWidth | BlockKind::FootnoteDefinition => {
                     RowLayout::text(13.0, 22.0)
@@ -427,11 +465,6 @@ impl PreviewDisplayMap {
                     padding_bottom: 2.0,
                     ..RowLayout::text(12.0, 19.0)
                 },
-                BlockKind::Keyword => RowLayout {
-                    padding_top: 3.0,
-                    padding_bottom: 3.0,
-                    ..RowLayout::text(12.0, 18.0)
-                },
                 BlockKind::HorizontalRule => RowLayout::rule(),
                 BlockKind::Comment | BlockKind::CommentBlock => RowLayout {
                     fixed_height: Some(0.0),
@@ -452,8 +485,10 @@ impl PreviewDisplayMap {
                 MarkdownKind::Blank => RowLayout::blank(),
                 MarkdownKind::Paragraph => RowLayout::text(14.0, 22.0),
                 MarkdownKind::ListItem => RowLayout {
-                    padding_left: 4.0,
-                    ..RowLayout::text(14.0, 22.0)
+                    padding_left: 8.0,
+                    padding_top: 2.0,
+                    padding_bottom: 2.0,
+                    ..RowLayout::text(15.0, 24.0)
                 },
                 MarkdownKind::Quote => RowLayout {
                     padding_left: 16.0,
@@ -489,7 +524,7 @@ impl PreviewDisplayMap {
         available_width: f32,
     ) -> Option<(f32, f32)> {
         match self.projection.rows.get(row)?.kind {
-            VisualRowKind::Image { width, height } => Some((width, height)),
+            VisualRowKind::Image { dimensions } => dimensions,
             _ => None,
         }
         .map(|(width, height)| crate::preview::fitted_image_size(width, height, available_width))
@@ -505,9 +540,10 @@ impl PreviewDisplayMap {
         {
             VisualRowKind::Text => PreviewLineKind::Text,
             VisualRowKind::Heading(level) => PreviewLineKind::Heading(*level),
-            VisualRowKind::List => PreviewLineKind::List,
+            VisualRowKind::List(_) => PreviewLineKind::List,
+            VisualRowKind::Caption => PreviewLineKind::Caption,
             VisualRowKind::Quote => PreviewLineKind::Quote,
-            VisualRowKind::Code => PreviewLineKind::Code,
+            VisualRowKind::Code(_) => PreviewLineKind::Code,
             VisualRowKind::Blank | VisualRowKind::Hidden => PreviewLineKind::Blank,
             VisualRowKind::Table(_) => PreviewLineKind::Table,
             VisualRowKind::Image { .. } => PreviewLineKind::Image,
@@ -570,22 +606,47 @@ pub(in crate::preview) fn build_display_map_reusing(
 }
 
 pub(super) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> DisplayRuns {
+    let visual = model
+        .projection
+        .rows
+        .get(row)
+        .expect("reading row index is in bounds");
     let line = model.source_row(row);
     let kind = model.row_kind(row);
     let source = model.text.copy_range(line.content.range);
     let source = source.trim_end_matches(['\r', '\n']);
+    let source = match (&model.format, &visual.kind, &kind) {
+        (DocumentFormat::Org, _, PreviewLineKind::Heading(_)) => parse_heading(source).title,
+        (_, _, PreviewLineKind::List) => {
+            let parts = parse_list_item(source);
+            parts.term.map_or(parts.body.clone(), |term| {
+                format!("{term} — {}", parts.body)
+            })
+        }
+        (DocumentFormat::Org, _, PreviewLineKind::Caption) => source
+            .split_once(':')
+            .map_or(source, |(_, caption)| caption)
+            .trim_start()
+            .to_owned(),
+        (_, VisualRowKind::Code(ReadingCodeRow::Start), _) => {
+            visual.code_language.as_deref().unwrap_or("code").to_owned()
+        }
+        (_, VisualRowKind::Code(ReadingCodeRow::End), _) => String::new(),
+        _ => source.to_owned(),
+    };
     let parse_inline = matches!(
         kind,
         PreviewLineKind::Text
             | PreviewLineKind::Heading(_)
             | PreviewLineKind::List
+            | PreviewLineKind::Caption
             | PreviewLineKind::Quote
     );
     let (text, inline_spans): (SharedString, Arc<[InlineSpan]>) = if parse_inline {
-        let parsed = parse_document_inline(model.format, source);
+        let parsed = parse_document_inline(model.format, &source);
         (parsed.text.into(), parsed.spans.into())
     } else {
-        (source.to_owned().into(), Arc::from([]))
+        (source.into(), Arc::from([]))
     };
     let code_spans = model
         .projection
@@ -628,6 +689,7 @@ pub(super) fn kind_color(kind: PreviewLineKind) -> u32 {
         PreviewLineKind::Table => theme.foreground,
         PreviewLineKind::Quote => theme.quote,
         PreviewLineKind::List => theme.foreground,
+        PreviewLineKind::Caption => theme.meta,
         PreviewLineKind::Image => theme.attribute,
         PreviewLineKind::Rule => theme.border,
         PreviewLineKind::Text | PreviewLineKind::Blank => theme.foreground,

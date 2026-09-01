@@ -165,7 +165,7 @@ fn product_shell_has_one_definition_in_app() {
 fn entity_and_load_boundaries_keep_their_fields_private() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for (relative, name) in [
-        ("src/preview/panel.rs", "PreviewPanel"),
+        ("src/preview/reading_panel.rs", "ReadingPreviewPanel"),
         ("src/preview/document.rs", "LoadedDocument"),
         ("src/preview/file_manager_host.rs", "FileManagerHost"),
         ("src/preview/export_ui.rs", "ExportHost"),
@@ -198,6 +198,8 @@ fn removed_product_types_do_not_return_as_items() {
         "DocumentLayout",
         "DocumentSurfaceFocus",
         "RightPreviewState",
+        "PreviewPanel",
+        "PreviewProjectionSnapshot",
     ];
     let mut violations = Vec::new();
     for path in files {

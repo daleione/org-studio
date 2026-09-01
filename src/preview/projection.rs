@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ops::Range,
     sync::{
         Arc,
@@ -8,7 +8,7 @@ use std::{
 };
 
 use crate::{
-    document::{EditLog, Revision, RevisionDelta, RevisionRange},
+    document::{EditLog, Revision, RevisionDelta, RevisionRange, TextSnapshot},
     org_syntax::{BlockArena, BlockId, BlockKind},
 };
 
@@ -16,6 +16,7 @@ use super::{
     DocumentFormat, PreviewRow,
     display_map::{PreviewDisplayMap, RowLayout},
     markdown::{MarkdownBlock, MarkdownKind},
+    org_line::{CheckboxState, parse_list_item},
     table::TableRowProjection,
 };
 
@@ -33,14 +34,35 @@ pub(in crate::preview) struct VisualRowId(pub(in crate::preview) u64);
 pub(in crate::preview) enum VisualRowKind {
     Text,
     Heading(u8),
-    List,
+    List(ReadingListMarker),
+    Caption,
     Quote,
-    Code,
+    Code(ReadingCodeRow),
     Blank,
     Table(TableRowProjection),
-    Image { width: u32, height: u32 },
+    Image { dimensions: Option<(u32, u32)> },
     Rule,
     Hidden,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::preview) enum ReadingCodeRow {
+    Start,
+    Body,
+    End,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::preview) struct ReadingListMarker {
+    pub(in crate::preview) marker: Arc<str>,
+    pub(in crate::preview) checkbox: Option<CheckboxState>,
+    pub(in crate::preview) indent: u16,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::preview) struct ReadingProjectionResources<'a> {
+    pub(in crate::preview) tables: &'a HashMap<BlockId, TableRowProjection>,
+    pub(in crate::preview) images: &'a HashMap<BlockId, (u32, u32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -275,7 +297,7 @@ impl VisualRowTree {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct PreviewProjectionSnapshot {
+pub(in crate::preview) struct ReadingProjection {
     pub(in crate::preview) revision: Revision,
     pub(in crate::preview) revisions: VisualRevisions,
     pub(in crate::preview) rows: VisualRowTree,
@@ -339,7 +361,7 @@ pub(in crate::preview) enum ProjectionPatchError {
     UncoveredChangedRow,
 }
 
-impl PreviewProjectionSnapshot {
+impl ReadingProjection {
     fn rebased(&self) -> Result<Self, ProjectionPatchError> {
         let rows = self
             .rows
@@ -666,25 +688,25 @@ fn edit_intersects_range(
 }
 
 pub(in crate::preview) fn build_projection_snapshot(
+    text: &dyn TextSnapshot,
     revision: Revision,
     format: DocumentFormat,
     source_rows: Arc<Vec<PreviewRow>>,
     blocks: &BlockArena,
     markdown_blocks: &[MarkdownBlock],
-    tables: &std::collections::HashMap<BlockId, TableRowProjection>,
-    images: &std::collections::HashMap<BlockId, (u32, u32)>,
-) -> Arc<PreviewProjectionSnapshot> {
+    resources: ReadingProjectionResources<'_>,
+) -> Arc<ReadingProjection> {
     let rows = build_visual_rows(
+        text,
         revision,
         format,
         &source_rows,
         blocks,
         markdown_blocks,
-        tables,
-        images,
+        resources,
     );
     let rows = VisualRowTree::from_rows(rows);
-    Arc::new(PreviewProjectionSnapshot {
+    Arc::new(ReadingProjection {
         revision,
         revisions: VisualRevisions::default(),
         presentation: PresentationTree::from_visual_rows(&rows),
@@ -694,37 +716,42 @@ pub(in crate::preview) fn build_projection_snapshot(
 }
 
 pub(in crate::preview) fn build_visual_rows(
+    text: &dyn TextSnapshot,
     revision: Revision,
     format: DocumentFormat,
     source_rows: &[PreviewRow],
     blocks: &BlockArena,
     markdown_blocks: &[MarkdownBlock],
-    tables: &std::collections::HashMap<BlockId, TableRowProjection>,
-    images: &std::collections::HashMap<BlockId, (u32, u32)>,
+    resources: ReadingProjectionResources<'_>,
 ) -> Vec<VisualRow> {
     source_rows
         .iter()
-        .map(|row| VisualRow {
-            id: next_visual_row_id(),
-            source: row.content,
-            block_id: row.block_id,
-            semantic_revision: revision.0,
-            kind: visual_kind(
-                format,
-                row.block_id,
-                blocks,
-                markdown_blocks,
-                tables,
-                images,
-            ),
-            code_language: visual_code_language(format, row.block_id, blocks, markdown_blocks),
-            layout: PreviewDisplayMap::source_row_layout(
-                format,
-                blocks,
-                markdown_blocks,
-                row.block_id,
-            ),
-            render: *row,
+        .map(|row| {
+            let kind = visual_kind(text, format, row, blocks, markdown_blocks, resources);
+            let layout = match &kind {
+                VisualRowKind::Caption => RowLayout {
+                    padding_top: 4.0,
+                    padding_bottom: 8.0,
+                    ..RowLayout::text(12.0, 18.0)
+                },
+                VisualRowKind::Code(ReadingCodeRow::End) => RowLayout::hidden(),
+                _ => PreviewDisplayMap::source_row_layout(
+                    format,
+                    blocks,
+                    markdown_blocks,
+                    row.block_id,
+                ),
+            };
+            VisualRow {
+                id: next_visual_row_id(),
+                source: row.content,
+                block_id: row.block_id,
+                semantic_revision: revision.0,
+                kind,
+                code_language: visual_code_language(format, row.block_id, blocks, markdown_blocks),
+                layout,
+                render: *row,
+            }
         })
         .collect()
 }
@@ -739,14 +766,12 @@ fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
         }
         (
             VisualRowKind::Image {
-                width: old_width,
-                height: old_height,
+                dimensions: old_dimensions,
             },
             VisualRowKind::Image {
-                width: new_width,
-                height: new_height,
+                dimensions: new_dimensions,
             },
-        ) => old_width == new_width && old_height == new_height,
+        ) => old_dimensions == new_dimensions,
         (VisualRowKind::Rule, VisualRowKind::Rule)
         | (VisualRowKind::Blank, VisualRowKind::Blank)
         | (VisualRowKind::Hidden, VisualRowKind::Hidden) => true,
@@ -755,25 +780,47 @@ fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
 }
 
 fn visual_kind(
+    text: &dyn TextSnapshot,
     format: DocumentFormat,
-    block_id: BlockId,
+    row: &PreviewRow,
     blocks: &BlockArena,
     markdown_blocks: &[MarkdownBlock],
-    tables: &std::collections::HashMap<BlockId, TableRowProjection>,
-    images: &std::collections::HashMap<BlockId, (u32, u32)>,
+    resources: ReadingProjectionResources<'_>,
 ) -> VisualRowKind {
-    if let Some(table) = tables.get(&block_id) {
+    let block_id = row.block_id;
+    if let Some(table) = resources.tables.get(&block_id) {
         return VisualRowKind::Table(table.clone());
     }
-    if let Some(&(width, height)) = images.get(&block_id) {
-        return VisualRowKind::Image { width, height };
+    if let Some(&(width, height)) = resources.images.get(&block_id) {
+        return VisualRowKind::Image {
+            dimensions: Some((width, height)),
+        };
     }
     match format {
         DocumentFormat::Org => match blocks.nodes()[block_id as usize].kind {
             BlockKind::Heading { level } => VisualRowKind::Heading(level.min(4) as u8),
-            BlockKind::ListItem => VisualRowKind::List,
+            BlockKind::ListItem => {
+                let parts = parse_list_item(&text.copy_range(row.content.range));
+                VisualRowKind::List(ReadingListMarker {
+                    marker: Arc::from(parts.marker),
+                    checkbox: parts.checkbox,
+                    indent: reading_indent(&parts.indent),
+                })
+            }
+            BlockKind::Keyword
+                if text
+                    .copy_range(row.content.range)
+                    .trim_start()
+                    .get(.."#+caption:".len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+caption:")) =>
+            {
+                VisualRowKind::Caption
+            }
             BlockKind::QuoteBlock => VisualRowKind::Quote,
-            BlockKind::SourceBlock { .. } | BlockKind::ExampleBlock => VisualRowKind::Code,
+            BlockKind::Image { .. } => VisualRowKind::Image { dimensions: None },
+            BlockKind::SourceBlock { .. } | BlockKind::ExampleBlock => {
+                VisualRowKind::Code(ReadingCodeRow::Body)
+            }
             BlockKind::BlankLine => VisualRowKind::Blank,
             BlockKind::HorizontalRule => VisualRowKind::Rule,
             BlockKind::Comment | BlockKind::CommentBlock => VisualRowKind::Hidden,
@@ -781,14 +828,39 @@ fn visual_kind(
         },
         DocumentFormat::Markdown => match markdown_blocks[block_id as usize].kind {
             MarkdownKind::Heading { level } => VisualRowKind::Heading(level.min(4) as u8),
-            MarkdownKind::ListItem => VisualRowKind::List,
+            MarkdownKind::ListItem => {
+                let parts = parse_list_item(&text.copy_range(row.content.range));
+                VisualRowKind::List(ReadingListMarker {
+                    marker: Arc::from(parts.marker),
+                    checkbox: parts.checkbox,
+                    indent: reading_indent(&parts.indent),
+                })
+            }
             MarkdownKind::Quote => VisualRowKind::Quote,
-            MarkdownKind::Code { .. } => VisualRowKind::Code,
+            MarkdownKind::Image { .. } => VisualRowKind::Image { dimensions: None },
+            MarkdownKind::Code { role, .. } => VisualRowKind::Code(match role {
+                crate::preview::CodeRowRole::Open => ReadingCodeRow::Start,
+                crate::preview::CodeRowRole::Body => ReadingCodeRow::Body,
+                crate::preview::CodeRowRole::Close => ReadingCodeRow::End,
+            }),
             MarkdownKind::Blank => VisualRowKind::Blank,
             MarkdownKind::HorizontalRule => VisualRowKind::Rule,
             _ => VisualRowKind::Text,
         },
     }
+}
+
+fn reading_indent(indent: &str) -> u16 {
+    indent
+        .bytes()
+        .fold(0usize, |column, byte| {
+            if byte == b'\t' {
+                (column / 4 + 1) * 4
+            } else {
+                column + 1
+            }
+        })
+        .min(u16::MAX as usize) as u16
 }
 
 fn visual_code_language(
@@ -834,7 +906,6 @@ mod tests {
                     ByteRange::new(index as u64 * 10, index as u64 * 10 + 5),
                 ),
                 continuation: false,
-                show_line_number: true,
                 blank: false,
             },
         }
@@ -864,7 +935,7 @@ mod tests {
 
     #[test]
     fn patch_rejects_stale_and_incompletely_covered_changes() {
-        let snapshot = PreviewProjectionSnapshot {
+        let snapshot = ReadingProjection {
             revision: Revision(0),
             revisions: VisualRevisions::default(),
             rows: VisualRowTree::from_rows((0..3).map(|index| row(index, Revision(0))).collect()),
@@ -892,7 +963,7 @@ mod tests {
 
     #[test]
     fn patch_advances_snapshot_and_reports_only_the_replaced_visual_range() {
-        let snapshot = PreviewProjectionSnapshot {
+        let snapshot = ReadingProjection {
             revision: Revision(0),
             revisions: VisualRevisions::default(),
             rows: VisualRowTree::from_rows((0..3).map(|index| row(index, Revision(0))).collect()),
@@ -958,7 +1029,7 @@ mod tests {
         let mut old = row(0, Revision(0));
         old.kind = VisualRowKind::Table(test_table_projection());
         let rows = VisualRowTree::from_rows(vec![old]);
-        let snapshot = PreviewProjectionSnapshot {
+        let snapshot = ReadingProjection {
             revision: Revision(0),
             revisions: VisualRevisions::default(),
             presentation: PresentationTree::from_visual_rows(&rows),
@@ -983,7 +1054,7 @@ mod tests {
     #[test]
     fn projection_rebases_before_bounded_history_expires() {
         let rows = VisualRowTree::from_rows((0..3).map(|index| row(index, Revision(0))).collect());
-        let mut snapshot = PreviewProjectionSnapshot {
+        let mut snapshot = ReadingProjection {
             revision: Revision(0),
             revisions: VisualRevisions::default(),
             presentation: PresentationTree::from_visual_rows(&rows),

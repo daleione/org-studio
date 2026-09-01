@@ -24,12 +24,14 @@ pub(crate) struct ListParts {
     pub body: String,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct PlanningParts {
     pub entries: Vec<(String, String)>,
 }
 
 impl HeadingParts {
+    #[cfg(test)]
     pub(crate) fn native_text(&self) -> String {
         let mut parts = Vec::new();
         if let Some(todo) = &self.todo {
@@ -52,6 +54,7 @@ impl HeadingParts {
 }
 
 impl ListParts {
+    #[cfg(test)]
     pub(crate) fn native_text(&self) -> String {
         let mut result = format!("{}{}", self.indent, self.marker);
         if let Some(counter) = &self.counter {
@@ -73,6 +76,7 @@ impl ListParts {
     }
 }
 
+#[cfg(test)]
 impl PlanningParts {
     pub(crate) fn native_text(&self) -> String {
         self.entries
@@ -148,6 +152,7 @@ pub(crate) fn parse_list_item(text: &str) -> ListParts {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_planning(text: &str) -> PlanningParts {
     const KEYS: [&str; 3] = ["SCHEDULED:", "DEADLINE:", "CLOSED:"];
     let mut entries = Vec::new();
@@ -171,6 +176,7 @@ pub(crate) fn parse_planning(text: &str) -> PlanningParts {
     PlanningParts { entries }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_drawer_property(text: &str) -> Option<(&str, &str)> {
     let rest = text.strip_prefix(':')?;
     let separator = rest.find(':')?;

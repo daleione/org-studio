@@ -91,7 +91,8 @@ pub fn render(
                 .max(1.0) as usize;
             let width = f32::from(bounds.size.width).ceil().max(1.0) as usize;
             let scale_factor = window.scale_factor().max(1.0);
-            let parent_width = (editor_width - 110.0 - minimap_width).max(120.0);
+            let parent_width =
+                crate::preview::layout::reading_content_width(editor_width, minimap_width);
             let priority_row = shape_list
                 .logical_scroll_top()
                 .item_ix

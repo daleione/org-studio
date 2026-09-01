@@ -1,15 +1,22 @@
 use super::{
     Arc, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FontWeight, Instant,
-    PreviewRow, PreviewSnapshot, WorkspaceWindow, current_theme, div, img, minimap,
-    org_code_row_role, px, render_code_row, render_markdown_block, render_table_row,
-    resolve_image_path, rgb, styled_inline_runs,
+    PreviewRow, PreviewSnapshot, ReadingRowContext, WorkspaceWindow, current_theme, div, img,
+    minimap, px, render_code_row, render_markdown_block, render_table_row, resolve_image_path, rgb,
+    styled_inline_runs,
 };
-use crate::preview::{PreviewPanel, PreviewRenderState};
+use crate::preview::BlockId;
+use crate::preview::{
+    CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
+    display_map::PreviewLineKind,
+    layout::{READING_FRAME_MAX_WIDTH, reading_content_width},
+    org_line::{CheckboxState, parse_heading},
+    projection::{ReadingCodeRow, ReadingListMarker, VisualRowKind},
+};
 use gpui::{list, prelude::*};
 
-pub(in crate::preview) struct PreviewRenderOptions {
+pub(in crate::preview) struct ReadingRenderOptions {
     pub(in crate::preview) minimap_visible: bool,
-    pub(in crate::preview) editor_width: f32,
+    pub(in crate::preview) pane_width: f32,
     pub(in crate::preview) minimap_width: f32,
     pub(in crate::preview) minimap_resize_preview: Option<f32>,
     pub(in crate::preview) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
@@ -17,24 +24,26 @@ pub(in crate::preview) struct PreviewRenderOptions {
     pub(in crate::preview) opened_at: Instant,
 }
 
-pub(in crate::preview) fn render_document(
-    state: PreviewRenderState,
-    panel_entity: gpui::Entity<PreviewPanel>,
+pub(in crate::preview) fn render_reading_document(
+    state: ReadingRenderState,
+    panel_entity: gpui::Entity<ReadingPreviewPanel>,
     workspace_entity: gpui::Entity<WorkspaceWindow>,
-    options: PreviewRenderOptions,
+    options: ReadingRenderOptions,
 ) -> gpui::Div {
-    let PreviewRenderState {
+    let ReadingRenderState {
         document,
         minimap_state,
+        table_scroll_handles,
         list_state,
         visible_rows,
         fold_markers,
         fold_animation,
         presentation_revision,
+        zoom,
     } = state;
-    let PreviewRenderOptions {
+    let ReadingRenderOptions {
         minimap_visible,
-        editor_width,
+        pane_width,
         minimap_width,
         minimap_resize_preview,
         minimap_thumb_visibility,
@@ -42,7 +51,7 @@ pub(in crate::preview) fn render_document(
         opened_at,
     } = options;
     let theme = current_theme();
-    let preview_display_map = document.display_map.clone();
+    let reading_display_map = document.display_map.clone();
     let minimap_list_state = list_state.clone();
     let minimap_entity = panel_entity.clone();
     let minimap_resize_entity = workspace_entity.clone();
@@ -64,17 +73,6 @@ pub(in crate::preview) fn render_document(
                 .flex()
                 .flex_col()
                 .relative()
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .bottom_0()
-                        .left_0()
-                        .w(px(50.0))
-                        .bg(rgb(theme.background_alt))
-                        .border_r_1()
-                        .border_color(rgb(theme.border)),
-                )
                 .child({
                     let document = document.clone();
                     let visible_rows = visible_rows.clone();
@@ -83,7 +81,7 @@ pub(in crate::preview) fn render_document(
                     list(list_state, move |index, _window, _cx| {
                         let available_width = {
                             let minimap = if minimap_visible { minimap_width } else { 0.0 };
-                            (editor_width - 110.0 - minimap).max(120.0)
+                            reading_content_width(pane_width, minimap)
                         };
                         if let Some(animation) = fold_animation.as_ref()
                             && let Some(shell) = animation.segment_at(index)
@@ -94,6 +92,8 @@ pub(in crate::preview) fn render_document(
                                 animation.progress,
                                 shell.clone(),
                                 available_width,
+                                zoom,
+                                table_scroll_handles.clone(),
                             )
                             .into_any_element();
                         }
@@ -104,13 +104,12 @@ pub(in crate::preview) fn render_document(
                         let row = document
                             .projection
                             .source_row(actual_index)
-                            .expect("visible preview row maps to the current revision");
+                            .expect("visible reading row maps to the current revision");
                         let display_map = document
                             .display_map
                             .as_ref()
-                            .expect("preview display map must exist after loading");
+                            .expect("reading display map must exist after loading");
                         let is_heading = display_map.is_heading(actual_index);
-                        let is_table_row = display_map.is_table(actual_index);
                         let is_suppressed_marker =
                             fold_animation.as_ref().is_some_and(|animation| {
                                 animation.suppressed_markers.contains(&row.block_id)
@@ -119,15 +118,16 @@ pub(in crate::preview) fn render_document(
                             && fold_markers.contains(&row.block_id)
                             && !is_suppressed_marker;
                         let entity_for_click = panel_entity.clone();
-                        let row_element = render_preview_row(
+                        let row_element = render_reading_row(
                             &document,
                             actual_index,
                             row,
-                            is_table_row,
                             is_folded,
                             available_width,
+                            zoom,
+                            &table_scroll_handles,
                         )
-                        .id(("preview-row", actual_index))
+                        .id(("reading-row", actual_index))
                         .when(index == 0, |element| element.pt_1())
                         .when(index + 1 == rendered_item_count, |element| element.pb_2())
                         .when(is_heading, |element| {
@@ -153,7 +153,7 @@ pub(in crate::preview) fn render_document(
                 }),
         )
         .when_some(
-            minimap_visible.then_some(preview_display_map).flatten(),
+            minimap_visible.then_some(reading_display_map).flatten(),
             |layout, display_map| {
                 layout.child(minimap::render(
                     display_map,
@@ -161,7 +161,7 @@ pub(in crate::preview) fn render_document(
                     minimap_rows.clone(),
                     fold_markers.clone(),
                     minimap_list_state,
-                    editor_width,
+                    pane_width,
                     minimap_width,
                     minimap_thumb_visibility,
                     generation,
@@ -199,6 +199,8 @@ fn render_fold_shell(
     progress: f32,
     shell: FoldSegment,
     available_width: f32,
+    zoom: f32,
+    table_scroll_handles: Arc<std::collections::HashMap<BlockId, gpui::ScrollHandle>>,
 ) -> gpui::Div {
     let distance = shell.distance;
     let rows = shell.rendered_rows;
@@ -206,7 +208,9 @@ fn render_fold_shell(
     let rendered_rows = rows
         .iter()
         .copied()
-        .map(|row| render_fold_shell_row(&document, row, available_width))
+        .map(|row| {
+            render_fold_shell_row(&document, row, available_width, zoom, &table_scroll_handles)
+        })
         .collect::<Vec<_>>();
     div()
         .relative()
@@ -234,71 +238,74 @@ fn render_fold_shell_row(
     document: &Arc<PreviewSnapshot>,
     actual_index: usize,
     available_width: f32,
+    zoom: f32,
+    table_scroll_handles: &std::collections::HashMap<BlockId, gpui::ScrollHandle>,
 ) -> gpui::Div {
     let row = document
         .projection
         .source_row(actual_index)
         .expect("fold shell row maps to the current revision");
-    let display_map = document
-        .display_map
-        .as_ref()
-        .expect("preview display map must exist after loading");
-    let is_table_row = display_map.is_table(actual_index);
-    render_preview_row(
+    render_reading_row(
         document,
         actual_index,
         row,
-        is_table_row,
         false,
         available_width,
+        zoom,
+        table_scroll_handles,
     )
 }
 
-fn render_preview_row(
+fn render_reading_row(
     document: &Arc<PreviewSnapshot>,
     actual_index: usize,
     row: PreviewRow,
-    is_table_row: bool,
     is_folded: bool,
     available_width: f32,
+    zoom: f32,
+    table_scroll_handles: &std::collections::HashMap<BlockId, gpui::ScrollHandle>,
 ) -> gpui::Div {
-    let theme = current_theme();
+    let minimum_height = match &document
+        .projection
+        .rows
+        .get(actual_index)
+        .expect("reading row index is in bounds")
+        .kind
+    {
+        VisualRowKind::Table(table) if table.is_separator() => 2.0,
+        VisualRowKind::Code(ReadingCodeRow::End) => 0.0,
+        _ => 24.0,
+    };
+    let table_scroll = match &document
+        .projection
+        .rows
+        .get(actual_index)
+        .expect("reading row index is in bounds")
+        .kind
+    {
+        VisualRowKind::Table(table) => table_scroll_handles.get(&table.group_id()),
+        _ => None,
+    };
+    let context = ReadingRowContext {
+        available_width,
+        zoom,
+        table_scroll,
+    };
     div()
         .w_full()
-        .min_h(px(24.0))
+        .min_h(px(minimum_height))
         .flex()
+        .justify_center()
         .items_start()
         .child(
             div()
-                .flex_none()
-                .w(px(50.0))
-                .pr_3()
-                .h(px(24.0))
-                .flex()
-                .items_center()
-                .justify_end()
-                .text_right()
-                .font_family("Menlo")
-                .text_size(px(10.0))
-                .text_color(rgb(theme.foreground_dim))
-                .child(if row.show_line_number {
-                    (document.text.line_of_byte(row.content.range.start) + 1).to_string()
-                } else {
-                    String::new()
-                }),
-        )
-        .child(
-            div()
-                .flex_1()
+                .w_full()
+                .max_w(px(READING_FRAME_MAX_WIDTH))
                 .min_w_0()
-                .min_h(px(24.0))
+                .min_h(px(minimum_height))
                 .flex()
                 .items_center()
-                .pl_3()
-                .pr_8()
-                .when(is_table_row, |element| {
-                    element.bg(rgb(current_theme().background_alt))
-                })
+                .px_6()
                 .child(
                     div()
                         .w_full()
@@ -308,7 +315,7 @@ fn render_preview_row(
                                 actual_index,
                                 &document.markdown_blocks[row.block_id as usize],
                                 is_folded,
-                                available_width,
+                                context,
                             )
                         } else {
                             render_block(
@@ -317,7 +324,7 @@ fn render_preview_row(
                                 row,
                                 &document.blocks.nodes()[row.block_id as usize],
                                 is_folded,
-                                available_width,
+                                context,
                             )
                         }),
                 ),
@@ -330,20 +337,31 @@ fn render_block(
     row: PreviewRow,
     block: &BlockNode,
     is_folded: bool,
-    available_width: f32,
+    context: ReadingRowContext<'_>,
 ) -> gpui::Div {
     let theme = current_theme();
     let display_map = document
         .display_map
         .as_ref()
-        .expect("preview display map must exist after loading");
+        .expect("reading display map must exist after loading");
     let display_runs = display_map.runs(display_row);
-    let row_layout = display_map.layout(display_row);
+    let row_layout = display_map.layout(display_row).scaled(context.zoom);
     if row.blank {
         return div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)));
     }
     let text = display_runs.text.clone();
     let inline = || styled_inline_runs(text.clone(), display_runs.inline_spans.clone());
+    if matches!(display_map.row_kind(display_row), PreviewLineKind::Caption) {
+        return div()
+            .w_full()
+            .pt(px(row_layout.padding_top))
+            .pb(px(row_layout.padding_bottom))
+            .text_center()
+            .text_size(px(row_layout.font_size))
+            .line_height(px(row_layout.line_height))
+            .text_color(rgb(theme.meta))
+            .child(inline());
+    }
 
     match &block.kind {
         BlockKind::BlankLine => {
@@ -351,14 +369,12 @@ fn render_block(
         }
         BlockKind::Heading { level } => {
             let heading_index = (*level as usize).saturating_sub(1);
-            let marker = format!(
-                "{} ",
-                theme.heading_bullets[heading_index % theme.heading_bullets.len()]
-            );
+            let source = document.text.copy_range(row.content.range);
+            let parts = parse_heading(source.trim_end_matches(['\r', '\n']));
             div()
                 .flex()
                 .items_center()
-                .gap_1()
+                .gap_2()
                 .text_size(px(row_layout.font_size))
                 .line_height(px(row_layout.line_height))
                 .font_weight(if *level <= 2 {
@@ -367,14 +383,11 @@ fn render_block(
                     FontWeight::MEDIUM
                 })
                 .text_color(rgb(theme.heading[heading_index.min(3)]))
-                .child(
-                    div()
-                        .flex_none()
-                        .font_family("Menlo")
-                        .text_size(px(13.0))
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(rgb(theme.heading[heading_index.min(3)]))
-                        .child(marker),
+                .children(parts.todo.map(|todo| reading_chip(todo, theme.keyword)))
+                .children(
+                    parts
+                        .priority
+                        .map(|priority| reading_chip(format!("P{priority}"), theme.attribute)),
                 )
                 .child(
                     div()
@@ -391,6 +404,13 @@ fn render_block(
                                     .child("..."),
                             )
                         }),
+                )
+                .children(parts.cookie.map(|cookie| reading_chip(cookie, theme.meta)))
+                .children(
+                    parts
+                        .tags
+                        .into_iter()
+                        .map(|tag| reading_chip(tag, theme.link)),
                 )
         }
         BlockKind::Paragraph => {
@@ -411,8 +431,8 @@ fn render_block(
             let (width, height) = document
                 .display_map
                 .as_ref()
-                .and_then(|map| map.image_size(display_row, available_width))
-                .unwrap_or_else(|| (available_width.min(640.0), 240.0));
+                .and_then(|map| map.image_size(display_row, context.available_width))
+                .unwrap_or_else(|| (context.available_width.min(640.0), 240.0));
             div()
                 .w_full()
                 .pt(px(row_layout.padding_top))
@@ -428,12 +448,13 @@ fn render_block(
             .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.date))
             .child(text),
-        BlockKind::ListItem => div()
-            .pl(px(row_layout.padding_left))
-            .text_size(px(row_layout.font_size))
-            .line_height(px(row_layout.line_height))
-            .text_color(rgb(theme.foreground))
-            .child(inline()),
+        BlockKind::ListItem => render_list_item(
+            document,
+            display_row,
+            inline(),
+            row_layout.font_size,
+            row_layout.line_height,
+        ),
         BlockKind::FixedWidth => div()
             .font_family("Menlo")
             .text_size(px(row_layout.font_size))
@@ -446,16 +467,31 @@ fn render_block(
             .line_height(px(row_layout.line_height))
             .text_color(rgb(theme.link))
             .child(text),
-        BlockKind::TableRow => render_table_row(
-            &text,
-            display_map
-                .table_projection(display_row)
-                .expect("table row projection must exist"),
+        BlockKind::TableRow => display_map.table_projection(display_row).map_or_else(
+            || reading_fallback(text.clone(), row_layout.font_size, row_layout.line_height),
+            |projection| {
+                render_table_row(
+                    &text,
+                    projection,
+                    DocumentFormat::Org,
+                    context.available_width,
+                    context.zoom,
+                    display_row,
+                    context.table_scroll,
+                )
+            },
         ),
-        BlockKind::SourceBlock { .. } => {
-            let role = org_code_row_role(&text, row.continuation);
-            render_code_row(text, display_runs.code_spans, row_layout, role)
-        }
+        BlockKind::SourceBlock { language } => div()
+            .w_full()
+            .when(!row.continuation, |element| {
+                element.child(reading_code_label(language.as_deref()))
+            })
+            .child(render_code_row(
+                text,
+                display_runs.code_spans,
+                row_layout,
+                CodeRowRole::Body,
+            )),
         BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
             .min_h(px(row_layout.min_height))
             .pl(px(row_layout.padding_left))
@@ -534,9 +570,136 @@ fn render_block(
     }
 }
 
+fn reading_chip(text: impl Into<gpui::SharedString>, color: u32) -> gpui::Div {
+    let theme = current_theme();
+    div()
+        .flex_none()
+        .px_1()
+        .rounded_sm()
+        .bg(rgb(theme.background_alt))
+        .font_family("Menlo")
+        .text_size(px(10.0))
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(rgb(color))
+        .child(text.into())
+}
+
+pub(super) fn render_list_item(
+    document: &Arc<PreviewSnapshot>,
+    display_row: usize,
+    content: gpui::StyledText,
+    font_size: f32,
+    line_height: f32,
+) -> gpui::Div {
+    let theme = current_theme();
+    let marker = match &document
+        .projection
+        .rows
+        .get(display_row)
+        .expect("reading row index is in bounds")
+        .kind
+    {
+        VisualRowKind::List(marker) => marker,
+        _ => {
+            return reading_fallback(content, font_size, line_height);
+        }
+    };
+    div()
+        .w_full()
+        .pl(px(f32::from(marker.indent).min(96.0)))
+        .flex()
+        .items_start()
+        .gap_2()
+        .text_size(px(font_size))
+        .line_height(px(line_height))
+        .text_color(rgb(theme.foreground))
+        .child(reading_list_marker(marker))
+        .child(div().flex_1().min_w_0().child(content))
+}
+
+fn reading_list_marker(marker: &ReadingListMarker) -> gpui::Div {
+    let theme = current_theme();
+    if let Some(state) = &marker.checkbox {
+        let (label, foreground, background) = match state {
+            CheckboxState::Empty => ("", theme.foreground_dim, theme.background),
+            CheckboxState::Partial => ("−", theme.background, theme.attribute),
+            CheckboxState::Checked => ("✓", theme.background, theme.heading[1]),
+        };
+        return div()
+            .mt(px(3.0))
+            .size(px(16.0))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(foreground))
+            .bg(rgb(background))
+            .font_family("Menlo")
+            .text_size(px(11.0))
+            .font_weight(FontWeight::SEMIBOLD)
+            .text_color(rgb(foreground))
+            .child(label);
+    }
+    let ordered = marker.marker.ends_with('.') || marker.marker.ends_with(')');
+    let label = if ordered {
+        marker.marker.to_string()
+    } else {
+        "•".to_owned()
+    };
+    let width = reading_marker_width(&label, ordered);
+    div()
+        .w(px(width))
+        .flex_none()
+        .whitespace_nowrap()
+        .when(ordered, |element| element.pr_1().text_right())
+        .when(!ordered, |element| element.text_center())
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(theme.heading[2]))
+        .child(label)
+}
+
+fn reading_marker_width(label: &str, ordered: bool) -> f32 {
+    if ordered {
+        (label.chars().count() as f32 * 9.0 + 8.0).max(30.0)
+    } else {
+        18.0
+    }
+}
+
+pub(super) fn reading_code_label(language: Option<&str>) -> gpui::Div {
+    let theme = current_theme();
+    div()
+        .w_full()
+        .h(px(22.0))
+        .px_3()
+        .flex()
+        .items_center()
+        .border_l_2()
+        .border_color(rgb(theme.code_block_accent))
+        .bg(rgb(theme.code_boundary_background))
+        .font_family("Menlo")
+        .text_size(px(10.0))
+        .text_color(rgb(theme.meta))
+        .child(language.unwrap_or("code").to_owned())
+}
+
+pub(super) fn reading_fallback(
+    content: impl IntoElement,
+    font_size: f32,
+    line_height: f32,
+) -> gpui::Div {
+    div()
+        .text_size(px(font_size))
+        .line_height(px(line_height))
+        .text_color(rgb(current_theme().foreground))
+        .child(content)
+}
+
 #[cfg(test)]
 mod animation_tests {
-    use super::{FoldDirection, fold_shell_geometry};
+    use super::{FoldDirection, fold_shell_geometry, reading_marker_width};
 
     #[test]
     fn shell_height_and_body_offset_share_one_linear_progress() {
@@ -560,5 +723,12 @@ mod animation_tests {
             fold_shell_geometry(FoldDirection::Expand, 1.0, 96.0),
             (96.0, 0.0)
         );
+    }
+
+    #[test]
+    fn ordered_list_marker_has_room_for_punctuation_without_wrapping() {
+        assert_eq!(reading_marker_width("•", false), 18.0);
+        assert!(reading_marker_width("1.", true) >= 30.0);
+        assert!(reading_marker_width("100.", true) > reading_marker_width("1.", true));
     }
 }

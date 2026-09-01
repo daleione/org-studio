@@ -219,7 +219,6 @@ fn parse_markdown_range(
             block_id: id,
             content: text.revision_range(ByteRange::new(content_start, content_end)),
             continuation: false,
-            show_line_number: true,
             blank,
         });
     }
@@ -251,10 +250,16 @@ fn map_delta_boundary(
 }
 
 pub(super) fn parse_markdown_inline(source: &str) -> InlineText {
+    // pulldown-cmark always starts in block context. A heading title such as `2. Design`
+    // would therefore be reinterpreted as an ordered-list item and lose its marker. Prefixing
+    // one ordinary paragraph fragment forces the parser into inline context; both rendered and
+    // source ranges are rebased before the result leaves this function.
+    const INLINE_CONTEXT_PREFIX: &str = "p: ";
+    let wrapped = format!("{INLINE_CONTEXT_PREFIX}{source}");
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut result = InlineText::default();
     let mut stack: Vec<(TagEnd, InlineKind, usize, usize)> = Vec::new();
-    for (event, source_range) in Parser::new_ext(source, options).into_offset_iter() {
+    for (event, source_range) in Parser::new_ext(&wrapped, options).into_offset_iter() {
         match event {
             Event::Start(tag) => {
                 let kind = match &tag {
@@ -300,6 +305,25 @@ pub(super) fn parse_markdown_inline(source: &str) -> InlineText {
             _ => {}
         }
     }
+    if !result.text.starts_with(INLINE_CONTEXT_PREFIX) {
+        return InlineText {
+            text: source.to_owned(),
+            spans: Vec::new(),
+        };
+    }
+    result.text.drain(..INLINE_CONTEXT_PREFIX.len());
+    result.spans.retain_mut(|span| {
+        if span.range.start < INLINE_CONTEXT_PREFIX.len()
+            || span.source.start < INLINE_CONTEXT_PREFIX.len()
+        {
+            return false;
+        }
+        span.range.start -= INLINE_CONTEXT_PREFIX.len();
+        span.range.end -= INLINE_CONTEXT_PREFIX.len();
+        span.source.start -= INLINE_CONTEXT_PREFIX.len();
+        span.source.end -= INLINE_CONTEXT_PREFIX.len();
+        true
+    });
     result.spans.sort_by_key(|span| span.range.start);
     result
 }
@@ -418,6 +442,15 @@ mod tests {
             standalone_image("![diagram](images/a.png)"),
             Some("images/a.png".into())
         );
+    }
+
+    #[test]
+    fn inline_context_preserves_ordered_markers_at_the_start_of_heading_text() {
+        let inline = parse_markdown_inline("2. **语义化编辑器**");
+        assert_eq!(inline.text, "2. 语义化编辑器");
+        assert_eq!(inline.spans.len(), 1);
+        assert_eq!(inline.spans[0].kind, InlineKind::Bold);
+        assert_eq!(&inline.text[inline.spans[0].range.clone()], "语义化编辑器");
     }
 
     #[test]

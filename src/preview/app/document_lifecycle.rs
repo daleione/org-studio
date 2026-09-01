@@ -534,7 +534,10 @@ impl WorkspaceWindow {
                                 cx.new({
                                     let document = document.clone();
                                     move |_| {
-                                        super::super::PreviewPanel::new(document, list_overdraw)
+                                        super::super::ReadingPreviewPanel::new(
+                                            document,
+                                            list_overdraw,
+                                        )
                                     }
                                 })
                             }),
@@ -545,7 +548,7 @@ impl WorkspaceWindow {
                             )
                             .then(|| {
                                 cx.new(move |_| {
-                                    super::super::PreviewPanel::new(document, list_overdraw)
+                                    super::super::ReadingPreviewPanel::new(document, list_overdraw)
                                 })
                             }),
                     })

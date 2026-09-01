@@ -27,6 +27,8 @@ Commands:
   scroll [PIXELS] [MIB]       Run one GUI scroll sample.
   profile [PIXELS] [MIB]      Run scroll plus GPUI profiling spans.
   suite [MIB]                 Build, prepare, then run CPU and 0/16/80px GUI samples.
+  gate [MIB ...]              Run first-frame, scroll, memory, and incremental gates
+                              (default: 1 10 50).
   help                        Show this help.
 
 Configuration environment variables:
@@ -101,6 +103,14 @@ ensure_release_binaries() {
     [[ -x "$ROOT_DIR/target/release/org-preview-cpu-bench" ]] || die "CPU benchmark missing; run: scripts/perf/org-preview build"
 }
 
+run_measured() {
+    if [[ "$(uname -s)" == "Darwin" && -x /usr/bin/time ]]; then
+        /usr/bin/time -l "$@"
+    else
+        "$@"
+    fi
+}
+
 prepare() {
     local sizes=("$@")
     if [[ ${#sizes[@]} -eq 0 ]]; then
@@ -132,9 +142,9 @@ run_incremental() {
     local mib="${1:-$DEFAULT_MIB}"
     require_positive_integer "$mib" "fixture MiB"
     ensure_fixture "$mib"
-    ORG_STUDIO_PHASE_E_FIXTURE="$(fixture_path "$mib")" \
+    ORG_STUDIO_READING_FIXTURE="$(fixture_path "$mib")" \
         cargo test --release --features benchmarks --lib \
-        phase_e_ -- --nocapture
+        reading_ -- --nocapture
 }
 
 run_first_frame() {
@@ -145,9 +155,10 @@ run_first_frame() {
     require_boolean "$DEFAULT_DISABLE_INACTIVE_THROTTLE" "ORG_STUDIO_PERF_DISABLE_INACTIVE_THROTTLE"
     new_run_dir "first-frame-${mib}m"
     printf 'inactive_window_throttle_disabled=%s\n' "$DEFAULT_DISABLE_INACTIVE_THROTTLE" >>"$RUN_DIR/metadata.txt"
-    ORG_STUDIO_RELOAD_BENCH=1 \
-    ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
-    ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE="$DEFAULT_DISABLE_INACTIVE_THROTTLE" \
+    run_measured env \
+        ORG_STUDIO_RELOAD_BENCH=1 \
+        ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
+        ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE="$DEFAULT_DISABLE_INACTIVE_THROTTLE" \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
         2>&1 | tee "$RUN_DIR/first-frame.log"
 }
@@ -200,7 +211,7 @@ run_scroll() {
     if [[ "$profile" == "1" ]]; then
         env_args+=("ORG_STUDIO_PROFILE_FRAMES=1")
     fi
-    env "${env_args[@]}" \
+    run_measured env "${env_args[@]}" \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
         2>&1 | tee "$RUN_DIR/scroll.log"
 }
@@ -216,6 +227,24 @@ run_suite() {
     run_scroll 80 "$mib" 0
 }
 
+run_gate() {
+    local sizes=("$@")
+    if [[ ${#sizes[@]} -eq 0 ]]; then
+        sizes=(1 10 50)
+    fi
+    build_release
+    prepare "${sizes[@]}"
+    local final_mib=""
+    for mib in "${sizes[@]}"; do
+        require_positive_integer "$mib" "fixture MiB"
+        final_mib="$mib"
+        run_cpu "$mib"
+        run_first_frame "$mib"
+        run_scroll 16 "$mib" 0
+    done
+    run_incremental "$final_mib"
+}
+
 cd "$ROOT_DIR"
 command="${1:-help}"
 shift || true
@@ -229,6 +258,7 @@ case "$command" in
     scroll) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 0 ;;
     profile) run_scroll "${1:-$DEFAULT_PIXELS}" "${2:-$DEFAULT_MIB}" 1 ;;
     suite) run_suite "$@" ;;
+    gate) run_gate "$@" ;;
     help|-h|--help) usage ;;
     *) usage >&2; die "unknown command: $command" ;;
 esac

@@ -422,13 +422,16 @@ mod tests {
             .unwrap() as u32;
 
         let projection = crate::preview::projection::build_projection_snapshot(
+            &text,
             text.revision(),
             crate::preview::DocumentFormat::Org,
             std::sync::Arc::new(rows),
             &blocks,
             &[],
-            &std::collections::HashMap::new(),
-            &std::collections::HashMap::new(),
+            crate::preview::projection::ReadingProjectionResources {
+                tables: &std::collections::HashMap::new(),
+                images: &std::collections::HashMap::new(),
+            },
         );
         let visible = visible_row_indices(&projection.rows, &blocks, &HashSet::from([heading]));
         let lines = visible
@@ -456,13 +459,16 @@ mod tests {
         let blocks = parse(&text);
         let rows = build_preview_rows(&text, &blocks);
         let projection = crate::preview::projection::build_projection_snapshot(
+            &text,
             text.revision(),
             crate::preview::DocumentFormat::Org,
             std::sync::Arc::new(rows),
             &blocks,
             &[],
-            &Default::default(),
-            &Default::default(),
+            crate::preview::projection::ReadingProjectionResources {
+                tables: &Default::default(),
+                images: &Default::default(),
+            },
         );
 
         let (overview, overview_markers) =
@@ -553,13 +559,16 @@ mod tests {
         .unwrap();
         let (blocks, rows) = markdown::parse_markdown(&text);
         let projection = crate::preview::projection::build_projection_snapshot(
+            &text,
             text.revision(),
             crate::preview::DocumentFormat::Markdown,
             std::sync::Arc::new(rows),
             &Default::default(),
             &blocks,
-            &Default::default(),
-            &Default::default(),
+            crate::preview::projection::ReadingProjectionResources {
+                tables: &Default::default(),
+                images: &Default::default(),
+            },
         );
 
         let (overview, _) =
@@ -596,13 +605,16 @@ mod tests {
         .unwrap();
         let (blocks, rows) = markdown::parse_markdown(&text);
         let projection = crate::preview::projection::build_projection_snapshot(
+            &text,
             text.revision(),
             crate::preview::DocumentFormat::Markdown,
             std::sync::Arc::new(rows),
             &Default::default(),
             &blocks,
-            &Default::default(),
-            &Default::default(),
+            crate::preview::projection::ReadingProjectionResources {
+                tables: &Default::default(),
+                images: &Default::default(),
+            },
         );
 
         let top_folded =

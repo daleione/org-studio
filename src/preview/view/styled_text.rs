@@ -34,7 +34,10 @@ pub(in crate::preview) fn code_highlight_style(kind: CodeHighlightKind) -> Highl
     }
 }
 
-pub(super) fn styled_inline_runs(text: gpui::SharedString, spans: Arc<[InlineSpan]>) -> StyledText {
+pub(in crate::preview) fn styled_inline_runs(
+    text: gpui::SharedString,
+    spans: Arc<[InlineSpan]>,
+) -> StyledText {
     let theme = current_theme();
     let highlights = spans.iter().map(|span| {
         let style = match span.kind {

@@ -1,6 +1,10 @@
-use std::{collections::HashSet, sync::Arc, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+    time::Instant,
+};
 
-use gpui::{Context, EventEmitter, ListOffset, ListState, Window, px};
+use gpui::{Context, EventEmitter, ListOffset, ListState, ScrollHandle, Window, px};
 
 use super::{
     BlockId, DerivedEvent, DocumentFormat, FoldMeasurement, FoldTransition, FoldTransitionInput,
@@ -15,35 +19,39 @@ use super::{
 ///
 /// The workspace routes commands and owns window-level settings; this entity owns the immutable
 /// derived snapshot plus the virtual-list, fold and minimap presentation state for that snapshot.
-pub(crate) struct PreviewPanel {
+pub(crate) struct ReadingPreviewPanel {
     document: Arc<PreviewSnapshot>,
     list_state: ListState,
     fold_markers: Arc<HashSet<BlockId>>,
     visible_rows: Arc<Vec<usize>>,
     minimap_state: Arc<minimap::MinimapState>,
+    table_scroll_handles: Arc<HashMap<BlockId, ScrollHandle>>,
     global_visibility: GlobalVisibility,
     global_cycle_contiguous: bool,
     local_cycle_continuation: Option<(BlockId, LocalVisibility)>,
     fold_animation_revision: u64,
     fold_animation: Option<FoldTransition>,
     presentation_revision: u64,
+    zoom: f32,
     viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct PreviewRenderState {
+pub(in crate::preview) struct ReadingRenderState {
     pub(in crate::preview) document: Arc<PreviewSnapshot>,
     pub(in crate::preview) minimap_state: Arc<minimap::MinimapState>,
+    pub(in crate::preview) table_scroll_handles: Arc<HashMap<BlockId, ScrollHandle>>,
     pub(in crate::preview) list_state: ListState,
     pub(in crate::preview) visible_rows: Arc<Vec<usize>>,
     pub(in crate::preview) fold_markers: Arc<HashSet<BlockId>>,
     pub(in crate::preview) fold_animation: Option<FoldTransition>,
     pub(in crate::preview) presentation_revision: u64,
+    pub(in crate::preview) zoom: f32,
 }
 
-impl EventEmitter<DerivedEvent> for PreviewPanel {}
+impl EventEmitter<DerivedEvent> for ReadingPreviewPanel {}
 
 struct GlobalVisibilityProjection {
     visibility: GlobalVisibility,
@@ -51,7 +59,26 @@ struct GlobalVisibilityProjection {
     fold_markers: HashSet<BlockId>,
 }
 
-impl PreviewPanel {
+fn table_scroll_handles(
+    document: &PreviewSnapshot,
+    previous: Option<&HashMap<BlockId, ScrollHandle>>,
+) -> Arc<HashMap<BlockId, ScrollHandle>> {
+    let mut handles = HashMap::new();
+    for row in document.projection.rows.iter() {
+        let super::projection::VisualRowKind::Table(table) = &row.kind else {
+            continue;
+        };
+        handles.entry(table.group_id()).or_insert_with(|| {
+            previous
+                .and_then(|previous| previous.get(&table.group_id()))
+                .cloned()
+                .unwrap_or_default()
+        });
+    }
+    handles.into()
+}
+
+impl ReadingPreviewPanel {
     pub(in crate::preview) fn new(document: Arc<PreviewSnapshot>, list_overdraw: f32) -> Self {
         let visible_rows = Arc::new((0..document.projection.rows.len()).collect::<Vec<_>>());
         let list_state = ListState::new(visible_rows.len(), ListAlignment::Top, px(list_overdraw));
@@ -59,33 +86,38 @@ impl PreviewPanel {
             list_state.clone().measure_all();
         }
         let minimap_state = Arc::new(minimap::MinimapState::new());
+        let table_scroll_handles = table_scroll_handles(&document, None);
         Self {
             document,
             list_state,
             fold_markers: Arc::new(HashSet::new()),
             visible_rows,
             minimap_state,
+            table_scroll_handles,
             global_visibility: GlobalVisibility::All,
             global_cycle_contiguous: false,
             local_cycle_continuation: None,
             fold_animation_revision: 0,
             fold_animation: None,
             presentation_revision: 0,
+            zoom: 1.0,
             viewport_revision_key: None,
             minimap_pending_seek: None,
             minimap_seek_scheduled: false,
         }
     }
 
-    pub(in crate::preview) fn render_state(&self) -> PreviewRenderState {
-        PreviewRenderState {
+    pub(in crate::preview) fn render_state(&self) -> ReadingRenderState {
+        ReadingRenderState {
             document: self.document.clone(),
             minimap_state: self.minimap_state.clone(),
+            table_scroll_handles: self.table_scroll_handles.clone(),
             list_state: self.list_state.clone(),
             visible_rows: self.visible_rows.clone(),
             fold_markers: self.fold_markers.clone(),
             fold_animation: self.fold_animation.clone(),
             presentation_revision: self.presentation_revision,
+            zoom: self.zoom(),
         }
     }
 
@@ -99,6 +131,21 @@ impl PreviewPanel {
 
     pub(in crate::preview) fn visible_rows(&self) -> &[usize] {
         &self.visible_rows
+    }
+
+    pub(in crate::preview) fn zoom(&self) -> f32 {
+        self.zoom
+    }
+
+    #[cfg(test)]
+    pub(in crate::preview) fn set_zoom(&mut self, zoom: f32) -> bool {
+        let zoom = zoom.clamp(0.75, 2.0);
+        if (self.zoom - zoom).abs() < f32::EPSILON {
+            return false;
+        }
+        self.zoom = zoom;
+        self.bump_presentation_revision();
+        true
     }
 
     #[cfg(test)]
@@ -255,6 +302,8 @@ impl PreviewPanel {
         let preserves_visible_rows = incremental_update.is_some()
             && next_visible_rows.as_slice() == previous_visible_rows.as_slice();
         self.discard_fold_animation();
+        self.table_scroll_handles =
+            table_scroll_handles(&document, Some(&self.table_scroll_handles));
         self.document = document;
         self.fold_markers = Arc::new(next_fold_markers);
         self.global_visibility = next_global_visibility;
