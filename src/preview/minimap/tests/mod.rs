@@ -266,6 +266,56 @@ fn projection_scheduler_prioritizes_the_current_view_before_sequential_work() {
 }
 
 #[test]
+fn fold_projection_reuses_exact_minimap_measurements() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let buffer =
+        DocumentBuffer::from_utf8(b"* First\nfirst body\n* Second\nsecond body\n".to_vec())
+            .unwrap();
+    let document = derive_preview(
+        std::path::PathBuf::from("fold-rebase.org"),
+        buffer.snapshot(),
+    );
+    assert!(document.projection.rows.len() >= 3);
+    let model = document.display_map.as_deref().unwrap();
+    let previous_rows = Arc::new(vec![0, 2]);
+    let previous_projection = ProjectionSnapshot::new(vec![
+        ProjectionMeasure::new(3, 33.0, true),
+        ProjectionMeasure::new(5, 55.0, true),
+    ]);
+    let expanded_rows = Arc::new(vec![0, 1, 2]);
+    let key = MinimapLineIndexKey::new(
+        &expanded_rows,
+        800.0,
+        MinimapDensity::Comfortable,
+        document.revision,
+        1,
+    );
+
+    let mut builder = MinimapLineIndexBuilder::rebased(
+        model,
+        key,
+        expanded_rows,
+        800.0,
+        &previous_rows,
+        &previous_projection,
+    );
+
+    assert_eq!(builder.exact_rows, 2);
+    assert_eq!(
+        builder.projection.measure(0),
+        previous_projection.measure(0)
+    );
+    assert!(!builder.projection.measure(1).exact);
+    assert_eq!(
+        builder.projection.measure(2),
+        previous_projection.measure(1)
+    );
+    assert_eq!(builder.next_candidate(), Some(1));
+}
+
+#[test]
 fn larger_density_expands_the_projection_and_visible_thumb_span() {
     let mut index = test_line_index(100, 1, MinimapDensity::Compact, &[0, 100], &[0.0, 100.0]);
     assert_eq!(
@@ -396,6 +446,10 @@ fn display_run_slices_rebase_inline_and_syntax_ranges() {
             range: 2..8,
             kind: InlineKind::Bold,
         }]),
+        links: Arc::from([super::super::display_map::InlineLink {
+            range: 2..8,
+            destination: "target".into(),
+        }]),
         code_spans: Arc::from([CodeHighlightSpan {
             start: 4,
             end: 9,
@@ -405,6 +459,8 @@ fn display_run_slices_rebase_inline_and_syntax_ranges() {
     let sliced = slice_display_runs(&runs, 5..9);
     assert_eq!(sliced.text.as_ref(), "5678");
     assert_eq!(sliced.inline_spans[0].range, 0..3);
+    assert_eq!(sliced.links[0].range, 0..3);
+    assert_eq!(sliced.links[0].destination.as_ref(), "target");
     assert_eq!(
         (sliced.code_spans[0].start, sliced.code_spans[0].end),
         (0, 4)
@@ -415,6 +471,7 @@ fn empty_runs(text: &'static str) -> DisplayRuns {
     DisplayRuns {
         text: text.into(),
         inline_spans: Arc::from([]),
+        links: Arc::from([]),
         code_spans: Arc::from([]),
     }
 }
@@ -1135,6 +1192,7 @@ fn inline_display_runs_cover_the_same_rendered_text() {
     let line = DisplayRuns {
         text: parsed.text.into(),
         inline_spans: parsed.spans.into(),
+        links: Arc::from([]),
         code_spans: Arc::from([]),
     };
     let mut base_font = font("Menlo");

@@ -20,10 +20,11 @@ use super::{
     DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND, DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND,
     END_COMMAND, EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND,
     OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
-    QUIT_APPLICATION_COMMAND, RELOAD_DOCUMENT_COMMAND, RETURN_DOCUMENT_COMMAND,
-    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
-    SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND, SHOW_HOME_COMMAND, SHOW_READING_COMMAND,
-    SHOW_SPLIT_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
+    QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
+    RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
+    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND, SHOW_HOME_COMMAND,
+    SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
 };
 
 #[cfg(test)]
@@ -88,6 +89,28 @@ pub(super) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in save-as command");
+    for (name, title, command) in [
+        (UNDO_DOCUMENT_COMMAND, "Undo", BuiltinCommand::UndoDocument),
+        (REDO_DOCUMENT_COMMAND, "Redo", BuiltinCommand::RedoDocument),
+    ] {
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::None,
+            })
+            .expect("valid document history command");
+    }
     builder
         .register_builtin(BuiltinCommandSpec {
             name: OPEN_DOCUMENT_COMMAND.into(),
@@ -476,6 +499,14 @@ pub(super) fn built_in_contexts() -> crate::input::ContextRegistry {
 pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
     let mut bindings = workspace_bindings();
     bindings.extend([
+        BindingSpec {
+            keys: "cmd-z",
+            behavior: BindingBehavior::Command(UNDO_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "cmd-shift-z",
+            behavior: BindingBehavior::Command(REDO_DOCUMENT_COMMAND),
+        },
         BindingSpec {
             keys: "S-tab",
             behavior: BindingBehavior::Command(GLOBAL_VISIBILITY_CYCLE_COMMAND),

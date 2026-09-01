@@ -87,20 +87,6 @@ pub(super) fn cycle_todo(text: &str) -> Option<(Range<usize>, &'static str)> {
     }
 }
 
-pub(super) fn cycle_checkbox(text: &str) -> Option<(Range<usize>, &'static str)> {
-    for (current, next) in [
-        ("[ ]", "[X]"),
-        ("[X]", "[-]"),
-        ("[x]", "[-]"),
-        ("[-]", "[ ]"),
-    ] {
-        if let Some(start) = text.find(current) {
-            return Some((start..start + current.len(), next));
-        }
-    }
-    None
-}
-
 pub(super) fn align_table(
     snapshot: &DocumentSnapshot,
     context: &EditorCommandContext,
@@ -303,8 +289,14 @@ mod tests {
         assert_eq!(cycle_todo("* Heading"), Some((2..2, "TODO ")));
         assert_eq!(cycle_todo("* TODO Heading"), Some((2..6, "DONE")));
         assert_eq!(cycle_todo("* DONE Heading"), Some((2..7, "")));
-        assert_eq!(cycle_checkbox("- [ ] item"), Some((2..5, "[X]")));
-        assert_eq!(cycle_checkbox("- [X] item"), Some((2..5, "[-]")));
+        assert_eq!(
+            crate::org_syntax::command::cycle_checkbox("- [ ] item"),
+            Some((2..5, "[X]"))
+        );
+        assert_eq!(
+            crate::org_syntax::command::cycle_checkbox("- [X] item"),
+            Some((2..5, "[ ]"))
+        );
     }
 
     #[test]

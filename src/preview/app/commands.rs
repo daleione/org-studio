@@ -97,6 +97,18 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::SaveDocumentAs) => {
                 self.save_document_as(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::UndoDocument) => {
+                if let Some(session) = self.document_session().cloned() {
+                    let _ = session.update(cx, |session, cx| session.undo(cx));
+                    cx.notify();
+                }
+            }
+            CommandImplementation::Builtin(BuiltinCommand::RedoDocument) => {
+                if let Some(session) = self.document_session().cloned() {
+                    let _ = session.update(cx, |session, cx| session.redo(cx));
+                    cx.notify();
+                }
+            }
             CommandImplementation::Builtin(BuiltinCommand::ExportDocument) => {
                 self.show_export_panel(cx)
             }
@@ -345,6 +357,26 @@ impl WorkspaceWindow {
         {
             cx.stop_propagation();
             cx.notify();
+            return;
+        }
+        if event.keystroke.key == "escape"
+            && matches!(
+                self.document_workspace.active_surface(),
+                crate::app::PaneSurface::Reading
+            )
+        {
+            cx.stop_propagation();
+            let other = self.document_workspace.active_pane.other();
+            if self.document_workspace.is_split()
+                && matches!(
+                    self.document_workspace.surface(other),
+                    crate::app::PaneSurface::Editor
+                )
+            {
+                self.activate_pane(other, cx);
+            } else {
+                self.set_active_surface(crate::app::PaneSurface::Editor, cx);
+            }
             return;
         }
         let modifiers = event.keystroke.modifiers;

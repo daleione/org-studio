@@ -425,7 +425,69 @@ impl SemanticEditor {
     }
 
     fn toggle_checkbox(&mut self, _: &ToggleCheckbox, _: &mut Window, cx: &mut Context<Self>) {
-        self.apply_line_cycle(super::org_commands::cycle_checkbox, cx);
+        let snapshot = self.snapshot(cx);
+        if self
+            .session
+            .read(cx)
+            .path()
+            .extension()
+            .and_then(|value| value.to_str())
+            != Some("org")
+        {
+            self.command_feedback = Some("此命令仅适用于 Org 文档".into());
+            cx.notify();
+            return;
+        }
+        let Some(target) = snapshot
+            .line_index_at(self.selection.head())
+            .ok()
+            .and_then(|line| snapshot.line_content_range(line).ok())
+            .and_then(|line_range| {
+                let text = snapshot.copy_range(line_range);
+                crate::org_syntax::command::checkbox_token(&text).map(|(token, _)| {
+                    ByteRange::new(
+                        line_range.start.0 + token.start as u64,
+                        line_range.start.0 + token.end as u64,
+                    )
+                })
+            })
+        else {
+            self.command_feedback = Some("当前行不适用此命令".into());
+            cx.notify();
+            return;
+        };
+        let Some(edits) = crate::org_syntax::command::checkbox_transaction(&snapshot, target)
+        else {
+            self.command_feedback = Some("当前行不适用此命令".into());
+            cx.notify();
+            return;
+        };
+        let before = self.selection;
+        let after = Selection::caret(map_offset_through_edits(before.head(), &edits));
+        if self
+            .session
+            .update(cx, |session, cx| {
+                session.edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(snapshot.revision(), edits),
+                        before,
+                        after,
+                        EditOrigin::Other,
+                    ),
+                    cx,
+                )
+            })
+            .is_ok()
+        {
+            self.command_feedback = None;
+            self.selection = after;
+            let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
+            self.sync_selection_utf16(&snapshot);
+            self.hit_rows = Arc::from([]);
+            self.pending_reveal_caret = true;
+            cx.notify();
+        }
     }
 
     fn apply_line_cycle(&mut self, cycle: super::org_commands::LineCycle, cx: &mut Context<Self>) {
@@ -1110,6 +1172,23 @@ impl Render for SemanticEditor {
                 )
             })
     }
+}
+
+fn map_offset_through_edits(offset: ByteOffset, edits: &[TextEdit]) -> ByteOffset {
+    let mut shift = 0_i128;
+    for edit in edits {
+        if offset <= edit.range.start {
+            continue;
+        }
+        if offset < edit.range.end {
+            return ByteOffset(
+                (i128::from(edit.range.start.0) + shift + edit.replacement.len() as i128).max(0)
+                    as u64,
+            );
+        }
+        shift += edit.replacement.len() as i128 - i128::from(edit.range.len());
+    }
+    ByteOffset((i128::from(offset.0) + shift).max(0) as u64)
 }
 
 #[cfg(test)]

@@ -1,6 +1,7 @@
 use super::{
-    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, MAX_EAGER_LAYOUT_ROWS, accept_generation,
-    dired_command_items, preview_input, should_eagerly_measure_rows,
+    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, MAX_EAGER_LAYOUT_ROWS,
+    REDO_DOCUMENT_COMMAND, UNDO_DOCUMENT_COMMAND, accept_generation, dired_command_items,
+    preview_input, should_eagerly_measure_rows,
 };
 
 use crate::{
@@ -121,6 +122,36 @@ fn markdown_closing_fence_is_zero_height_in_reading() {
         })
         .expect("fixture has a closing fence");
     assert_eq!(closing.layout.fixed_height, Some(0.0));
+}
+
+#[test]
+fn reading_checkbox_action_only_targets_the_structural_prefix() {
+    let document =
+        loaded_document("checkbox.org", "- [ ] task\n- literal [ ] text\n").into_preview();
+    let actions = document
+        .projection
+        .rows
+        .iter()
+        .map(|row| super::checkbox_action(&document, row).is_some())
+        .collect::<Vec<_>>();
+    assert_eq!(actions, vec![true, false]);
+}
+
+#[test]
+fn markdown_code_action_uses_the_precomputed_body_range() {
+    let source = "```rust\nlet value = 1;\n```\n";
+    let document = loaded_document("code.md", source).into_preview();
+    let action = document
+        .projection
+        .rows
+        .iter()
+        .position(|row| row.code_action_range.is_some())
+        .and_then(|row| super::code_action(&document, row))
+        .expect("opening fence exposes a copy action");
+    assert_eq!(
+        document.text.copy_range(action.target().source_range),
+        "let value = 1;\n"
+    );
 }
 
 #[test]
@@ -595,6 +626,47 @@ fn incremental_document_replacement_preserves_list_and_fold_state(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn code_copy_feedback_is_pane_local_and_clears_after_the_confirmation_window(
+    cx: &mut gpui::TestAppContext,
+) {
+    let preview = loaded_document(
+        "copy-feedback.org",
+        "#+begin_src rust\nfn main() {}\n#+end_src\n",
+    )
+    .into_preview();
+    let panel = cx.new(|_| super::ReadingPreviewPanel::new(std::sync::Arc::new(preview), 80.0));
+    let range = ByteRange::new(17, 29);
+    panel.update(cx, |panel, cx| {
+        panel.show_copy_feedback(range, super::CopyFeedbackState::Succeeded, cx);
+        assert_eq!(
+            panel.render_state().copy_feedback,
+            Some((range, super::CopyFeedbackState::Succeeded))
+        );
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(1_601));
+    cx.run_until_parked();
+    assert_eq!(
+        panel.read_with(cx, |panel, _| panel.render_state().copy_feedback),
+        None
+    );
+}
+
+#[gpui::test]
+fn independent_preview_actions_can_be_pending_together(cx: &mut gpui::TestAppContext) {
+    let preview = loaded_document("actions.org", "- [ ] one\n- [ ] two\n").into_preview();
+    let panel = cx.new(|_| super::ReadingPreviewPanel::new(std::sync::Arc::new(preview), 80.0));
+    panel.update(cx, |panel, _| {
+        let first = super::PreviewActionIdentity::Source(ByteRange::new(2, 5));
+        let second = super::PreviewActionIdentity::Source(ByteRange::new(12, 15));
+        assert!(panel.begin_action(first).is_some());
+        assert!(panel.begin_action(second).is_some());
+        assert!(panel.begin_action(first).is_none());
+        assert_eq!(panel.render_state().action_states.len(), 2);
+    });
+}
+
+#[gpui::test]
 fn trailing_space_update_does_not_rebind_or_jump_split_reading(cx: &mut gpui::TestAppContext) {
     let source = (0..400)
         .map(|index| format!("* Heading {index}\nbody {index}\n"))
@@ -1001,6 +1073,29 @@ fn shift_tab_dispatches_the_global_visibility_cycle() {
             prefix: crate::command::PrefixArgument::None,
         }
     );
+}
+
+#[test]
+fn reading_keymap_routes_platform_undo_and_redo_to_document_history() {
+    let (commands, mut keyboard, context) = preview_input();
+    for (stroke, name) in [
+        (
+            KeyStroke::new("z", false, false, false, true),
+            UNDO_DOCUMENT_COMMAND,
+        ),
+        (
+            KeyStroke::new("z", false, false, true, true),
+            REDO_DOCUMENT_COMMAND,
+        ),
+    ] {
+        assert_eq!(
+            keyboard.route(stroke, context),
+            EmacsOutcome::Command {
+                command: commands.key(name).unwrap(),
+                prefix: crate::command::PrefixArgument::None,
+            }
+        );
+    }
 }
 
 #[test]

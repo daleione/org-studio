@@ -1,7 +1,4 @@
-use std::sync::Arc;
-
-#[cfg(test)]
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 use crate::document::Revision;
 
@@ -127,7 +124,6 @@ impl LayoutSnapshot {
         Self::from_chunks(chunks)
     }
 
-    #[cfg(test)]
     pub(in crate::preview) fn replacing_range(
         &self,
         range: Range<usize>,
@@ -169,7 +165,6 @@ impl LayoutSnapshot {
             .min(self.chunks.len())
     }
 
-    #[cfg(test)]
     fn locate_boundary(&self, row: usize) -> (usize, usize) {
         if row >= self.rows {
             return (self.chunks.len(), 0);

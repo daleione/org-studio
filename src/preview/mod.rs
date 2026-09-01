@@ -8,6 +8,7 @@ use gpui::{
     Context, FontStyle, FontWeight, HighlightStyle, IntoElement, KeyDownEvent, ListAlignment,
     PathPromptOptions, Render, StyledText, Window, actions, div, img, px, rgb,
 };
+mod action;
 mod app;
 pub(crate) mod derived;
 mod display_map;
@@ -19,6 +20,11 @@ mod layout;
 mod loading;
 mod status_line;
 mod view;
+use action::{
+    CopyFeedbackState, PendingPreviewAction, PreviewAction, PreviewActionIdentity,
+    PreviewActionTarget, PreviewActionVisualState, checkbox_action, code_action, image_action,
+    source_action_target,
+};
 pub(crate) use document::DocumentFormat;
 use document::{
     CodeRowRole, DerivedUpdate, PreviewRow, ReloadedDocument, WorkspaceLoadedDocument,
@@ -107,6 +113,8 @@ const SHOW_HOME_COMMAND: &str = "org-studio.workspace.show-home";
 const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
 const SAVE_DOCUMENT_COMMAND: &str = "org-studio.document.save";
 const SAVE_DOCUMENT_AS_COMMAND: &str = "org-studio.document.save-as";
+const UNDO_DOCUMENT_COMMAND: &str = "org-studio.document.undo";
+const REDO_DOCUMENT_COMMAND: &str = "org-studio.document.redo";
 const EXPORT_DOCUMENT_COMMAND: &str = "org-studio.document.export";
 const QUIT_APPLICATION_COMMAND: &str = "org-studio.application.quit";
 const SCROLL_FORWARD_COMMAND: &str = "org-studio.preview.scroll-forward";

@@ -73,7 +73,7 @@ pub(in crate::preview) struct MinimapLineIndexProgress {
 pub(super) struct MinimapRefinement {
     pub(super) priority_row: usize,
     pub(super) allow: bool,
-    pub(super) fold_revision: u64,
+    pub(super) geometry_revision: u64,
 }
 
 impl MinimapLineIndexKey {
@@ -82,7 +82,7 @@ impl MinimapLineIndexKey {
         available_width: f32,
         density: MinimapDensity,
         document_revision: Revision,
-        fold_revision: u64,
+        geometry_revision: u64,
     ) -> Self {
         Self {
             presentation_rows: Arc::as_ptr(presentation_rows) as usize,
@@ -92,7 +92,7 @@ impl MinimapLineIndexKey {
                 document_revision,
                 content_width_px: available_width.round().clamp(1.0, u16::MAX as f32) as u16,
                 text_metrics_revision: 0,
-                fold_revision,
+                fold_revision: geometry_revision,
             },
         }
     }
@@ -128,6 +128,90 @@ impl MinimapLineIndexBuilder {
             priority_cursor: 0,
             exact_bits: vec![0; key.presentation_rows.div_ceil(64)],
             exact_rows: 0,
+            started_at,
+            pending_updates: Vec::with_capacity(16),
+            slices: 0,
+            work: Duration::ZERO,
+            max_slice: Duration::ZERO,
+        }
+    }
+
+    pub(super) fn rebased(
+        model: &PreviewDisplayMap,
+        key: MinimapLineIndexKey,
+        presentation_rows: Arc<Vec<usize>>,
+        available_width: f32,
+        previous_rows: &[usize],
+        previous_projection: &LayoutSnapshot,
+    ) -> Self {
+        let started_at = Instant::now();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        presentation_rows.hash(&mut hasher);
+        let rows_signature = hasher.finish();
+        let projection = if previous_projection.rows == previous_rows.len() {
+            let common_prefix = previous_rows
+                .iter()
+                .zip(presentation_rows.iter())
+                .take_while(|(previous, next)| previous == next)
+                .count();
+            let max_suffix = previous_rows
+                .len()
+                .saturating_sub(common_prefix)
+                .min(presentation_rows.len().saturating_sub(common_prefix));
+            let common_suffix = previous_rows
+                .iter()
+                .rev()
+                .zip(presentation_rows.iter().rev())
+                .take(max_suffix)
+                .take_while(|(previous, next)| previous == next)
+                .count();
+            let previous_end = previous_rows.len() - common_suffix;
+            let next_end = presentation_rows.len() - common_suffix;
+            let mut previous_cursor = common_prefix;
+            let replacements = presentation_rows[common_prefix..next_end]
+                .iter()
+                .map(|row| {
+                    while previous_cursor < previous_end && previous_rows[previous_cursor] < *row {
+                        previous_cursor += 1;
+                    }
+                    if previous_cursor < previous_end && previous_rows[previous_cursor] == *row {
+                        previous_projection.measure(previous_cursor)
+                    } else {
+                        model.estimated_measure(*row, available_width)
+                    }
+                })
+                .collect();
+            Arc::new(previous_projection.replacing_range(common_prefix..previous_end, replacements))
+        } else {
+            Arc::new(LayoutSnapshot::new(
+                presentation_rows
+                    .iter()
+                    .map(|row| model.estimated_measure(*row, available_width))
+                    .collect(),
+            ))
+        };
+        let mut exact_bits = vec![0u64; presentation_rows.len().div_ceil(64)];
+        for (index, measure) in projection
+            .chunks
+            .iter()
+            .flat_map(|chunk| chunk.measures.iter())
+            .enumerate()
+        {
+            if measure.exact {
+                exact_bits[index / 64] |= 1u64 << (index % 64);
+            }
+        }
+        let exact_rows = projection.exact_rows;
+        Self {
+            key,
+            projection,
+            presentation_rows,
+            rows_signature,
+            sequential_cursor: 0,
+            priority_range: 0..0,
+            priority_cursor: 0,
+            exact_bits,
+            exact_rows,
             started_at,
             pending_updates: Vec::with_capacity(16),
             slices: 0,
@@ -316,7 +400,7 @@ impl PreviewDisplayMap {
             available_width,
             density,
             self.projection.revision,
-            refinement.fold_revision,
+            refinement.geometry_revision,
         );
         let cached = state
             .line_index
@@ -342,42 +426,84 @@ impl PreviewDisplayMap {
             .expect("minimap line-index builder poisoned");
         let created = build.as_ref().is_none_or(|builder| builder.key != key);
         if created {
-            *build = Some(MinimapLineIndexBuilder::new(
-                self,
-                key,
-                presentation_rows.clone(),
-                available_width,
-                density,
-            ));
+            let reusable_build = build.as_ref().and_then(|builder| {
+                (builder.key.width == key.width
+                    && builder.key.density == key.density
+                    && builder.key.layout.document_revision == key.layout.document_revision)
+                    .then(|| {
+                        (
+                            builder.presentation_rows.clone(),
+                            builder.projection.clone(),
+                        )
+                    })
+            });
+            let reusable = reusable_build.or_else(|| {
+                state
+                    .line_index
+                    .lock()
+                    .expect("minimap line index poisoned")
+                    .as_ref()
+                    .filter(|cached| {
+                        cached.index.width == key.width
+                            && cached.index.density == key.density
+                            && cached.index.layout.document_revision == key.layout.document_revision
+                    })
+                    .map(|cached| {
+                        (
+                            cached.presentation_rows.clone(),
+                            cached.index.projection.clone(),
+                        )
+                    })
+            });
+            *build = Some(
+                if let Some((previous_rows, previous_projection)) = reusable {
+                    MinimapLineIndexBuilder::rebased(
+                        self,
+                        key,
+                        presentation_rows.clone(),
+                        available_width,
+                        &previous_rows,
+                        &previous_projection,
+                    )
+                } else {
+                    MinimapLineIndexBuilder::new(
+                        self,
+                        key,
+                        presentation_rows.clone(),
+                        available_width,
+                        density,
+                    )
+                },
+            );
         }
         if created {
             let builder = build.as_mut().expect("line-index builder initialized");
             if minimap_perf_enabled() {
                 eprintln!(
-                    "org_studio_minimap_ready readiness=estimated rows={} exact_rows=0 width={} elapsed_ms={:.3} projection_bytes={}",
+                    "org_studio_minimap_ready readiness={} rows={} exact_rows={} width={} elapsed_ms={:.3} projection_bytes={}",
+                    if builder.exact_rows == builder.presentation_rows.len() {
+                        "exact"
+                    } else if builder.exact_rows == 0 {
+                        "estimated"
+                    } else {
+                        "partially_exact"
+                    },
                     builder.presentation_rows.len(),
+                    builder.exact_rows,
                     key.width,
                     builder.started_at.elapsed().as_secs_f64() * 1000.0,
                     builder.projection.estimated_heap_bytes(),
                 );
             }
-            return MinimapLineIndexProgress {
-                index: builder.index(density),
-                readiness: MinimapProjectionReadiness::Estimated,
-                exact_rows: 0,
-            };
+            if builder.exact_rows == builder.presentation_rows.len() {
+                let builder = build.take().expect("exact line-index builder exists");
+                return finish_line_index(state, builder, density);
+            }
+            return line_index_progress(builder, density);
         }
         if !refinement.allow {
             let builder = build.as_ref().expect("line-index builder initialized");
-            return MinimapLineIndexProgress {
-                index: builder.index(density),
-                readiness: if builder.exact_rows == 0 {
-                    MinimapProjectionReadiness::Estimated
-                } else {
-                    MinimapProjectionReadiness::PartiallyExact
-                },
-                exact_rows: builder.exact_rows,
-            };
+            return line_index_progress(builder, density);
         }
         let started = Instant::now();
         let builder = build.as_mut().expect("line-index builder initialized");
@@ -423,11 +549,7 @@ impl PreviewDisplayMap {
                         elapsed.as_secs_f64() * 1000.0,
                     );
                 }
-                return MinimapLineIndexProgress {
-                    index: builder.index(density),
-                    readiness: MinimapProjectionReadiness::PartiallyExact,
-                    exact_rows: builder.exact_rows,
-                };
+                return line_index_progress(builder, density);
             }
         }
         builder.record_slice(started.elapsed());
@@ -449,18 +571,45 @@ impl PreviewDisplayMap {
                 builder.slices,
             );
         }
-        let index = builder.index(density);
-        *state
-            .line_index
-            .lock()
-            .expect("minimap line index poisoned") = Some(CachedMinimapLineIndex {
-            presentation_rows: builder.presentation_rows,
-            index: index.clone(),
-        });
-        MinimapLineIndexProgress {
-            exact_rows: presentation_rows.len(),
-            index,
-            readiness: MinimapProjectionReadiness::Exact,
-        }
+        finish_line_index(state, builder, density)
+    }
+}
+
+fn line_index_progress(
+    builder: &MinimapLineIndexBuilder,
+    density: MinimapDensity,
+) -> MinimapLineIndexProgress {
+    let readiness = if builder.exact_rows == 0 {
+        MinimapProjectionReadiness::Estimated
+    } else if builder.exact_rows == builder.presentation_rows.len() {
+        MinimapProjectionReadiness::Exact
+    } else {
+        MinimapProjectionReadiness::PartiallyExact
+    };
+    MinimapLineIndexProgress {
+        index: builder.index(density),
+        readiness,
+        exact_rows: builder.exact_rows,
+    }
+}
+
+fn finish_line_index(
+    state: &super::MinimapState,
+    builder: MinimapLineIndexBuilder,
+    density: MinimapDensity,
+) -> MinimapLineIndexProgress {
+    let exact_rows = builder.presentation_rows.len();
+    let index = builder.index(density);
+    *state
+        .line_index
+        .lock()
+        .expect("minimap line index poisoned") = Some(CachedMinimapLineIndex {
+        presentation_rows: builder.presentation_rows,
+        index: index.clone(),
+    });
+    MinimapLineIndexProgress {
+        exact_rows,
+        index,
+        readiness: MinimapProjectionReadiness::Exact,
     }
 }

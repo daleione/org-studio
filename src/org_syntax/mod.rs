@@ -8,7 +8,9 @@ use crate::document::{
     ByteOffset, ByteRange, LineCursor, RevisionDelta, RevisionRange, TextSnapshot,
 };
 
+pub(crate) mod command;
 pub mod inline;
+pub(crate) mod list;
 
 pub type BlockId = u32;
 

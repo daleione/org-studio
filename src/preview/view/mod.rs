@@ -25,6 +25,26 @@ struct ReadingRowContext<'a> {
     zoom: f32,
     table_scroll: Option<&'a gpui::ScrollHandle>,
 }
+
+#[derive(Clone)]
+struct ReadingInteraction {
+    panel: gpui::Entity<super::ReadingPreviewPanel>,
+    workspace: gpui::Entity<WorkspaceWindow>,
+    action_states: Arc<
+        Vec<(
+            super::PreviewActionIdentity,
+            super::PreviewActionVisualState,
+        )>,
+    >,
+    copy_feedback: Option<(crate::document::ByteRange, super::CopyFeedbackState)>,
+}
+
+struct ReadingRowHost<'a> {
+    available_width: f32,
+    zoom: f32,
+    table_scroll_handles: &'a std::collections::HashMap<super::BlockId, gpui::ScrollHandle>,
+    interaction: Option<&'a ReadingInteraction>,
+}
 use code_block::render_code_row;
 pub(super) use document::{ReadingRenderOptions, render_reading_document};
 pub(super) use home::{render_home, render_loading};

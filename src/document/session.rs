@@ -4,9 +4,9 @@ use gpui::{Context, EventEmitter};
 
 use super::{
     ByteOffset, ByteRange, DocumentBuffer, DocumentId, DocumentSnapshot, EditError, EditOrigin,
-    EditTransaction, FileMetadata, FileStamp, HistoryOutcome, Revision, RevisionDelta, SaveOutcome,
-    SaveRequest, SaveState, Selection, SyncState, TargetExpectation, TextEdit, TextEditSummary,
-    TextSnapshot,
+    EditTransaction, FileMetadata, FileStamp, HistoryOutcome, RangeMapError, Revision,
+    RevisionDelta, RevisionRange, SaveOutcome, SaveRequest, SaveState, Selection, SyncState,
+    TargetExpectation, TextEdit, TextEditSummary, TextSnapshot,
     transaction::PreparedText,
     undo::{HistoryStep, UndoHistory},
 };
@@ -249,6 +249,17 @@ impl DocumentSession {
 
     pub fn snapshot(&self) -> DocumentSnapshot {
         self.buffer.snapshot()
+    }
+
+    /// Maps a range captured by an immutable view onto the current buffer revision.
+    ///
+    /// The edit log deliberately rejects ranges touched by intervening edits. Callers must still
+    /// validate the mapped text before applying a semantic action.
+    pub fn map_range_to_current(
+        &self,
+        range: RevisionRange,
+    ) -> Result<RevisionRange, RangeMapError> {
+        self.buffer.edit_log().map_range(range, self.revision())
     }
 
     pub fn save_point(&self) -> SavePoint {

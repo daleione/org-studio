@@ -237,19 +237,37 @@ impl WorkspaceWindow {
                 }
                 cx.quit();
             }
-            PendingTransition::Open(path) => {
+            PendingTransition::Open { path, anchor } => {
                 if discard_current {
                     self.open_discarding_current(path, cx);
                 } else {
                     self.open(path, cx);
                 }
+                self.pending_navigation = anchor.map(|anchor| (self.generation, anchor));
             }
             PendingTransition::Home => self.show_home_now(cx),
         }
     }
 
     pub fn request_open(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.request_transition(PendingTransition::Open(path), window, cx);
+        self.request_transition(PendingTransition::Open { path, anchor: None }, window, cx);
+    }
+
+    pub(in crate::preview) fn request_open_at(
+        &mut self,
+        path: PathBuf,
+        anchor: Arc<str>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.request_transition(
+            PendingTransition::Open {
+                path,
+                anchor: Some(anchor),
+            },
+            window,
+            cx,
+        );
     }
 
     pub(in crate::preview) fn request_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {

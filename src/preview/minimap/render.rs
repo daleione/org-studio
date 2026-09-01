@@ -40,7 +40,8 @@ pub fn render(
     minimap_width: f32,
     thumb_visibility: crate::settings::MinimapThumbVisibility,
     generation: u64,
-    presentation_revision: u64,
+    geometry_revision: u64,
+    allow_projection_refinement: bool,
     opened_at: Instant,
     on_seek: impl Fn(
         super::viewport::MinimapSourceTarget,
@@ -116,13 +117,16 @@ pub fn render(
                     density,
                     MinimapRefinement {
                         priority_row,
-                        allow: !interaction_active,
-                        fold_revision: presentation_revision,
+                        allow: allow_projection_refinement && !interaction_active,
+                        geometry_revision,
                     },
                     window.text_system(),
                 )
             };
-            if projection.readiness != MinimapProjectionReadiness::Exact && !interaction_active {
+            if projection.readiness != MinimapProjectionReadiness::Exact
+                && allow_projection_refinement
+                && !interaction_active
+            {
                 // Drive cooperative exact refinement at display cadence. The
                 // estimated projection remains paintable throughout the process.
                 window.request_animation_frame();
@@ -297,7 +301,7 @@ pub fn render(
                             eprintln!(
                                 "org_studio_minimap_tile_ready generation={} revision={} tile_start={} rows={} lines={} width={} total_ms={:.3} text_system_wait_ms={:.3} cold_text_system={} first={} since_open_ms={:.3}",
                                 generation,
-                                presentation_revision,
+                                geometry_revision,
                                 request.key.tile_start,
                                 request.rows.len(),
                                 rasterized.line_count,
@@ -351,14 +355,14 @@ pub fn render(
                     eprintln!(
                         "org_studio_minimap_first_pixels generation={} revision={} tiles={} since_open_ms={:.3}",
                         generation,
-                        presentation_revision,
+                        geometry_revision,
                         tiles.len(),
                         opened_at.elapsed().as_secs_f64() * 1000.0,
                     );
                     eprintln!(
                         "org_preview_coherent_first_frame generation={} revision={} since_open_ms={:.3}",
                         generation,
-                        presentation_revision,
+                        geometry_revision,
                         opened_at.elapsed().as_secs_f64() * 1000.0,
                     );
                 }

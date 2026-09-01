@@ -7,12 +7,7 @@ pub(crate) struct HeadingParts {
     pub tags: Vec<String>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CheckboxState {
-    Empty,
-    Partial,
-    Checked,
-}
+pub(crate) use crate::org_syntax::list::CheckboxState;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ListParts {
@@ -119,36 +114,19 @@ pub(crate) fn parse_heading(text: &str) -> HeadingParts {
 }
 
 pub(crate) fn parse_list_item(text: &str) -> ListParts {
-    let indent_len = text.len() - text.trim_start_matches([' ', '\t']).len();
-    let indent = text[..indent_len].to_owned();
-    let rest = &text[indent_len..];
-    let marker_end = rest.find(char::is_whitespace).unwrap_or(rest.len());
-    let marker = rest[..marker_end].to_owned();
-    let mut body = rest[marker_end..].trim_start();
-    let counter = take_bracket_token(body, "[@").map(str::to_owned);
-    if let Some(token) = &counter {
-        body = body[token.len()..].trim_start();
-    }
-    let checkbox = match body.get(..3) {
-        Some("[ ]") => Some(CheckboxState::Empty),
-        Some("[-]") => Some(CheckboxState::Partial),
-        Some("[X]") | Some("[x]") => Some(CheckboxState::Checked),
-        _ => None,
+    let Some(parsed) = crate::org_syntax::list::parse_list_line(text) else {
+        return ListParts {
+            body: text.to_owned(),
+            ..ListParts::default()
+        };
     };
-    if checkbox.is_some() {
-        body = body[3..].trim_start();
-    }
-    let (term, body) = body
-        .split_once(" :: ")
-        .map(|(term, description)| (Some(term.to_owned()), description.to_owned()))
-        .unwrap_or((None, body.to_owned()));
     ListParts {
-        indent,
-        marker,
-        counter,
-        checkbox,
-        term,
-        body,
+        indent: parsed.indent.to_owned(),
+        marker: parsed.marker.to_owned(),
+        counter: parsed.counter.map(str::to_owned),
+        checkbox: parsed.checkbox.map(|checkbox| checkbox.state),
+        term: parsed.term.map(str::to_owned),
+        body: parsed.body.to_owned(),
     }
 }
 
@@ -239,12 +217,6 @@ fn is_statistics_cookie(word: &&str) -> bool {
                 && done.chars().all(|ch| ch.is_ascii_digit())
                 && total.chars().all(|ch| ch.is_ascii_digit())
         })
-}
-
-fn take_bracket_token<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    text.strip_prefix(prefix)?;
-    let end = text.find(']')?;
-    Some(&text[..=end])
 }
 
 #[cfg(test)]

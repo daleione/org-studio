@@ -22,6 +22,7 @@ impl WorkspaceWindow {
         self.opened_at = None;
         self.first_frame_scheduled = None;
         self.home_error = None;
+        self.pending_navigation = None;
         self.content_route = super::super::ContentRoute::Document;
         self.file_manager.reset_for_document();
         self.stop_dired_directory_watch();
@@ -41,6 +42,7 @@ impl WorkspaceWindow {
     ) -> u64 {
         self.home_error = None;
         self.save.status = None;
+        self.pending_navigation = None;
         self.generation += 1;
         self.opened_at = Some(opened_at);
         self.first_frame_scheduled = None;
@@ -579,7 +581,35 @@ impl WorkspaceWindow {
                 }
             }
         };
+        self.apply_pending_navigation(generation, cx);
         true
+    }
+
+    pub(super) fn apply_pending_navigation(&mut self, generation: u64, cx: &mut impl AppContext) {
+        let Some((pending_generation, anchor)) = self.pending_navigation.clone() else {
+            return;
+        };
+        if pending_generation != generation {
+            self.pending_navigation = None;
+            return;
+        }
+        let Some(ready) = self.state.ready() else {
+            return;
+        };
+        let panels = [ready.readers.left.clone(), ready.readers.right.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>();
+        if panels.is_empty() {
+            return;
+        }
+        let found = panels
+            .into_iter()
+            .any(|panel| panel.update(cx, |panel, _| panel.jump_to_destination(&anchor)));
+        self.pending_navigation = None;
+        if !found {
+            self.set_document_notice(Some("Link target was not found".into()));
+        }
     }
 
     pub(in crate::preview) fn choose_file(

@@ -133,6 +133,7 @@ pub struct WorkspaceWindow {
     pub(crate) recent_documents: Vec<crate::recent_documents::RecentDocument>,
     pub(crate) home_error: Option<Arc<str>>,
     pub(crate) generation: u64,
+    pub(crate) pending_navigation: Option<(u64, Arc<str>)>,
     pub(crate) load_task: Option<Task<()>>,
     pub(crate) derived: DerivedHost,
     pub(crate) file_watch_task: Option<Task<()>>,

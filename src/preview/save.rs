@@ -12,7 +12,10 @@ pub(crate) enum SaveStatus {
 pub(crate) enum PendingTransition {
     Close,
     Quit,
-    Open(PathBuf),
+    Open {
+        path: PathBuf,
+        anchor: Option<Arc<str>>,
+    },
     Home,
 }
 

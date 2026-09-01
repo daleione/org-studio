@@ -11,6 +11,7 @@ use super::{
 use crate::app::{DocumentViewPreferences, DocumentWorkspaceState, PaneSide, PaneSurface};
 use gpui::{div, prelude::*, rgb};
 
+mod actions;
 mod benchmark;
 mod commands;
 mod document_lifecycle;
@@ -77,6 +78,7 @@ impl WorkspaceWindow {
             recent_documents: crate::recent_documents::load(),
             home_error: None,
             generation: 0,
+            pending_navigation: None,
             load_task: None,
             derived: crate::app::DerivedHost::default(),
             file_watch_task: None,
@@ -258,6 +260,7 @@ impl WorkspaceWindow {
                     Some(cx.new(move |_| super::ReadingPreviewPanel::new(document, list_overdraw)));
             }
         }
+        self.apply_pending_navigation(self.generation, cx);
         true
     }
 
@@ -288,7 +291,7 @@ impl WorkspaceWindow {
             .visible_panes()
             .filter_map(|pane| self.preview_panel_for(pane))
         {
-            panel.update(cx, |panel, _| panel.bump_presentation_revision());
+            panel.update(cx, |panel, _| panel.bump_geometry_revision());
         }
     }
 

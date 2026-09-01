@@ -73,6 +73,7 @@ pub(in crate::preview) struct VisualRow {
     pub(in crate::preview) semantic_revision: u64,
     pub(in crate::preview) kind: VisualRowKind,
     pub(in crate::preview) code_language: Option<Arc<str>>,
+    pub(in crate::preview) code_action_range: Option<crate::document::ByteRange>,
     pub(in crate::preview) layout: RowLayout,
     pub(in crate::preview) render: PreviewRow,
 }
@@ -749,11 +750,60 @@ pub(in crate::preview) fn build_visual_rows(
                 semantic_revision: revision.0,
                 kind,
                 code_language: visual_code_language(format, row.block_id, blocks, markdown_blocks),
+                code_action_range: code_action_range(format, row.block_id, blocks, markdown_blocks),
                 layout,
                 render: *row,
             }
         })
         .collect()
+}
+
+fn code_action_range(
+    format: DocumentFormat,
+    block_id: BlockId,
+    blocks: &BlockArena,
+    markdown_blocks: &[MarkdownBlock],
+) -> Option<crate::document::ByteRange> {
+    match format {
+        DocumentFormat::Org => match blocks.nodes().get(block_id as usize)?.kind {
+            BlockKind::SourceBlock { .. } | BlockKind::ExampleBlock => {
+                Some(blocks.nodes()[block_id as usize].content)
+            }
+            _ => None,
+        },
+        DocumentFormat::Markdown => {
+            let block_index = block_id as usize;
+            if !matches!(
+                markdown_blocks.get(block_index)?.kind,
+                MarkdownKind::Code {
+                    role: crate::preview::CodeRowRole::Open,
+                    ..
+                }
+            ) {
+                return None;
+            }
+            let mut body = markdown_blocks
+                .iter()
+                .skip(block_index + 1)
+                .take_while(|block| {
+                    matches!(
+                        block.kind,
+                        MarkdownKind::Code {
+                            role: crate::preview::CodeRowRole::Body,
+                            ..
+                        }
+                    )
+                })
+                .map(|block| block.source);
+            let first = body.next().unwrap_or_else(|| {
+                let end = markdown_blocks[block_index].source.end.0;
+                crate::document::ByteRange::new(end, end)
+            });
+            Some(body.fold(first, |range, next| {
+                crate::document::ByteRange::new(range.start.0, next.end.0)
+            }))
+        }
+    }
 }
 
 fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
@@ -898,6 +948,7 @@ mod tests {
             semantic_revision: revision.0,
             kind: VisualRowKind::Text,
             code_language: None,
+            code_action_range: None,
             layout: RowLayout::text(14.0, 22.0),
             render: PreviewRow {
                 block_id: index as u32,
@@ -985,6 +1036,7 @@ mod tests {
             semantic_revision: 1,
             kind: VisualRowKind::Text,
             code_language: None,
+            code_action_range: None,
             layout: RowLayout::text(14.0, 22.0),
             render: row(1, Revision(1)).render,
         };

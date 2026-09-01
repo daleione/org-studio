@@ -1,7 +1,8 @@
-use super::document::{reading_code_label, reading_fallback, render_list_item};
+use super::document::{reading_code_label, reading_fallback, reading_inline, render_list_item};
 use super::{
-    Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingRowContext, current_theme, div, img,
-    markdown, px, render_code_row, render_table_row, resolve_image_path, rgb, styled_inline_runs,
+    Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingInteraction, ReadingRowContext,
+    current_theme, div, img, markdown, px, render_code_row, render_table_row, resolve_image_path,
+    rgb,
 };
 use crate::preview::CodeRowRole;
 use gpui::prelude::*;
@@ -12,6 +13,7 @@ pub(super) fn render_markdown_block(
     block: &markdown::MarkdownBlock,
     is_folded: bool,
     context: ReadingRowContext<'_>,
+    interaction: Option<&ReadingInteraction>,
 ) -> gpui::Div {
     use markdown::MarkdownKind;
     let theme = current_theme();
@@ -22,7 +24,7 @@ pub(super) fn render_markdown_block(
     let display_runs = display_map.runs(display_row);
     let row_layout = display_map.layout(display_row).scaled(context.zoom);
     let text = display_runs.text.clone();
-    let inline = || styled_inline_runs(text.clone(), display_runs.inline_spans.clone());
+    let inline = || reading_inline(document, display_row, &display_runs, interaction);
     match &block.kind {
         MarkdownKind::Blank => {
             div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)))
@@ -67,6 +69,7 @@ pub(super) fn render_markdown_block(
             inline(),
             row_layout.font_size,
             row_layout.line_height,
+            interaction,
         ),
         MarkdownKind::Quote => div()
             .pl(px(row_layout.padding_left))
@@ -80,7 +83,12 @@ pub(super) fn render_markdown_block(
             .line_height(px(row_layout.line_height))
             .child(inline()),
         MarkdownKind::Code { language, role } => match role {
-            CodeRowRole::Open => reading_code_label(language.as_deref()),
+            CodeRowRole::Open => div().child(reading_code_label(
+                language.as_deref(),
+                crate::preview::code_action(document, display_row),
+                interaction,
+                display_row,
+            )),
             CodeRowRole::Close => div().h(px(0.0)),
             CodeRowRole::Body => render_code_row(text, display_runs.code_spans, row_layout, *role),
         },
@@ -107,17 +115,37 @@ pub(super) fn render_markdown_block(
         MarkdownKind::Image { path } => {
             let source = resolve_image_path(&document.path, path);
             let fitted = display_map.image_size(display_row, context.available_width);
-            div()
-                .w_full()
-                .pt(px(row_layout.padding_top))
-                .pb(px(row_layout.padding_bottom))
-                .flex()
-                .items_start()
-                .child(if let Some((width, height)) = fitted {
-                    img(source).w(px(width)).h(px(height))
-                } else {
-                    img(source).max_w(px(context.available_width.min(960.0)))
-                })
+            let action = document
+                .projection
+                .rows
+                .get(display_row)
+                .map(|visual| crate::preview::image_action(document, visual, path.as_str()));
+            let interaction = interaction.cloned();
+            div().w_full().child(
+                div()
+                    .id(("reading-image", display_row))
+                    .pt(px(row_layout.padding_top))
+                    .pb(px(row_layout.padding_bottom))
+                    .flex()
+                    .items_start()
+                    .child(if let Some((width, height)) = fitted {
+                        img(source).w(px(width)).h(px(height))
+                    } else {
+                        img(source).max_w(px(context.available_width.min(960.0)))
+                    })
+                    .when_some(action.zip(interaction), |element, (action, interaction)| {
+                        element.cursor_pointer().on_click(move |_, window, cx| {
+                            interaction.workspace.update(cx, |workspace, cx| {
+                                workspace.dispatch_preview_action(
+                                    action.clone(),
+                                    interaction.panel.clone(),
+                                    window,
+                                    cx,
+                                );
+                            });
+                        })
+                    }),
+            )
         }
     }
 }

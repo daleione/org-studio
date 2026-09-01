@@ -1,13 +1,13 @@
 use super::{
     Arc, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FontWeight, Instant,
-    PreviewRow, PreviewSnapshot, ReadingRowContext, WorkspaceWindow, current_theme, div, img,
-    minimap, px, render_code_row, render_markdown_block, render_table_row, resolve_image_path, rgb,
-    styled_inline_runs,
+    PreviewRow, PreviewSnapshot, ReadingInteraction, ReadingRowContext, ReadingRowHost,
+    WorkspaceWindow, current_theme, div, img, minimap, px, render_code_row, render_markdown_block,
+    render_table_row, resolve_image_path, rgb, styled_inline_runs,
 };
 use crate::preview::BlockId;
 use crate::preview::{
     CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
-    display_map::PreviewLineKind,
+    display_map::{DisplayRuns, PreviewLineKind},
     layout::{READING_FRAME_MAX_WIDTH, reading_content_width},
     org_line::{CheckboxState, parse_heading},
     projection::{ReadingCodeRow, ReadingListMarker, VisualRowKind},
@@ -38,8 +38,10 @@ pub(in crate::preview) fn render_reading_document(
         visible_rows,
         fold_markers,
         fold_animation,
-        presentation_revision,
+        geometry_revision,
         zoom,
+        action_states,
+        copy_feedback,
     } = state;
     let ReadingRenderOptions {
         minimap_visible,
@@ -56,6 +58,13 @@ pub(in crate::preview) fn render_reading_document(
     let minimap_entity = panel_entity.clone();
     let minimap_resize_entity = workspace_entity.clone();
     let rendered_item_count = list_state.item_count();
+    let allow_minimap_refinement = fold_animation.is_none();
+    let interaction = ReadingInteraction {
+        panel: panel_entity.clone(),
+        workspace: workspace_entity.clone(),
+        action_states,
+        copy_feedback,
+    };
     // The minimap represents the final semantic projection. The temporary flow segments belong
     // only to the main list; exposing them here causes a second tile refresh when the animation
     // completes and the segment is removed.
@@ -78,6 +87,7 @@ pub(in crate::preview) fn render_reading_document(
                     let visible_rows = visible_rows.clone();
                     let fold_markers = fold_markers.clone();
                     let fold_animation = fold_animation.clone();
+                    let interaction = interaction.clone();
                     list(list_state, move |index, _window, _cx| {
                         let available_width = {
                             let minimap = if minimap_visible { minimap_width } else { 0.0 };
@@ -123,9 +133,12 @@ pub(in crate::preview) fn render_reading_document(
                             actual_index,
                             row,
                             is_folded,
-                            available_width,
-                            zoom,
-                            &table_scroll_handles,
+                            ReadingRowHost {
+                                available_width,
+                                zoom,
+                                table_scroll_handles: &table_scroll_handles,
+                                interaction: Some(&interaction),
+                            },
                         )
                         .id(("reading-row", actual_index))
                         .when(index == 0, |element| element.pt_1())
@@ -165,11 +178,12 @@ pub(in crate::preview) fn render_reading_document(
                     minimap_width,
                     minimap_thumb_visibility,
                     generation,
-                    presentation_revision,
+                    geometry_revision,
+                    allow_minimap_refinement,
                     opened_at,
                     move |_source_target, offset, window, cx| {
                         minimap_entity.update(cx, |this, cx| {
-                            this.seek_minimap(presentation_revision, offset, window, cx);
+                            this.seek_minimap(geometry_revision, offset, window, cx);
                         });
                     },
                     move |change, _, cx| {
@@ -250,9 +264,12 @@ fn render_fold_shell_row(
         actual_index,
         row,
         false,
-        available_width,
-        zoom,
-        table_scroll_handles,
+        ReadingRowHost {
+            available_width,
+            zoom,
+            table_scroll_handles,
+            interaction: None,
+        },
     )
 }
 
@@ -261,10 +278,14 @@ fn render_reading_row(
     actual_index: usize,
     row: PreviewRow,
     is_folded: bool,
-    available_width: f32,
-    zoom: f32,
-    table_scroll_handles: &std::collections::HashMap<BlockId, gpui::ScrollHandle>,
+    host: ReadingRowHost<'_>,
 ) -> gpui::Div {
+    let ReadingRowHost {
+        available_width,
+        zoom,
+        table_scroll_handles,
+        interaction,
+    } = host;
     let minimum_height = match &document
         .projection
         .rows
@@ -316,6 +337,7 @@ fn render_reading_row(
                                 &document.markdown_blocks[row.block_id as usize],
                                 is_folded,
                                 context,
+                                interaction,
                             )
                         } else {
                             render_block(
@@ -325,6 +347,7 @@ fn render_reading_row(
                                 &document.blocks.nodes()[row.block_id as usize],
                                 is_folded,
                                 context,
+                                interaction,
                             )
                         }),
                 ),
@@ -338,6 +361,7 @@ fn render_block(
     block: &BlockNode,
     is_folded: bool,
     context: ReadingRowContext<'_>,
+    interaction: Option<&ReadingInteraction>,
 ) -> gpui::Div {
     let theme = current_theme();
     let display_map = document
@@ -350,7 +374,7 @@ fn render_block(
         return div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)));
     }
     let text = display_runs.text.clone();
-    let inline = || styled_inline_runs(text.clone(), display_runs.inline_spans.clone());
+    let inline = || reading_inline(document, display_row, &display_runs, interaction);
     if matches!(display_map.row_kind(display_row), PreviewLineKind::Caption) {
         return div()
             .w_full()
@@ -433,14 +457,34 @@ fn render_block(
                 .as_ref()
                 .and_then(|map| map.image_size(display_row, context.available_width))
                 .unwrap_or_else(|| (context.available_width.min(640.0), 240.0));
-            div()
-                .w_full()
-                .pt(px(row_layout.padding_top))
-                .pb(px(row_layout.padding_bottom))
-                .flex()
-                .items_start()
-                .justify_start()
-                .child(img(source).w(px(width)).h(px(height)))
+            let action = document
+                .projection
+                .rows
+                .get(display_row)
+                .map(|visual| crate::preview::image_action(document, visual, path.clone()));
+            let interaction = interaction.cloned();
+            div().w_full().child(
+                div()
+                    .id(("reading-image", display_row))
+                    .pt(px(row_layout.padding_top))
+                    .pb(px(row_layout.padding_bottom))
+                    .flex()
+                    .items_start()
+                    .justify_start()
+                    .child(img(source).w(px(width)).h(px(height)))
+                    .when_some(action.zip(interaction), |element, (action, interaction)| {
+                        element.cursor_pointer().on_click(move |_, window, cx| {
+                            interaction.workspace.update(cx, |workspace, cx| {
+                                workspace.dispatch_preview_action(
+                                    action.clone(),
+                                    interaction.panel.clone(),
+                                    window,
+                                    cx,
+                                );
+                            });
+                        })
+                    }),
+            )
         }
         BlockKind::Planning => div()
             .font_family("Menlo")
@@ -454,6 +498,7 @@ fn render_block(
             inline(),
             row_layout.font_size,
             row_layout.line_height,
+            interaction,
         ),
         BlockKind::FixedWidth => div()
             .font_family("Menlo")
@@ -484,7 +529,12 @@ fn render_block(
         BlockKind::SourceBlock { language } => div()
             .w_full()
             .when(!row.continuation, |element| {
-                element.child(reading_code_label(language.as_deref()))
+                element.child(reading_code_label(
+                    language.as_deref(),
+                    crate::preview::code_action(document, display_row),
+                    interaction,
+                    display_row,
+                ))
             })
             .child(render_code_row(
                 text,
@@ -587,9 +637,10 @@ fn reading_chip(text: impl Into<gpui::SharedString>, color: u32) -> gpui::Div {
 pub(super) fn render_list_item(
     document: &Arc<PreviewSnapshot>,
     display_row: usize,
-    content: gpui::StyledText,
+    content: gpui::AnyElement,
     font_size: f32,
     line_height: f32,
+    interaction: Option<&ReadingInteraction>,
 ) -> gpui::Div {
     let theme = current_theme();
     let marker = match &document
@@ -613,19 +664,53 @@ pub(super) fn render_list_item(
         .text_size(px(font_size))
         .line_height(px(line_height))
         .text_color(rgb(theme.foreground))
-        .child(reading_list_marker(marker))
+        .child(reading_list_marker(
+            document,
+            display_row,
+            marker,
+            interaction,
+        ))
         .child(div().flex_1().min_w_0().child(content))
 }
 
-fn reading_list_marker(marker: &ReadingListMarker) -> gpui::Div {
+fn reading_list_marker(
+    document: &PreviewSnapshot,
+    display_row: usize,
+    marker: &ReadingListMarker,
+    interaction: Option<&ReadingInteraction>,
+) -> gpui::Stateful<gpui::Div> {
     let theme = current_theme();
     if let Some(state) = &marker.checkbox {
-        let (label, foreground, background) = match state {
-            CheckboxState::Empty => ("", theme.foreground_dim, theme.background),
-            CheckboxState::Partial => ("−", theme.background, theme.attribute),
-            CheckboxState::Checked => ("✓", theme.background, theme.heading[1]),
+        let action = document
+            .projection
+            .rows
+            .get(display_row)
+            .and_then(|row| crate::preview::checkbox_action(document, row));
+        let action_state = action.as_ref().and_then(|action| {
+            interaction.and_then(|interaction| {
+                let identity = action.target().identity();
+                interaction
+                    .action_states
+                    .iter()
+                    .find_map(|(candidate, state)| (*candidate == identity).then_some(*state))
+            })
+        });
+        let (label, foreground, background) = match action_state {
+            Some(crate::preview::PreviewActionVisualState::Pending) => {
+                ("…", theme.foreground_dim, theme.background_alt)
+            }
+            Some(crate::preview::PreviewActionVisualState::Failed) => {
+                ("!", theme.background, theme.keyword)
+            }
+            None => match state {
+                CheckboxState::Empty => ("", theme.foreground_dim, theme.background),
+                CheckboxState::Partial => ("−", theme.background, theme.attribute),
+                CheckboxState::Checked => ("✓", theme.background, theme.heading[1]),
+            },
         };
+        let interaction = interaction.cloned();
         return div()
+            .id(("reading-checkbox", display_row))
             .mt(px(3.0))
             .size(px(16.0))
             .flex_none()
@@ -640,7 +725,19 @@ fn reading_list_marker(marker: &ReadingListMarker) -> gpui::Div {
             .text_size(px(11.0))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(foreground))
-            .child(label);
+            .child(label)
+            .when_some(action.zip(interaction), |element, (action, interaction)| {
+                element.cursor_pointer().on_click(move |_, window, cx| {
+                    interaction.workspace.update(cx, |workspace, cx| {
+                        workspace.dispatch_preview_action(
+                            action.clone(),
+                            interaction.panel.clone(),
+                            window,
+                            cx,
+                        );
+                    });
+                })
+            });
     }
     let ordered = marker.marker.ends_with('.') || marker.marker.ends_with(')');
     let label = if ordered {
@@ -650,6 +747,7 @@ fn reading_list_marker(marker: &ReadingListMarker) -> gpui::Div {
     };
     let width = reading_marker_width(&label, ordered);
     div()
+        .id(("reading-list-marker", display_row))
         .w(px(width))
         .flex_none()
         .whitespace_nowrap()
@@ -668,9 +766,29 @@ fn reading_marker_width(label: &str, ordered: bool) -> f32 {
     }
 }
 
-pub(super) fn reading_code_label(language: Option<&str>) -> gpui::Div {
+pub(super) fn reading_code_label(
+    language: Option<&str>,
+    action: Option<crate::preview::PreviewAction>,
+    interaction: Option<&ReadingInteraction>,
+    display_row: usize,
+) -> gpui::Stateful<gpui::Div> {
     let theme = current_theme();
+    let copy_feedback = action.as_ref().and_then(|action| {
+        interaction.and_then(|interaction| {
+            interaction
+                .copy_feedback
+                .filter(|(range, _)| *range == action.target().source_range)
+                .map(|(_, state)| state)
+        })
+    });
+    let (copy_label, copy_color) = match copy_feedback {
+        Some(crate::preview::CopyFeedbackState::Succeeded) => ("Copied ✓", theme.heading[1]),
+        Some(crate::preview::CopyFeedbackState::Failed) => ("Copy failed", theme.keyword),
+        None => ("Copy", theme.meta),
+    };
+    let interaction = interaction.cloned();
     div()
+        .id(("reading-code-label", display_row))
         .w_full()
         .h(px(22.0))
         .px_3()
@@ -682,7 +800,81 @@ pub(super) fn reading_code_label(language: Option<&str>) -> gpui::Div {
         .font_family("Menlo")
         .text_size(px(10.0))
         .text_color(rgb(theme.meta))
+        .justify_between()
         .child(language.unwrap_or("code").to_owned())
+        .when_some(action.zip(interaction), |element, (action, interaction)| {
+            element.child(
+                div()
+                    .id(("reading-copy-code", display_row))
+                    .w(px(76.0))
+                    .px_2()
+                    .rounded_sm()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .text_color(rgb(copy_color))
+                    .hover(|element| element.bg(rgb(theme.background_alt)))
+                    .active(|element| element.bg(rgb(theme.code_block_accent)).opacity(0.62))
+                    .when(copy_feedback.is_some(), |element| {
+                        element.bg(rgb(theme.background_alt))
+                    })
+                    .child(copy_label)
+                    .on_click(move |_, window, cx| {
+                        interaction.workspace.update(cx, |workspace, cx| {
+                            workspace.dispatch_preview_action(
+                                action.clone(),
+                                interaction.panel.clone(),
+                                window,
+                                cx,
+                            );
+                        });
+                    }),
+            )
+        })
+}
+
+pub(super) fn reading_inline(
+    document: &PreviewSnapshot,
+    display_row: usize,
+    runs: &DisplayRuns,
+    interaction: Option<&ReadingInteraction>,
+) -> gpui::AnyElement {
+    let styled = styled_inline_runs(runs.text.clone(), runs.inline_spans.clone());
+    let Some(interaction) = interaction.cloned() else {
+        return styled.into_any_element();
+    };
+    if runs.links.is_empty() {
+        return styled.into_any_element();
+    }
+    let Some(row) = document.projection.rows.get(display_row) else {
+        return styled.into_any_element();
+    };
+    let target = crate::preview::source_action_target(document, row);
+    let ranges = runs
+        .links
+        .iter()
+        .map(|link| link.range.clone())
+        .collect::<Vec<_>>();
+    let actions = runs
+        .links
+        .iter()
+        .map(|link| crate::preview::PreviewAction::OpenLink {
+            target: target.clone(),
+            destination: link.destination.clone(),
+        })
+        .collect::<Vec<_>>();
+    gpui::InteractiveText::new(("reading-inline", display_row), styled)
+        .on_click(ranges, move |index, window, cx| {
+            cx.stop_propagation();
+            let Some(action) = actions.get(index).cloned() else {
+                return;
+            };
+            interaction.workspace.update(cx, |workspace, cx| {
+                workspace.dispatch_preview_action(action, interaction.panel.clone(), window, cx);
+            });
+        })
+        .into_any_element()
 }
 
 pub(super) fn reading_fallback(

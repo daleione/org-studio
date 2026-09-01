@@ -1,15 +1,16 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use gpui::{Context, EventEmitter, ListOffset, ListState, ScrollHandle, Window, px};
 
 use super::{
-    BlockId, DerivedEvent, DocumentFormat, FoldMeasurement, FoldTransition, FoldTransitionInput,
-    FoldTransitionPlan, GlobalVisibility, LOCAL_FOLD_ANIMATION_DURATION, ListAlignment,
-    LocalCycleProjection, LocalVisibility, PreviewSnapshot, accept_generation, changed_range,
+    BlockId, CopyFeedbackState, DerivedEvent, DocumentFormat, FoldMeasurement, FoldTransition,
+    FoldTransitionInput, FoldTransitionPlan, GlobalVisibility, LOCAL_FOLD_ANIMATION_DURATION,
+    ListAlignment, LocalCycleProjection, LocalVisibility, PendingPreviewAction,
+    PreviewActionVisualState, PreviewSnapshot, accept_generation, changed_range,
     cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
     global_org_visibility, minimap, should_eagerly_measure_rows, visible_markdown_row_indices,
     visible_row_indices,
@@ -31,11 +32,17 @@ pub(crate) struct ReadingPreviewPanel {
     local_cycle_continuation: Option<(BlockId, LocalVisibility)>,
     fold_animation_revision: u64,
     fold_animation: Option<FoldTransition>,
-    presentation_revision: u64,
+    geometry_revision: u64,
     zoom: f32,
     viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
+    next_action_id: u64,
+    pending_actions: Vec<PendingPreviewAction>,
+    failed_action: Option<super::PreviewActionIdentity>,
+    copy_feedback: Option<(crate::document::ByteRange, CopyFeedbackState)>,
+    copy_feedback_request: u64,
+    copy_feedback_task: Option<gpui::Task<()>>,
 }
 
 #[derive(Clone)]
@@ -47,8 +54,11 @@ pub(in crate::preview) struct ReadingRenderState {
     pub(in crate::preview) visible_rows: Arc<Vec<usize>>,
     pub(in crate::preview) fold_markers: Arc<HashSet<BlockId>>,
     pub(in crate::preview) fold_animation: Option<FoldTransition>,
-    pub(in crate::preview) presentation_revision: u64,
+    pub(in crate::preview) geometry_revision: u64,
     pub(in crate::preview) zoom: f32,
+    pub(in crate::preview) action_states:
+        Arc<Vec<(super::PreviewActionIdentity, PreviewActionVisualState)>>,
+    pub(in crate::preview) copy_feedback: Option<(crate::document::ByteRange, CopyFeedbackState)>,
 }
 
 impl EventEmitter<DerivedEvent> for ReadingPreviewPanel {}
@@ -99,11 +109,17 @@ impl ReadingPreviewPanel {
             local_cycle_continuation: None,
             fold_animation_revision: 0,
             fold_animation: None,
-            presentation_revision: 0,
+            geometry_revision: 0,
             zoom: 1.0,
             viewport_revision_key: None,
             minimap_pending_seek: None,
             minimap_seek_scheduled: false,
+            next_action_id: 1,
+            pending_actions: Vec::new(),
+            failed_action: None,
+            copy_feedback: None,
+            copy_feedback_request: 0,
+            copy_feedback_task: None,
         }
     }
 
@@ -116,9 +132,94 @@ impl ReadingPreviewPanel {
             visible_rows: self.visible_rows.clone(),
             fold_markers: self.fold_markers.clone(),
             fold_animation: self.fold_animation.clone(),
-            presentation_revision: self.presentation_revision,
+            geometry_revision: self.geometry_revision,
             zoom: self.zoom(),
+            action_states: self
+                .pending_actions
+                .iter()
+                .map(|action| (action.identity, PreviewActionVisualState::Pending))
+                .chain(
+                    self.failed_action
+                        .as_ref()
+                        .map(|identity| (*identity, PreviewActionVisualState::Failed)),
+                )
+                .collect::<Vec<_>>()
+                .into(),
+            copy_feedback: self.copy_feedback,
         }
+    }
+
+    pub(in crate::preview) fn show_copy_feedback(
+        &mut self,
+        target_range: crate::document::ByteRange,
+        state: CopyFeedbackState,
+        cx: &mut Context<Self>,
+    ) {
+        const FEEDBACK_DURATION: Duration = Duration::from_millis(1_600);
+        self.copy_feedback_request = self.copy_feedback_request.wrapping_add(1);
+        let request = self.copy_feedback_request;
+        self.copy_feedback = Some((target_range, state));
+        let delay = cx.background_executor().timer(FEEDBACK_DURATION);
+        self.copy_feedback_task = Some(cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.copy_feedback_request != request {
+                    return;
+                }
+                this.copy_feedback_task = None;
+                this.copy_feedback = None;
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    pub(in crate::preview) fn begin_action(
+        &mut self,
+        identity: super::PreviewActionIdentity,
+    ) -> Option<u64> {
+        if self
+            .pending_actions
+            .iter()
+            .any(|action| action.identity == identity)
+        {
+            return None;
+        }
+        let id = self.next_action_id;
+        self.next_action_id = self.next_action_id.wrapping_add(1).max(1);
+        self.pending_actions.push(PendingPreviewAction {
+            id,
+            identity,
+            committed_revision: None,
+        });
+        self.failed_action = None;
+        Some(id)
+    }
+
+    pub(in crate::preview) fn commit_action(
+        &mut self,
+        id: u64,
+        revision: crate::document::Revision,
+    ) {
+        if let Some(action) = self
+            .pending_actions
+            .iter_mut()
+            .find(|action| action.id == id)
+        {
+            action.committed_revision = Some(revision);
+        }
+    }
+
+    pub(in crate::preview) fn fail_action(&mut self, id: u64) {
+        let Some(index) = self
+            .pending_actions
+            .iter()
+            .position(|action| action.id == id)
+        else {
+            return;
+        };
+        let action = self.pending_actions.remove(index);
+        self.failed_action = Some(action.identity);
     }
 
     pub(in crate::preview) fn document(&self) -> &Arc<PreviewSnapshot> {
@@ -144,7 +245,7 @@ impl ReadingPreviewPanel {
             return false;
         }
         self.zoom = zoom;
-        self.bump_presentation_revision();
+        self.bump_geometry_revision();
         true
     }
 
@@ -170,8 +271,8 @@ impl ReadingPreviewPanel {
         self.local_cycle_continuation
     }
 
-    pub(in crate::preview) fn bump_presentation_revision(&mut self) {
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+    pub(in crate::preview) fn bump_geometry_revision(&mut self) {
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
     }
 
     pub(in crate::preview) fn scroll_to(&mut self, offset: ListOffset) {
@@ -305,11 +406,20 @@ impl ReadingPreviewPanel {
         self.table_scroll_handles =
             table_scroll_handles(&document, Some(&self.table_scroll_handles));
         self.document = document;
+        let previous_action_count = self.pending_actions.len();
+        self.pending_actions.retain(|action| {
+            action
+                .committed_revision
+                .is_none_or(|revision| self.document.revision < revision)
+        });
+        if self.pending_actions.len() != previous_action_count {
+            self.failed_action = None;
+        }
         self.fold_markers = Arc::new(next_fold_markers);
         self.global_visibility = next_global_visibility;
         self.global_cycle_contiguous = next_global_cycle_contiguous;
         self.local_cycle_continuation = next_local_cycle;
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
         self.minimap_pending_seek = None;
         self.minimap_seek_scheduled = false;
         if preserves_visible_rows {
@@ -457,12 +567,55 @@ impl ReadingPreviewPanel {
         });
     }
 
+    pub(in crate::preview) fn jump_to_destination(&mut self, destination: &str) -> bool {
+        let target = destination
+            .strip_prefix('#')
+            .or_else(|| destination.strip_prefix('*'))
+            .unwrap_or(destination)
+            .trim();
+        if target.is_empty() {
+            return false;
+        }
+        let target_slug = heading_slug(target);
+        let offset = self
+            .document
+            .projection
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| matches!(row.kind, super::projection::VisualRowKind::Heading(_)))
+            .find_map(|(index, _)| {
+                let source_row = self.document.projection.source_row(index)?;
+                let source = self.document.text.copy_range(source_row.content.range);
+                let source_title = match self.document.format {
+                    DocumentFormat::Org => {
+                        super::org_line::parse_heading(source.trim_end_matches(['\r', '\n'])).title
+                    }
+                    DocumentFormat::Markdown => source
+                        .trim_end_matches(['\r', '\n'])
+                        .trim_start_matches('#')
+                        .trim()
+                        .trim_end_matches('#')
+                        .trim()
+                        .to_owned(),
+                };
+                let title = super::parse_document_inline(self.document.format, &source_title).text;
+                (title.eq_ignore_ascii_case(target) || heading_slug(&title) == target_slug)
+                    .then_some(source_row.content.range.start)
+            });
+        let Some(offset) = offset else {
+            return false;
+        };
+        self.scroll_to_source_offset_with_offset(offset, px(0.0));
+        true
+    }
+
     pub(in crate::preview) fn note_viewport(&mut self, viewport: (u32, u32)) -> bool {
         if self.viewport_revision_key == Some(viewport) {
             return false;
         }
         self.viewport_revision_key = Some(viewport);
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
         self.cancel_minimap_interaction();
         true
     }
@@ -573,7 +726,7 @@ impl ReadingPreviewPanel {
             .collect();
         let transition = plan.into_transition(revision, suppressed_markers);
         self.cancel_minimap_interaction();
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
         self.fold_markers = Arc::new(fold_markers);
         self.visible_rows = Arc::new(visible_rows);
         for edit in transition.initial_edits.iter() {
@@ -587,7 +740,7 @@ impl ReadingPreviewPanel {
 
     fn apply_fold_projection(&mut self, visible_rows: Vec<usize>, fold_markers: HashSet<BlockId>) {
         self.cancel_minimap_interaction();
-        self.presentation_revision = self.presentation_revision.wrapping_add(1);
+        self.geometry_revision = self.geometry_revision.wrapping_add(1);
         self.fold_markers = Arc::new(fold_markers);
         self.apply_visible_rows(Arc::new(visible_rows));
     }
@@ -743,12 +896,12 @@ impl ReadingPreviewPanel {
 
     pub(in crate::preview) fn seek_minimap(
         &mut self,
-        presentation_revision: u64,
+        geometry_revision: u64,
         offset: ListOffset,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.minimap_pending_seek = Some((presentation_revision, offset));
+        self.minimap_pending_seek = Some((geometry_revision, offset));
         if self.minimap_seek_scheduled {
             return;
         }
@@ -756,7 +909,7 @@ impl ReadingPreviewPanel {
         cx.on_next_frame(window, |this, _, cx| {
             this.minimap_seek_scheduled = false;
             if let Some((revision, offset)) = this.minimap_pending_seek.take()
-                && accept_generation(this.presentation_revision, revision)
+                && accept_generation(this.geometry_revision, revision)
             {
                 this.list_state.scroll_to(offset);
                 cx.notify();
@@ -771,6 +924,23 @@ impl ReadingPreviewPanel {
         self.list_state.scrollbar_drag_ended();
         was_dragging
     }
+}
+
+fn heading_slug(title: &str) -> String {
+    let mut slug = String::with_capacity(title.len());
+    let mut separator = false;
+    for character in title.chars().flat_map(char::to_lowercase) {
+        if character.is_alphanumeric() || character == '_' {
+            if separator && !slug.is_empty() {
+                slug.push('-');
+            }
+            separator = false;
+            slug.push(character);
+        } else {
+            separator = true;
+        }
+    }
+    slug
 }
 
 fn closest_block_by_source(
