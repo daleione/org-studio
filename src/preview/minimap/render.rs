@@ -123,6 +123,8 @@ pub fn render(
                     window.text_system(),
                 )
             };
+            let projection_readiness = projection.readiness;
+            let projection_exact_rows = projection.exact_rows;
             if projection.readiness != MinimapProjectionReadiness::Exact
                 && allow_projection_refinement
                 && !interaction_active
@@ -147,6 +149,29 @@ pub fn render(
                 f32::from(bounds.size.height),
                 *shape_anchor.lock().expect("minimap anchor poisoned"),
             );
+            if minimap_trace_enabled()
+                && projection_readiness == MinimapProjectionReadiness::Exact
+            {
+                let scroll = shape_list.logical_scroll_top();
+                let viewport_pixels = f32::from(shape_list.viewport_bounds().size.height).max(0.0);
+                let scroll_pixels = line_index.pixel_for_list_offset(scroll);
+                let (visible_top, visible_bottom) = super::viewport::minimap_visible_display_range(
+                    &line_index,
+                    scroll_pixels,
+                    viewport_pixels,
+                );
+                eprintln!(
+                    "org_studio_minimap_viewport readiness={projection_readiness:?} exact_rows={projection_exact_rows} rows={} scroll_item={} scroll_inner={:.3} scroll_pixels={scroll_pixels:.3} viewport_pixels={viewport_pixels:.3} visible_top={visible_top:.3} visible_bottom={visible_bottom:.3} total_lines={} document_pixels={:.3} content_top={:.3} thumb_top={:.3} thumb_height={:.3}",
+                    shape_rows.len(),
+                    scroll.item_ix,
+                    f32::from(scroll.offset_in_item),
+                    line_index.total,
+                    line_index.document_pixels(),
+                    viewport.content_top,
+                    viewport.thumb.top,
+                    viewport.thumb.height,
+                );
+            }
             let content_line = viewport.content_top.floor() as usize;
             let content_fraction = viewport.content_top.fract();
             let (anchor_row, anchor_inner_line) = line_index.locate(content_line);

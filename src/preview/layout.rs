@@ -248,11 +248,22 @@ impl LayoutSnapshot {
             .saturating_sub(1)
             .min(self.chunks.len() - 1);
         let mut remaining = (pixel - self.pixel_prefix[chunk]).max(0.0);
+        let mut last_nonzero = None;
         for (local, measure) in self.chunks[chunk].measures.iter().enumerate() {
-            if remaining < measure.pixels || measure.pixels <= f32::EPSILON {
+            // Zero-height semantic rows (for example a Markdown closing fence in Reading)
+            // occupy no pixel interval. Returning one here would make every later pixel in the
+            // chunk resolve to that row until the next chunk boundary.
+            if measure.pixels <= f32::EPSILON {
+                continue;
+            }
+            last_nonzero = Some((self.row_prefix[chunk] + local, measure.pixels));
+            if remaining < measure.pixels {
                 return (self.row_prefix[chunk] + local, remaining);
             }
             remaining -= measure.pixels;
+        }
+        if let Some(last_nonzero) = last_nonzero {
+            return last_nonzero;
         }
         let last = self.rows - 1;
         (last, self.measure(last).pixels)
@@ -295,5 +306,24 @@ mod tests {
             .count();
         assert!(shared as f32 / snapshot.chunks.len() as f32 >= 0.99);
         assert_eq!(updated.measure(64_000).display_lines, 2);
+    }
+
+    #[test]
+    fn pixel_lookup_skips_zero_height_rows_in_the_middle_of_a_chunk() {
+        let snapshot = LayoutSnapshot::new(vec![
+            ResolvedRow::new(1, 24.0, true),
+            ResolvedRow::new(1, 0.0, true),
+            ResolvedRow::new(1, 40.0, true),
+        ]);
+
+        assert_eq!(snapshot.locate_pixel(23.0), (0, 23.0));
+        assert_eq!(snapshot.locate_pixel(24.0), (2, 0.0));
+        assert_eq!(snapshot.locate_pixel(50.0), (2, 26.0));
+
+        let trailing_zero = LayoutSnapshot::new(vec![
+            ResolvedRow::new(1, 24.0, true),
+            ResolvedRow::new(1, 0.0, true),
+        ]);
+        assert_eq!(trailing_zero.locate_pixel(24.0), (0, 24.0));
     }
 }

@@ -63,6 +63,10 @@ impl WorkspaceWindow {
             .unwrap_or(80.0);
         let (commands, keyboard, key_context) = document_input();
         let minimap_visible = configured_minimap_visible();
+        let mut document_workspace = DocumentWorkspaceState::default();
+        if std::env::var("ORG_STUDIO_SCROLL_BENCH_SURFACE").as_deref() == Ok("reading") {
+            document_workspace.set_surface(PaneSide::Left, PaneSurface::Reading);
+        }
         Self {
             language: preview_settings.language,
             focus_handle: None,
@@ -118,7 +122,7 @@ impl WorkspaceWindow {
             key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
             content_route: ContentRoute::Document,
-            document_workspace: DocumentWorkspaceState::default(),
+            document_workspace,
             document_view_preferences: DocumentViewPreferences {
                 split_ratio: preview_settings.split_ratio,
             },
