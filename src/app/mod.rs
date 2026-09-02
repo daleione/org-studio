@@ -185,6 +185,12 @@ pub(crate) struct PanePair<T> {
     pub(crate) right: T,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct SurfaceAnchor {
+    pub(crate) document_id: crate::document::DocumentId,
+    pub(crate) source: crate::document::RevisionRange,
+}
+
 impl<T> PanePair<T> {
     pub(crate) fn get(&self, pane: PaneSide) -> &T {
         match pane {
@@ -243,6 +249,7 @@ pub struct WorkspaceWindow {
     pub(crate) home_error: Option<Arc<str>>,
     pub(crate) generation: u64,
     pub(crate) pending_navigation: Option<(u64, Arc<str>)>,
+    pub(crate) pending_surface_anchors: PanePair<Option<SurfaceAnchor>>,
     pub(crate) load_task: Option<Task<()>>,
     pub(crate) derived: DerivedHost,
     pub(crate) file_watch_task: Option<Task<()>>,

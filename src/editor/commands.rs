@@ -1229,7 +1229,6 @@ impl SemanticEditor {
         }
     }
 
-    #[cfg(test)]
     pub(crate) fn top_source_anchor(&self, snapshot: &DocumentSnapshot) -> (ByteOffset, f32) {
         let line = self.animated_line_at_y(self.scroll_y);
         let line_start = self.animated_line_start_y(line);
@@ -1239,6 +1238,30 @@ impl SemanticEditor {
             .line_content_range(LineIndex(line))
             .map_or(ByteOffset(0), |range| range.start);
         (source, fraction)
+    }
+
+    pub(crate) fn scroll_to_source_offset(
+        &mut self,
+        source: ByteOffset,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.finish_fold_animation();
+        let snapshot = self.snapshot(cx);
+        let Ok(line) = snapshot.line_index_at(source) else {
+            return false;
+        };
+        let line = (0..=line.0)
+            .rev()
+            .find(|line| !self.display_map.is_hidden(*line))
+            .unwrap_or(0);
+        let viewport_height = self
+            .viewport
+            .map_or(0.0, |viewport| f32::from(viewport.size.height));
+        let max_scroll = (self.display_map.total_height() - viewport_height).max(0.0);
+        self.scroll_y = self.display_map.line_start_y(line).clamp(0.0, max_scroll);
+        self.minimap.note_viewport_changed();
+        cx.notify();
+        true
     }
 
     pub(super) fn sync_selection_utf16(&mut self, snapshot: &DocumentSnapshot) {

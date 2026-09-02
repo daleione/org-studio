@@ -5,8 +5,8 @@ use gpui::{Context, Window, div, prelude::*, px, rgb};
 use crate::app::home::{render_home, render_loading};
 use crate::{
     app::{
-        ContentRoute, DocumentViewPreferences, DocumentWorkspaceState, PaneSide, PaneSurface,
-        ReadyDocument, WorkspaceLoadState, WorkspaceWindow, split_layout,
+        ContentRoute, DocumentViewPreferences, DocumentWorkspaceState, PanePair, PaneSide,
+        PaneSurface, ReadyDocument, WorkspaceLoadState, WorkspaceWindow, split_layout,
     },
     preview::{
         ReadingPreviewPanel, ReadingRenderOptions, configured_minimap_visible, document_input,
@@ -93,6 +93,10 @@ impl WorkspaceWindow {
             home_error: None,
             generation: 0,
             pending_navigation: None,
+            pending_surface_anchors: PanePair {
+                left: None,
+                right: None,
+            },
             load_task: None,
             derived: crate::app::DerivedHost::default(),
             file_watch_task: None,
@@ -285,7 +289,7 @@ impl WorkspaceWindow {
         let Some(ready) = self.state.ready_mut() else {
             return false;
         };
-        for pane in panes {
+        for &pane in &panes {
             if let Some(panel) = ready.readers.get(pane).clone() {
                 let current = panel.read(cx).document().clone();
                 if current.document_id != document.document_id
@@ -303,6 +307,9 @@ impl WorkspaceWindow {
                 *ready.readers.get_mut(pane) =
                     Some(cx.new(move |_| ReadingPreviewPanel::new(document, list_overdraw)));
             }
+        }
+        for pane in panes {
+            self.apply_pending_surface_anchor(pane, cx);
         }
         self.apply_pending_navigation(self.generation, cx);
         true

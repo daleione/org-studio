@@ -3,8 +3,9 @@ use std::{sync::Arc, time::Duration};
 
 use gpui::{Context, KeyDownEvent, Window};
 
+use crate::document::TextSnapshot;
 use crate::{
-    app::{ContentRoute, WorkspaceWindow},
+    app::{ContentRoute, SurfaceAnchor, WorkspaceWindow},
     command::{
         BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
         InvocationOrigin, PrefixArgument,
@@ -299,10 +300,15 @@ impl WorkspaceWindow {
         cx: &mut Context<Self>,
     ) {
         let pane = self.document_workspace.active_pane;
+        let previous_surface = self.document_workspace.surface(pane);
         if matches!(surface, crate::app::PaneSurface::Reading)
             && let Some(editor) = self.editor(pane)
         {
             editor.update(cx, |editor, cx| editor.finish_composition(cx));
+        }
+        if previous_surface != surface {
+            *self.pending_surface_anchors.get_mut(pane) =
+                self.surface_top_source_anchor(pane, previous_surface, cx);
         }
         self.document_workspace.set_surface(pane, surface);
         match surface {
@@ -311,11 +317,88 @@ impl WorkspaceWindow {
                 self.reconcile_visible_reading_panes(cx);
             }
         }
+        self.apply_pending_surface_anchor(pane, cx);
         self.cancel_split_resize();
         self.reconcile_derived_preview(cx);
         self.install_document_keymap();
         self.focus_active_surface(cx);
         cx.notify();
+    }
+
+    fn surface_top_source_anchor(
+        &self,
+        pane: crate::app::PaneSide,
+        surface: crate::app::PaneSurface,
+        cx: &gpui::App,
+    ) -> Option<SurfaceAnchor> {
+        match surface {
+            crate::app::PaneSurface::Editor => self.editor(pane).and_then(|editor| {
+                editor.read_with(cx, |editor, cx| {
+                    let snapshot = editor.snapshot(cx);
+                    let source = editor.top_source_anchor(&snapshot).0;
+                    let line = snapshot.line_index_at(source).ok()?;
+                    let range = snapshot.line_range(line).ok()?;
+                    Some(SurfaceAnchor {
+                        document_id: snapshot.document_id(),
+                        source: snapshot.revision_range(range),
+                    })
+                })
+            }),
+            crate::app::PaneSurface::Reading => self.reading_panel_for(pane).and_then(|panel| {
+                let panel = panel.read(cx);
+                Some(SurfaceAnchor {
+                    document_id: panel.document().document_id,
+                    source: panel.top_source_revision_range()?,
+                })
+            }),
+        }
+    }
+
+    pub(crate) fn apply_pending_surface_anchor(
+        &mut self,
+        pane: crate::app::PaneSide,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(anchor) = *self.pending_surface_anchors.get(pane) else {
+            return false;
+        };
+        let Some(session) = self.document_session().cloned() else {
+            return false;
+        };
+        let mapped = {
+            let session = session.read(cx);
+            if session.id() != anchor.document_id {
+                *self.pending_surface_anchors.get_mut(pane) = None;
+                return false;
+            }
+            session.map_range_to_current(anchor.source)
+        };
+        let Ok(mapped) = mapped else {
+            *self.pending_surface_anchors.get_mut(pane) = None;
+            return false;
+        };
+        *self.pending_surface_anchors.get_mut(pane) = Some(SurfaceAnchor {
+            document_id: anchor.document_id,
+            source: mapped,
+        });
+        let source = mapped.range.start;
+        let applied = match self.document_workspace.surface(pane) {
+            crate::app::PaneSurface::Editor => self.editor(pane).is_some_and(|editor| {
+                editor.update(cx, |editor, cx| editor.scroll_to_source_offset(source, cx))
+            }),
+            crate::app::PaneSurface::Reading => {
+                if !self.latest_preview_is_current(cx) {
+                    return false;
+                }
+                self.reading_panel_for(pane).is_some_and(|panel| {
+                    panel.update(cx, |panel, _| panel.scroll_to_source_offset(source))
+                })
+            }
+        };
+        if applied {
+            *self.pending_surface_anchors.get_mut(pane) = None;
+        }
+        applied
     }
 
     pub(crate) fn focus_active_surface(&mut self, cx: &mut Context<Self>) {

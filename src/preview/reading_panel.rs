@@ -585,6 +585,44 @@ impl ReadingPreviewPanel {
             .map(|row| (row.content.range.start, scroll_top.offset_in_item))
     }
 
+    #[cfg(test)]
+    pub(crate) fn top_source_offset(&self) -> Option<crate::document::ByteOffset> {
+        self.top_source_anchor().map(|(source, _)| source)
+    }
+
+    pub(crate) fn top_source_revision_range(&self) -> Option<crate::document::RevisionRange> {
+        let item = self
+            .list_state
+            .logical_scroll_top()
+            .item_ix
+            .min(self.visible_rows.len().saturating_sub(1));
+        let visual = *self.visible_rows.get(item)?;
+        self.document
+            .projection
+            .source_row(visual)
+            .map(|row| row.content)
+    }
+
+    pub(crate) fn scroll_to_source_offset(&mut self, offset: crate::document::ByteOffset) -> bool {
+        let Some(visual) = self
+            .document
+            .projection
+            .visual_row_for_source_offset(offset)
+        else {
+            return false;
+        };
+        let item = match self.visible_rows.binary_search(&visual) {
+            Ok(item) => item,
+            Err(item) => item.saturating_sub(1),
+        }
+        .min(self.visible_rows.len().saturating_sub(1));
+        self.list_state.scroll_to(ListOffset {
+            item_ix: item,
+            offset_in_item: px(0.0),
+        });
+        true
+    }
+
     fn scroll_to_source_offset_with_offset(
         &mut self,
         offset: crate::document::ByteOffset,

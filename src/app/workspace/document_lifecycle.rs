@@ -31,6 +31,10 @@ impl WorkspaceWindow {
         self.first_frame_scheduled = None;
         self.home_error = None;
         self.pending_navigation = None;
+        self.pending_surface_anchors = PanePair {
+            left: None,
+            right: None,
+        };
         self.content_route = ContentRoute::Document;
         self.file_manager.reset_for_document();
         self.stop_dired_directory_watch();
@@ -51,6 +55,10 @@ impl WorkspaceWindow {
         self.home_error = None;
         self.save.status = None;
         self.pending_navigation = None;
+        self.pending_surface_anchors = PanePair {
+            left: None,
+            right: None,
+        };
         self.generation += 1;
         self.opened_at = Some(opened_at);
         self.first_frame_scheduled = None;

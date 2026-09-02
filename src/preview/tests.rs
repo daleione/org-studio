@@ -395,6 +395,156 @@ fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::Te
 }
 
 #[gpui::test]
+fn surface_switch_preserves_the_top_source_line(cx: &mut gpui::TestAppContext) {
+    let source = (0..80)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("surface-anchor.org", &source)),
+            cx,
+        ));
+
+        let ready = workspace.state.ready().unwrap();
+        let session = ready.session.clone();
+        let snapshot = ready.session.read(cx).snapshot();
+        let editor_anchor = snapshot
+            .line_content_range(crate::document::LineIndex(24))
+            .unwrap()
+            .start;
+        ready
+            .editors
+            .left
+            .as_ref()
+            .unwrap()
+            .update(cx, |editor, cx| {
+                assert!(editor.scroll_to_source_offset(editor_anchor, cx));
+            });
+
+        workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
+        let reader = workspace
+            .reading_panel_for(crate::app::PaneSide::Left)
+            .expect("reading panel exists after switching");
+        assert_eq!(reader.read(cx).top_source_offset(), Some(editor_anchor));
+
+        let reading_anchor = snapshot
+            .line_content_range(crate::document::LineIndex(48))
+            .unwrap()
+            .start;
+        reader.update(cx, |reader, _| {
+            assert!(reader.scroll_to_source_offset(reading_anchor));
+        });
+
+        let inserted = "new first line\n";
+        session.update(cx, |session, cx| {
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(
+                            session.revision(),
+                            vec![TextEdit::new(ByteRange::new(0, 0), inserted)],
+                        ),
+                        Selection::caret(ByteOffset(0)),
+                        Selection::caret(ByteOffset(inserted.len() as u64)),
+                        EditOrigin::Typing,
+                    ),
+                    cx,
+                )
+                .unwrap();
+        });
+
+        workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
+        let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+        let current = session.read(cx).snapshot();
+        let (restored, _) = editor.read(cx).top_source_anchor(&current);
+        assert_eq!(
+            restored,
+            ByteOffset(reading_anchor.0 + inserted.len() as u64)
+        );
+    });
+}
+
+#[gpui::test]
+fn editor_to_reading_keeps_the_top_line_across_async_projection(cx: &mut gpui::TestAppContext) {
+    let source = (0..80)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    let session = crate::document::DocumentSession::from_utf8(
+        std::path::PathBuf::from("async-surface-anchor.org"),
+        source.into_bytes(),
+    )
+    .unwrap();
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    let (anchor, session) = workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(super::WorkspaceLoadedDocument::Source(session)),
+            cx,
+        ));
+        let ready = workspace.state.ready().unwrap();
+        let session = ready.session.clone();
+        let snapshot = ready.session.read(cx).snapshot();
+        let anchor = snapshot
+            .line_content_range(crate::document::LineIndex(32))
+            .unwrap()
+            .start;
+        ready
+            .editors
+            .left
+            .as_ref()
+            .unwrap()
+            .update(cx, |editor, cx| {
+                assert!(editor.scroll_to_source_offset(anchor, cx));
+            });
+        workspace.show_reading(cx);
+        assert!(
+            workspace
+                .reading_panel_for(crate::app::PaneSide::Left)
+                .is_none()
+        );
+        (anchor, session)
+    });
+
+    let inserted = "inserted above\n";
+    let delta = session.update(cx, |session, cx| {
+        session
+            .edit(
+                DocumentCommand::new(
+                    EditTransaction::new(
+                        session.revision(),
+                        vec![TextEdit::new(ByteRange::new(0, 0), inserted)],
+                    ),
+                    Selection::caret(ByteOffset(0)),
+                    Selection::caret(ByteOffset(inserted.len() as u64)),
+                    EditOrigin::Typing,
+                ),
+                cx,
+            )
+            .unwrap()
+    });
+    workspace.update(cx, |workspace, cx| {
+        workspace.schedule_derived_update_with_delta(Some(delta), cx)
+    });
+
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(25));
+    cx.run_until_parked();
+
+    cx.read(|cx| {
+        let reader = workspace
+            .read(cx)
+            .reading_panel_for(crate::app::PaneSide::Left)
+            .expect("async reading panel is published");
+        assert_eq!(
+            reader.read(cx).top_source_offset(),
+            Some(ByteOffset(anchor.0 + inserted.len() as u64))
+        );
+    });
+}
+
+#[gpui::test]
 fn reading_style_switch_reuses_projection_and_invalidates_geometry_once(
     cx: &mut gpui::TestAppContext,
 ) {
