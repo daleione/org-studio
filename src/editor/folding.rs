@@ -1,6 +1,6 @@
 use crate::document::{
-    DocumentFormat, DocumentId, DocumentSnapshot, HeadingIndex, LineIndex, LocalVisibility,
-    OutlineHeading, Revision, RevisionDelta, RevisionRange, TextSnapshot,
+    ByteOffset, DocumentFormat, DocumentId, DocumentSnapshot, HeadingIndex, LineCursor, LineIndex,
+    LocalVisibility, OutlineHeading, Revision, RevisionDelta, RevisionRange, TextSnapshot,
     global_outline_visibility, next_local_visibility,
 };
 use std::{cell::RefCell, collections::HashSet, path::Path, sync::Arc};
@@ -10,6 +10,7 @@ pub(super) use crate::document::GlobalVisibility;
 #[derive(Default)]
 pub(super) struct EditorFoldState {
     headings: Vec<FoldedHeading>,
+    blocks: Vec<FoldedBlock>,
     pub(super) global: GlobalVisibility,
     heading_cache: RefCell<Option<CachedHeadingIndex>>,
 }
@@ -17,6 +18,17 @@ pub(super) struct EditorFoldState {
 struct FoldedHeading {
     source: RevisionRange,
     visibility: LocalVisibility,
+}
+
+struct FoldedBlock {
+    source: RevisionRange,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BlockRegion {
+    source: crate::document::ByteRange,
+    start_line: u64,
+    end_line: u64,
 }
 
 struct CachedHeadingIndex {
@@ -87,6 +99,38 @@ impl EditorFoldState {
         true
     }
 
+    /// Toggle an Org begin/end block or Markdown fence only from its opening boundary. Tabs inside
+    /// the body remain normal editing input, especially for indentation-sensitive source blocks.
+    pub(super) fn toggle_block(
+        &mut self,
+        path: &Path,
+        snapshot: &DocumentSnapshot,
+        line: u64,
+    ) -> bool {
+        if !is_block_boundary_candidate(path, snapshot, line) {
+            return false;
+        }
+        let Some(region) = block_regions(path, snapshot)
+            .into_iter()
+            .find(|region| region.start_line == line && region.end_line > line + 1)
+        else {
+            return false;
+        };
+        self.global = GlobalVisibility::All;
+        if let Some(index) = self
+            .blocks
+            .iter()
+            .position(|block| block.source.range.start == region.source.start)
+        {
+            self.blocks.remove(index);
+        } else {
+            self.blocks.push(FoldedBlock {
+                source: snapshot.revision_range(region.source),
+            });
+        }
+        true
+    }
+
     pub(super) fn apply_delta(&mut self, delta: &RevisionDelta) {
         self.heading_cache.take();
         self.headings = self
@@ -102,6 +146,16 @@ impl EditorFoldState {
                     })
             })
             .collect();
+        self.blocks = self
+            .blocks
+            .drain(..)
+            .filter_map(|block| {
+                delta
+                    .map_range(block.source)
+                    .ok()
+                    .map(|source| FoldedBlock { source })
+            })
+            .collect();
     }
 
     pub(super) fn cycle_global(&mut self, path: &Path, snapshot: &DocumentSnapshot) -> bool {
@@ -115,13 +169,16 @@ impl EditorFoldState {
         true
     }
 
-    pub(super) fn expand_heading(&mut self, snapshot: &DocumentSnapshot, line: u64) {
+    pub(super) fn expand_at(&mut self, snapshot: &DocumentSnapshot, line: u64) {
         if self.global != GlobalVisibility::All {
             self.global = GlobalVisibility::All;
             self.headings.clear();
-        } else if let Ok(range) = snapshot.line_content_range(LineIndex(line)) {
+        }
+        if let Ok(range) = snapshot.line_content_range(LineIndex(line)) {
             self.headings
                 .retain(|heading| heading.source.range.start != range.start);
+            self.blocks
+                .retain(|block| block.source.range.start != range.start);
         }
     }
 
@@ -130,12 +187,15 @@ impl EditorFoldState {
         path: &Path,
         snapshot: &DocumentSnapshot,
     ) -> EditorFoldProjection {
-        if self.global == GlobalVisibility::All && self.headings.is_empty() {
+        if self.global == GlobalVisibility::All
+            && self.headings.is_empty()
+            && self.blocks.is_empty()
+        {
             return EditorFoldProjection::default();
         }
         let index = self.heading_index(path, snapshot);
         let headings = index.as_slice();
-        if headings.is_empty() {
+        if headings.is_empty() && self.blocks.is_empty() {
             return EditorFoldProjection::default();
         }
         let mut hidden = Vec::new();
@@ -193,6 +253,19 @@ impl EditorFoldState {
                 markers.extend(global_markers.into_iter().map(|line| line as u64));
             }
         }
+        if !self.blocks.is_empty() {
+            let regions = block_regions(path, snapshot);
+            for folded in &self.blocks {
+                if let Some(region) = regions
+                    .iter()
+                    .find(|region| region.source.start == folded.source.range.start)
+                    && region.start_line + 1 < region.end_line
+                {
+                    hidden.push(region.start_line + 1..region.end_line);
+                    markers.insert(region.start_line);
+                }
+            }
+        }
         hidden.sort_by_key(|range| range.start);
         let hidden_ranges = merge(hidden);
         markers.retain(|line| !hidden_ranges.iter().any(|range| range.contains(line)));
@@ -233,6 +306,115 @@ impl EditorFoldState {
         });
         index
     }
+}
+
+pub(super) fn is_block_boundary_candidate(
+    path: &Path,
+    snapshot: &DocumentSnapshot,
+    line: u64,
+) -> bool {
+    let Ok(range) = snapshot.line_content_range(LineIndex(line)) else {
+        return false;
+    };
+    let text = snapshot.copy_range(range);
+    let trimmed = text.trim_start();
+    match DocumentFormat::detect(path) {
+        Some(DocumentFormat::Org) => trimmed
+            .get(.."#+begin_".len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+begin_")),
+        Some(DocumentFormat::Markdown) => {
+            let leading = text.len() - trimmed.len();
+            leading <= 3 && crate::document::markdown::fence_start(trimmed).is_some()
+        }
+        None => false,
+    }
+}
+
+fn block_regions(path: &Path, snapshot: &DocumentSnapshot) -> Vec<BlockRegion> {
+    match DocumentFormat::detect(path) {
+        Some(DocumentFormat::Org) => org_block_regions(snapshot),
+        Some(DocumentFormat::Markdown) => markdown_fenced_block_regions(snapshot),
+        None => Vec::new(),
+    }
+}
+
+fn org_block_regions(snapshot: &DocumentSnapshot) -> Vec<BlockRegion> {
+    crate::org_syntax::parse(snapshot)
+        .nodes()
+        .iter()
+        .filter(|node| is_foldable_org_block(&node.kind))
+        .filter_map(|node| block_region(snapshot, node.source))
+        .collect()
+}
+
+fn is_foldable_org_block(kind: &crate::org_syntax::BlockKind) -> bool {
+    use crate::org_syntax::BlockKind;
+    matches!(
+        kind,
+        BlockKind::SourceBlock { .. }
+            | BlockKind::ExampleBlock
+            | BlockKind::QuoteBlock
+            | BlockKind::VerseBlock
+            | BlockKind::CenterBlock
+            | BlockKind::CommentBlock
+            | BlockKind::ExportBlock { .. }
+            | BlockKind::SpecialBlock { .. }
+    )
+}
+
+fn markdown_fenced_block_regions(snapshot: &DocumentSnapshot) -> Vec<BlockRegion> {
+    let mut cursor = LineCursor::new(snapshot);
+    let mut open: Option<(char, usize, crate::document::ByteRange, u64)> = None;
+    let mut regions = Vec::new();
+    let mut line_number = 0_u64;
+    while let Some(line) = cursor.next_line() {
+        let logical = line.text.trim_end_matches(['\r', '\n']);
+        let trimmed = logical.trim_start();
+        let leading = logical.len() - trimmed.len();
+        if let Some((marker, count, source, start_line)) = open {
+            if leading <= 3 && crate::document::markdown::is_closing_fence(trimmed, marker, count) {
+                regions.push(BlockRegion {
+                    source,
+                    start_line,
+                    end_line: line_number + 1,
+                });
+                open = None;
+            }
+        } else if leading <= 3
+            && let Some((marker, count, _)) = crate::document::markdown::fence_start(trimmed)
+        {
+            let source = snapshot
+                .line_content_range(LineIndex(line_number))
+                .unwrap_or(line.range);
+            open = Some((marker, count, source, line_number));
+        }
+        line_number += 1;
+    }
+    if let Some((_, _, source, start_line)) = open {
+        regions.push(BlockRegion {
+            source,
+            start_line,
+            end_line: snapshot.len_lines(),
+        });
+    }
+    regions
+}
+
+fn block_region(
+    snapshot: &DocumentSnapshot,
+    source: crate::document::ByteRange,
+) -> Option<BlockRegion> {
+    let start_line = snapshot.line_of_byte(source.start);
+    let last_byte = source.end.0.saturating_sub(1).max(source.start.0);
+    let end_line = snapshot
+        .line_of_byte(ByteOffset(last_byte))
+        .saturating_add(1);
+    let source = snapshot.line_content_range(LineIndex(start_line)).ok()?;
+    Some(BlockRegion {
+        source,
+        start_line,
+        end_line,
+    })
 }
 
 fn outline_headings(headings: &[crate::document::DocumentHeading]) -> Vec<OutlineHeading<usize>> {
@@ -465,6 +647,82 @@ mod tests {
 
         folds.toggle_heading(markdown(), &snapshot, 0);
         assert_eq!(folds.hidden_ranges(markdown(), &snapshot), vec![1..4]);
+    }
+
+    #[test]
+    fn org_begin_end_blocks_toggle_from_the_opening_boundary() {
+        let snapshot = DocumentSnapshot::from_utf8(
+            b"before\n#+begin_src rust\nfn main() {\n    println!(\"hi\");\n}\n#+end_src\nafter\n"
+                .to_vec(),
+        )
+        .unwrap();
+        let mut folds = EditorFoldState::default();
+
+        assert!(folds.toggle_block(org(), &snapshot, 1));
+        assert_eq!(folds.hidden_ranges(org(), &snapshot), vec![2..6]);
+        assert_eq!(
+            folds.projection(org(), &snapshot).marker_lines,
+            HashSet::from([1])
+        );
+        assert!(!folds.toggle_block(org(), &snapshot, 2));
+        assert!(folds.toggle_block(org(), &snapshot, 1));
+        assert!(folds.hidden_ranges(org(), &snapshot).is_empty());
+    }
+
+    #[test]
+    fn org_quote_and_other_named_blocks_use_the_same_fold_projection() {
+        for name in [
+            "quote", "example", "verse", "center", "comment", "export", "details",
+        ] {
+            let source = format!("before\n#+begin_{name}\nbody\n#+end_{name}\nafter\n");
+            let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
+            let mut folds = EditorFoldState::default();
+
+            assert!(folds.toggle_block(org(), &snapshot, 1), "{name}");
+            assert_eq!(folds.hidden_ranges(org(), &snapshot), vec![2..4], "{name}");
+            assert_eq!(
+                folds.projection(org(), &snapshot).marker_lines,
+                HashSet::from([1]),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_fenced_code_blocks_fold_and_unclosed_fences_reach_eof() {
+        let closed =
+            DocumentSnapshot::from_utf8(b"before\n```rust\nfn main() {}\n```\nafter\n".to_vec())
+                .unwrap();
+        let mut folds = EditorFoldState::default();
+        assert!(folds.toggle_block(markdown(), &closed, 1));
+        assert_eq!(folds.hidden_ranges(markdown(), &closed), vec![2..4]);
+
+        let unclosed =
+            DocumentSnapshot::from_utf8(b"```python\nprint('hi')\nmore\n".to_vec()).unwrap();
+        let mut folds = EditorFoldState::default();
+        assert!(folds.toggle_block(markdown(), &unclosed, 0));
+        assert_eq!(folds.hidden_ranges(markdown(), &unclosed), vec![1..4]);
+    }
+
+    #[test]
+    fn structural_block_fold_follows_edits_above_it() {
+        let mut buffer = DocumentBuffer::from_utf8(
+            b"before\n#+begin_src rust\nfn main() {}\n#+end_src\n".to_vec(),
+        )
+        .unwrap();
+        let snapshot = buffer.snapshot();
+        let mut folds = EditorFoldState::default();
+        assert!(folds.toggle_block(org(), &snapshot, 1));
+
+        let delta = buffer
+            .commit(EditTransaction::new(
+                snapshot.revision(),
+                vec![TextEdit::new(ByteRange::new(0, 0), "new\n")],
+            ))
+            .unwrap();
+        folds.apply_delta(&delta);
+
+        assert_eq!(folds.hidden_ranges(org(), &buffer.snapshot()), vec![3..5]);
     }
 
     #[test]

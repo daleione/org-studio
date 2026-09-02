@@ -322,7 +322,20 @@ impl SemanticEditor {
                     self.animate_fold_layout(previous, target, context.line.0, window, cx);
                 }
             }
-            _ => self.replace_selection("\t", EditOrigin::Typing, cx),
+            _ => {
+                if !super::folding::is_block_boundary_candidate(&path, &snapshot, context.line.0) {
+                    self.replace_selection("\t", EditOrigin::Typing, cx);
+                    return;
+                }
+                self.finish_fold_animation();
+                let previous = self.folds.projection(&path, &snapshot);
+                if self.folds.toggle_block(&path, &snapshot, context.line.0) {
+                    let target = self.folds.projection(&path, &snapshot);
+                    self.animate_fold_layout(previous, target, context.line.0, window, cx);
+                } else {
+                    self.replace_selection("\t", EditOrigin::Typing, cx);
+                }
+            }
         }
     }
 
@@ -871,7 +884,7 @@ impl SemanticEditor {
             let path = self.session.read(cx).path().to_path_buf();
             self.finish_fold_animation();
             let previous = self.folds.projection(&path, &snapshot);
-            self.folds.expand_heading(&snapshot, line);
+            self.folds.expand_at(&snapshot, line);
             let target = self.folds.projection(&path, &snapshot);
             self.animate_fold_layout(previous, target, line, window, cx);
             return;
@@ -1532,6 +1545,39 @@ mod horizontal_scroll_tests {
                     std::slice::from_ref(&(1..4))
                 );
                 assert_eq!(animation.target_marker_lines.as_ref(), &HashSet::from([0]));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn tab_on_block_boundary_folds_but_tab_in_body_still_indents(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                b"#+begin_src rust\nfn main() {}\n#+end_src\nafter\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.insert_tab(&InsertTab, window, cx);
+                let animation = editor
+                    .fold_animation
+                    .as_ref()
+                    .expect("source block Tab starts a fold transition");
+                assert_eq!(
+                    animation.target_hidden_ranges.as_ref(),
+                    std::slice::from_ref(&(1..3))
+                );
+                editor.finish_fold_animation();
+                editor.set_selection(Selection::caret(ByteOffset(17)), cx);
+                editor.insert_tab(&InsertTab, window, cx);
+                assert_eq!(editor.snapshot(cx).copy_range(ByteRange::new(17, 18)), "\t");
             })
             .unwrap();
     }
