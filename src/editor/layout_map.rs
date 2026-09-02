@@ -162,16 +162,6 @@ impl EditorLayoutMap {
             })
     }
 
-    pub(super) fn visible_position_at_y(&self, y: f32) -> f32 {
-        if self.visible_line_count() == 0 {
-            return 0.0;
-        }
-        let line = self.line_at_y(y);
-        let line_top = self.line_start_y(line);
-        let fraction = ((y - line_top) / self.line_height_px(line).max(1.0)).clamp(0.0, 1.0);
-        self.visible_ordinal_for_line(line) as f32 + fraction
-    }
-
     pub(super) fn set_soft_wrap(&mut self, soft_wrap: bool) -> bool {
         if self.soft_wrap == soft_wrap {
             return false;
@@ -229,7 +219,10 @@ impl EditorLayoutMap {
             return false;
         }
         self.hidden_ranges = hidden_ranges;
-        self.clear_layout();
+        // Folding changes visibility, not the measured shape of a source line. Keep the sparse
+        // measurements so expanding a subtree does not briefly fall back to baseline heights.
+        // `rebuild_fenwick` excludes hidden lines from the visible height index.
+        self.rebuild_fenwick();
         true
     }
 
@@ -239,6 +232,7 @@ impl EditorLayoutMap {
             .any(|(range, _)| range.contains(&line))
     }
 
+    #[cfg(test)]
     pub(super) fn hidden_after(&self, line: u64) -> u64 {
         self.hidden_ranges
             .iter()
@@ -322,7 +316,12 @@ impl EditorLayoutMap {
         for (&chunk, heights) in &self.measured_heights {
             let delta = heights
                 .iter()
-                .map(|height| i64::from(height.saturating_sub(baseline)))
+                .enumerate()
+                .filter(|(local, _)| {
+                    let line = chunk * CHUNK_LINES + *local as u64;
+                    line < self.line_count && !line_is_hidden(&self.hidden_ranges, line)
+                })
+                .map(|(_, height)| i64::from(height.saturating_sub(baseline)))
                 .sum::<i64>();
             let mut index = chunk as usize + 1;
             while index < self.height_fenwick.len() {
@@ -416,7 +415,11 @@ impl EditorLayoutMap {
         let local_extra = self.measured_heights.get(&chunk).map_or(0i64, |heights| {
             heights[..local]
                 .iter()
-                .map(|height| i64::from(height.saturating_sub(baseline)))
+                .enumerate()
+                .filter(|(local, _)| {
+                    !line_is_hidden(&self.hidden_ranges, chunk * CHUNK_LINES + *local as u64)
+                })
+                .map(|(_, height)| i64::from(height.saturating_sub(baseline)))
                 .sum()
         });
         fixed_to_pixels_i64(
@@ -447,6 +450,7 @@ impl EditorLayoutMap {
         low.min(self.line_count - 1)
     }
 
+    #[cfg(test)]
     pub(super) fn visible_line_range(
         &self,
         snapshot: &DocumentSnapshot,
@@ -496,6 +500,10 @@ impl EditorLayoutMap {
             display,
         })
     }
+}
+
+fn line_is_hidden(hidden_ranges: &[(Range<u64>, u64)], line: u64) -> bool {
+    hidden_ranges.iter().any(|(range, _)| range.contains(&line))
 }
 
 fn pixels_to_fixed(pixels: f32) -> u32 {
@@ -585,6 +593,25 @@ mod tests {
         assert_eq!(map.visible_line_count(), 7);
         assert_eq!(map.visible_ordinal_for_line(5), 2);
         assert_eq!(map.source_line_for_visible_ordinal(2), Some(5));
+    }
+
+    #[test]
+    fn folding_preserves_measured_heights_for_expand_without_a_baseline_frame() {
+        let mut map = EditorLayoutMap::default();
+        map.configure(10, 640.0);
+        map.update_line_layout(1, 4, 30.0, 8.0, 4.0);
+        map.update_line_layout(5, 3, 24.0, 2.0, 2.0);
+        let expanded_height = map.total_height();
+
+        assert!(map.set_hidden_ranges(std::iter::once(1..5).collect()));
+        assert_eq!(map.line_height_px(1), 0.0);
+        assert_eq!(map.line_start_y(5), super::super::LINE_HEIGHT);
+        assert_eq!(map.total_height(), expanded_height - 4.0 * 22.0 - 110.0);
+
+        assert!(map.set_hidden_ranges(Vec::new()));
+        assert_eq!(map.line_height_px(1), 132.0);
+        assert_eq!(map.line_height_px(5), 76.0);
+        assert_eq!(map.total_height(), expanded_height);
     }
 
     #[test]

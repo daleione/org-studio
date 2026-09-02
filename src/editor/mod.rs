@@ -7,7 +7,12 @@ mod minimap;
 mod org_commands;
 mod syntax;
 
-use std::{collections::HashMap, ops::Range, sync::Arc, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::Range,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
@@ -106,6 +111,8 @@ pub(super) struct HitRow {
     pub(super) range: ByteRange,
     pub(super) line: LineIndex,
     pub(super) origin_y: Pixels,
+    pub(super) visible_top: Pixels,
+    pub(super) visible_bottom: Pixels,
     pub(super) text_origin_x: Pixels,
     pub(super) line_height: Pixels,
     pub(super) display: layout_map::DisplayLineText,
@@ -124,6 +131,32 @@ pub(super) struct Composition {
 pub(super) struct PlatformRange {
     pub(super) bytes: ByteRange,
     pub(super) utf16: Range<usize>,
+}
+
+struct EditorFoldAnimation {
+    revision: u64,
+    changed_ranges: Arc<[Range<u64>]>,
+    target_hidden_ranges: Arc<[Range<u64>]>,
+    target_marker_lines: Arc<HashSet<u64>>,
+    collapsing: bool,
+    anchor_line: u64,
+    anchor_viewport_y: f32,
+    started_at: Option<Instant>,
+    progress: f32,
+}
+
+impl EditorFoldAnimation {
+    fn scale(&self) -> f32 {
+        let eased = crate::fold_animation::ease_out_cubic(self.progress);
+        if self.collapsing { 1.0 - eased } else { eased }
+    }
+
+    fn changed_line_count(&self) -> u64 {
+        self.changed_ranges
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum()
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -218,6 +251,9 @@ pub struct SemanticEditor {
     composition: Option<Composition>,
     display_map: EditorLayoutMap,
     folds: folding::EditorFoldState,
+    fold_markers: Arc<HashSet<u64>>,
+    fold_animation: Option<EditorFoldAnimation>,
+    fold_animation_revision: u64,
     command_feedback: Option<SharedString>,
     minimap: minimap::EditorMinimapHost,
     syntax_cache: syntax::EditorSyntaxCache,
@@ -245,6 +281,116 @@ pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
 impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
 
 impl SemanticEditor {
+    pub(super) fn animated_line_start_y(&self, line: u64) -> f32 {
+        let base = self.display_map.line_start_y(line);
+        let Some(animation) = self.fold_animation.as_ref() else {
+            return base;
+        };
+        let compression = animation
+            .changed_ranges
+            .iter()
+            .filter_map(|range| {
+                let end = range.end.min(line);
+                (range.start < end).then(|| {
+                    self.display_map.line_start_y(end) - self.display_map.line_start_y(range.start)
+                })
+            })
+            .sum::<f32>()
+            * (1.0 - animation.scale());
+        base - compression
+    }
+
+    pub(super) fn animated_line_height_px(&self, line: u64) -> f32 {
+        let height = self.display_map.line_height_px(line);
+        self.fold_animation.as_ref().map_or(height, |animation| {
+            if animation
+                .changed_ranges
+                .iter()
+                .any(|range| range.contains(&line))
+            {
+                height * animation.scale()
+            } else {
+                height
+            }
+        })
+    }
+
+    pub(super) fn animated_document_height(&self) -> f32 {
+        self.animated_line_start_y(self.display_map.line_count())
+    }
+
+    pub(super) fn animated_visible_line_count(&self) -> f32 {
+        let base = self.display_map.visible_line_count() as f32;
+        self.fold_animation.as_ref().map_or(base, |animation| {
+            let changed = animation.changed_line_count() as f32;
+            (base - changed * (1.0 - animation.scale())).max(0.0)
+        })
+    }
+
+    pub(super) fn animated_line_at_y(&self, y: f32) -> u64 {
+        let line_count = self.display_map.line_count();
+        if line_count == 0 {
+            return 0;
+        }
+        let total_height = self.animated_document_height();
+        let target = y.max(0.0).min((total_height - 0.01).max(0.0));
+        let (mut low, mut high) = (0, line_count);
+        while low < high {
+            let middle = low + (high - low) / 2;
+            if self.animated_line_start_y(middle + 1) <= target {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        low.min(line_count - 1)
+    }
+
+    pub(super) fn animated_visible_line_range(
+        &self,
+        snapshot: &DocumentSnapshot,
+        scroll_y: f32,
+        viewport_height: f32,
+    ) -> Range<u64> {
+        let first = self.animated_line_at_y(scroll_y).min(snapshot.len_lines());
+        let last = self
+            .animated_line_at_y(scroll_y.max(0.0) + viewport_height.max(0.0))
+            .saturating_add(2)
+            .min(snapshot.len_lines());
+        first..last.max(first)
+    }
+
+    pub(super) fn animated_visible_position_at_y(&self, y: f32) -> f32 {
+        if self.animated_visible_line_count() <= 0.0 {
+            return 0.0;
+        }
+        let line = self.animated_line_at_y(y);
+        let line_top = self.animated_line_start_y(line);
+        let line_height = self.animated_line_height_px(line).max(1.0);
+        let fraction = ((y - line_top) / line_height).clamp(0.0, 1.0);
+        let base = self.display_map.visible_ordinal_for_line(line) as f32;
+        let compressed_lines = self.fold_animation.as_ref().map_or(0.0, |animation| {
+            animation
+                .changed_ranges
+                .iter()
+                .map(|range| range.end.min(line).saturating_sub(range.start) as f32)
+                .sum::<f32>()
+                * (1.0 - animation.scale())
+        });
+        let line_scale = self.fold_animation.as_ref().map_or(1.0, |animation| {
+            if animation
+                .changed_ranges
+                .iter()
+                .any(|range| range.contains(&line))
+            {
+                animation.scale()
+            } else {
+                1.0
+            }
+        });
+        (base - compressed_lines + fraction * line_scale).max(0.0)
+    }
+
     pub fn new(session: Entity<DocumentSession>, cx: &mut Context<Self>) -> Self {
         Self::new_with_autofocus(session, true, cx)
     }
@@ -335,8 +481,12 @@ impl SemanticEditor {
                     this.display_map.invalidate_layout_from(first_line);
                 }
                 this.folds.apply_delta(delta);
-                this.display_map
-                    .set_hidden_ranges(this.folds.hidden_ranges(&snapshot));
+                this.fold_animation = None;
+                this.fold_animation_revision = this.fold_animation_revision.wrapping_add(1);
+                let path = this.session.read(cx).path().to_path_buf();
+                let projection = this.folds.projection(&path, &snapshot);
+                this.fold_markers = Arc::new(projection.marker_lines);
+                this.display_map.set_hidden_ranges(projection.hidden_ranges);
                 let anchor_line = mapped_anchor
                     .and_then(|offset| snapshot.line_index_at(offset).ok())
                     .map_or(anchor_line, |line| line.0)
@@ -367,6 +517,9 @@ impl SemanticEditor {
             } else if matches!(event, DocumentEvent::PathChanged { .. }) {
                 this.syntax_cache.reset();
                 this.folds = folding::EditorFoldState::default();
+                this.fold_markers = Arc::new(HashSet::new());
+                this.fold_animation = None;
+                this.fold_animation_revision = this.fold_animation_revision.wrapping_add(1);
                 this.display_map.set_hidden_ranges(Vec::new());
                 this.shape_cache.clear();
                 this.minimap.invalidate_raster();
@@ -387,6 +540,10 @@ impl SemanticEditor {
                 this.scroll_x = 0.0;
                 this.layout_anchor = None;
                 this.folds = folding::EditorFoldState::default();
+                this.fold_markers = Arc::new(HashSet::new());
+                this.fold_animation = None;
+                this.fold_animation_revision = this.fold_animation_revision.wrapping_add(1);
+                this.display_map.set_hidden_ranges(Vec::new());
             }
             cx.notify();
         });
@@ -404,6 +561,9 @@ impl SemanticEditor {
             composition: None,
             display_map,
             folds: folding::EditorFoldState::default(),
+            fold_markers: Arc::new(HashSet::new()),
+            fold_animation: None,
+            fold_animation_revision: 0,
             command_feedback: None,
             minimap: minimap::EditorMinimapHost::default(),
             syntax_cache: syntax::EditorSyntaxCache::default(),
@@ -523,14 +683,13 @@ impl SemanticEditor {
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
         let visible_bottom_line = if viewport_height > 0.0 {
-            self.display_map
-                .line_at_y((self.scroll_y + viewport_height - 0.5).max(0.0))
+            self.animated_line_at_y((self.scroll_y + viewport_height - 0.5).max(0.0))
                 .saturating_add(1)
         } else {
             0
         }
         .min(total_lines);
-        let document_height = self.display_map.total_height();
+        let document_height = self.animated_document_height();
         let reached_end =
             viewport_height > 0.0 && self.scroll_y + viewport_height + 0.5 >= document_height;
         SemanticEditorStatus {
@@ -618,6 +777,28 @@ fn word_boundary(snapshot: &DocumentSnapshot, offset: ByteOffset, forward: bool)
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn local_fold_animation_eases_between_expanded_and_collapsed_scales() {
+        let mut animation = EditorFoldAnimation {
+            revision: 1,
+            changed_ranges: Arc::from(std::iter::once(1..3).collect::<Vec<_>>()),
+            target_hidden_ranges: Arc::from(std::iter::once(1..3).collect::<Vec<_>>()),
+            target_marker_lines: Arc::new(HashSet::from([0])),
+            collapsing: true,
+            anchor_line: 0,
+            anchor_viewport_y: 0.0,
+            started_at: None,
+            progress: 0.0,
+        };
+        assert_eq!(animation.scale(), 1.0);
+        animation.progress = 1.0;
+        assert_eq!(animation.scale(), 0.0);
+        animation.collapsing = false;
+        assert_eq!(animation.scale(), 1.0);
+        animation.progress = 0.0;
+        assert_eq!(animation.scale(), 0.0);
+    }
 
     #[gpui::test]
     fn semantic_editor_edits_unicode_and_restores_selection_on_undo(cx: &mut gpui::TestAppContext) {

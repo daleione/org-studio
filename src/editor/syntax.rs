@@ -129,16 +129,9 @@ impl EditorSyntaxCache {
 }
 
 fn language(path: &Path) -> Language {
-    if path
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| {
-            extension.eq_ignore_ascii_case("md") || extension.eq_ignore_ascii_case("markdown")
-        })
-    {
-        Language::Markdown
-    } else {
-        Language::Org
+    match crate::document::DocumentFormat::from_path(path) {
+        crate::document::DocumentFormat::Markdown => Language::Markdown,
+        crate::document::DocumentFormat::Org => Language::Org,
     }
 }
 
@@ -201,12 +194,20 @@ pub(super) struct EditorLineStyle {
     pub(super) metrics: BlockMetrics,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) struct EditorStyleSnapshot {
     pub(super) revision: Revision,
     pub(super) lines: Arc<[EditorLineStyle]>,
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct SparseEditorStyleSnapshot {
+    pub(super) revision: Revision,
+    lines: BTreeMap<u64, EditorLineStyle>,
+}
+
+#[cfg(test)]
 impl EditorStyleSnapshot {
     pub(super) fn for_lines(
         path: &Path,
@@ -236,9 +237,44 @@ impl EditorStyleSnapshot {
             lines: styles.into(),
         }
     }
+}
 
-    pub(super) fn line(&self, line: u64, first_line: u64) -> Option<&EditorLineStyle> {
-        self.lines.get(line.saturating_sub(first_line) as usize)
+impl SparseEditorStyleSnapshot {
+    pub(super) fn for_lines(
+        path: &Path,
+        snapshot: &DocumentSnapshot,
+        lines: &[u64],
+        cache: &EditorSyntaxCache,
+    ) -> Self {
+        let language = language(path);
+        let lines = lines
+            .iter()
+            .filter_map(|&line| {
+                let source_range = snapshot.line_content_range(LineIndex(line)).ok()?;
+                let text = classification_text(snapshot, source_range);
+                let mut code = cache.context_at(snapshot, language, line);
+                let id = classify_line(language, &text, &mut code);
+                Some((
+                    line,
+                    EditorLineStyle {
+                        source_range,
+                        id,
+                        code_language: (id == EditorStyleId::Code)
+                            .then(|| code.code_language.clone())
+                            .flatten(),
+                        metrics: metrics_for(id),
+                    },
+                ))
+            })
+            .collect();
+        Self {
+            revision: snapshot.revision(),
+            lines,
+        }
+    }
+
+    pub(super) fn line(&self, line: u64) -> Option<&EditorLineStyle> {
+        self.lines.get(&line)
     }
 }
 
@@ -331,10 +367,8 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
                 code.org_end_marker = Some(Arc::from(format!("#+end_{name}")));
                 code.code_language = language;
                 true
-            } else if starts_with_ascii_case_insensitive(text, "#+end_") {
-                true
             } else {
-                false
+                starts_with_ascii_case_insensitive(text, "#+end_")
             }
         }
         Language::Markdown => {
@@ -385,7 +419,6 @@ fn org_block_start(text: &str) -> Option<(String, Option<Arc<str>>)> {
 fn markdown_fence_language(text: &str, marker: u8) -> Option<Arc<str>> {
     let fence_end = text.bytes().take_while(|byte| *byte == marker).count();
     text.get(fence_end..)?
-        .trim()
         .split_whitespace()
         .next()
         .filter(|language| !language.is_empty())
@@ -525,13 +558,17 @@ pub(super) fn runs(
         && let Some(language) = line_style.code_language.as_deref()
         && let Ok(code_spans) = crate::preview::highlight_code(language, text)
     {
-        spans.extend(code_spans.into_iter().filter_map(|span| {
-            (span.start < span.end
-                && span.end <= text.len()
-                && text.is_char_boundary(span.start)
-                && text.is_char_boundary(span.end))
-            .then(|| (span.start..span.end, code_span_style(span.kind, theme)))
-        }));
+        spans.extend(
+            code_spans
+                .into_iter()
+                .filter(|span| {
+                    span.start < span.end
+                        && span.end <= text.len()
+                        && text.is_char_boundary(span.start)
+                        && text.is_char_boundary(span.end)
+                })
+                .map(|span| (span.start..span.end, code_span_style(span.kind, theme))),
+        );
     }
     match language(path) {
         Language::Org if !verbatim => {

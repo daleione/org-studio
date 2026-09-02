@@ -1,6 +1,6 @@
-use std::sync::Arc;
 #[cfg(feature = "benchmarks")]
 use std::time::Instant;
+use std::{ops::Range, sync::Arc};
 
 use gpui::{
     App, BorderStyle, Bounds, ContentMask, Corners, Element, ElementId, ElementInputHandler,
@@ -15,9 +15,10 @@ use crate::{
 
 #[cfg(feature = "benchmarks")]
 use super::FrameBenchmarkAction;
-use super::{HitRow, SemanticEditor, ShapeKey, syntax};
+use super::{HitRow, SemanticEditor, ShapeKey, layout_map::EditorLayoutMap, syntax};
 
 const GUTTER_PADDING: f32 = 16.0;
+const MAX_ANIMATED_PAINT_LINES: u64 = 192;
 
 pub struct EditorElement {
     editor: gpui::Entity<SemanticEditor>,
@@ -72,7 +73,86 @@ struct PaintRow {
     shape_key: ShapeKey,
     visual_rows: usize,
     metrics: syntax::BlockMetrics,
+    animated_height: f32,
     background: Option<PaintQuad>,
+    animation_clip_y: Option<(Pixels, Pixels)>,
+}
+
+fn animated_paint_lines(
+    display_map: &EditorLayoutMap,
+    visible_lines: Range<u64>,
+    fold_ranges: &[Range<u64>],
+) -> Vec<u64> {
+    if visible_lines.is_empty() {
+        return Vec::new();
+    }
+    if fold_ranges.is_empty() {
+        return visible_source_lines(display_map, visible_lines);
+    }
+
+    let mut unchanged = Vec::new();
+    let mut animated_segments = Vec::new();
+    let mut cursor = visible_lines.start;
+    for range in fold_ranges {
+        let start = range.start.max(visible_lines.start).min(visible_lines.end);
+        let end = range.end.max(visible_lines.start).min(visible_lines.end);
+        if cursor < start {
+            unchanged.extend(visible_source_lines(display_map, cursor..start));
+        }
+        if start < end {
+            let first = display_map.visible_ordinal_for_line(start);
+            let last = display_map.visible_ordinal_for_line(end);
+            if first < last {
+                animated_segments.push((first, last));
+            }
+        }
+        cursor = cursor.max(end);
+    }
+    if cursor < visible_lines.end {
+        unchanged.extend(visible_source_lines(display_map, cursor..visible_lines.end));
+    }
+
+    let animated_count = animated_segments
+        .iter()
+        .map(|(start, end)| end - start)
+        .sum::<u64>();
+    if animated_count <= MAX_ANIMATED_PAINT_LINES {
+        for (start, end) in animated_segments {
+            unchanged.extend(visible_source_ordinals(display_map, start..end));
+        }
+    } else {
+        for sample in 0..MAX_ANIMATED_PAINT_LINES {
+            let rank = sample * (animated_count - 1) / (MAX_ANIMATED_PAINT_LINES - 1);
+            let mut remaining = rank;
+            for &(start, end) in &animated_segments {
+                let count = end - start;
+                if remaining < count {
+                    if let Some(line) =
+                        display_map.source_line_for_visible_ordinal(start + remaining)
+                    {
+                        unchanged.push(line);
+                    }
+                    break;
+                }
+                remaining -= count;
+            }
+        }
+    }
+    unchanged.sort_unstable();
+    unchanged.dedup();
+    unchanged
+}
+
+fn visible_source_lines(display_map: &EditorLayoutMap, lines: Range<u64>) -> Vec<u64> {
+    let start = display_map.visible_ordinal_for_line(lines.start);
+    let end = display_map.visible_ordinal_for_line(lines.end);
+    visible_source_ordinals(display_map, start..end)
+}
+
+fn visible_source_ordinals(display_map: &EditorLayoutMap, ordinals: Range<u64>) -> Vec<u64> {
+    ordinals
+        .filter_map(|ordinal| display_map.source_line_for_visible_ordinal(ordinal))
+        .collect()
 }
 
 impl Element for EditorElement {
@@ -129,11 +209,11 @@ impl Element for EditorElement {
             let was_at_end = scroll_is_at_end(
                 editor.scroll_y,
                 viewport_height,
-                editor.display_map.total_height(),
+                editor.animated_document_height(),
             );
-            let anchor_line = editor.display_map.line_at_y(editor.scroll_y);
-            let anchor_start = editor.display_map.line_start_y(anchor_line);
-            let anchor_height = editor.display_map.line_height_px(anchor_line).max(1.0);
+            let anchor_line = editor.animated_line_at_y(editor.scroll_y);
+            let anchor_start = editor.animated_line_start_y(anchor_line);
+            let anchor_height = editor.animated_line_height_px(anchor_line).max(1.0);
             let anchor_fraction =
                 ((editor.scroll_y - anchor_start) / anchor_height).clamp(0.0, 1.0);
             let layout_reconfigured = editor
@@ -141,8 +221,8 @@ impl Element for EditorElement {
                 .configure(snapshot.len_lines(), wrap_width);
             let anchored = if layout_reconfigured {
                 editor.minimap.invalidate_raster();
-                editor.display_map.line_start_y(anchor_line)
-                    + anchor_fraction * editor.display_map.line_height_px(anchor_line)
+                editor.animated_line_start_y(anchor_line)
+                    + anchor_fraction * editor.animated_line_height_px(anchor_line)
             } else {
                 editor.scroll_y
             };
@@ -150,26 +230,27 @@ impl Element for EditorElement {
                 was_at_end,
                 anchored,
                 viewport_height,
-                editor.display_map.total_height(),
+                editor.animated_document_height(),
             );
         });
         let editor = self.editor.read(cx);
         let selection = editor.selection;
         let marked = editor.marked.as_ref().map(|range| range.bytes);
         let scroll_y = editor.scroll_y;
-        let visible_lines = editor.display_map.visible_line_range(
-            &snapshot,
-            scroll_y,
-            f32::from(bounds.size.height),
-        );
-        let first_line = visible_lines.start;
-        let first_line_y = editor.display_map.line_start_y(first_line);
-        let line_offset = scroll_y - first_line_y;
-        let last_line = visible_lines.end;
-        let style_snapshot = syntax::EditorStyleSnapshot::for_lines(
+        let visible_lines =
+            editor.animated_visible_line_range(&snapshot, scroll_y, f32::from(bounds.size.height));
+        let first_line_y = editor.animated_line_start_y(visible_lines.start);
+        let fold_animation_active = editor.fold_animation.is_some();
+        let (fold_ranges, fold_scale) = editor
+            .fold_animation
+            .as_ref()
+            .map(|animation| (animation.changed_ranges.clone(), animation.scale()))
+            .unwrap_or_else(|| (Arc::from([]), 1.0));
+        let paint_lines = animated_paint_lines(&editor.display_map, visible_lines, &fold_ranges);
+        let style_snapshot = syntax::SparseEditorStyleSnapshot::for_lines(
             editor.session.read(cx).path(),
             &snapshot,
-            visible_lines.clone(),
+            &paint_lines,
             &editor.syntax_cache,
         );
         debug_assert_eq!(style_snapshot.revision, snapshot.revision());
@@ -183,7 +264,7 @@ impl Element for EditorElement {
         let theme = current_theme();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
-        let mut rows = Vec::with_capacity((last_line - first_line) as usize);
+        let mut rows = Vec::with_capacity(paint_lines.len());
         let mut selection_quads = Vec::new();
         let mut caret = None;
         let mut next_y = first_line_y;
@@ -192,7 +273,7 @@ impl Element for EditorElement {
             size(px(minimap_width), bounds.size.height),
         );
 
-        for line_number in first_line..last_line {
+        for line_number in paint_lines {
             if editor.display_map.is_hidden(line_number) {
                 continue;
             }
@@ -211,11 +292,19 @@ impl Element for EditorElement {
             let source_content_range = source_line.source_range;
             let content_range = source_line.visible_range;
             let display = source_line.display;
+            let folded = editor.fold_markers.contains(&line_number);
+            let line_animation_scale =
+                if fold_ranges.iter().any(|range| range.contains(&line_number)) {
+                    fold_scale
+                } else {
+                    1.0
+                };
             let line_style = style_snapshot
-                .line(line_number, first_line)
+                .line(line_number)
                 .expect("visible style snapshot covers every visible source line");
             let metrics = line_style.metrics;
-            let text: gpui::SharedString = display.text.clone().into();
+            let display_text = folded_display_text(display.text.clone(), folded);
+            let text: gpui::SharedString = display_text.into();
             let base_run = TextRun {
                 len: text.len(),
                 font: style.font(),
@@ -277,12 +366,26 @@ impl Element for EditorElement {
                     .shape_line(number, font_size, &[gutter_run], None);
             let total_height =
                 metrics.before + visual_rows as f32 * metrics.line_height + metrics.after;
-            let block_top = bounds.top() + px(next_y - first_line_y - line_offset);
+            // A fold transition may paint a sparse sample, so those rows need absolute animated
+            // coordinates. Normal editing paints contiguous visible rows and deliberately uses
+            // the heights shaped in this frame; after a window-width change that avoids showing
+            // one stale-baseline frame followed by a visible correction.
+            let block_top_y = if fold_animation_active {
+                editor.animated_line_start_y(line_number)
+            } else {
+                next_y
+            };
+            let block_top = bounds.top() + px(block_top_y - scroll_y);
             let origin_y = block_top + px(metrics.before);
+            let animated_height = total_height * line_animation_scale;
+            let animation_clip_y = (line_animation_scale < 0.999)
+                .then_some((block_top, block_top + px(animated_height)));
             let hit = HitRow {
                 range: source_line.visible_range,
                 line,
                 origin_y,
+                visible_top: block_top,
+                visible_bottom: block_top + px(animated_height),
                 text_origin_x,
                 line_height: px(metrics.line_height),
                 display,
@@ -292,7 +395,7 @@ impl Element for EditorElement {
             let selected = selection.range();
             let selected_start = selected.start.0.max(full_range.start.0);
             let selected_end = selected.end.0.min(full_range.end.0);
-            if selected_start < selected_end {
+            if selected_start < selected_end && line_animation_scale >= 0.999 {
                 let source_local_start = selected_start
                     .saturating_sub(content_range.start.0)
                     .min(hit.layout.len() as u64) as usize;
@@ -315,6 +418,7 @@ impl Element for EditorElement {
                 && selection.is_empty()
                 && selection.head() >= content_range.start
                 && selection.head() <= content_range.end
+                && line_animation_scale >= 0.999
             {
                 let source_local = selection
                     .head()
@@ -340,16 +444,20 @@ impl Element for EditorElement {
                 shape_key,
                 visual_rows,
                 metrics,
+                animated_height,
                 background: row_background(
                     line_style.id,
                     Bounds::new(
                         point(text_origin_x, block_top),
-                        size(px(wrap_width), px(total_height)),
+                        size(px(wrap_width), px(animated_height)),
                     ),
                     theme,
                 ),
+                animation_clip_y,
             });
-            next_y += total_height;
+            if !fold_animation_active {
+                next_y += total_height;
+            }
         }
 
         let (_, fallback_top, fallback_bottom) =
@@ -372,7 +480,9 @@ impl Element for EditorElement {
             window.scale_factor(),
             theme,
         );
-        if let Some(request) = minimap_raster_request {
+        if editor.fold_animation.is_none()
+            && let Some(request) = minimap_raster_request
+        {
             schedule_minimap_raster(self.editor.clone(), request, cx);
         }
         PrepaintState {
@@ -440,14 +550,31 @@ impl Element for EditorElement {
             let text_left = state.gutter.bounds.right() + px(1.0);
             for row in &state.rows {
                 let number_x = text_left - px(GUTTER_PADDING) - row.gutter_layout.width();
-                let _ = row.gutter_layout.paint(
-                    point(number_x, row.hit.origin_y),
-                    row.hit.line_height,
-                    TextAlign::Left,
-                    None,
-                    window,
-                    cx,
-                );
+                let mut paint = |window: &mut Window| {
+                    let _ = row.gutter_layout.paint(
+                        point(number_x, row.hit.origin_y),
+                        row.hit.line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                };
+                if let Some((top, bottom)) = row.animation_clip_y {
+                    if bottom > top {
+                        window.with_content_mask(
+                            Some(ContentMask {
+                                bounds: Bounds::from_corners(
+                                    point(bounds.left(), top),
+                                    point(text_left, bottom),
+                                ),
+                            }),
+                            paint,
+                        );
+                    }
+                } else {
+                    paint(window);
+                }
             }
             let text_right = if state.minimap.background.is_none() {
                 bounds.right()
@@ -470,14 +597,31 @@ impl Element for EditorElement {
                         window.paint_quad(selection);
                     }
                     for row in &state.rows {
-                        let _ = row.hit.layout.paint(
-                            point(row.hit.text_origin_x, row.hit.origin_y),
-                            row.hit.line_height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
-                        );
+                        let mut paint = |window: &mut Window| {
+                            let _ = row.hit.layout.paint(
+                                point(row.hit.text_origin_x, row.hit.origin_y),
+                                row.hit.line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        };
+                        if let Some((top, bottom)) = row.animation_clip_y {
+                            if bottom > top {
+                                window.with_content_mask(
+                                    Some(ContentMask {
+                                        bounds: Bounds::from_corners(
+                                            point(text_bounds.left(), top),
+                                            point(text_bounds.right(), bottom),
+                                        ),
+                                    }),
+                                    paint,
+                                );
+                            }
+                        } else {
+                            paint(window);
+                        }
                     }
                     if focus_handle.is_focused(window)
                         && let Some(caret) = state.caret.take()
@@ -515,12 +659,12 @@ impl Element for EditorElement {
             let was_at_end = scroll_is_at_end(
                 editor.scroll_y,
                 viewport_height,
-                editor.display_map.total_height(),
+                editor.animated_document_height(),
             );
-            let anchor_line = editor.display_map.line_at_y(editor.scroll_y);
-            let anchor_start = editor.display_map.line_start_y(anchor_line);
+            let anchor_line = editor.animated_line_at_y(editor.scroll_y);
+            let anchor_start = editor.animated_line_start_y(anchor_line);
             let anchor_fraction = ((editor.scroll_y - anchor_start)
-                / editor.display_map.line_height_px(anchor_line).max(1.0))
+                / editor.animated_line_height_px(anchor_line).max(1.0))
             .clamp(0.0, 1.0);
             let layout_changed =
                 measured_rows
@@ -535,8 +679,8 @@ impl Element for EditorElement {
                         ) || changed
                     });
             let anchored = if layout_changed {
-                editor.display_map.line_start_y(anchor_line)
-                    + anchor_fraction * editor.display_map.line_height_px(anchor_line)
+                editor.animated_line_start_y(anchor_line)
+                    + anchor_fraction * editor.animated_line_height_px(anchor_line)
             } else {
                 editor.scroll_y
             };
@@ -544,7 +688,7 @@ impl Element for EditorElement {
                 was_at_end,
                 anchored,
                 viewport_height,
-                editor.display_map.total_height(),
+                editor.animated_document_height(),
             );
             let scroll_settled = (settled_scroll_y - editor.scroll_y).abs() > 0.5;
             editor.scroll_y = settled_scroll_y;
@@ -562,7 +706,7 @@ impl Element for EditorElement {
                 editor.pending_reveal_caret = !has_exact_row;
                 editor.reveal_caret(&snapshot);
             }
-            let final_anchor_line = editor.display_map.line_at_y(editor.scroll_y);
+            let final_anchor_line = editor.animated_line_at_y(editor.scroll_y);
             editor.layout_anchor = snapshot
                 .line_content_range(LineIndex(final_anchor_line))
                 .ok()
@@ -601,15 +745,13 @@ fn visible_position_in_paint_rows(
     let last = rows.last()?;
     for row in rows {
         let block_top = row.hit.origin_y - px(row.metrics.before);
-        let block_height = row.metrics.before
-            + row.visual_rows as f32 * row.metrics.line_height
-            + row.metrics.after;
+        let block_height = row.animated_height;
         let block_bottom = block_top + px(block_height);
         if y <= block_bottom || row.hit.line == last.hit.line {
             let fraction = (f32::from(y - block_top) / block_height.max(1.0)).clamp(0.0, 1.0);
-            return Some(
-                editor.display_map.visible_ordinal_for_line(row.hit.line.0) as f32 + fraction,
-            );
+            let source_y = editor.animated_line_start_y(row.hit.line.0)
+                + fraction * editor.animated_line_height_px(row.hit.line.0);
+            return Some(editor.animated_visible_position_at_y(source_y));
         }
     }
     None
@@ -904,6 +1046,13 @@ fn local_marked(
     )
 }
 
+fn folded_display_text(mut text: String, folded: bool) -> String {
+    if folded {
+        text.push_str("...");
+    }
+    text
+}
+
 fn row_background(
     style: syntax::EditorStyleId,
     bounds: Bounds<Pixels>,
@@ -978,7 +1127,23 @@ fn push_selection_quads(
 
 #[cfg(test)]
 mod tests {
-    use super::{scroll_is_at_end, stabilized_scroll_y};
+    use super::{
+        MAX_ANIMATED_PAINT_LINES, animated_paint_lines, folded_display_text, scroll_is_at_end,
+        stabilized_scroll_y,
+    };
+    use crate::editor::layout_map::EditorLayoutMap;
+
+    #[test]
+    fn folded_heading_display_adds_an_ellipsis_without_changing_source_text() {
+        assert_eq!(
+            folded_display_text("* Heading".to_owned(), true),
+            "* Heading..."
+        );
+        assert_eq!(
+            folded_display_text("* Heading".to_owned(), false),
+            "* Heading"
+        );
+    }
 
     #[test]
     fn bottom_stays_pinned_while_measured_document_height_converges() {
@@ -986,5 +1151,19 @@ mod tests {
         assert_eq!(stabilized_scroll_y(true, 800.0, 200.0, 1_120.0), 920.0);
         assert_eq!(stabilized_scroll_y(false, 420.0, 200.0, 1_120.0), 420.0);
         assert_eq!(stabilized_scroll_y(false, 980.0, 200.0, 1_120.0), 920.0);
+    }
+
+    #[test]
+    fn large_fold_animations_shape_only_a_bounded_sample_of_changed_lines() {
+        let mut display_map = EditorLayoutMap::default();
+        display_map.configure(1_000, 700.0);
+
+        let lines = animated_paint_lines(&display_map, 0..1_000, std::slice::from_ref(&(1..999)));
+
+        assert!(lines.len() <= MAX_ANIMATED_PAINT_LINES as usize + 2);
+        assert_eq!(lines.first(), Some(&0));
+        assert_eq!(lines.last(), Some(&999));
+        assert!(lines.contains(&1));
+        assert!(lines.contains(&998));
     }
 }

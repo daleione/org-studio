@@ -2,7 +2,13 @@ use std::{ops::Range, path::Path};
 
 use unicode_width::UnicodeWidthStr;
 
-use crate::document::{ByteOffset, ByteRange, DocumentSnapshot, LineIndex, TextSnapshot};
+use crate::{
+    document::{
+        ByteOffset, ByteRange, DocumentFormat, DocumentSnapshot, HeadingIndex, LineIndex,
+        TextSnapshot,
+    },
+    org_syntax::{BlockKind, parse},
+};
 
 pub(super) type LineCycle = fn(&str) -> Option<(Range<usize>, &'static str)>;
 
@@ -24,23 +30,51 @@ pub(super) struct EditorCommandContext {
 
 impl EditorCommandContext {
     pub(super) fn at(path: &Path, snapshot: &DocumentSnapshot, offset: ByteOffset) -> Option<Self> {
+        let headings =
+            DocumentFormat::detect(path).map(|format| HeadingIndex::parse(format, snapshot));
+        Self::at_with_headings(path, snapshot, offset, headings.as_ref())
+    }
+
+    pub(super) fn at_with_headings(
+        path: &Path,
+        snapshot: &DocumentSnapshot,
+        offset: ByteOffset,
+        headings: Option<&HeadingIndex>,
+    ) -> Option<Self> {
         let line = snapshot.line_index_at(offset).ok()?;
         let line_range = snapshot.line_content_range(line).ok()?;
-        if !path
-            .extension()
-            .and_then(|value| value.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("org"))
-        {
+        let Some(format) = DocumentFormat::detect(path) else {
             return Some(Self {
                 line,
                 line_range,
                 kind: EditorCommandKind::NonOrg,
             });
+        };
+        if format == DocumentFormat::Markdown {
+            let is_heading = headings
+                .and_then(|headings| headings.heading_at_line(line.0))
+                .is_some_and(|heading| heading.start == line_range.start);
+            return Some(Self {
+                line,
+                line_range,
+                kind: if is_heading {
+                    EditorCommandKind::Heading
+                } else {
+                    EditorCommandKind::Plain
+                },
+            });
         }
         let text = snapshot.copy_range(line_range);
         let trimmed = text.trim_start();
         let local = offset.0.saturating_sub(line_range.start.0) as usize;
-        let kind = if is_table_row(trimmed) {
+        let arena = parse(snapshot);
+        let structural_kind = arena
+            .nodes()
+            .iter()
+            .find(|node| node.source.start == line_range.start)
+            .map(|node| &node.kind);
+        let kind = if matches!(structural_kind, Some(BlockKind::TableRow)) && is_table_row(trimmed)
+        {
             EditorCommandKind::TableCell {
                 column: text[..local.min(text.len())]
                     .bytes()
@@ -48,9 +82,9 @@ impl EditorCommandContext {
                     .count()
                     .saturating_sub(1),
             }
-        } else if is_heading(trimmed) {
+        } else if matches!(structural_kind, Some(BlockKind::Heading { .. })) {
             EditorCommandKind::Heading
-        } else if is_list(trimmed) {
+        } else if matches!(structural_kind, Some(BlockKind::ListItem)) {
             EditorCommandKind::List
         } else {
             EditorCommandKind::Plain
@@ -232,21 +266,6 @@ fn is_table_row(text: &str) -> bool {
     text.starts_with('|') && text[1..].contains(['|', '+'])
 }
 
-fn is_heading(text: &str) -> bool {
-    let stars = text.bytes().take_while(|byte| *byte == b'*').count();
-    stars > 0 && text.as_bytes().get(stars) == Some(&b' ')
-}
-
-fn is_list(text: &str) -> bool {
-    text.starts_with("- ")
-        || text.starts_with("+ ")
-        || text.split_once(['.', ')']).is_some_and(|(prefix, tail)| {
-            !prefix.is_empty()
-                && prefix.bytes().all(|byte| byte.is_ascii_digit())
-                && tail.starts_with(' ')
-        })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,6 +284,51 @@ mod tests {
         assert_eq!(kinds[1], EditorCommandKind::List);
         assert!(matches!(kinds[2], EditorCommandKind::TableCell { .. }));
         assert_eq!(kinds[3], EditorCommandKind::Plain);
+    }
+
+    #[test]
+    fn context_does_not_treat_example_contents_as_org_structures() {
+        let snapshot = DocumentSnapshot::from_utf8(
+            b"#+begin_example\n* literal heading\n| literal | table |\n- literal list\n#+end_example\n"
+                .to_vec(),
+        )
+        .unwrap();
+
+        for offset in [17, 35, 55] {
+            assert_eq!(
+                EditorCommandContext::at(Path::new("a.org"), &snapshot, ByteOffset(offset))
+                    .unwrap()
+                    .kind,
+                EditorCommandKind::Plain
+            );
+        }
+    }
+
+    #[test]
+    fn context_recognizes_markdown_headings_but_not_fenced_heading_text() {
+        let snapshot = DocumentSnapshot::from_utf8(
+            b"# Heading\n```md\n# literal heading\n```\nparagraph\n".to_vec(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            EditorCommandContext::at(Path::new("a.md"), &snapshot, ByteOffset(2))
+                .unwrap()
+                .kind,
+            EditorCommandKind::Heading
+        );
+        assert_eq!(
+            EditorCommandContext::at(Path::new("a.md"), &snapshot, ByteOffset(18))
+                .unwrap()
+                .kind,
+            EditorCommandKind::Plain
+        );
+        assert_eq!(
+            EditorCommandContext::at(Path::new("a.markdown"), &snapshot, ByteOffset(42))
+                .unwrap()
+                .kind,
+            EditorCommandKind::Plain
+        );
     }
 
     #[test]

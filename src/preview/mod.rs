@@ -11,12 +11,12 @@ mod input;
 pub(crate) mod layout;
 mod loading;
 mod view;
+pub(crate) use crate::document::DocumentFormat;
 pub(crate) use action::{
     CopyFeedbackState, PendingPreviewAction, PreviewAction, PreviewActionIdentity,
     PreviewActionTarget, PreviewActionVisualState,
 };
 use action::{checkbox_action, code_action, image_action, source_action_target};
-pub(crate) use document::DocumentFormat;
 pub(crate) use document::{
     CodeRowRole, DerivedUpdate, PreviewRow, ReloadedDocument, WorkspaceLoadedDocument,
     WorkspaceReloadedDocument, configured_minimap_visible,
@@ -39,7 +39,7 @@ pub(crate) use view::{ReadingRenderOptions, render_reading_document};
 mod coordinates;
 mod fold_transition;
 mod folding;
-mod markdown;
+pub(crate) mod markdown;
 pub(crate) mod minimap;
 mod org_line;
 mod projection;
@@ -129,7 +129,7 @@ pub(crate) const KEY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
 // genuinely small documents, but never let a file switch turn one UI frame into a full-document
 // layout. Larger documents converge as their visible rows are measured by GPUI's virtual list.
 const MAX_EAGER_LAYOUT_ROWS: usize = 128;
-const LOCAL_FOLD_ANIMATION_DURATION: Duration = Duration::from_millis(160);
+pub(crate) use crate::fold_animation::FOLD_ANIMATION_DURATION as LOCAL_FOLD_ANIMATION_DURATION;
 
 actions!(
     org_preview,

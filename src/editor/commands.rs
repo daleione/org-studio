@@ -1,4 +1,5 @@
 use super::*;
+use crate::fold_animation::FOLD_ANIMATION_DURATION;
 
 impl SemanticEditor {
     pub(super) fn replace_selection(
@@ -291,12 +292,17 @@ impl SemanticEditor {
         self.replace_selection(newline, EditOrigin::Newline, cx);
     }
 
-    fn insert_tab(&mut self, _: &InsertTab, _: &mut Window, cx: &mut Context<Self>) {
+    fn insert_tab(&mut self, _: &InsertTab, window: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.snapshot(cx);
         let path = self.session.read(cx).path().to_path_buf();
-        let Some(context) =
-            super::org_commands::EditorCommandContext::at(&path, &snapshot, self.selection.head())
-        else {
+        let headings = crate::document::DocumentFormat::detect(&path)
+            .map(|_| self.folds.heading_index(&path, &snapshot));
+        let Some(context) = super::org_commands::EditorCommandContext::at_with_headings(
+            &path,
+            &snapshot,
+            self.selection.head(),
+            headings.as_deref(),
+        ) else {
             return;
         };
         match context.kind {
@@ -309,20 +315,195 @@ impl SemanticEditor {
                 self.replace_selection("\t", EditOrigin::Other, cx);
             }
             super::org_commands::EditorCommandKind::Heading => {
-                self.folds.toggle_heading(&snapshot, context.line.0);
-                self.refresh_fold_layout(&snapshot);
-                cx.notify();
+                self.finish_fold_animation();
+                let previous = self.folds.projection(&path, &snapshot);
+                if self.folds.toggle_heading(&path, &snapshot, context.line.0) {
+                    let target = self.folds.projection(&path, &snapshot);
+                    self.animate_fold_layout(previous, target, context.line.0, window, cx);
+                }
             }
             _ => self.replace_selection("\t", EditOrigin::Typing, cx),
         }
     }
 
-    fn shift_tab(&mut self, _: &ShiftTab, _: &mut Window, cx: &mut Context<Self>) {
+    fn finish_fold_animation(&mut self) {
+        let Some(animation) = self.fold_animation.take() else {
+            return;
+        };
+        self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
+        self.apply_fold_projection(
+            super::folding::EditorFoldProjection {
+                hidden_ranges: animation.target_hidden_ranges.to_vec(),
+                marker_lines: animation.target_marker_lines.as_ref().clone(),
+            },
+            animation.anchor_line,
+            animation.anchor_viewport_y,
+        );
+    }
+
+    fn complete_fold_animation(&mut self) {
+        let Some(animation) = self.fold_animation.take() else {
+            return;
+        };
+        self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
+        self.fold_markers = animation.target_marker_lines;
+        self.display_map
+            .set_hidden_ranges(animation.target_hidden_ranges.to_vec());
+        if let Some(viewport) = self.viewport {
+            let max_scroll =
+                (self.display_map.total_height() - f32::from(viewport.size.height)).max(0.0);
+            self.scroll_y = self.scroll_y.clamp(0.0, max_scroll);
+        }
+        self.minimap.invalidate_raster();
+        self.minimap.note_viewport_changed();
+    }
+
+    fn stabilize_fold_animation_anchor(&mut self) {
+        let Some(animation) = self.fold_animation.as_ref() else {
+            return;
+        };
+        let Some(viewport) = self.viewport else {
+            return;
+        };
+        let anchor_line = animation.anchor_line;
+        let anchor_viewport_y = animation.anchor_viewport_y;
+        self.scroll_y = fold_anchor_scroll_y(
+            self.animated_line_start_y(anchor_line),
+            self.animated_line_height_px(anchor_line),
+            anchor_viewport_y,
+            f32::from(viewport.size.height),
+            self.animated_document_height(),
+        );
+        self.minimap.note_viewport_changed();
+    }
+
+    fn animate_fold_layout(
+        &mut self,
+        previous: super::folding::EditorFoldProjection,
+        target: super::folding::EditorFoldProjection,
+        anchor_line: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if previous == target {
+            return;
+        }
+        let anchor_viewport_y = self.display_map.line_start_y(anchor_line) - self.scroll_y;
+        let newly_hidden =
+            super::folding::subtract_ranges(&target.hidden_ranges, &previous.hidden_ranges);
+        let newly_visible =
+            super::folding::subtract_ranges(&previous.hidden_ranges, &target.hidden_ranges);
+        let (changed_ranges, collapsing) = match (newly_hidden.is_empty(), newly_visible.is_empty())
+        {
+            (false, true) => (newly_hidden, true),
+            (true, false) => (newly_visible, false),
+            _ => {
+                self.apply_fold_projection(target, anchor_line, anchor_viewport_y);
+                cx.notify();
+                return;
+            }
+        };
+        if cx.reduce_motion() {
+            self.apply_fold_projection(target, anchor_line, anchor_viewport_y);
+            cx.notify();
+            return;
+        }
+
+        self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
+        let revision = self.fold_animation_revision;
+        if !collapsing {
+            self.apply_fold_projection(target.clone(), anchor_line, anchor_viewport_y);
+        } else {
+            self.fold_markers = Arc::new(target.marker_lines.clone());
+        }
+        self.fold_animation = Some(EditorFoldAnimation {
+            revision,
+            changed_ranges: changed_ranges.into(),
+            target_hidden_ranges: target.hidden_ranges.into(),
+            target_marker_lines: Arc::new(target.marker_lines),
+            collapsing,
+            anchor_line,
+            anchor_viewport_y,
+            started_at: None,
+            progress: 0.0,
+        });
+        self.stabilize_fold_animation_anchor();
+        self.minimap.invalidate_raster();
+        self.schedule_fold_animation_frame(revision, window, cx);
+        cx.notify();
+    }
+
+    fn apply_fold_projection(
+        &mut self,
+        projection: super::folding::EditorFoldProjection,
+        anchor_line: u64,
+        anchor_viewport_y: f32,
+    ) {
+        self.fold_markers = Arc::new(projection.marker_lines);
+        self.display_map.set_hidden_ranges(projection.hidden_ranges);
+        if let Some(viewport) = self.viewport {
+            self.scroll_y = fold_anchor_scroll_y(
+                self.display_map.line_start_y(anchor_line),
+                self.display_map.line_height_px(anchor_line),
+                anchor_viewport_y,
+                f32::from(viewport.size.height),
+                self.display_map.total_height(),
+            );
+        }
+        self.minimap.invalidate_raster();
+        self.minimap.note_viewport_changed();
+    }
+
+    fn schedule_fold_animation_frame(
+        &mut self,
+        revision: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.on_next_frame(window, move |this, window, cx| {
+            let Some(animation) = this.fold_animation.as_mut() else {
+                return;
+            };
+            if animation.revision != revision {
+                return;
+            }
+            let Some(started_at) = animation.started_at else {
+                animation.started_at = Some(Instant::now());
+                this.schedule_fold_animation_frame(revision, window, cx);
+                return;
+            };
+            animation.progress = (started_at.elapsed().as_secs_f32()
+                / FOLD_ANIMATION_DURATION.as_secs_f32())
+            .clamp(0.0, 1.0);
+            let complete = animation.progress >= 1.0;
+            this.stabilize_fold_animation_anchor();
+            cx.notify();
+            if complete {
+                cx.on_next_frame(window, move |this, _, cx| {
+                    if this.fold_animation.as_ref().is_some_and(|animation| {
+                        animation.revision == revision && animation.progress >= 1.0
+                    }) {
+                        this.complete_fold_animation();
+                        cx.notify();
+                    }
+                });
+            } else {
+                this.schedule_fold_animation_frame(revision, window, cx);
+            }
+        });
+    }
+
+    fn shift_tab(&mut self, _: &ShiftTab, window: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.snapshot(cx);
         let path = self.session.read(cx).path().to_path_buf();
-        let Some(context) =
-            super::org_commands::EditorCommandContext::at(&path, &snapshot, self.selection.head())
-        else {
+        let headings = crate::document::DocumentFormat::detect(&path)
+            .map(|_| self.folds.heading_index(&path, &snapshot));
+        let Some(context) = super::org_commands::EditorCommandContext::at_with_headings(
+            &path,
+            &snapshot,
+            self.selection.head(),
+            headings.as_deref(),
+        ) else {
             return;
         };
         if matches!(
@@ -333,28 +514,45 @@ impl SemanticEditor {
         } else if matches!(context.kind, super::org_commands::EditorCommandKind::NonOrg) {
             self.replace_selection("\t", EditOrigin::Typing, cx);
         } else {
-            self.folds.cycle_global();
-            self.refresh_fold_layout(&snapshot);
-            cx.notify();
+            self.finish_fold_animation();
+            let previous = self.folds.projection(&path, &snapshot);
+            if self.folds.cycle_global(&path, &snapshot) {
+                let target = self.folds.projection(&path, &snapshot);
+                let anchor_line = self.normalize_selection_for_fold(&snapshot, &target);
+                self.animate_fold_layout(previous, target, anchor_line, window, cx);
+            }
         }
     }
 
-    fn refresh_fold_layout(&mut self, snapshot: &DocumentSnapshot) {
-        self.display_map
-            .set_hidden_ranges(self.folds.hidden_ranges(snapshot));
-        self.minimap.invalidate_raster();
-        if let Ok(line) = snapshot.line_index_at(self.selection.head())
-            && self.display_map.is_hidden(line.0)
+    fn normalize_selection_for_fold(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        projection: &super::folding::EditorFoldProjection,
+    ) -> u64 {
+        let line = snapshot
+            .line_index_at(self.selection.head())
+            .map_or(0, |line| line.0);
+        if !projection
+            .hidden_ranges
+            .iter()
+            .any(|range| range.contains(&line))
         {
-            let visible = (0..=line.0)
-                .rev()
-                .find(|line| !self.display_map.is_hidden(*line))
-                .unwrap_or(0);
-            if let Ok(range) = snapshot.line_content_range(LineIndex(visible)) {
-                self.selection = Selection::caret(range.end);
-                self.sync_selection_utf16(snapshot);
-            }
+            return line;
         }
+        let visible = (0..=line)
+            .rev()
+            .find(|candidate| {
+                !projection
+                    .hidden_ranges
+                    .iter()
+                    .any(|range| range.contains(candidate))
+            })
+            .unwrap_or(0);
+        if let Ok(range) = snapshot.line_content_range(LineIndex(visible)) {
+            self.selection = Selection::caret(range.end);
+            self.sync_selection_utf16(snapshot);
+        }
+        visible
     }
 
     fn align_table(&mut self, _: &AlignTable, _: &mut Window, cx: &mut Context<Self>) {
@@ -667,12 +865,15 @@ impl SemanticEditor {
             })
             .map(|row| (row.line.0, row.text_origin_x))
             && event.position.x < text_x
-            && self.display_map.hidden_after(line) > 0
+            && self.fold_markers.contains(&line)
         {
             let snapshot = self.snapshot(cx);
+            let path = self.session.read(cx).path().to_path_buf();
+            self.finish_fold_animation();
+            let previous = self.folds.projection(&path, &snapshot);
             self.folds.expand_heading(&snapshot, line);
-            self.refresh_fold_layout(&snapshot);
-            cx.notify();
+            let target = self.folds.projection(&path, &snapshot);
+            self.animate_fold_layout(previous, target, line, window, cx);
             return;
         }
         self.is_selecting = true;
@@ -749,7 +950,7 @@ impl SemanticEditor {
         let (total_units, visible_top, visible_bottom) =
             self.minimap_source_viewport(viewport_height);
         let viewport_units = (visible_bottom - visible_top).max(0.0);
-        let max_scroll_pixels = (self.display_map.total_height() - viewport_height).max(0.0);
+        let max_scroll_pixels = (self.animated_document_height() - viewport_height).max(0.0);
         let target_y = if let Some(session) = self.minimap.drag {
             let (ratio, thumb_top) = crate::minimap::drag_target(
                 pointer,
@@ -778,8 +979,8 @@ impl SemanticEditor {
                 .display_map
                 .source_line_for_visible_ordinal(ordinal)
                 .unwrap_or(0);
-            self.display_map.line_start_y(source_line)
-                + fraction * self.display_map.line_height_px(source_line)
+            self.animated_line_start_y(source_line)
+                + fraction * self.animated_line_height_px(source_line)
         };
         let previous_y = self.scroll_y;
         self.scroll_y = target_y.clamp(0.0, max_scroll_pixels);
@@ -805,10 +1006,10 @@ impl SemanticEditor {
         visible_bottom: f32,
     ) -> super::minimap::ViewportGeometry {
         let viewport_height = f32::from(bounds.size.height);
-        let total_units = self.display_map.visible_line_count() as f32;
+        let total_units = self.animated_visible_line_count();
         let density = crate::minimap::Density::for_width(f32::from(bounds.size.width));
         let line_height = self.minimap.line_height(density);
-        let max_scroll = (self.display_map.total_height() - viewport_height).max(0.0);
+        let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let scroll_ratio = if max_scroll > 0.0 {
             (self.scroll_y / max_scroll).clamp(0.0, 1.0)
         } else {
@@ -833,23 +1034,22 @@ impl SemanticEditor {
     }
 
     pub(super) fn minimap_source_viewport(&self, viewport_height: f32) -> (f32, f32, f32) {
-        let total = self.display_map.visible_line_count() as f32;
+        let total = self.animated_visible_line_count();
         if total <= 0.0 {
             return (0.0, 0.0, 0.0);
         }
-        let document_height = self.display_map.total_height();
-        let max_scroll = (self.display_map.total_height() - viewport_height).max(0.0);
+        let document_height = self.animated_document_height();
+        let max_scroll = (document_height - viewport_height).max(0.0);
         let scroll_y = self.scroll_y.clamp(0.0, max_scroll);
         let top = if self.scroll_y <= 0.5 {
             0.0
         } else {
-            self.display_map.visible_position_at_y(scroll_y)
+            self.animated_visible_position_at_y(scroll_y)
         };
         let bottom = if scroll_y + viewport_height + 0.5 >= document_height {
             total
         } else {
-            self.display_map
-                .visible_position_at_y((scroll_y + viewport_height).min(document_height))
+            self.animated_visible_position_at_y((scroll_y + viewport_height).min(document_height))
                 .clamp(top, total)
         };
         (total, top, bottom)
@@ -876,7 +1076,7 @@ impl SemanticEditor {
         };
         if distance != 0.0 {
             let max_scroll =
-                (self.display_map.total_height() - f32::from(viewport.size.height)).max(0.0);
+                (self.animated_document_height() - f32::from(viewport.size.height)).max(0.0);
             let speed = distance.signum() * (distance.abs() / 8.0).clamp(4.0, 64.0);
             let previous_y = self.scroll_y;
             self.scroll_y = (self.scroll_y + speed).clamp(0.0, max_scroll);
@@ -897,11 +1097,7 @@ impl SemanticEditor {
         let row = self
             .hit_rows
             .iter()
-            .find(|row| {
-                let top = row.origin_y;
-                let height = row.line_height * (row.layout.wrap_boundaries().len() + 1) as f32;
-                position.y >= top && position.y < top + height
-            })
+            .find(|row| position.y >= row.visible_top && position.y < row.visible_bottom)
             .unwrap_or_else(|| {
                 self.hit_rows
                     .iter()
@@ -926,7 +1122,7 @@ impl SemanticEditor {
         let viewport_height = self
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
-        let max_scroll = (self.display_map.total_height() - viewport_height).max(0.0);
+        let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let previous_y = self.scroll_y;
         self.scroll_y = (self.scroll_y - delta_y).clamp(0.0, max_scroll);
         if !self.display_map.soft_wrap() {
@@ -993,8 +1189,8 @@ impl SemanticEditor {
             });
         let (top, caret_height) = measured.unwrap_or_else(|| {
             (
-                self.display_map.line_start_y(line.0),
-                self.display_map.line_height_px(line.0).min(LINE_HEIGHT),
+                self.animated_line_start_y(line.0),
+                self.animated_line_height_px(line.0).min(LINE_HEIGHT),
             )
         });
         let bottom = top + caret_height;
@@ -1035,9 +1231,9 @@ impl SemanticEditor {
 
     #[cfg(test)]
     pub(crate) fn top_source_anchor(&self, snapshot: &DocumentSnapshot) -> (ByteOffset, f32) {
-        let line = self.display_map.line_at_y(self.scroll_y);
-        let line_start = self.display_map.line_start_y(line);
-        let line_height = self.display_map.line_height_px(line).max(1.0);
+        let line = self.animated_line_at_y(self.scroll_y);
+        let line_start = self.animated_line_start_y(line);
+        let line_height = self.animated_line_height_px(line).max(1.0);
         let fraction = ((self.scroll_y - line_start) / line_height).clamp(0.0, 1.0);
         let source = snapshot
             .line_content_range(LineIndex(line))
@@ -1067,8 +1263,8 @@ impl SemanticEditor {
 }
 
 fn vertical_distance(y: Pixels, row: &super::HitRow) -> f32 {
-    let top = row.origin_y;
-    let bottom = top + row.line_height * (row.layout.wrap_boundaries().len() + 1) as f32;
+    let top = row.visible_top;
+    let bottom = row.visible_bottom;
     if y < top {
         f32::from(top - y)
     } else if y > bottom {
@@ -1076,6 +1272,19 @@ fn vertical_distance(y: Pixels, row: &super::HitRow) -> f32 {
     } else {
         0.0
     }
+}
+
+fn fold_anchor_scroll_y(
+    anchor_y: f32,
+    anchor_height: f32,
+    previous_viewport_y: f32,
+    viewport_height: f32,
+    document_height: f32,
+) -> f32 {
+    let max_anchor_viewport_y = (viewport_height - anchor_height.max(1.0)).max(0.0);
+    let anchor_viewport_y = previous_viewport_y.clamp(0.0, max_anchor_viewport_y);
+    let max_scroll = (document_height - viewport_height).max(0.0);
+    (anchor_y - anchor_viewport_y).clamp(0.0, max_scroll)
 }
 
 fn horizontal_scroll_limit(content_width: f32, available_width: f32) -> f32 {
@@ -1193,11 +1402,225 @@ fn map_offset_through_edits(offset: ByteOffset, edits: &[TextEdit]) -> ByteOffse
 
 #[cfg(test)]
 mod horizontal_scroll_tests {
-    use super::horizontal_scroll_limit;
+    use super::*;
 
     #[test]
     fn horizontal_scroll_is_zero_until_content_exceeds_the_viewport() {
         assert_eq!(horizontal_scroll_limit(500.0, 600.0), 0.0);
         assert_eq!(horizontal_scroll_limit(700.0, 600.0), 112.0);
+    }
+
+    #[test]
+    fn fold_anchor_stays_inside_the_viewport_when_the_document_shrinks() {
+        let scroll = fold_anchor_scroll_y(900.0, 22.0, 190.0, 200.0, 930.0);
+        assert_eq!(scroll, 722.0);
+        assert_eq!(900.0 - scroll, 178.0);
+    }
+
+    #[gpui::test]
+    fn fold_animation_uses_next_frame_callbacks_outside_paint(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                b"* Heading\nbody one\nbody two\n* Next\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.animate_fold_layout(
+                    super::super::folding::EditorFoldProjection::default(),
+                    super::super::folding::EditorFoldProjection {
+                        hidden_ranges: std::iter::once(1..3).collect(),
+                        marker_lines: HashSet::from([0]),
+                    },
+                    0,
+                    window,
+                    cx,
+                );
+            })
+            .unwrap();
+        cx.run_until_parked();
+
+        let root = window.entity(cx).unwrap();
+        root.update(cx, |editor, _| {
+            editor.fold_animation.as_mut().unwrap().started_at =
+                Some(Instant::now() - FOLD_ANIMATION_DURATION / 2);
+        });
+        let simulate_frame = |cx: &mut gpui::TestAppContext| {
+            cx.update(|cx| {
+                cx.with_window(root.entity_id(), |window, cx| {
+                    window.simulate_next_frame(cx)
+                })
+                .unwrap()
+            })
+        };
+        assert!(simulate_frame(cx) > 0);
+        cx.run_until_parked();
+        root.update(cx, |editor, _| {
+            editor.fold_animation.as_mut().unwrap().started_at =
+                Some(Instant::now() - FOLD_ANIMATION_DURATION);
+        });
+        assert!(simulate_frame(cx) > 0);
+        cx.run_until_parked();
+        assert!(simulate_frame(cx) > 0);
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = root.read(cx);
+            assert!(editor.fold_animation.is_none());
+            assert!(editor.display_map.is_hidden(1));
+            assert!(editor.display_map.is_hidden(2));
+        });
+    }
+
+    #[gpui::test]
+    fn markdown_tab_runs_the_real_heading_fold_action_and_starts_animation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.md"),
+                b"# Heading\nbody\n## Child\nchild body\n# Next\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.insert_tab(&InsertTab, window, cx);
+                let animation = editor
+                    .fold_animation
+                    .as_ref()
+                    .expect("Markdown heading Tab starts a fold transition");
+                assert_eq!(
+                    animation.target_hidden_ranges.as_ref(),
+                    std::slice::from_ref(&(1..4))
+                );
+                assert_eq!(animation.target_marker_lines.as_ref(), &HashSet::from([0]));
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn shift_tab_on_headingless_org_is_a_stable_no_op(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("plain.org"),
+                b"plain\ncontent\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.shift_tab(&ShiftTab, window, cx);
+                assert_eq!(
+                    editor.folds.global,
+                    super::super::folding::GlobalVisibility::All
+                );
+                assert!(editor.fold_animation.is_none());
+                assert_eq!(editor.display_map.visible_line_count(), 3);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn shift_tab_keeps_a_full_animation_for_large_documents(cx: &mut gpui::TestAppContext) {
+        let mut source = String::from("* Heading\n");
+        for line in 0..600 {
+            source.push_str(&format!("body {line}\n"));
+        }
+        source.push_str("* Next\n");
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(std::path::PathBuf::from("large.org"), source.into_bytes())
+                .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.shift_tab(&ShiftTab, window, cx);
+                let animation = editor
+                    .fold_animation
+                    .as_ref()
+                    .expect("large global folds retain the animated transition");
+                assert!(animation.changed_line_count() > 256);
+                assert!(animation.collapsing);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn expanding_fold_animates_document_extent_and_commits_without_an_end_jump(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                b"* Heading\nbody one\nbody two\n* Next\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                let previous = super::super::folding::EditorFoldProjection {
+                    hidden_ranges: std::iter::once(1..3).collect(),
+                    marker_lines: HashSet::from([0]),
+                };
+                editor
+                    .display_map
+                    .set_hidden_ranges(previous.hidden_ranges.clone());
+                editor.fold_markers = Arc::new(previous.marker_lines.clone());
+                let collapsed_height = editor.display_map.total_height();
+                let collapsed_lines = editor.display_map.visible_line_count() as f32;
+
+                editor.animate_fold_layout(
+                    previous,
+                    super::super::folding::EditorFoldProjection::default(),
+                    0,
+                    window,
+                    cx,
+                );
+                assert!((editor.animated_document_height() - collapsed_height).abs() < 0.01);
+                assert!((editor.animated_visible_line_count() - collapsed_lines).abs() < 0.01);
+
+                editor.fold_animation.as_mut().unwrap().progress = 0.5;
+                let middle_height = editor.animated_document_height();
+                assert!(middle_height > collapsed_height);
+                assert!(middle_height < editor.display_map.total_height());
+
+                editor.fold_animation.as_mut().unwrap().progress = 1.0;
+                let next_heading_y = editor.animated_line_start_y(3);
+                let final_height = editor.animated_document_height();
+                let scroll_y = editor.scroll_y;
+                editor.complete_fold_animation();
+
+                assert!((editor.display_map.line_start_y(3) - next_heading_y).abs() < 0.01);
+                assert!((editor.display_map.total_height() - final_height).abs() < 0.01);
+                assert!((editor.scroll_y - scroll_y).abs() < 0.01);
+            })
+            .unwrap();
     }
 }

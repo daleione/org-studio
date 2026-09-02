@@ -1,49 +1,23 @@
 use std::collections::HashSet;
 
-use crate::org_syntax::{BlockArena, BlockId, BlockKind};
+use crate::{
+    document::{
+        OutlineCycleProjection, OutlineHeading, cycle_outline_visibility, global_outline_visibility,
+    },
+    org_syntax::{BlockArena, BlockId, BlockKind},
+};
 
 use super::{
     markdown::{MarkdownBlock, MarkdownKind},
     projection::VisualRowTree,
 };
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum GlobalVisibility {
-    #[default]
-    All,
-    Overview,
-    Contents,
-}
-
-impl GlobalVisibility {
-    pub(super) fn next(self) -> Self {
-        match self {
-            Self::All => Self::Overview,
-            Self::Overview => Self::Contents,
-            Self::Contents => Self::All,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum LocalVisibility {
-    Empty,
-    Folded,
-    Children,
-    Subtree,
-}
+pub(super) use crate::document::{GlobalVisibility, LocalVisibility};
 
 pub(super) struct LocalCycleProjection {
     pub(super) visibility: LocalVisibility,
     pub(super) visible_rows: Vec<usize>,
     pub(super) fold_markers: HashSet<BlockId>,
-}
-
-#[derive(Clone, Copy)]
-struct HeadingRow {
-    row: usize,
-    block_id: BlockId,
-    level: u16,
 }
 
 pub(super) fn global_org_visibility(
@@ -100,7 +74,7 @@ pub(super) fn cycle_markdown_subtree_visibility(
     )
 }
 
-fn org_heading_rows(rows: &VisualRowTree, blocks: &BlockArena) -> Vec<HeadingRow> {
+fn org_heading_rows(rows: &VisualRowTree, blocks: &BlockArena) -> Vec<OutlineHeading<BlockId>> {
     rows.iter()
         .enumerate()
         .filter_map(|(index, row)| {
@@ -108,16 +82,19 @@ fn org_heading_rows(rows: &VisualRowTree, blocks: &BlockArena) -> Vec<HeadingRow
             let BlockKind::Heading { level } = block.kind else {
                 return None;
             };
-            Some(HeadingRow {
-                row: index,
-                block_id: row.block_id,
+            Some(OutlineHeading {
+                position: index,
+                id: row.block_id,
                 level,
             })
         })
         .collect()
 }
 
-fn markdown_heading_rows(rows: &VisualRowTree, blocks: &[MarkdownBlock]) -> Vec<HeadingRow> {
+fn markdown_heading_rows(
+    rows: &VisualRowTree,
+    blocks: &[MarkdownBlock],
+) -> Vec<OutlineHeading<BlockId>> {
     rows.iter()
         .enumerate()
         .filter_map(|(index, row)| {
@@ -125,9 +102,9 @@ fn markdown_heading_rows(rows: &VisualRowTree, blocks: &[MarkdownBlock]) -> Vec<
             let MarkdownKind::Heading { level } = block.kind else {
                 return None;
             };
-            Some(HeadingRow {
-                row: index,
-                block_id: row.block_id,
+            Some(OutlineHeading {
+                position: index,
+                id: row.block_id,
                 level,
             })
         })
@@ -136,179 +113,37 @@ fn markdown_heading_rows(rows: &VisualRowTree, blocks: &[MarkdownBlock]) -> Vec<
 
 fn global_heading_visibility(
     row_count: usize,
-    headings: &[HeadingRow],
+    headings: &[OutlineHeading<BlockId>],
     visibility: GlobalVisibility,
 ) -> (Vec<usize>, HashSet<BlockId>) {
-    if visibility == GlobalVisibility::All {
-        return ((0..row_count).collect(), HashSet::new());
-    }
-
-    let top_level = headings.iter().map(|heading| heading.level).min();
-    let visible = headings
-        .iter()
-        .filter(|heading| {
-            visibility == GlobalVisibility::Contents || Some(heading.level) == top_level
-        })
-        .map(|heading| heading.row)
-        .collect();
-    let markers = headings
-        .iter()
-        .enumerate()
-        .filter(|(_, heading)| {
-            visibility == GlobalVisibility::Contents || Some(heading.level) == top_level
-        })
-        .filter_map(|(index, heading)| {
-            let subtree_end = heading_subtree_end(row_count, headings, index);
-            let has_hidden_rows = subtree_end > heading.row + 1;
-            let shows_child = visibility == GlobalVisibility::Contents
-                && headings
-                    .get(index + 1)
-                    .is_some_and(|next| next.level > heading.level);
-            (has_hidden_rows && !shows_child).then_some(heading.block_id)
-        })
-        .collect();
-    (visible, markers)
+    global_outline_visibility(row_count, headings, visibility)
 }
 
 fn cycle_subtree_visibility(
     row_count: usize,
-    headings: &[HeadingRow],
+    headings: &[OutlineHeading<BlockId>],
     current_visible: &[usize],
     current_markers: &HashSet<BlockId>,
     block_id: BlockId,
     continue_from_children: bool,
 ) -> Option<LocalCycleProjection> {
-    let heading_index = headings
-        .iter()
-        .position(|heading| heading.block_id == block_id)?;
-    let heading = headings[heading_index];
-    let subtree_end = heading_subtree_end(row_count, headings, heading_index);
-    if subtree_end == heading.row + 1 {
-        return Some(LocalCycleProjection {
-            visibility: LocalVisibility::Empty,
-            visible_rows: current_visible.to_vec(),
-            fold_markers: current_markers.clone(),
-        });
-    }
-
-    let direct_children = direct_child_headings(headings, heading_index, subtree_end);
-    let subtree_is_folded = current_visible
-        .iter()
-        .filter(|row| **row >= heading.row && **row < subtree_end)
-        .copied()
-        .eq(std::iter::once(heading.row));
-    let visibility = if subtree_is_folded {
-        if direct_children.is_empty() {
-            LocalVisibility::Subtree
-        } else {
-            LocalVisibility::Children
-        }
-    } else if continue_from_children {
-        LocalVisibility::Subtree
-    } else {
-        LocalVisibility::Folded
-    };
-
-    let replacement = match visibility {
-        LocalVisibility::Folded => vec![heading.row],
-        LocalVisibility::Children => {
-            let entry_end = headings
-                .get(heading_index + 1)
-                .map_or(subtree_end, |next| next.row);
-            (heading.row..entry_end)
-                .chain(direct_children.iter().map(|(_, child)| child.row))
-                .collect()
-        }
-        LocalVisibility::Subtree => (heading.row..subtree_end).collect(),
-        LocalVisibility::Empty => unreachable!(),
-    };
-    let mut visible_rows = Vec::with_capacity(
-        current_visible.len() - current_visible.partition_point(|row| *row < subtree_end)
-            + current_visible.partition_point(|row| *row < heading.row)
-            + replacement.len(),
-    );
-    visible_rows.extend(
-        current_visible
-            .iter()
-            .copied()
-            .take_while(|row| *row < heading.row),
-    );
-    visible_rows.extend(replacement);
-    visible_rows.extend(
-        current_visible
-            .iter()
-            .copied()
-            .skip_while(|row| *row < subtree_end),
-    );
-
-    let mut fold_markers = current_markers.clone();
-    for nested in headings
-        .iter()
-        .skip(heading_index)
-        .take_while(|nested| nested.row < subtree_end)
-    {
-        fold_markers.remove(&nested.block_id);
-    }
-    match visibility {
-        LocalVisibility::Folded => {
-            fold_markers.insert(block_id);
-        }
-        LocalVisibility::Children => {
-            for (child_index, child) in direct_children {
-                if heading_subtree_end(row_count, headings, child_index) > child.row + 1 {
-                    fold_markers.insert(child.block_id);
-                }
-            }
-        }
-        LocalVisibility::Subtree | LocalVisibility::Empty => {}
-    }
-
+    let OutlineCycleProjection {
+        visibility,
+        visible_positions,
+        fold_markers,
+    } = cycle_outline_visibility(
+        row_count,
+        headings,
+        current_visible,
+        current_markers,
+        block_id,
+        continue_from_children,
+    )?;
     Some(LocalCycleProjection {
         visibility,
-        visible_rows,
+        visible_rows: visible_positions,
         fold_markers,
     })
-}
-
-fn heading_subtree_end(row_count: usize, headings: &[HeadingRow], index: usize) -> usize {
-    let heading = headings[index];
-    headings
-        .iter()
-        .skip(index + 1)
-        .find(|next| next.level <= heading.level)
-        .map_or(row_count, |next| next.row)
-}
-
-fn direct_child_headings(
-    headings: &[HeadingRow],
-    index: usize,
-    subtree_end: usize,
-) -> Vec<(usize, HeadingRow)> {
-    let parent = headings[index];
-    let mut stack = vec![parent];
-    let mut children = Vec::new();
-    for (heading_index, heading) in headings
-        .iter()
-        .copied()
-        .enumerate()
-        .skip(index + 1)
-        .take_while(|(_, heading)| heading.row < subtree_end)
-    {
-        while stack
-            .last()
-            .is_some_and(|ancestor| ancestor.level >= heading.level)
-        {
-            stack.pop();
-        }
-        if stack
-            .last()
-            .is_some_and(|ancestor| ancestor.block_id == parent.block_id)
-        {
-            children.push((heading_index, heading));
-        }
-        stack.push(heading);
-    }
-    children
 }
 
 pub(super) fn visible_row_indices(

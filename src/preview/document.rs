@@ -1,8 +1,8 @@
 use super::{display_map, markdown, minimap, projection::ReadingProjection};
 use crate::{
     document::{
-        DocumentId, DocumentSession, PreparedReload, Revision, RevisionRange, SharedTextSnapshot,
-        TextSnapshot, TextStatistics,
+        DocumentFormat, DocumentId, DocumentSession, PreparedReload, Revision, RevisionRange,
+        SharedTextSnapshot, TextSnapshot, TextStatistics,
     },
     org_syntax::{BlockArena, BlockId},
 };
@@ -180,26 +180,6 @@ pub(crate) fn configured_minimap_visible() -> bool {
             _ => None,
         })
         .unwrap_or(preview_settings.minimap_enabled)
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum DocumentFormat {
-    Org,
-    Markdown,
-}
-
-impl DocumentFormat {
-    pub(crate) fn from_path(path: &std::path::Path) -> Self {
-        match path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .map(str::to_ascii_lowercase)
-            .as_deref()
-        {
-            Some("md" | "markdown") => Self::Markdown,
-            _ => Self::Org,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

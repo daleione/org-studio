@@ -5,6 +5,7 @@ pub mod editor;
 pub mod export;
 pub mod file_manager;
 pub mod file_watcher;
+mod fold_animation;
 pub mod i18n;
 pub mod input;
 pub mod keymap;

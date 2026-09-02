@@ -197,6 +197,9 @@ pub fn parse_range(snapshot: &dyn TextSnapshot, range: ByteRange) -> Option<Bloc
         let logical = line.text.trim_end_matches(['\r', '\n']);
 
         if let Some((block_id, end_marker)) = open_block.as_ref() {
+            for (_, id) in &heading_stack {
+                arena.nodes[*id as usize].source.end = line.range.end;
+            }
             let node = &mut arena.nodes[*block_id as usize];
             node.source.end = line.range.end;
             if logical.trim().eq_ignore_ascii_case(end_marker) {
@@ -759,6 +762,19 @@ mod tests {
         assert!(nodes[0].source.start <= nodes[2].source.start);
         assert!(nodes[0].source.end >= nodes[2].source.end);
         assert!(nodes[0].source.end <= nodes[4].source.start);
+    }
+
+    #[test]
+    fn heading_section_extends_through_verbatim_block_contents() {
+        let text =
+            snapshot("* Parent\n#+begin_example\n* literal heading\n#+end_example\n* Next\n");
+        let arena = parse(text.as_ref());
+        let nodes = arena.nodes();
+
+        assert!(matches!(nodes[0].kind, BlockKind::Heading { level: 1 }));
+        assert!(matches!(nodes[1].kind, BlockKind::ExampleBlock));
+        assert_eq!(nodes[0].source.end, nodes[1].source.end);
+        assert!(nodes[0].source.end <= nodes[2].source.start);
     }
 
     #[test]

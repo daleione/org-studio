@@ -10,6 +10,10 @@ use ropey::Rope;
 
 mod coordinates;
 mod file;
+mod format;
+mod headings;
+pub(crate) mod markdown;
+mod outline;
 mod revision;
 mod selection;
 mod session;
@@ -22,6 +26,12 @@ pub use file::{
     SaveState, SyncState, write_atomic,
 };
 pub(crate) use file::{TargetExpectation, resolve_symlink_target};
+pub(crate) use format::DocumentFormat;
+pub(crate) use headings::{DocumentHeading, HeadingIndex};
+pub(crate) use outline::{
+    GlobalVisibility, LocalVisibility, OutlineCycleProjection, OutlineHeading,
+    cycle_outline_visibility, global_outline_visibility, next_local_visibility,
+};
 pub use revision::{
     EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
 };
