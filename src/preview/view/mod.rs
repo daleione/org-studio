@@ -35,6 +35,15 @@ pub(in crate::preview) struct ReadingInteraction {
         super::reading_panel::ReadingTextPoint,
         super::reading_panel::ReadingTextPoint,
     )>,
+    pub(in crate::preview) row_bounds: Option<ReadingRowBounds>,
+}
+
+impl ReadingInteraction {
+    fn scoped_to_row(&self, bounds: ReadingRowBounds) -> Self {
+        let mut interaction = self.clone();
+        interaction.row_bounds = Some(bounds);
+        interaction
+    }
 }
 
 pub(crate) type ReadingActionDispatcher = Arc<
@@ -62,6 +71,8 @@ use code_block::render_code_row;
 pub(in crate::preview) use document::reading_row_selection;
 pub(crate) use document::{ReadingRenderOptions, render_reading_document};
 use markdown_block::render_markdown_block;
-pub(in crate::preview) use selectable_text::SelectableReadingText;
+pub(in crate::preview) use selectable_text::{
+    ReadingRowBounds, ReadingRowScope, SelectableReadingText,
+};
 pub(super) use styled_text::code_highlight_style;
 pub(in crate::preview) use styled_text::styled_inline_runs;

@@ -63,6 +63,19 @@ pub(crate) struct ReadingListMarker {
     pub(crate) text_signature: u64,
 }
 
+impl ReadingListMarker {
+    pub(crate) fn selection_prefix(&self) -> Option<String> {
+        self.checkbox.is_none().then(|| {
+            let label = if self.marker.ends_with('.') || self.marker.ends_with(')') {
+                self.marker.as_ref()
+            } else {
+                "•"
+            };
+            format!("{label} ")
+        })
+    }
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct ReadingProjectionResources<'a> {
     pub(crate) tables: &'a HashMap<BlockId, TableRowProjection>,

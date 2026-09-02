@@ -36,6 +36,7 @@ pub(super) fn render_code_row(
             display_row,
             selection,
         )
+        .with_row_bounds(interaction.row_bounds.clone())
         .into_any_element()
     } else {
         content.into_any_element()

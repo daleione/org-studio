@@ -1117,7 +1117,18 @@ fn selected_reading_text(
         }
         let runs = display_map.runs(*row);
         let text = display_map.table_projection(*row).map_or_else(
-            || runs.text.to_string(),
+            || {
+                let body = runs.text.to_string();
+                document
+                    .projection
+                    .rows
+                    .get(*row)
+                    .and_then(|visual| match &visual.kind {
+                        super::projection::VisualRowKind::List(marker) => marker.selection_prefix(),
+                        _ => None,
+                    })
+                    .map_or(body.clone(), |prefix| prefix + &body)
+            },
             |projection| {
                 projection
                     .columns()
@@ -1252,6 +1263,26 @@ mod text_selection_tests {
         assert_eq!(
             selected_reading_text(&document, &[0, 1], selection).as_deref(),
             Some("pha\nbeta")
+        );
+    }
+
+    #[test]
+    fn copied_list_selection_includes_the_rendered_marker() {
+        let document = markdown("1. alpha\n");
+        let rendered = "1. alpha";
+        let selection = ReadingTextSelection {
+            anchor: ReadingTextPoint { row: 0, offset: 0 },
+            head: ReadingTextPoint {
+                row: 0,
+                offset: rendered.len(),
+            },
+            pending: false,
+            suppress_click: true,
+        };
+
+        assert_eq!(
+            selected_reading_text(&document, &[0], selection).as_deref(),
+            Some(rendered)
         );
     }
 

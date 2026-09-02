@@ -71,6 +71,7 @@ pub(crate) fn render_reading_document(
         action_states,
         copy_feedback,
         text_selection,
+        row_bounds: None,
     };
     // The minimap represents the final semantic projection. The temporary flow segments belong
     // only to the main list; exposing them here causes a second tile refresh when the animation
@@ -154,6 +155,8 @@ pub(crate) fn render_reading_document(
                             && fold_markers.contains(&row.block_id)
                             && !is_suppressed_marker;
                         let entity_for_click = panel_entity.clone();
+                        let row_interaction =
+                            interaction.scoped_to_row(super::ReadingRowBounds::default());
                         let row_element = render_reading_row(
                             &document,
                             actual_index,
@@ -164,7 +167,7 @@ pub(crate) fn render_reading_document(
                                 zoom,
                                 style,
                                 table_scroll_handles: &table_scroll_handles,
-                                interaction: Some(&interaction),
+                                interaction: Some(&row_interaction),
                                 extra_bottom_padding: row_index + 1 == visible_rows.len()
                                     && actual_index + 1 < document.projection.rows.len(),
                             },
@@ -366,7 +369,8 @@ fn render_reading_row(
         style,
         table_scroll,
     };
-    div()
+    let row_bounds = interaction.and_then(|interaction| interaction.row_bounds.clone());
+    let content = div()
         .w_full()
         .min_h(px(minimum_height))
         .flex()
@@ -407,7 +411,13 @@ fn render_reading_row(
                             )
                         }),
                 ),
-        )
+        );
+    match row_bounds {
+        Some(row_bounds) => div()
+            .w_full()
+            .child(super::ReadingRowScope::new(row_bounds, content)),
+        None => content,
+    }
 }
 
 fn render_block(
@@ -428,7 +438,11 @@ fn render_block(
     let display_runs = display_map.runs(display_row);
     let row_layout = display_map.layout(display_row, style).scaled(context.zoom);
     if row.blank {
-        return div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)));
+        return selectable_blank_row(
+            display_row,
+            row_layout.fixed_height.unwrap_or(row_layout.min_height),
+            interaction,
+        );
     }
     let text = display_runs.text.clone();
     let inline = || reading_inline(document, display_row, &display_runs, style, interaction);
@@ -445,9 +459,11 @@ fn render_block(
     }
 
     match &block.kind {
-        BlockKind::BlankLine => {
-            div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)))
-        }
+        BlockKind::BlankLine => selectable_blank_row(
+            display_row,
+            row_layout.fixed_height.unwrap_or(row_layout.min_height),
+            interaction,
+        ),
         BlockKind::Heading { level } => {
             let heading_index = (*level as usize).saturating_sub(1);
             let source = document.text.copy_range(row.content.range);
@@ -829,12 +845,33 @@ fn reading_list_marker(
             });
     }
     let ordered = marker.marker.ends_with('.') || marker.marker.ends_with(')');
-    let label = if ordered {
-        marker.marker.to_string()
-    } else {
-        "•".to_owned()
-    };
-    let width = reading_marker_width(&label, ordered);
+    let prefix = marker
+        .selection_prefix()
+        .expect("non-checkbox list markers have a selectable prefix");
+    let label = prefix.trim_end();
+    let width = reading_marker_width(label, ordered);
+    let marker_content = interaction.map_or_else(
+        || gpui::StyledText::new(prefix.clone()).into_any_element(),
+        |interaction| {
+            let content_len = document
+                .display_map
+                .as_ref()
+                .map_or(0, |display_map| display_map.runs(display_row).text.len());
+            let row_text_len = prefix.len() + content_len;
+            let selection =
+                reading_segment_selection(interaction, display_row, row_text_len, 0..prefix.len());
+            super::SelectableReadingText::new(
+                ("reading-list-prefix", display_row),
+                gpui::StyledText::new(prefix.clone()),
+                interaction.panel.clone(),
+                display_row,
+                selection,
+            )
+            .with_row_text_len(row_text_len)
+            .restrict_drag_to_bounds()
+            .into_any_element()
+        },
+    );
     div()
         .id(("reading-list-marker", display_row))
         .w(px(width))
@@ -844,7 +881,7 @@ fn reading_list_marker(
         .when(!ordered, |element| element.text_center())
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(palette.accent_text))
-        .child(label)
+        .child(marker_content)
 }
 
 fn reading_marker_width(label: &str, ordered: bool) -> f32 {
@@ -960,14 +997,32 @@ pub(crate) fn reading_inline(
     let Some(interaction) = interaction.cloned() else {
         return styled.into_any_element();
     };
-    let selection = reading_row_selection(&interaction, display_row, runs.text.len());
+    let text_offset = document
+        .projection
+        .rows
+        .get(display_row)
+        .and_then(|row| match &row.kind {
+            VisualRowKind::List(marker) => marker.selection_prefix(),
+            _ => None,
+        })
+        .map_or(0, |prefix| prefix.len());
+    let row_text_len = text_offset + runs.text.len();
+    let selection = reading_segment_selection(
+        &interaction,
+        display_row,
+        row_text_len,
+        text_offset..row_text_len,
+    );
     let selectable = super::SelectableReadingText::new(
         ("reading-inline", display_row),
         styled,
         interaction.panel.clone(),
         display_row,
         selection,
-    );
+    )
+    .with_text_offset(text_offset)
+    .with_row_text_len(row_text_len)
+    .with_row_bounds(interaction.row_bounds.clone());
     if runs.links.is_empty() {
         return selectable.into_any_element();
     }
@@ -1009,7 +1064,49 @@ pub(in crate::preview) fn reading_row_selection(
     }
     let range_start = if row == start.row { start.offset } else { 0 }.min(text_len);
     let range_end = if row == end.row { end.offset } else { text_len }.min(text_len);
-    (range_start < range_end).then_some((range_start..range_end, row < end.row))
+    let include_newline = row < end.row;
+    (range_start < range_end || include_newline)
+        .then_some((range_start..range_end, include_newline))
+}
+
+fn reading_segment_selection(
+    interaction: &ReadingInteraction,
+    row: usize,
+    row_text_len: usize,
+    segment: std::ops::Range<usize>,
+) -> Option<(std::ops::Range<usize>, bool)> {
+    reading_row_selection(interaction, row, row_text_len).and_then(
+        |(selection, include_newline)| {
+            let start = selection.start.max(segment.start);
+            let end = selection.end.min(segment.end);
+            let owns_newline =
+                include_newline && selection.end == row_text_len && segment.end == row_text_len;
+            (start < end || (owns_newline && start == end))
+                .then_some((start - segment.start..end - segment.start, owns_newline))
+        },
+    )
+}
+
+pub(super) fn selectable_blank_row(
+    display_row: usize,
+    height: f32,
+    interaction: Option<&ReadingInteraction>,
+) -> gpui::Div {
+    let Some(interaction) = interaction else {
+        return div().w_full().h(px(height));
+    };
+    let selection = reading_row_selection(interaction, display_row, 0);
+    div().w_full().h(px(height)).child(
+        super::SelectableReadingText::new(
+            ("reading-blank", display_row),
+            gpui::StyledText::new(""),
+            interaction.panel.clone(),
+            display_row,
+            selection,
+        )
+        .with_row_bounds(interaction.row_bounds.clone())
+        .with_minimum_height(height),
+    )
 }
 
 fn selectable_plain_text(
@@ -1028,6 +1125,7 @@ fn selectable_plain_text(
         display_row,
         selection,
     )
+    .with_row_bounds(interaction.row_bounds.clone())
     .into_any_element()
 }
 

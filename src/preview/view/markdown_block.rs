@@ -1,4 +1,6 @@
-use super::document::{reading_code_label, reading_fallback, reading_inline, render_list_item};
+use super::document::{
+    reading_code_label, reading_fallback, reading_inline, render_list_item, selectable_blank_row,
+};
 use super::{
     Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingInteraction, ReadingRowContext, div,
     img, markdown, px, render_code_row, render_table_row, resolve_image_path, rgb,
@@ -26,9 +28,11 @@ pub(super) fn render_markdown_block(
     let text = display_runs.text.clone();
     let inline = || reading_inline(document, display_row, &display_runs, style, interaction);
     match &block.kind {
-        MarkdownKind::Blank => {
-            div().h(px(row_layout.fixed_height.unwrap_or(row_layout.min_height)))
-        }
+        MarkdownKind::Blank => selectable_blank_row(
+            display_row,
+            row_layout.fixed_height.unwrap_or(row_layout.min_height),
+            interaction,
+        ),
         MarkdownKind::Heading { level } => {
             let index = (*level as usize).saturating_sub(1).min(3);
             div()
