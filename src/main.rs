@@ -9,9 +9,11 @@ use org_studio::{
     editor::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     perf_tracing,
     preview::{
-        ExportDocument, InitialDocumentLoad, OpenDocument, QuitApplication, ReloadDocument,
-        SaveDocument, SaveDocumentAs, ShowEditor, ShowHome, ShowReading, ShowSplit, ToggleMinimap,
-        ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish, preload_initial_document,
+        DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, ExportDocument,
+        IncreaseContentFontSize, InitialDocumentLoad, OpenDocument, QuitApplication,
+        ReloadDocument, ResetContentFontSize, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome,
+        ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
+        UseEnglish, preload_initial_document,
     },
 };
 
@@ -162,6 +164,26 @@ fn main() {
             KeyBinding::new("cmd-2", ShowReading, None),
             KeyBinding::new("cmd-3", ShowSplit, None),
             KeyBinding::new("alt-z", ToggleSoftWrap, None),
+            KeyBinding::new(
+                "cmd-=",
+                IncreaseContentFontSize,
+                Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
+            ),
+            KeyBinding::new(
+                "cmd-+",
+                IncreaseContentFontSize,
+                Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
+            ),
+            KeyBinding::new(
+                "cmd--",
+                DecreaseContentFontSize,
+                Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
+            ),
+            KeyBinding::new(
+                "cmd-0",
+                ResetContentFontSize,
+                Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
+            ),
         ]);
         cx.set_menus(app_menus());
         let displays = cx.displays();
@@ -248,6 +270,10 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::action("Split", ShowSplit),
             MenuItem::separator(),
             MenuItem::action("Toggle Soft Wrap", ToggleSoftWrap),
+            MenuItem::separator(),
+            MenuItem::action("Increase Content Font Size", IncreaseContentFontSize),
+            MenuItem::action("Decrease Content Font Size", DecreaseContentFontSize),
+            MenuItem::action("Reset Content Font Size", ResetContentFontSize),
             MenuItem::separator(),
             MenuItem::action("Toggle Sidebar", ToggleSidebar),
             MenuItem::action("Toggle Minimap", ToggleMinimap),

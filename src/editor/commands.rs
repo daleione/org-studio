@@ -326,7 +326,7 @@ impl SemanticEditor {
         }
     }
 
-    fn finish_fold_animation(&mut self) {
+    pub(super) fn finish_fold_animation(&mut self) {
         let Some(animation) = self.fold_animation.take() else {
             return;
         };
@@ -1190,7 +1190,8 @@ impl SemanticEditor {
         let (top, caret_height) = measured.unwrap_or_else(|| {
             (
                 self.animated_line_start_y(line.0),
-                self.animated_line_height_px(line.0).min(LINE_HEIGHT),
+                self.animated_line_height_px(line.0)
+                    .min(self.base_line_height()),
             )
         });
         let bottom = top + caret_height;
@@ -1342,8 +1343,8 @@ impl Render for SemanticEditor {
             .overflow_hidden()
             .bg(rgb(current_theme().background))
             .font_family(super::EDITOR_FONT_FAMILY)
-            .text_size(px(15.0))
-            .line_height(px(LINE_HEIGHT))
+            .text_size(px(self.font_size_px()))
+            .line_height(px(self.base_line_height()))
             .cursor(gpui::CursorStyle::IBeam)
             .on_action(cx.listener(Self::delete_backward))
             .on_action(cx.listener(Self::delete_forward))
@@ -1380,7 +1381,8 @@ impl Render for SemanticEditor {
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_mouse_up_out(MouseButton::Left, cx.listener(Self::on_mouse_up))
             .on_scroll_wheel(move |event, _, cx| {
-                let delta = event.delta.pixel_delta(px(LINE_HEIGHT));
+                let line_height = scroll_entity.read(cx).base_line_height();
+                let delta = event.delta.pixel_delta(px(line_height));
                 scroll_entity.update(cx, |this, cx| {
                     this.scroll(f32::from(delta.x), f32::from(delta.y), cx)
                 });

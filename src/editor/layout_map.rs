@@ -114,6 +114,20 @@ impl Default for EditorLayoutMap {
 }
 
 impl EditorLayoutMap {
+    pub(super) fn set_base_line_height(&mut self, line_height: f32) -> bool {
+        let line_height = line_height.max(1.0);
+        if (self.line_height - line_height).abs() < f32::EPSILON {
+            return false;
+        }
+        self.line_height = line_height;
+        self.clear_layout();
+        true
+    }
+
+    pub(super) fn base_line_height(&self) -> f32 {
+        self.line_height
+    }
+
     pub(super) fn soft_wrap(&self) -> bool {
         self.soft_wrap
     }

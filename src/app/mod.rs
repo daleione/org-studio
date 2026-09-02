@@ -70,6 +70,7 @@ pub struct DocumentWorkspaceState {
     pub(crate) active_pane: PaneSide,
     left_surface: PaneSurface,
     right_surface: PaneSurface,
+    split_initialized: bool,
 }
 
 impl Default for DocumentWorkspaceState {
@@ -79,6 +80,7 @@ impl Default for DocumentWorkspaceState {
             active_pane: PaneSide::Left,
             left_surface: PaneSurface::Editor,
             right_surface: PaneSurface::Reading,
+            split_initialized: false,
         }
     }
 }
@@ -104,6 +106,14 @@ impl DocumentWorkspaceState {
 
     pub(crate) const fn is_split(self) -> bool {
         matches!(self.layout, WorkspaceLayout::Split)
+    }
+
+    pub(crate) fn enter_split(&mut self) -> Option<(PaneSide, PaneSide)> {
+        let inheritance =
+            (!self.split_initialized).then(|| (self.active_pane, self.active_pane.other()));
+        self.split_initialized = true;
+        self.layout = WorkspaceLayout::Split;
+        inheritance
     }
 
     pub(crate) fn pane_is_visible(self, pane: PaneSide) -> bool {
@@ -272,6 +282,7 @@ pub struct WorkspaceWindow {
     pub(crate) content_route: ContentRoute,
     pub(crate) document_workspace: DocumentWorkspaceState,
     pub(crate) document_view_preferences: DocumentViewPreferences,
+    pub(crate) content_font_sizes: PanePair<crate::typography::ContentFontSize>,
     pub(crate) split_resize: Option<split_layout::ResizeSession>,
     pub(crate) soft_wrap: bool,
     pub(crate) minimap_visible: bool,

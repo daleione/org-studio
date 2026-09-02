@@ -250,6 +250,7 @@ pub struct SemanticEditor {
     selection_utf16_reversed: bool,
     marked: Option<PlatformRange>,
     composition: Option<Composition>,
+    content_font_size: crate::typography::ContentFontSize,
     display_map: EditorLayoutMap,
     folds: folding::EditorFoldState,
     fold_markers: Arc<HashSet<u64>>,
@@ -560,6 +561,7 @@ impl SemanticEditor {
             selection_utf16_reversed: false,
             marked: None,
             composition: None,
+            content_font_size: crate::typography::ContentFontSize::default(),
             display_map,
             folds: folding::EditorFoldState::default(),
             fold_markers: Arc::new(HashSet::new()),
@@ -609,6 +611,56 @@ impl SemanticEditor {
             self.minimap.invalidate_raster();
             cx.notify();
         }
+    }
+
+    pub(crate) fn content_font_size(&self) -> crate::typography::ContentFontSize {
+        self.content_font_size
+    }
+
+    pub(super) fn font_size_px(&self) -> f32 {
+        self.content_font_size.get() as f32
+    }
+
+    pub(super) fn base_line_height(&self) -> f32 {
+        LINE_HEIGHT * self.content_font_size.scale()
+    }
+
+    pub(crate) fn set_content_font_size(
+        &mut self,
+        font_size: crate::typography::ContentFontSize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if self.content_font_size == font_size {
+            return false;
+        }
+        self.finish_fold_animation();
+        let viewport_height = self
+            .viewport
+            .map_or(0.0, |viewport| f32::from(viewport.size.height));
+        let was_at_end = self.viewport.is_some()
+            && self.scroll_y + viewport_height + 0.5 >= self.display_map.total_height();
+        let anchor_line = self.display_map.line_at_y(self.scroll_y);
+        let anchor_start = self.display_map.line_start_y(anchor_line);
+        let anchor_fraction =
+            (self.scroll_y - anchor_start) / self.display_map.line_height_px(anchor_line).max(1.0);
+
+        self.content_font_size = font_size;
+        self.display_map
+            .set_base_line_height(self.base_line_height());
+        let anchored = self.display_map.line_start_y(anchor_line)
+            + anchor_fraction.clamp(0.0, 1.0) * self.display_map.line_height_px(anchor_line);
+        let max_scroll = (self.display_map.total_height() - viewport_height).max(0.0);
+        self.scroll_y = if was_at_end {
+            max_scroll
+        } else {
+            anchored.clamp(0.0, max_scroll)
+        };
+        self.shape_cache.clear();
+        self.hit_rows = Arc::from([]);
+        self.vertical_goal_x = None;
+        self.minimap.note_viewport_changed();
+        cx.notify();
+        true
     }
 
     pub(crate) fn set_minimap(
@@ -799,6 +851,97 @@ mod tests {
         assert_eq!(animation.scale(), 1.0);
         animation.progress = 0.0;
         assert_eq!(animation.scale(), 0.0);
+    }
+
+    #[gpui::test]
+    fn content_font_size_updates_editor_typography_and_layout_baseline(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("font-size.org"), b"one\ntwo\n".to_vec())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+        let minimap_line_height = cx.read(|cx| {
+            editor
+                .read(cx)
+                .minimap
+                .line_height(crate::minimap::Density::Compact)
+        });
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.content_font_size().get(), 15);
+            assert_eq!(editor.font_size_px(), 15.0);
+            assert_eq!(editor.base_line_height(), 22.0);
+            assert_eq!(editor.display_map.base_line_height(), 22.0);
+        });
+
+        editor.update(cx, |editor, cx| {
+            assert!(editor.set_content_font_size(crate::typography::ContentFontSize::new(30), cx,));
+            assert!(
+                !editor.set_content_font_size(crate::typography::ContentFontSize::new(30), cx,)
+            );
+        });
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.content_font_size().get(), 30);
+            assert_eq!(editor.font_size_px(), 30.0);
+            assert_eq!(editor.base_line_height(), 44.0);
+            assert_eq!(editor.display_map.base_line_height(), 44.0);
+        });
+
+        for size in [5, 96] {
+            editor.update(cx, |editor, cx| {
+                assert!(
+                    editor
+                        .set_content_font_size(crate::typography::ContentFontSize::new(size), cx,)
+                );
+            });
+            cx.read(|cx| {
+                let editor = editor.read(cx);
+                let expected_line_height =
+                    22.0 * size as f32 / crate::typography::ContentFontSize::DEFAULT as f32;
+                assert_eq!(editor.content_font_size().get(), size);
+                assert_eq!(editor.font_size_px(), size as f32);
+                assert!((editor.base_line_height() - expected_line_height).abs() < 0.001);
+                assert!(
+                    (editor.display_map.base_line_height() - expected_line_height).abs() < 0.001
+                );
+                assert_eq!(
+                    editor.minimap.line_height(crate::minimap::Density::Compact),
+                    minimap_line_height
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn content_font_size_preserves_editor_top_anchor_and_bottom_pin(cx: &mut gpui::TestAppContext) {
+        let source = (0..100)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("font-anchor.org"), source.into_bytes())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+
+        editor.update(cx, |editor, cx| {
+            editor.viewport = Some(Bounds {
+                origin: gpui::point(px(0.0), px(0.0)),
+                size: gpui::size(px(800.0), px(220.0)),
+            });
+            editor.scroll_y = editor.display_map.line_start_y(40) + 5.5;
+            assert!(editor.set_content_font_size(crate::typography::ContentFontSize::new(30), cx,));
+            assert_eq!(editor.display_map.line_at_y(editor.scroll_y), 40);
+            assert!((editor.scroll_y - editor.display_map.line_start_y(40) - 11.0).abs() < 0.001);
+
+            editor.scroll_y = (editor.display_map.total_height() - 220.0).max(0.0);
+            assert!(editor.set_content_font_size(crate::typography::ContentFontSize::new(5), cx,));
+            let expected_bottom = (editor.display_map.total_height() - 220.0).max(0.0);
+            assert!((editor.scroll_y - expected_bottom).abs() < 0.001);
+        });
     }
 
     #[gpui::test]

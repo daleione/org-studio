@@ -197,7 +197,8 @@ impl Element for EditorElement {
             editor.minimap.scale_factor = window.scale_factor().max(1.0);
         });
         let digits = snapshot.len_lines().max(1).ilog10() + 1;
-        let gutter_width = digits as f32 * 9.0 + GUTTER_PADDING * 2.0;
+        let editor_font_size = self.editor.read(cx).font_size_px();
+        let gutter_width = digits as f32 * editor_font_size * 0.6 + GUTTER_PADDING * 2.0;
         let minimap_width = if self.editor.read(cx).minimap.visible {
             self.editor.read(cx).minimap.width
         } else {
@@ -302,7 +303,9 @@ impl Element for EditorElement {
             let line_style = style_snapshot
                 .line(line_number)
                 .expect("visible style snapshot covers every visible source line");
-            let metrics = line_style.metrics;
+            let metrics = line_style
+                .metrics
+                .scaled(editor.content_font_size().scale());
             let display_text = folded_display_text(display.text.clone(), folded);
             let text: gpui::SharedString = display_text.into();
             let base_run = TextRun {
@@ -930,7 +933,8 @@ fn build_minimap(
     ));
     for mark in editor.minimap.search_marks.iter().take(2_000) {
         if let Ok(line) = snapshot.line_index_at(mark.start) {
-            let line_unit = editor.display_map.line_start_y(line.0) / super::LINE_HEIGHT;
+            let line_unit = editor.display_map.line_start_y(line.0)
+                / editor.display_map.base_line_height().max(1.0);
             let y = density.edge_padding() + (line_unit - geometry.content_top) * line_height;
             if y < 0.0 || y > geometry.interaction_height {
                 continue;

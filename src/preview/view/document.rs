@@ -483,13 +483,16 @@ fn render_block(
                 .children(
                     parts
                         .todo
-                        .map(|todo| reading_chip(todo, palette.keyword, style)),
+                        .map(|todo| reading_chip(todo, palette.keyword, style, context.zoom)),
                 )
-                .children(
-                    parts.priority.map(|priority| {
-                        reading_chip(format!("P{priority}"), palette.attribute, style)
-                    }),
-                )
+                .children(parts.priority.map(|priority| {
+                    reading_chip(
+                        format!("P{priority}"),
+                        palette.attribute,
+                        style,
+                        context.zoom,
+                    )
+                }))
                 .child(
                     div()
                         .flex_1()
@@ -509,13 +512,13 @@ fn render_block(
                 .children(
                     parts
                         .cookie
-                        .map(|cookie| reading_chip(cookie, palette.meta, style)),
+                        .map(|cookie| reading_chip(cookie, palette.meta, style, context.zoom)),
                 )
                 .children(
                     parts
                         .tags
                         .into_iter()
-                        .map(|tag| reading_chip(tag, palette.link, style)),
+                        .map(|tag| reading_chip(tag, palette.link, style, context.zoom)),
                 )
         }
         BlockKind::Paragraph => {
@@ -730,14 +733,15 @@ fn reading_chip(
     text: impl Into<gpui::SharedString>,
     color: u32,
     style: super::PreviewStyle,
+    zoom: f32,
 ) -> gpui::Div {
     div()
         .flex_none()
-        .px_1()
-        .rounded_sm()
+        .px(px(4.0 * zoom))
+        .rounded(px((style.spacing.radius * zoom).clamp(2.0, 18.0)))
         .bg(rgb(style.palette.surface))
         .font_family(style.typography.code_family)
-        .text_size(px(10.0))
+        .text_size(px(10.0 * zoom))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
         .child(text.into())
@@ -765,12 +769,13 @@ pub(crate) fn render_list_item(
             return reading_fallback(content, font_size, line_height, style);
         }
     };
+    let scale = font_size / style.typography.body_size.max(1.0);
     div()
         .w_full()
-        .pl(px(f32::from(marker.indent).min(96.0)))
+        .pl(px(f32::from(marker.indent).min(96.0) * scale))
         .flex()
         .items_start()
-        .gap_2()
+        .gap(px(8.0 * scale))
         .text_size(px(font_size))
         .line_height(px(line_height))
         .text_color(rgb(palette.foreground))
@@ -779,6 +784,7 @@ pub(crate) fn render_list_item(
             display_row,
             marker,
             style,
+            scale,
             interaction,
         ))
         .child(div().flex_1().min_w_0().child(content))
@@ -789,6 +795,7 @@ fn reading_list_marker(
     display_row: usize,
     marker: &ReadingListMarker,
     style: super::PreviewStyle,
+    scale: f32,
     interaction: Option<&ReadingInteraction>,
 ) -> gpui::Stateful<gpui::Div> {
     let palette = style.palette;
@@ -821,20 +828,21 @@ fn reading_list_marker(
             },
         };
         let interaction = interaction.cloned();
+        let checkbox_size = (style.spacing.checkbox_size * scale).max(14.0);
         return div()
             .id(("reading-checkbox", display_row))
-            .mt(px(3.0))
-            .size(px(style.spacing.checkbox_size))
+            .mt(px(3.0 * scale))
+            .size(px(checkbox_size))
             .flex_none()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(style.spacing.radius.clamp(2.0, 3.0)))
+            .rounded(px((style.spacing.radius * scale).clamp(2.0, 12.0)))
             .border_1()
             .border_color(rgb(foreground))
             .bg(rgb(background))
             .font_family(style.typography.code_family)
-            .text_size(px(11.0))
+            .text_size(px((11.0 * scale).max(5.0)))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(foreground))
             .child(label)
@@ -849,7 +857,7 @@ fn reading_list_marker(
         .selection_prefix()
         .expect("non-checkbox list markers have a selectable prefix");
     let label = prefix.trim_end();
-    let width = reading_marker_width(label, ordered);
+    let width = reading_marker_width(label, ordered) * scale;
     let marker_content = interaction.map_or_else(
         || gpui::StyledText::new(prefix.clone()).into_any_element(),
         |interaction| {

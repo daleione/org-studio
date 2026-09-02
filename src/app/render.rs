@@ -9,11 +9,13 @@ use crate::{
     app::{WorkspaceLoadState, WorkspaceWindow},
     editor::Copy,
     preview::{
-        EXPORT_DOCUMENT_COMMAND, ExportDocument, OPEN_DOCUMENT_COMMAND, OpenDocument,
+        DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, EXPORT_DOCUMENT_COMMAND,
+        ExportDocument, IncreaseContentFontSize, OPEN_DOCUMENT_COMMAND, OpenDocument,
         OpenFileManager, QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND,
-        ReloadDocument, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
-        SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome, ShowReading,
-        ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish,
+        ReloadDocument, ResetContentFontSize, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
+        SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor,
+        ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
+        UseEnglish,
     },
     theme::current_theme,
 };
@@ -111,6 +113,7 @@ impl Render for WorkspaceWindow {
         let resizing_split = self.split_resize.is_some();
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
+        let content_font_size_actions_enabled = self.content_font_size_command_available();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
         let split_resize_entity = entity.clone();
@@ -123,6 +126,9 @@ impl Render for WorkspaceWindow {
             .text_color(rgb(current_theme().foreground))
             .font_family("Menlo")
             .text_size(px(14.0))
+            .when(content_font_size_actions_enabled, |view| {
+                view.key_context(DOCUMENT_WORKSPACE_KEY_CONTEXT)
+            })
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -161,6 +167,17 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ShowReading, _, cx| this.show_reading(cx)))
             .on_action(cx.listener(|this, _: &ShowSplit, _, cx| this.show_split(cx)))
             .on_action(cx.listener(|this, _: &ToggleSoftWrap, _, cx| this.toggle_soft_wrap(cx)))
+            .on_action(cx.listener(|this, _: &IncreaseContentFontSize, _, cx| {
+                this.increase_content_font_size(cx)
+            }))
+            .on_action(cx.listener(|this, _: &DecreaseContentFontSize, _, cx| {
+                this.decrease_content_font_size(cx)
+            }))
+            .on_action(
+                cx.listener(|this, _: &ResetContentFontSize, _, cx| {
+                    this.reset_content_font_size(cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &UseEnglish, _, cx| {
                 this.set_language(crate::i18n::Language::English, cx)
             }))

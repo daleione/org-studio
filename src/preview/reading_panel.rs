@@ -33,7 +33,7 @@ pub(crate) struct ReadingPreviewPanel {
     fold_animation_revision: u64,
     fold_animation: Option<FoldTransition>,
     geometry_revision: u64,
-    zoom: f32,
+    content_font_size: crate::typography::ContentFontSize,
     viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
@@ -139,7 +139,7 @@ impl ReadingPreviewPanel {
             fold_animation_revision: 0,
             fold_animation: None,
             geometry_revision: 0,
-            zoom: 1.0,
+            content_font_size: crate::typography::ContentFontSize::default(),
             viewport_revision_key: None,
             minimap_pending_seek: None,
             minimap_seek_scheduled: false,
@@ -236,25 +236,10 @@ impl ReadingPreviewPanel {
             return;
         }
         self.discard_fold_animation();
-        let was_at_bottom =
-            layout_changed && minimap::list_viewport_reaches_document_end(&self.list_state);
-        let source_anchor = layout_changed.then(|| self.top_source_anchor()).flatten();
         if layout_changed {
-            self.geometry_revision = self.geometry_revision.wrapping_add(1);
-            self.list_state
-                .remeasure_items(0..self.list_state.item_count());
-            if was_at_bottom && self.list_state.item_count() > 0 {
-                self.list_state.scroll_to(ListOffset {
-                    item_ix: self.list_state.item_count() - 1,
-                    offset_in_item: px(0.0),
-                });
-            } else if let Some((offset, offset_in_item)) = source_anchor {
-                self.scroll_to_source_offset_with_offset(offset, offset_in_item);
-            }
+            self.remeasure_all_preserving_viewport();
         }
-        self.minimap_pending_seek = None;
-        self.minimap_seek_scheduled = false;
-        self.minimap_state.invalidate_style();
+        self.invalidate_minimap_layout();
         cx.notify();
     }
 
@@ -337,18 +322,43 @@ impl ReadingPreviewPanel {
     }
 
     pub(crate) fn zoom(&self) -> f32 {
-        self.zoom
+        self.content_font_size.scale()
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_zoom(&mut self, zoom: f32) -> bool {
-        let zoom = zoom.clamp(0.75, 2.0);
-        if (self.zoom - zoom).abs() < f32::EPSILON {
+    pub(crate) fn set_content_font_size(
+        &mut self,
+        font_size: crate::typography::ContentFontSize,
+    ) -> bool {
+        if self.content_font_size == font_size {
             return false;
         }
-        self.zoom = zoom;
-        self.bump_geometry_revision();
+        self.discard_fold_animation();
+        self.content_font_size = font_size;
+        self.remeasure_all_preserving_viewport();
+        self.invalidate_minimap_layout();
         true
+    }
+
+    fn remeasure_all_preserving_viewport(&mut self) {
+        let was_at_bottom = minimap::list_viewport_reaches_document_end(&self.list_state);
+        let source_anchor = self.top_source_anchor();
+        self.bump_geometry_revision();
+        self.list_state
+            .remeasure_items(0..self.list_state.item_count());
+        if was_at_bottom && self.list_state.item_count() > 0 {
+            self.list_state.scroll_to(ListOffset {
+                item_ix: self.list_state.item_count() - 1,
+                offset_in_item: px(0.0),
+            });
+        } else if let Some((offset, offset_in_item)) = source_anchor {
+            self.scroll_to_source_offset_with_offset(offset, offset_in_item);
+        }
+    }
+
+    fn invalidate_minimap_layout(&mut self) {
+        self.minimap_pending_seek = None;
+        self.minimap_seek_scheduled = false;
+        self.minimap_state.invalidate_style();
     }
 
     #[cfg(test)]

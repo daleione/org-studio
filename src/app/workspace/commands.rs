@@ -178,6 +178,15 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ToggleSoftWrap) => {
                 self.toggle_soft_wrap(cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::IncreaseContentFontSize) => {
+                self.increase_content_font_size(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::DecreaseContentFontSize) => {
+                self.decrease_content_font_size(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ResetContentFontSize) => {
+                self.reset_content_font_size(cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle) => {
                 self.cycle_global_visibility_animated(window, cx);
                 cx.notify();
@@ -243,7 +252,10 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn show_split(&mut self, cx: &mut Context<Self>) {
-        self.document_workspace.layout = crate::app::WorkspaceLayout::Split;
+        if let Some((source, target)) = self.document_workspace.enter_split() {
+            let inherited = *self.content_font_sizes.get(source);
+            *self.content_font_sizes.get_mut(target) = inherited;
+        }
         self.cancel_split_resize();
         self.reconcile_visible_editor_panes(cx);
         self.reconcile_visible_reading_panes(cx);
@@ -251,6 +263,67 @@ impl WorkspaceWindow {
         self.install_document_keymap();
         self.focus_active_surface(cx);
         cx.notify();
+    }
+
+    pub(crate) fn increase_content_font_size(&mut self, cx: &mut Context<Self>) {
+        if !self.content_font_size_command_available() {
+            return;
+        }
+        let pane = self.document_workspace.active_pane;
+        let next = self.content_font_sizes.get(pane).increase();
+        self.set_content_font_size(pane, next, cx);
+    }
+
+    pub(crate) fn decrease_content_font_size(&mut self, cx: &mut Context<Self>) {
+        if !self.content_font_size_command_available() {
+            return;
+        }
+        let pane = self.document_workspace.active_pane;
+        let next = self.content_font_sizes.get(pane).decrease();
+        self.set_content_font_size(pane, next, cx);
+    }
+
+    pub(crate) fn reset_content_font_size(&mut self, cx: &mut Context<Self>) {
+        if !self.content_font_size_command_available() {
+            return;
+        }
+        self.set_content_font_size(
+            self.document_workspace.active_pane,
+            crate::typography::ContentFontSize::reset(),
+            cx,
+        );
+    }
+
+    pub(crate) fn content_font_size_command_available(&self) -> bool {
+        matches!(self.content_route, crate::app::ContentRoute::Document)
+            && self.state.ready().is_some()
+            && self.export.panel().is_none()
+    }
+
+    fn set_content_font_size(
+        &mut self,
+        pane: crate::app::PaneSide,
+        font_size: crate::typography::ContentFontSize,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if *self.content_font_sizes.get(pane) == font_size {
+            return false;
+        }
+        *self.content_font_sizes.get_mut(pane) = font_size;
+        let editor = self.editor(pane);
+        let reader = self.reading_panel_for(pane);
+        if let Some(editor) = editor {
+            editor.update(cx, |editor, cx| {
+                editor.set_content_font_size(font_size, cx);
+            });
+        }
+        if let Some(reader) = reader {
+            reader.update(cx, |reader, _| {
+                reader.set_content_font_size(font_size);
+            });
+        }
+        cx.notify();
+        true
     }
 
     pub(crate) fn toggle_pane_surface(

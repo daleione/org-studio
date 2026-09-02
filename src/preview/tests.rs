@@ -375,7 +375,7 @@ fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::Te
         workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
         let ready = workspace.state.ready().unwrap();
         ready.readers.left.as_ref().unwrap().update(cx, |panel, _| {
-            assert!(panel.set_zoom(1.25));
+            assert!(panel.set_content_font_size(crate::typography::ContentFontSize::new(18)));
         });
         ready
             .readers
@@ -383,14 +383,300 @@ fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::Te
             .as_ref()
             .unwrap()
             .update(cx, |panel, _| {
-                assert!(panel.set_zoom(0.9));
+                assert!(panel.set_content_font_size(crate::typography::ContentFontSize::new(14)));
             });
 
         workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
         workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
         let ready = workspace.state.ready().unwrap();
-        assert_eq!(ready.readers.left.as_ref().unwrap().read(cx).zoom(), 1.25);
-        assert_eq!(ready.readers.right.as_ref().unwrap().read(cx).zoom(), 0.9);
+        assert_eq!(
+            ready.readers.left.as_ref().unwrap().read(cx).zoom(),
+            18.0 / 15.0
+        );
+        assert_eq!(
+            ready.readers.right.as_ref().unwrap().read(cx).zoom(),
+            14.0 / 15.0
+        );
+    });
+}
+
+#[gpui::test]
+fn content_font_size_is_per_pane_and_shared_by_editor_and_reading(cx: &mut gpui::TestAppContext) {
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("pane-font-size.org", "* Heading\nbody\n",)),
+            cx,
+        ));
+
+        workspace.increase_content_font_size(cx);
+        assert_eq!(workspace.content_font_sizes.left.get(), 16);
+        assert_eq!(workspace.content_font_sizes.right.get(), 15);
+        let ready = workspace.state.ready().unwrap();
+        assert_eq!(
+            ready
+                .editors
+                .left
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .content_font_size()
+                .get(),
+            16
+        );
+        workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
+        let ready = workspace.state.ready().unwrap();
+        assert_eq!(
+            ready.readers.left.as_ref().unwrap().read(cx).zoom(),
+            16.0 / 15.0
+        );
+
+        workspace.activate_pane(crate::app::PaneSide::Right, cx);
+        workspace.decrease_content_font_size(cx);
+        assert_eq!(workspace.content_font_sizes.left.get(), 16);
+        assert_eq!(workspace.content_font_sizes.right.get(), 14);
+        let ready = workspace.state.ready().unwrap();
+        assert_eq!(
+            ready.readers.right.as_ref().unwrap().read(cx).zoom(),
+            14.0 / 15.0
+        );
+        workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+        let ready = workspace.state.ready().unwrap();
+        assert_eq!(
+            ready
+                .editors
+                .right
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .content_font_size()
+                .get(),
+            14
+        );
+
+        workspace.reset_content_font_size(cx);
+        assert_eq!(workspace.content_font_sizes.left.get(), 16);
+        assert_eq!(workspace.content_font_sizes.right.get(), 15);
+    });
+}
+
+#[gpui::test]
+fn reading_font_size_preserves_source_anchor_across_extreme_values(cx: &mut gpui::TestAppContext) {
+    let source = (0..120)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    let preview = loaded_document("reading-font-anchor.org", &source).into_preview();
+    let panel = cx.new(|_| super::ReadingPreviewPanel::new(std::sync::Arc::new(preview), 80.0));
+    panel.update(cx, |panel, _| {
+        panel.scroll_to(gpui::ListOffset {
+            item_ix: 40,
+            offset_in_item: gpui::px(7.0),
+        });
+        let source_anchor = panel.top_source_offset();
+        for size in [96, 5, 15] {
+            assert!(panel.set_content_font_size(crate::typography::ContentFontSize::new(size),));
+            assert_eq!(panel.top_source_offset(), source_anchor);
+            assert_eq!(panel.list_state().logical_scroll_top().item_ix, 40);
+            assert_eq!(
+                panel.list_state().logical_scroll_top().offset_in_item,
+                gpui::px(7.0)
+            );
+            assert_eq!(panel.zoom(), size as f32 / 15.0);
+        }
+    });
+}
+
+#[gpui::test]
+fn content_font_size_shortcut_context_follows_document_availability(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "cmd-=",
+            super::IncreaseContentFontSize,
+            Some(super::DOCUMENT_WORKSPACE_KEY_CONTEXT),
+        )]);
+    });
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).content_font_sizes.left.get()),
+        15
+    );
+
+    let source = (0..120)
+        .map(|line| format!("line {line}\n"))
+        .collect::<String>();
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_reading(cx);
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document("shortcut-font-size.org", &source)),
+                cx,
+            ));
+        });
+    });
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).content_font_sizes.left.get()),
+        16
+    );
+
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_editor(cx);
+        });
+    });
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).content_font_sizes.left.get()),
+        17
+    );
+
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_reading(cx);
+            for _ in 17..96 {
+                workspace.increase_content_font_size(cx);
+            }
+        });
+    });
+    cx.run_until_parked();
+    let reader = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .reading_panel_for(crate::app::PaneSide::Left)
+            .unwrap()
+    });
+    cx.read(|cx| {
+        let reader = reader.read(cx);
+        assert_eq!(reader.zoom(), 96.0 / 15.0);
+        let first = reader
+            .list_state()
+            .bounds_for_item(0)
+            .expect("the first reading row is laid out at 96 px");
+        assert!(first.size.height > gpui::px(0.0));
+        assert!(reader.list_state().viewport_bounds().size.height > gpui::px(0.0));
+    });
+
+    cx.update(|_, cx| {
+        reader.update(cx, |reader, _| reader.scroll_to_end());
+        workspace.update(cx, |_, cx| cx.notify());
+    });
+    cx.run_until_parked();
+    assert!(cx.read(|cx| {
+        super::minimap::list_viewport_reaches_document_end(reader.read(cx).list_state())
+    }));
+
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.reset_content_font_size(cx);
+            for _ in 5..15 {
+                workspace.decrease_content_font_size(cx);
+            }
+        });
+    });
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let reader = reader.read(cx);
+        assert_eq!(reader.zoom(), 5.0 / 15.0);
+        assert!(super::minimap::list_viewport_reaches_document_end(
+            reader.list_state()
+        ));
+    });
+
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_export_panel(cx);
+        });
+    });
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).content_font_sizes.left.get()),
+        5
+    );
+
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.close_export_panel(cx);
+            workspace.content_route = crate::app::ContentRoute::FileManager;
+            cx.notify();
+        });
+    });
+    cx.simulate_keystrokes("cmd-=");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).content_font_sizes.left.get()),
+        5
+    );
+}
+
+#[gpui::test]
+fn opening_a_split_inherits_the_active_pane_font_size(cx: &mut gpui::TestAppContext) {
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("split-font-size.org", "* Heading\nbody\n",)),
+            cx,
+        ));
+        for _ in 0..5 {
+            workspace.increase_content_font_size(cx);
+        }
+        workspace.show_split(cx);
+
+        assert_eq!(workspace.content_font_sizes.left.get(), 20);
+        assert_eq!(workspace.content_font_sizes.right.get(), 20);
+        workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+        let ready = workspace.state.ready().unwrap();
+        assert_eq!(
+            ready
+                .editors
+                .right
+                .as_ref()
+                .unwrap()
+                .read(cx)
+                .content_font_size()
+                .get(),
+            20
+        );
+    });
+}
+
+#[gpui::test]
+fn reopening_a_split_after_loading_another_document_preserves_independent_font_sizes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    workspace.update(cx, |workspace, cx| {
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("first-font-size.org", "* First\nbody\n")),
+            cx,
+        ));
+        workspace.increase_content_font_size(cx);
+        workspace.show_split(cx);
+        assert_eq!(workspace.content_font_sizes.left.get(), 16);
+        assert_eq!(workspace.content_font_sizes.right.get(), 16);
+
+        workspace.activate_pane(crate::app::PaneSide::Right, cx);
+        for _ in 0..4 {
+            workspace.increase_content_font_size(cx);
+        }
+        workspace.activate_pane(crate::app::PaneSide::Left, cx);
+        workspace.show_editor(cx);
+        assert!(workspace.apply_load_result(
+            0,
+            Ok(loaded_document("second-font-size.org", "* Second\nbody\n")),
+            cx,
+        ));
+        let ready = workspace.state.ready().unwrap();
+        assert!(ready.editors.right.is_none());
+        assert!(ready.readers.right.is_none());
+
+        workspace.show_split(cx);
+        assert_eq!(workspace.content_font_sizes.left.get(), 16);
+        assert_eq!(workspace.content_font_sizes.right.get(), 20);
     });
 }
 

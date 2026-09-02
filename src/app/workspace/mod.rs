@@ -55,7 +55,7 @@ impl WorkspaceWindow {
     pub(crate) fn with_split_layout(split: bool) -> Self {
         let mut workspace = Self::with_settings(crate::settings::WorkspaceSettings::default());
         if split {
-            workspace.document_workspace.layout = crate::app::WorkspaceLayout::Split;
+            workspace.document_workspace.enter_split();
         }
         workspace
     }
@@ -166,6 +166,10 @@ impl WorkspaceWindow {
             document_view_preferences: DocumentViewPreferences {
                 split_ratio: preview_settings.split_ratio,
             },
+            content_font_sizes: PanePair {
+                left: crate::typography::ContentFontSize::default(),
+                right: crate::typography::ContentFontSize::default(),
+            },
             split_resize: None,
             soft_wrap: preview_settings.soft_wrap,
             minimap_visible,
@@ -215,8 +219,10 @@ impl WorkspaceWindow {
         let soft_wrap = self.soft_wrap;
         let minimap_visible = self.minimap_visible;
         let minimap_width = self.minimap_width;
+        let content_font_size = *self.content_font_sizes.get(pane);
         let editor = cx.new(move |cx| {
             let mut editor = crate::editor::SemanticEditor::new_with_autofocus(session, false, cx);
+            editor.set_content_font_size(content_font_size, cx);
             editor.set_soft_wrap(soft_wrap, cx);
             editor.set_minimap(minimap_visible, minimap_width, cx);
             editor
@@ -286,6 +292,7 @@ impl WorkspaceWindow {
             .filter(|pane| matches!(self.document_workspace.surface(*pane), PaneSurface::Reading))
             .collect::<Vec<_>>();
         let list_overdraw = self.list_overdraw;
+        let content_font_sizes = self.content_font_sizes.clone();
         let Some(ready) = self.state.ready_mut() else {
             return false;
         };
@@ -304,8 +311,12 @@ impl WorkspaceWindow {
                 }
             } else {
                 let document = document.clone();
-                *ready.readers.get_mut(pane) =
-                    Some(cx.new(move |_| ReadingPreviewPanel::new(document, list_overdraw)));
+                let content_font_size = *content_font_sizes.get(pane);
+                *ready.readers.get_mut(pane) = Some(cx.new(move |_| {
+                    let mut panel = ReadingPreviewPanel::new(document, list_overdraw);
+                    panel.set_content_font_size(content_font_size);
+                    panel
+                }));
             }
         }
         for pane in panes {

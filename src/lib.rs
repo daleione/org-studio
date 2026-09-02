@@ -17,3 +17,4 @@ pub mod preview;
 pub mod recent_documents;
 pub mod settings;
 pub mod theme;
+pub mod typography;

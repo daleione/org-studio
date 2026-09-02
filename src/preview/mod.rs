@@ -104,6 +104,12 @@ const SHOW_EDITOR_COMMAND: &str = "org-studio.workspace.show-editor";
 const SHOW_READING_COMMAND: &str = "org-studio.workspace.show-reading";
 const SHOW_SPLIT_COMMAND: &str = "org-studio.workspace.show-split";
 const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
+pub(crate) const INCREASE_CONTENT_FONT_SIZE_COMMAND: &str =
+    "org-studio.view.increase-content-font-size";
+pub(crate) const DECREASE_CONTENT_FONT_SIZE_COMMAND: &str =
+    "org-studio.view.decrease-content-font-size";
+pub(crate) const RESET_CONTENT_FONT_SIZE_COMMAND: &str = "org-studio.view.reset-content-font-size";
+pub const DOCUMENT_WORKSPACE_KEY_CONTEXT: &str = "DocumentWorkspace";
 const GLOBAL_VISIBILITY_CYCLE_COMMAND: &str = "org-studio.preview.global-visibility-cycle";
 const DIRED_NEXT_COMMAND: &str = "org-studio.dired.next-line";
 const DIRED_PREVIOUS_COMMAND: &str = "org-studio.dired.previous-line";
@@ -149,6 +155,9 @@ actions!(
         ShowReading,
         ShowSplit,
         ToggleSoftWrap,
+        IncreaseContentFontSize,
+        DecreaseContentFontSize,
+        ResetContentFontSize,
         UseEnglish,
         UseChinese
     ]

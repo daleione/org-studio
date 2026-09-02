@@ -522,6 +522,7 @@ impl WorkspaceWindow {
                 let document_workspace = self.document_workspace;
                 let soft_wrap = self.soft_wrap;
                 let minimap_width = self.minimap_width;
+                let content_font_sizes = self.content_font_sizes.clone();
                 let mut create_editor = |pane| {
                     document_workspace
                         .shows(pane, crate::app::PaneSurface::Editor)
@@ -533,6 +534,7 @@ impl WorkspaceWindow {
                                     document_workspace.active_pane == pane,
                                     cx,
                                 );
+                                editor.set_content_font_size(*content_font_sizes.get(pane), cx);
                                 editor.set_soft_wrap(soft_wrap, cx);
                                 editor.set_minimap(minimap_visible, minimap_width, cx);
                                 editor
@@ -544,6 +546,7 @@ impl WorkspaceWindow {
                 let preview = preview.map(Arc::new);
                 self.derived.latest = preview.clone();
                 let list_overdraw = self.list_overdraw;
+                let content_font_sizes = self.content_font_sizes.clone();
                 let readers = preview
                     .map(|document| PanePair {
                         left: document_workspace
@@ -551,7 +554,14 @@ impl WorkspaceWindow {
                             .then(|| {
                                 cx.new({
                                     let document = document.clone();
-                                    move |_| ReadingPreviewPanel::new(document, list_overdraw)
+                                    let content_font_size =
+                                        *content_font_sizes.get(crate::app::PaneSide::Left);
+                                    move |_| {
+                                        let mut panel =
+                                            ReadingPreviewPanel::new(document, list_overdraw);
+                                        panel.set_content_font_size(content_font_size);
+                                        panel
+                                    }
                                 })
                             }),
                         right: document_workspace
@@ -560,7 +570,14 @@ impl WorkspaceWindow {
                                 crate::app::PaneSurface::Reading,
                             )
                             .then(|| {
-                                cx.new(move |_| ReadingPreviewPanel::new(document, list_overdraw))
+                                let content_font_size =
+                                    *content_font_sizes.get(crate::app::PaneSide::Right);
+                                cx.new(move |_| {
+                                    let mut panel =
+                                        ReadingPreviewPanel::new(document, list_overdraw);
+                                    panel.set_content_font_size(content_font_size);
+                                    panel
+                                })
                             }),
                     })
                     .unwrap_or(PanePair {

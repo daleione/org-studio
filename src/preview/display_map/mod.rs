@@ -68,7 +68,6 @@ impl RowLayout {
     }
 
     pub(crate) fn scaled(self, scale: f32) -> Self {
-        let scale = scale.clamp(0.75, 2.0);
         Self {
             font_size: self.font_size * scale,
             line_height: self.line_height * scale,
@@ -206,9 +205,7 @@ impl PreviewDisplayMap {
         text_system: &gpui::WindowTextSystem,
     ) -> DisplayLines {
         let width_key = available_width.round().clamp(1.0, u16::MAX as f32) as u16;
-        let zoom_key = (zoom.clamp(0.75, 2.0) * 1_000.0)
-            .round()
-            .clamp(1.0, u16::MAX as f32) as u16;
+        let zoom_key = (zoom * 1_000.0).round().clamp(1.0, u16::MAX as f32) as u16;
         let visual_row = self
             .projection
             .rows
@@ -409,7 +406,7 @@ impl PreviewDisplayMap {
         }
         crate::preview::layout::ResolvedRow::new(
             measure.display_lines as usize,
-            measure.pixels + style.spacing.content_padding_bottom * zoom.clamp(0.75, 2.0),
+            measure.pixels + style.spacing.content_padding_bottom * zoom,
             measure.exact,
         )
     }
@@ -428,8 +425,7 @@ impl PreviewDisplayMap {
         }
         crate::preview::layout::ResolvedRow::new(
             measure.display_lines as usize,
-            (measure.pixels - style.spacing.content_padding_bottom * zoom.clamp(0.75, 2.0))
-                .max(0.0),
+            (measure.pixels - style.spacing.content_padding_bottom * zoom).max(0.0),
             measure.exact,
         )
     }

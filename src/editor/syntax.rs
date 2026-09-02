@@ -186,6 +186,17 @@ impl Default for BlockMetrics {
     }
 }
 
+impl BlockMetrics {
+    pub(super) fn scaled(self, scale: f32) -> Self {
+        Self {
+            font_scale: self.font_scale,
+            line_height: self.line_height * scale,
+            before: self.before * scale,
+            after: self.after * scale,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct EditorLineStyle {
     pub(super) source_range: ByteRange,
