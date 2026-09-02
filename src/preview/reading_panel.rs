@@ -160,7 +160,8 @@ impl ReadingPreviewPanel {
             return;
         }
         self.discard_fold_animation();
-        let was_at_bottom = layout_changed && self.viewport_reaches_document_end();
+        let was_at_bottom =
+            layout_changed && minimap::list_viewport_reaches_document_end(&self.list_state);
         let source_anchor = layout_changed.then(|| self.top_source_anchor()).flatten();
         if layout_changed {
             self.geometry_revision = self.geometry_revision.wrapping_add(1);
@@ -582,20 +583,6 @@ impl ReadingPreviewPanel {
             .projection
             .source_row(visual)
             .map(|row| (row.content.range.start, scroll_top.offset_in_item))
-    }
-
-    fn viewport_reaches_document_end(&self) -> bool {
-        let count = self.list_state.item_count();
-        if count == 0 {
-            return true;
-        }
-        let viewport = self.list_state.viewport_bounds();
-        if f32::from(viewport.size.height) <= 0.0 {
-            return false;
-        }
-        self.list_state
-            .bounds_for_item(count - 1)
-            .is_some_and(|bounds| bounds.bottom() <= viewport.bottom() + px(0.5))
     }
 
     fn scroll_to_source_offset_with_offset(

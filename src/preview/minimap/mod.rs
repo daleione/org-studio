@@ -84,6 +84,7 @@ pub(super) use state::{
     take_resize_session,
 };
 pub(super) use viewport::MinimapInteractionAnchor;
+pub(super) use viewport::list_viewport_reaches_document_end;
 use viewport::{
     minimap_anchor_for_thumb_top, minimap_click_target_for_viewport, minimap_drag_target,
     minimap_thumb_for_drag, minimap_viewport_for_list_with_anchor, scroll_list_to_ratio,

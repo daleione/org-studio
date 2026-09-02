@@ -947,6 +947,37 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
     assert_eq!(max, 536.0);
     seek_to_ratio(&state, 1.0, false);
     assert_eq!(-f32::from(state.scroll_px_offset_for_scrollbar().y), max);
+
+    // Reading layout and the progressively refined minimap projection do not always
+    // have identical pixel heights (notably around final content padding). The real
+    // list endpoint must still pin the transparent viewport to the minimap endpoint,
+    // and a stale click/drag anchor must not pull it back up.
+    let estimated_at_bottom = test_line_index(
+        100,
+        3,
+        MinimapDensity::Compact,
+        &[0, 10, 120, 140, 280, 300],
+        &[0.0, 30.0, 330.0, 390.0, 760.0, 800.0],
+    );
+    let stale_anchor = MinimapInteractionAnchor {
+        layout: estimated_at_bottom.layout,
+        width: estimated_at_bottom.width,
+        rows_signature: estimated_at_bottom.rows_signature,
+        interaction_height: 500.0,
+        content_top: 0.0,
+    };
+    let pinned_bottom = minimap_viewport_for_list_with_anchor(
+        &estimated_at_bottom,
+        &state,
+        500.0,
+        Some(stale_anchor),
+    );
+    assert_eq!(pinned_bottom.scroll_ratio, 1.0);
+    assert!(
+        (pinned_bottom.thumb.top + pinned_bottom.thumb.height - 500.0).abs() < 0.001,
+        "the real list endpoint must win over estimated projection pixels and stale anchors"
+    );
+
     let compact = thumb_geometry(&state, heights.len(), 500.0);
 
     cx.draw(

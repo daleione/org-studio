@@ -128,9 +128,21 @@ pub(crate) fn minimap_viewport_for_list(
     let total = index.total as f32;
     let document_pixels = index.document_pixels();
     let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
-    let scroll_pixels = index
-        .pixel_for_list_offset(list_state.logical_scroll_top())
-        .clamp(0.0, max_scroll_pixels);
+    // `ListState` owns the real, incrementally measured row geometry. The minimap
+    // projection can still contain estimates (and deliberately excludes some reading
+    // chrome such as the final content padding), so mapping the list offset back through
+    // that projection is not guaranteed to produce its exact endpoint. Once the real
+    // list says its final item is visible at the bottom, pin the projection to its own
+    // endpoint as well. This keeps the viewport truthful without coupling the two layout
+    // systems or making progressive measurements move the bottom stop.
+    let at_document_end = list_viewport_reaches_document_end(list_state);
+    let scroll_pixels = if at_document_end {
+        max_scroll_pixels
+    } else {
+        index
+            .pixel_for_list_offset(list_state.logical_scroll_top())
+            .clamp(0.0, max_scroll_pixels)
+    };
     let progress = if max_scroll_pixels > 0.0 {
         scroll_pixels / max_scroll_pixels
     } else {
@@ -165,6 +177,11 @@ pub(crate) fn minimap_viewport_for_list_with_anchor(
     anchor: Option<MinimapInteractionAnchor>,
 ) -> MinimapViewport {
     let mut viewport = minimap_viewport_for_list(index, list_state, track_height);
+    // An interaction anchor only stabilizes a click/drag transition. It must never
+    // override the authoritative list endpoint after the user scrolls to the bottom.
+    if list_viewport_reaches_document_end(list_state) {
+        return viewport;
+    }
     if let Some(anchor) = anchor.filter(|anchor| anchor.matches(index, viewport.interaction_height))
     {
         let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
@@ -193,6 +210,20 @@ pub(crate) fn minimap_viewport_for_list_with_anchor(
         viewport.thumb.top = shared.thumb_top;
     }
     viewport
+}
+
+pub(crate) fn list_viewport_reaches_document_end(list_state: &ListState) -> bool {
+    let count = list_state.item_count();
+    if count == 0 {
+        return true;
+    }
+    let viewport = list_state.viewport_bounds();
+    if f32::from(viewport.size.height) <= 0.0 {
+        return false;
+    }
+    list_state
+        .bounds_for_item(count - 1)
+        .is_some_and(|bounds| bounds.bottom() <= viewport.bottom() + px(0.5))
 }
 
 pub(crate) fn minimap_anchor_for_thumb_top(
