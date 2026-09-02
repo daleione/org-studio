@@ -68,6 +68,7 @@ const POSITION_FULL_CHROME: f32 = 40.0;
 const POSITION_COMPACT_CHROME: f32 = 24.0;
 const PROGRESS_FULL_CHROME: f32 = 42.0;
 const PROGRESS_COMPACT_CHROME: f32 = 24.0;
+const READING_STYLE_CHROME: f32 = 24.0;
 
 impl StatusLineSnapshot {
     fn layout_key(&self, width: f32, settings: StatusLineSettings) -> StatusLayoutKey {
@@ -244,12 +245,14 @@ impl StatusLineLayout {
             Variant::Hidden => 0.0,
         };
         let reading_style = match (self.reading_style, snapshot.reading_style) {
-            (Variant::Full, Some(id)) => measure(preview_style(id).name(snapshot.language)) + 24.0,
+            (Variant::Full, Some(id)) => {
+                measure(preview_style(id).name(snapshot.language)) + READING_STYLE_CHROME
+            }
             (Variant::Compact, Some(_)) => {
                 measure(match snapshot.language {
                     Language::Chinese => "样式",
                     Language::English => "Style",
-                }) + 24.0
+                }) + READING_STYLE_CHROME
             }
             _ => 0.0,
         };
@@ -331,11 +334,10 @@ pub(crate) fn reading_style_popover_left(
     window: &Window,
 ) -> f32 {
     match layout.mode {
-        // Mode margin + padding + dot + gap + measured label. This is the
-        // trailing edge of the mode button and therefore the leading edge of
-        // the adjacent Reading style button.
-        Variant::Full => measured_text_width(snapshot.mode_label(), window) + 37.0,
-        Variant::Compact => 27.0,
+        // Mode margin + padding + dot + gap + measured label, followed by the
+        // small gap before the Reading style selector.
+        Variant::Full => measured_text_width(snapshot.mode_label(), window) + 39.0,
+        Variant::Compact => 29.0,
         Variant::Hidden => 8.0,
     }
 }
@@ -475,6 +477,17 @@ pub(crate) fn render_status_line(
         .when_some(snapshot.reading_style, |left, style_id| {
             left.child(
                 status_button(entity.clone(), pane_id, StatusSegment::ReadingStyle)
+                    .ml(px(2.0))
+                    .mr(px(2.0))
+                    .my(px(4.0))
+                    .h(px(22.0))
+                    .px(px(6.0))
+                    .gap(px(4.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(rgb(theme.border))
+                    .bg(rgb(theme.background))
+                    .text_color(rgb(theme.foreground))
                     .child(if layout.reading_style == Variant::Compact {
                         match snapshot.language {
                             Language::Chinese => "样式",
@@ -483,7 +496,12 @@ pub(crate) fn render_status_line(
                     } else {
                         preview_style(style_id).name(snapshot.language)
                     })
-                    .child("⌃"),
+                    .child(
+                        div()
+                            .text_size(px(8.0))
+                            .text_color(rgb(theme.foreground_dim))
+                            .child("▾"),
+                    ),
             )
         })
         .when(layout.outline != Variant::Hidden, |left| {
@@ -649,6 +667,7 @@ fn status_button(
     pane_id: u64,
     segment: StatusSegment,
 ) -> gpui::Stateful<gpui::Div> {
+    let theme = current_theme();
     let button = div()
         .id(format!("status-{pane_id}-segment-{}", segment as usize))
         .debug_selector(|| format!("status-{pane_id}-segment-{}", segment as usize))
@@ -659,8 +678,16 @@ fn status_button(
         .gap(px(5.0))
         .cursor_pointer()
         .border_l_1()
-        .border_color(rgb(current_theme().border))
-        .hover(|style| style.bg(rgb(current_theme().code_boundary_background)));
+        .border_color(rgb(theme.border));
+    let button = if segment == StatusSegment::Mode {
+        button.hover(|style| style.bg(rgb(theme.heading[0])).text_color(rgb(0xffffff)))
+    } else {
+        button.hover(|style| {
+            style
+                .bg(rgb(theme.code_boundary_background))
+                .text_color(rgb(theme.foreground))
+        })
+    };
     if segment == StatusSegment::More {
         return button;
     }
