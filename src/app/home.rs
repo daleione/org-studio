@@ -36,6 +36,7 @@ pub(crate) fn render_home(
                 .flex_col()
                 .child(
                     div()
+                        .flex_none()
                         .flex()
                         .flex_col()
                         .items_center()
@@ -138,6 +139,7 @@ pub(crate) fn render_home(
                 .when_some(error.map(str::to_owned), |view, error| {
                     view.child(
                         div()
+                            .flex_none()
                             .mt_4()
                             .rounded(px(8.0))
                             .border_1()
@@ -152,6 +154,7 @@ pub(crate) fn render_home(
                 })
                 .child(
                     div()
+                        .flex_none()
                         .mt(px(42.0))
                         .h(px(32.0))
                         .px_2()
@@ -260,6 +263,10 @@ fn render_recents(
 ) -> gpui::Div {
     let list = div()
         .w_full()
+        // `home-scroll` owns vertical scrolling. Keep the card at its intrinsic
+        // row height so the flex column contributes every recent document to the
+        // scroll extent instead of shrinking and clipping its tail.
+        .flex_none()
         .rounded(px(13.0))
         .border_1()
         .border_color(rgb(0xe1e1e4))
