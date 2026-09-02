@@ -445,8 +445,9 @@ impl Element for EditorElement {
                 visual_rows,
                 metrics,
                 animated_height,
-                background: row_background(
+                background: editor_row_background(
                     line_style.id,
+                    anchor.is_some(),
                     Bounds::new(
                         point(text_origin_x, block_top),
                         size(px(wrap_width), px(animated_height)),
@@ -1053,22 +1054,18 @@ fn folded_display_text(mut text: String, folded: bool) -> String {
     text
 }
 
-fn row_background(
+fn editor_row_background(
     style: syntax::EditorStyleId,
+    active: bool,
     bounds: Bounds<Pixels>,
     theme: &crate::theme::Theme,
 ) -> Option<PaintQuad> {
     let color = match style {
         syntax::EditorStyleId::CodeBoundary => theme.code_boundary_background,
+        syntax::EditorStyleId::Code if active => theme.code_active_background,
         syntax::EditorStyleId::Code => theme.code_background,
-        syntax::EditorStyleId::Quote => 0xf6f2f8,
-        syntax::EditorStyleId::Property => theme.background_alt,
-        syntax::EditorStyleId::Table => 0xf8fafb,
-        syntax::EditorStyleId::Plain
-        | syntax::EditorStyleId::Heading(_)
-        | syntax::EditorStyleId::List
-        | syntax::EditorStyleId::Meta
-        | syntax::EditorStyleId::Comment => return None,
+        _ if active => theme.background_alt,
+        _ => return None,
     };
     Some(fill(bounds, gpui::rgb(color)))
 }
@@ -1119,7 +1116,7 @@ fn push_selection_quads(
                         hit.origin_y + px((row + 1) as f32 * line_height_px),
                     ),
                 ),
-                rgba(0x3a81c34a),
+                rgba(0x3f78f24a),
             ));
         }
     }

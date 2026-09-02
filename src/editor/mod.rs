@@ -70,6 +70,7 @@ actions!(
 );
 
 const LINE_HEIGHT: f32 = 22.0;
+const EDITOR_FONT_FAMILY: &str = "JetBrains Mono";
 
 pub fn init(cx: &mut App) {
     cx.bind_keys([
@@ -1289,8 +1290,9 @@ mod tests {
     #[gpui::test]
     fn minimap_geometry_uses_the_settled_visible_source_span(cx: &mut gpui::TestAppContext) {
         cx.update(init);
+        let wrapping_text = "wrapped source text ".repeat(20);
         let source = (0..1_000)
-            .map(|index| format!("* Heading {index}\nbody {index}\n"))
+            .map(|index| format!("* Heading {index} {wrapping_text}\nbody {index}\n"))
             .collect::<String>();
         let session = cx.new(|_| {
             DocumentSession::from_utf8(PathBuf::from("diagnostic.org"), source.into_bytes())

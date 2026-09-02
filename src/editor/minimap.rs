@@ -138,7 +138,7 @@ pub(super) fn rasterize_text_rows(
     }
     let (font_system, swash_cache) = &mut *rasterizer;
     let attrs = Attrs::new()
-        .family(Family::Name("Menlo"))
+        .family(Family::Name(super::EDITOR_FONT_FAMILY))
         .weight(cosmic_text::Weight::BLACK);
     let mut buffer = Buffer::new(
         font_system,
