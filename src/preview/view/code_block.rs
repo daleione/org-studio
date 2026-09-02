@@ -3,8 +3,13 @@ use std::{ops::Range, sync::Arc};
 use gpui::{FontWeight, HighlightStyle, SharedString, StyledText, div, prelude::*, px, rgb};
 
 use crate::preview::{
-    CodeHighlightSpan, CodeRowRole, PreviewStyle, display_map::RowLayout, style::CodeBlockVariant,
-    view::styled_text::styled_code_runs,
+    CodeHighlightSpan, CodeRowRole, PreviewStyle,
+    display_map::RowLayout,
+    style::CodeBlockVariant,
+    view::{
+        ReadingInteraction, SelectableReadingText, document::reading_row_selection,
+        styled_text::styled_code_runs,
+    },
 };
 
 pub(super) fn render_code_row(
@@ -14,12 +19,26 @@ pub(super) fn render_code_row(
     role: CodeRowRole,
     card_bottom: bool,
     style: PreviewStyle,
+    selection_host: Option<(usize, &ReadingInteraction)>,
 ) -> gpui::Div {
     let palette = style.palette;
     let content = if role.is_boundary() {
-        styled_code_boundary(text, role, style)
+        styled_code_boundary(text.clone(), role, style)
     } else {
-        styled_code_runs(text, code_spans, style)
+        styled_code_runs(text.clone(), code_spans, style)
+    };
+    let content = if let Some((display_row, interaction)) = selection_host {
+        let selection = reading_row_selection(interaction, display_row, text.len());
+        SelectableReadingText::new(
+            ("reading-code", display_row),
+            content,
+            interaction.panel.clone(),
+            display_row,
+            selection,
+        )
+        .into_any_element()
+    } else {
+        content.into_any_element()
     };
     let background = if role.is_boundary() {
         rgb(palette.code_background).blend(rgb(palette.code_boundary_background).alpha(0.62))

@@ -7,6 +7,7 @@ use gpui::{
 
 use crate::{
     app::{WorkspaceLoadState, WorkspaceWindow},
+    editor::Copy,
     preview::{
         EXPORT_DOCUMENT_COMMAND, ExportDocument, OPEN_DOCUMENT_COMMAND, OpenDocument,
         OpenFileManager, QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND,
@@ -165,6 +166,9 @@ impl Render for WorkspaceWindow {
             }))
             .on_action(cx.listener(|this, _: &UseChinese, _, cx| {
                 this.set_language(crate::i18n::Language::Chinese, cx)
+            }))
+            .on_action(cx.listener(|this, _: &Copy, _, cx| {
+                this.copy_reading_selection(cx);
             }))
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.open_dropped_paths(paths, window, cx)

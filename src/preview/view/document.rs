@@ -46,6 +46,7 @@ pub(crate) fn render_reading_document(
         zoom,
         action_states,
         copy_feedback,
+        text_selection,
     } = state;
     let ReadingRenderOptions {
         minimap_visible,
@@ -69,17 +70,35 @@ pub(crate) fn render_reading_document(
         dispatch: dispatch_action,
         action_states,
         copy_feedback,
+        text_selection,
     };
     // The minimap represents the final semantic projection. The temporary flow segments belong
     // only to the main list; exposing them here causes a second tile refresh when the animation
     // completes and the segment is removed.
     let minimap_rows = visible_rows.clone();
+    let clear_selection_panel = panel_entity.clone();
+    let finish_selection_panel = panel_entity.clone();
     div()
         .size_full()
         .flex()
         .relative()
         .bg(rgb(palette.background))
         .font_family(style.typography.body_family)
+        .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+            clear_selection_panel.update(cx, |panel, cx| {
+                if panel.clear_text_selection_unless_dragging() {
+                    cx.notify();
+                }
+            });
+        })
+        .on_mouse_up(gpui::MouseButton::Left, move |_, _, cx| {
+            finish_selection_panel.update(cx, |panel, cx| {
+                if panel.text_selection_pending() {
+                    panel.finish_text_selection();
+                    cx.notify();
+                }
+            });
+        })
         .child(
             div()
                 .flex_1()
@@ -155,6 +174,9 @@ pub(crate) fn render_reading_document(
                             element.cursor_pointer().on_click(move |_, window, cx| {
                                 let viewport_height = f32::from(window.viewport_size().height);
                                 entity_for_click.update(cx, |this, cx| {
+                                    if this.text_selection_suppresses_click() {
+                                        return;
+                                    }
                                     this.toggle_fold_animated(
                                         row.block_id,
                                         viewport_height,
@@ -537,7 +559,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.date))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::ListItem => render_list_item(
             document,
             display_row,
@@ -552,13 +574,13 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.code_foreground))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::FootnoteDefinition => div()
             .font_family("Menlo")
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.link))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::TableRow => display_map.table_projection(display_row).map_or_else(
             || {
                 reading_fallback(
@@ -578,6 +600,7 @@ fn render_block(
                     display_row,
                     context.table_scroll,
                     style,
+                    interaction,
                 )
             },
         ),
@@ -604,6 +627,7 @@ fn render_block(
                     .get(display_row + 1)
                     .is_none_or(|next| next.block_id != row.block_id),
                 style,
+                interaction.map(|interaction| (display_row, interaction)),
             )),
         BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
             .min_h(px(row_layout.min_height))
@@ -616,7 +640,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.code_foreground))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::QuoteBlock => div()
             .pl(px(row_layout.padding_left))
             .pr(px(row_layout.padding_right))
@@ -632,21 +656,21 @@ fn render_block(
             .text_color(rgb(palette.quote))
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::VerseBlock => div()
             .pl(px(row_layout.padding_left))
             .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.quote))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::CenterBlock => div()
             .w_full()
             .text_center()
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.foreground))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::SpecialBlock { name } => div()
             .min_h(px(row_layout.min_height))
             .pl(px(row_layout.padding_left))
@@ -669,7 +693,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.meta))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::Keyword => div()
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
@@ -677,7 +701,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.meta))
-            .child(text),
+            .child(selectable_plain_text(text, display_row, interaction)),
         BlockKind::Comment | BlockKind::CommentBlock => div(),
         BlockKind::HorizontalRule => div()
             .h(px(row_layout.fixed_height.unwrap_or(1.0)))
@@ -936,11 +960,19 @@ pub(crate) fn reading_inline(
     let Some(interaction) = interaction.cloned() else {
         return styled.into_any_element();
     };
+    let selection = reading_row_selection(&interaction, display_row, runs.text.len());
+    let selectable = super::SelectableReadingText::new(
+        ("reading-inline", display_row),
+        styled,
+        interaction.panel.clone(),
+        display_row,
+        selection,
+    );
     if runs.links.is_empty() {
-        return styled.into_any_element();
+        return selectable.into_any_element();
     }
     let Some(row) = document.projection.rows.get(display_row) else {
-        return styled.into_any_element();
+        return selectable.into_any_element();
     };
     let target = crate::preview::source_action_target(document, row);
     let ranges = runs
@@ -956,15 +988,47 @@ pub(crate) fn reading_inline(
             destination: link.destination.clone(),
         })
         .collect::<Vec<_>>();
-    gpui::InteractiveText::new(("reading-inline", display_row), styled)
+    selectable
         .on_click(ranges, move |index, window, cx| {
-            cx.stop_propagation();
             let Some(action) = actions.get(index).cloned() else {
                 return;
             };
             (interaction.dispatch)(action, interaction.panel.clone(), window, cx);
         })
         .into_any_element()
+}
+
+pub(in crate::preview) fn reading_row_selection(
+    interaction: &ReadingInteraction,
+    row: usize,
+    text_len: usize,
+) -> Option<(std::ops::Range<usize>, bool)> {
+    let (start, end) = interaction.text_selection?;
+    if row < start.row || row > end.row {
+        return None;
+    }
+    let range_start = if row == start.row { start.offset } else { 0 }.min(text_len);
+    let range_end = if row == end.row { end.offset } else { text_len }.min(text_len);
+    (range_start < range_end).then_some((range_start..range_end, row < end.row))
+}
+
+fn selectable_plain_text(
+    text: gpui::SharedString,
+    display_row: usize,
+    interaction: Option<&ReadingInteraction>,
+) -> gpui::AnyElement {
+    let Some(interaction) = interaction else {
+        return gpui::StyledText::new(text).into_any_element();
+    };
+    let selection = reading_row_selection(interaction, display_row, text.len());
+    super::SelectableReadingText::new(
+        ("reading-plain", display_row),
+        gpui::StyledText::new(text),
+        interaction.panel.clone(),
+        display_row,
+        selection,
+    )
+    .into_any_element()
 }
 
 pub(crate) fn reading_fallback(

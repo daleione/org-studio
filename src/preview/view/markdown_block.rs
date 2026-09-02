@@ -122,6 +122,7 @@ pub(super) fn render_markdown_block(
                     *role,
                     card_bottom,
                     style,
+                    interaction.map(|interaction| (display_row, interaction)),
                 )
             }
         },
@@ -144,6 +145,7 @@ pub(super) fn render_markdown_block(
                     display_row,
                     context.table_scroll,
                     style,
+                    interaction,
                 )
             },
         ),

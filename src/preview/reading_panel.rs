@@ -43,6 +43,35 @@ pub(crate) struct ReadingPreviewPanel {
     copy_feedback: Option<(crate::document::ByteRange, CopyFeedbackState)>,
     copy_feedback_request: u64,
     copy_feedback_task: Option<gpui::Task<()>>,
+    text_selection: ReadingTextSelection,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ReadingTextPoint {
+    pub(crate) row: usize,
+    pub(crate) offset: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct ReadingTextSelection {
+    anchor: ReadingTextPoint,
+    head: ReadingTextPoint,
+    pending: bool,
+    suppress_click: bool,
+}
+
+impl ReadingTextSelection {
+    fn ordered(self) -> (ReadingTextPoint, ReadingTextPoint) {
+        if (self.anchor.row, self.anchor.offset) <= (self.head.row, self.head.offset) {
+            (self.anchor, self.head)
+        } else {
+            (self.head, self.anchor)
+        }
+    }
+
+    fn is_empty(self) -> bool {
+        self.anchor == self.head
+    }
 }
 
 #[derive(Clone)]
@@ -58,6 +87,7 @@ pub(crate) struct ReadingRenderState {
     pub(crate) zoom: f32,
     pub(crate) action_states: Arc<Vec<(super::PreviewActionIdentity, PreviewActionVisualState)>>,
     pub(crate) copy_feedback: Option<(crate::document::ByteRange, CopyFeedbackState)>,
+    pub(crate) text_selection: Option<(ReadingTextPoint, ReadingTextPoint)>,
 }
 
 impl EventEmitter<DerivedEvent> for ReadingPreviewPanel {}
@@ -119,6 +149,7 @@ impl ReadingPreviewPanel {
             copy_feedback: None,
             copy_feedback_request: 0,
             copy_feedback_task: None,
+            text_selection: ReadingTextSelection::default(),
         }
     }
 
@@ -145,7 +176,52 @@ impl ReadingPreviewPanel {
                 .collect::<Vec<_>>()
                 .into(),
             copy_feedback: self.copy_feedback,
+            text_selection: (!self.text_selection.is_empty())
+                .then(|| self.text_selection.ordered()),
         }
+    }
+
+    pub(crate) fn begin_text_selection(&mut self, row: usize, offset: usize, extend: bool) {
+        let point = ReadingTextPoint { row, offset };
+        if !extend || self.text_selection.is_empty() {
+            self.text_selection.anchor = point;
+        }
+        self.text_selection.head = point;
+        self.text_selection.pending = true;
+        self.text_selection.suppress_click = false;
+    }
+
+    pub(crate) fn update_text_selection(&mut self, row: usize, offset: usize) {
+        if !self.text_selection.pending {
+            return;
+        }
+        self.text_selection.head = ReadingTextPoint { row, offset };
+        self.text_selection.suppress_click = !self.text_selection.is_empty();
+    }
+
+    pub(crate) fn finish_text_selection(&mut self) {
+        self.text_selection.pending = false;
+        self.text_selection.suppress_click = !self.text_selection.is_empty();
+    }
+
+    pub(crate) fn clear_text_selection_unless_dragging(&mut self) -> bool {
+        if self.text_selection.pending || self.text_selection.is_empty() {
+            return false;
+        }
+        self.text_selection = ReadingTextSelection::default();
+        true
+    }
+
+    pub(crate) fn text_selection_pending(&self) -> bool {
+        self.text_selection.pending
+    }
+
+    pub(crate) fn text_selection_suppresses_click(&self) -> bool {
+        self.text_selection.suppress_click
+    }
+
+    pub(crate) fn selected_text(&self) -> Option<String> {
+        selected_reading_text(&self.document, &self.visible_rows, self.text_selection)
     }
 
     pub(crate) fn change_style(
@@ -322,6 +398,7 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        self.text_selection = ReadingTextSelection::default();
         let source_anchor = self.top_source_anchor();
         let previous_visible_rows = self.visible_rows.clone();
         let previous_minimap = self.minimap_state.clone();
@@ -780,6 +857,7 @@ impl ReadingPreviewPanel {
         window: Option<&mut Window>,
         cx: &mut Context<Self>,
     ) {
+        self.text_selection = ReadingTextSelection::default();
         if cx.reduce_motion() {
             self.apply_fold_projection(visible_rows, fold_markers);
             return;
@@ -967,6 +1045,7 @@ impl ReadingPreviewPanel {
     }
 
     fn apply_visible_rows(&mut self, visible_rows: Arc<Vec<usize>>) {
+        self.text_selection = ReadingTextSelection::default();
         let (old_range, new_count) = changed_range(&self.visible_rows, &visible_rows);
         self.list_state.splice(old_range, new_count);
         if should_eagerly_measure_rows(visible_rows.len()) {
@@ -1010,6 +1089,72 @@ impl ReadingPreviewPanel {
         self.list_state.scrollbar_drag_ended();
         was_dragging
     }
+}
+
+fn selected_reading_text(
+    document: &PreviewSnapshot,
+    visible_rows: &[usize],
+    selection: ReadingTextSelection,
+) -> Option<String> {
+    if selection.is_empty() {
+        return None;
+    }
+    let display_map = document.display_map.as_ref()?;
+    let (start, end) = selection.ordered();
+    let start_index = visible_rows.iter().position(|row| *row == start.row)?;
+    let end_index = visible_rows.iter().position(|row| *row == end.row)?;
+    if start_index > end_index {
+        return None;
+    }
+
+    let mut selected = String::new();
+    for (position, row) in visible_rows[start_index..=end_index].iter().enumerate() {
+        if display_map
+            .table_projection(*row)
+            .is_some_and(|projection| projection.is_separator())
+        {
+            continue;
+        }
+        let runs = display_map.runs(*row);
+        let text = display_map.table_projection(*row).map_or_else(
+            || runs.text.to_string(),
+            |projection| {
+                projection
+                    .columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        projection
+                            .cells()
+                            .get(index)
+                            .map_or_else(String::new, |cell| {
+                                super::parse_document_inline(document.format, cell.text(&runs.text))
+                                    .text
+                            })
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\t")
+            },
+        );
+        let from = if *row == start.row { start.offset } else { 0 };
+        let to = if *row == end.row {
+            end.offset
+        } else {
+            text.len()
+        };
+        if from > to
+            || to > text.len()
+            || !text.is_char_boundary(from)
+            || !text.is_char_boundary(to)
+        {
+            return None;
+        }
+        if position > 0 {
+            selected.push('\n');
+        }
+        selected.push_str(&text[from..to]);
+    }
+    (!selected.is_empty()).then_some(selected)
 }
 
 fn heading_slug(title: &str) -> String {
@@ -1061,4 +1206,88 @@ fn closest_block_by_source(
         (None, None) => return None,
     };
     BlockId::try_from(index).ok()
+}
+
+#[cfg(test)]
+mod text_selection_tests {
+    use std::path::PathBuf;
+
+    use crate::document::DocumentSnapshot;
+
+    use super::{ReadingTextPoint, ReadingTextSelection, selected_reading_text};
+
+    fn markdown(source: &str) -> crate::preview::PreviewSnapshot {
+        crate::preview::loading::derive_preview(
+            PathBuf::from("selection.md"),
+            DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap(),
+        )
+    }
+
+    #[test]
+    fn copied_selection_uses_rendered_text_and_only_visible_rows() {
+        let document = markdown("first **bold**\nhidden 世界\nthird\n");
+        let selection = ReadingTextSelection {
+            anchor: ReadingTextPoint { row: 0, offset: 6 },
+            head: ReadingTextPoint { row: 2, offset: 5 },
+            pending: false,
+            suppress_click: true,
+        };
+
+        assert_eq!(
+            selected_reading_text(&document, &[0, 2], selection).as_deref(),
+            Some("bold\nthird")
+        );
+    }
+
+    #[test]
+    fn copied_selection_normalizes_a_reverse_drag() {
+        let document = markdown("alpha\nbeta\n");
+        let selection = ReadingTextSelection {
+            anchor: ReadingTextPoint { row: 1, offset: 4 },
+            head: ReadingTextPoint { row: 0, offset: 2 },
+            pending: false,
+            suppress_click: true,
+        };
+
+        assert_eq!(
+            selected_reading_text(&document, &[0, 1], selection).as_deref(),
+            Some("pha\nbeta")
+        );
+    }
+
+    #[test]
+    fn copied_table_selection_matches_the_rendered_cells() {
+        let document = markdown("| **alpha** | 世界 |\n");
+        let rendered = "alpha\t世界";
+        let selection = ReadingTextSelection {
+            anchor: ReadingTextPoint { row: 0, offset: 0 },
+            head: ReadingTextPoint {
+                row: 0,
+                offset: rendered.len(),
+            },
+            pending: false,
+            suppress_click: true,
+        };
+
+        assert_eq!(
+            selected_reading_text(&document, &[0], selection).as_deref(),
+            Some(rendered)
+        );
+    }
+
+    #[test]
+    fn copied_table_selection_omits_the_visual_separator_row() {
+        let document = markdown("| head |\n| --- |\n| body |\n");
+        let selection = ReadingTextSelection {
+            anchor: ReadingTextPoint { row: 0, offset: 0 },
+            head: ReadingTextPoint { row: 2, offset: 4 },
+            pending: false,
+            suppress_click: true,
+        };
+
+        assert_eq!(
+            selected_reading_text(&document, &[0, 1, 2], selection).as_deref(),
+            Some("head\nbody")
+        );
+    }
 }

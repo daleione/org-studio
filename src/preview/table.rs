@@ -13,7 +13,7 @@ use super::{
     DocumentFormat,
     markdown::{MarkdownBlock, MarkdownKind},
     parse_document_inline,
-    view::styled_inline_runs,
+    view::{ReadingInteraction, SelectableReadingText, reading_row_selection, styled_inline_runs},
 };
 
 const CELL_WIDTH_PX: f32 = 8.45;
@@ -475,6 +475,7 @@ pub(crate) fn render_table_row(
     row_id: usize,
     horizontal_scroll: Option<&ScrollHandle>,
     style: super::PreviewStyle,
+    interaction: Option<&ReadingInteraction>,
 ) -> Div {
     let palette = style.palette;
     let horizontal_rules = style.variants.table == super::style::TableVariant::HorizontalRules;
@@ -493,15 +494,56 @@ pub(crate) fn render_table_row(
         zoom,
         style,
     );
+    let displays = projection
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(index, _)| {
+            projection
+                .cells
+                .get(index)
+                .map(|cell| parse_document_inline(format, cell.text(source)))
+                .unwrap_or_default()
+        })
+        .collect::<Vec<_>>();
+    let selection_text_len = displays
+        .iter()
+        .map(|display| display.text.len())
+        .sum::<usize>()
+        + displays.len().saturating_sub(1);
+    let mut text_offset = 0;
     let mut elements: Vec<AnyElement> = Vec::with_capacity(projection.columns().len());
-    for (index, column) in projection.columns().iter().enumerate() {
+    for (index, (column, display)) in projection.columns().iter().zip(displays).enumerate() {
         let width_px = layout.column_widths[index];
         let cell = projection.cells.get(index);
-        let display = cell
-            .map(|cell| parse_document_inline(format, cell.text(source)))
-            .unwrap_or_default();
         let align_right =
             column.alignment == Alignment::Right || cell.is_some_and(TableCell::align_right);
+        let text: gpui::SharedString = display.text.into();
+        let text_len = text.len();
+        let styled = styled_inline_runs(text, display.spans.into(), style);
+        let cell_text = if let Some(interaction) = interaction {
+            let selection = reading_row_selection(interaction, row_id, selection_text_len)
+                .and_then(|(selection, include_newline)| {
+                    let start = selection.start.max(text_offset);
+                    let end = selection.end.min(text_offset + text_len);
+                    (start < end).then_some((
+                        start - text_offset..end - text_offset,
+                        include_newline && end == selection_text_len,
+                    ))
+                });
+            SelectableReadingText::new(
+                format!("reading-table-cell-{row_id}-{index}"),
+                styled,
+                interaction.panel.clone(),
+                row_id,
+                selection,
+            )
+            .with_text_offset(text_offset)
+            .restrict_drag_to_bounds()
+            .into_any_element()
+        } else {
+            styled.into_any_element()
+        };
         let content = div()
             .w_full()
             .min_w_0()
@@ -511,11 +553,7 @@ pub(crate) fn render_table_row(
                 element.text_center()
             })
             .when(align_right, |element| element.text_right())
-            .child(styled_inline_runs(
-                display.text.into(),
-                display.spans.into(),
-                style,
-            ));
+            .child(cell_text);
         elements.push(
             div()
                 .w(px(width_px))
@@ -535,6 +573,7 @@ pub(crate) fn render_table_row(
                 .child(content)
                 .into_any(),
         );
+        text_offset += text_len + usize::from(index + 1 < projection.columns().len());
     }
     let table = div()
         .w(px(layout.content_width + TABLE_FRAME_WIDTH_PX))

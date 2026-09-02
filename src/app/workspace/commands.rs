@@ -1,7 +1,7 @@
 use gpui::{ListOffset, px};
 use std::{sync::Arc, time::Duration};
 
-use gpui::{Context, KeyDownEvent, Window};
+use gpui::{ClipboardItem, Context, KeyDownEvent, Window};
 
 use crate::document::TextSnapshot;
 use crate::{
@@ -441,6 +441,17 @@ impl WorkspaceWindow {
             }
             return;
         }
+        if event.keystroke.key.eq_ignore_ascii_case("c")
+            && event.keystroke.modifiers.platform
+            && matches!(
+                self.document_workspace.active_surface(),
+                crate::app::PaneSurface::Reading
+            )
+            && self.copy_reading_selection(cx)
+        {
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key == "escape"
             && (self.status.dismiss_popover()
                 || self.file_manager.dismiss_context_menu()
@@ -508,6 +519,23 @@ impl WorkspaceWindow {
             EmacsOutcome::Undefined if has_feedback => cx.stop_propagation(),
             EmacsOutcome::PassThrough | EmacsOutcome::Undefined => {}
         }
+    }
+
+    pub(crate) fn copy_reading_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        if !matches!(
+            self.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading
+        ) {
+            return false;
+        }
+        let Some(panel) = self.reading_panel_for(self.document_workspace.active_pane) else {
+            return false;
+        };
+        let Some(text) = panel.read(cx).selected_text() else {
+            return false;
+        };
+        cx.write_to_clipboard(ClipboardItem::new_string(text));
+        true
     }
 
     pub(crate) fn install_document_keymap(&mut self) {
