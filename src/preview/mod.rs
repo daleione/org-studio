@@ -25,7 +25,7 @@ pub use document::{
     DerivedEvent, InitialDocumentLoad, LoadMetrics, LoadedDocument, PreviewSnapshot,
     preload_initial_document,
 };
-use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
+pub(crate) use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 pub(crate) use input::*;
 pub(crate) use loading::{
     derive_preview_incremental, fitted_image_size, load_workspace_document,

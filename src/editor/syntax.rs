@@ -92,12 +92,12 @@ impl EditorSyntaxCache {
             cache.contexts.clear();
             cache.contexts.insert(0, CodeContext::default());
         }
-        let (&start, &mut_context) = cache
+        let (&start, checkpoint_context) = cache
             .contexts
             .range(..=first_line)
             .next_back()
             .expect("line zero syntax checkpoint exists");
-        let mut context = mut_context;
+        let mut context = checkpoint_context.clone();
         if start < first_line
             && let (Ok(start_range), Ok(end_range)) = (
                 snapshot.line_content_range(LineIndex(start)),
@@ -111,7 +111,7 @@ impl EditorSyntaxCache {
             let mut line = start;
             while let Some(source) = cursor.next_line() {
                 if line > start && line.is_multiple_of(CONTEXT_CHECKPOINT_LINES) {
-                    cache.contexts.insert(line, context);
+                    cache.contexts.insert(line, context.clone());
                 }
                 update_code_context(
                     language,
@@ -122,7 +122,7 @@ impl EditorSyntaxCache {
             }
         }
         if first_line.is_multiple_of(CONTEXT_CHECKPOINT_LINES) {
-            cache.contexts.insert(first_line, context);
+            cache.contexts.insert(first_line, context.clone());
         }
         context
     }
@@ -197,6 +197,7 @@ impl Default for BlockMetrics {
 pub(super) struct EditorLineStyle {
     pub(super) source_range: ByteRange,
     pub(super) id: EditorStyleId,
+    pub(super) code_language: Option<Arc<str>>,
     pub(super) metrics: BlockMetrics,
 }
 
@@ -223,6 +224,9 @@ impl EditorStyleSnapshot {
                 Some(EditorLineStyle {
                     source_range,
                     id,
+                    code_language: (id == EditorStyleId::Code)
+                        .then(|| code.code_language.clone())
+                        .flatten(),
                     metrics: metrics_for(id),
                 })
             })
@@ -238,10 +242,12 @@ impl EditorStyleSnapshot {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct CodeContext {
     in_block: bool,
+    org_end_marker: Option<Arc<str>>,
     markdown_fence: Option<u8>,
+    code_language: Option<Arc<str>>,
 }
 
 fn classification_text(snapshot: &DocumentSnapshot, range: ByteRange) -> String {
@@ -311,11 +317,21 @@ fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> Edit
 fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool {
     match language {
         Language::Org => {
-            if starts_with_ascii_case_insensitive(text, "#+begin_") {
+            if let Some(end_marker) = code.org_end_marker.as_deref() {
+                if text.trim().eq_ignore_ascii_case(end_marker) {
+                    code.in_block = false;
+                    code.org_end_marker = None;
+                    code.code_language = None;
+                    return true;
+                }
+                return false;
+            }
+            if let Some((name, language)) = org_block_start(text) {
                 code.in_block = true;
+                code.org_end_marker = Some(Arc::from(format!("#+end_{name}")));
+                code.code_language = language;
                 true
             } else if starts_with_ascii_case_insensitive(text, "#+end_") {
-                code.in_block = false;
                 true
             } else {
                 false
@@ -332,16 +348,48 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
             let Some(marker) = marker else {
                 return false;
             };
-            if code.in_block && code.markdown_fence == Some(marker) {
+            if code.in_block {
+                if code.markdown_fence != Some(marker) {
+                    return false;
+                }
                 code.in_block = false;
                 code.markdown_fence = None;
-            } else if !code.in_block {
+                code.code_language = None;
+            } else {
                 code.in_block = true;
                 code.markdown_fence = Some(marker);
+                code.code_language = markdown_fence_language(text, marker);
             }
             true
         }
     }
+}
+
+fn org_block_start(text: &str) -> Option<(String, Option<Arc<str>>)> {
+    let rest = text
+        .get("#+begin_".len()..)
+        .filter(|_| starts_with_ascii_case_insensitive(text, "#+begin_"))?;
+    let name = rest
+        .split_once(char::is_whitespace)
+        .map_or(rest, |(name, _)| name);
+    if name.is_empty() {
+        return None;
+    }
+    let name = name.to_ascii_lowercase();
+    let language = (name == "src")
+        .then(|| text.split_whitespace().nth(1).map(Arc::from))
+        .flatten();
+    Some((name, language))
+}
+
+fn markdown_fence_language(text: &str, marker: u8) -> Option<Arc<str>> {
+    let fence_end = text.bytes().take_while(|byte| *byte == marker).count();
+    text.get(fence_end..)?
+        .trim()
+        .split_whitespace()
+        .next()
+        .filter(|language| !language.is_empty())
+        .map(Arc::from)
 }
 
 fn starts_with_ascii_case_insensitive(text: &str, prefix: &str) -> bool {
@@ -466,9 +514,27 @@ pub(super) fn runs(
         ));
     }
 
-    collect_common_semantics(text, theme, &mut spans);
+    let verbatim = matches!(
+        line_style.id,
+        EditorStyleId::Code | EditorStyleId::CodeBoundary
+    );
+    if !verbatim {
+        collect_common_semantics(text, theme, &mut spans);
+    }
+    if line_style.id == EditorStyleId::Code
+        && let Some(language) = line_style.code_language.as_deref()
+        && let Ok(code_spans) = crate::preview::highlight_code(language, text)
+    {
+        spans.extend(code_spans.into_iter().filter_map(|span| {
+            (span.start < span.end
+                && span.end <= text.len()
+                && text.is_char_boundary(span.start)
+                && text.is_char_boundary(span.end))
+            .then(|| (span.start..span.end, code_span_style(span.kind, theme)))
+        }));
+    }
     match language(path) {
-        Language::Org => {
+        Language::Org if !verbatim => {
             collect_delimited(
                 text,
                 "[[",
@@ -495,7 +561,7 @@ pub(super) fn runs(
             }
             collect_org_tags(text, theme.attribute, &mut spans);
         }
-        Language::Markdown => {
+        Language::Markdown if !verbatim => {
             collect_delimited(
                 text,
                 "[",
@@ -508,6 +574,7 @@ pub(super) fn runs(
                 &mut spans,
             );
         }
+        Language::Org | Language::Markdown => {}
     }
 
     let mut boundaries = vec![0, text.len()];
@@ -573,6 +640,28 @@ pub(super) fn runs(
             Some(run)
         })
         .collect()
+}
+
+fn code_span_style(kind: crate::preview::CodeHighlightKind, theme: &Theme) -> SpanStyle {
+    use crate::preview::CodeHighlightKind;
+
+    let color = match kind {
+        CodeHighlightKind::Attribute => theme.attribute,
+        CodeHighlightKind::Boolean | CodeHighlightKind::Constant => theme.constant,
+        CodeHighlightKind::Comment => theme.comment,
+        CodeHighlightKind::Function => theme.function,
+        CodeHighlightKind::Keyword => theme.keyword,
+        CodeHighlightKind::Number => theme.number,
+        CodeHighlightKind::Operator | CodeHighlightKind::Punctuation => theme.operator,
+        CodeHighlightKind::Property | CodeHighlightKind::Variable => theme.variable,
+        CodeHighlightKind::String => theme.string,
+        CodeHighlightKind::Type => theme.type_name,
+    };
+    SpanStyle {
+        color: Some(color),
+        font_style: matches!(kind, CodeHighlightKind::Comment).then_some(FontStyle::Italic),
+        ..SpanStyle::default()
+    }
 }
 
 fn collect_common_semantics(text: &str, theme: &Theme, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
@@ -722,6 +811,7 @@ mod tests {
         let style = EditorLineStyle {
             source_range: ByteRange::new(0, text.len() as u64),
             id,
+            code_language: None,
             metrics: metrics_for(id),
         };
         let runs = runs(
@@ -761,10 +851,88 @@ mod tests {
         let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..4, &cache);
         assert_eq!(styles.lines[0].id, EditorStyleId::CodeBoundary);
         assert_eq!(styles.lines[1].id, EditorStyleId::Code);
+        assert_eq!(styles.lines[1].code_language.as_deref(), Some("rust"));
         assert_eq!(styles.lines[2].id, EditorStyleId::CodeBoundary);
         assert_eq!(styles.lines[3].id, EditorStyleId::Plain);
         let body_only = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 1..2, &cache);
         assert_eq!(body_only.lines[0].id, EditorStyleId::Code);
+    }
+
+    #[test]
+    fn example_block_keeps_nested_org_blocks_verbatim() {
+        let snapshot = DocumentSnapshot::from_utf8(
+            b"#+begin_example\n#+name: hello-rust\n#+begin_src rust :results output\nfn main() {\n    println!(\"hello\");\n}\n#+end_src\n#+end_example\nafter\n".to_vec(),
+        )
+        .unwrap();
+        let cache = EditorSyntaxCache::default();
+        let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..9, &cache);
+
+        assert_eq!(styles.lines[0].id, EditorStyleId::CodeBoundary);
+        assert!(
+            styles.lines[1..7]
+                .iter()
+                .all(|line| line.id == EditorStyleId::Code)
+        );
+        assert_eq!(styles.lines[7].id, EditorStyleId::CodeBoundary);
+        assert_eq!(styles.lines[8].id, EditorStyleId::Plain);
+
+        let tail = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 6..9, &cache);
+        assert_eq!(tail.lines[0].id, EditorStyleId::Code);
+        assert_eq!(tail.lines[1].id, EditorStyleId::CodeBoundary);
+        assert_eq!(tail.lines[2].id, EditorStyleId::Plain);
+    }
+
+    #[test]
+    fn org_code_content_does_not_receive_org_inline_semantics() {
+        let text = "*bold* [[target]] TODO :tag:";
+        let style = EditorLineStyle {
+            source_range: ByteRange::new(0, text.len() as u64),
+            id: EditorStyleId::Code,
+            code_language: None,
+            metrics: metrics_for(EditorStyleId::Code),
+        };
+        let runs = runs(
+            Path::new("a.org"),
+            text,
+            base_run(text.len()),
+            &style,
+            None,
+            current_theme(),
+        );
+
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].len, text.len());
+        assert!(runs[0].underline.is_none());
+        assert!(runs[0].strikethrough.is_none());
+    }
+
+    #[test]
+    fn editor_code_runs_use_the_declared_source_language() {
+        let snapshot =
+            DocumentSnapshot::from_utf8(b"#+begin_src rust\nfn main() {}\n#+end_src\n".to_vec())
+                .unwrap();
+        let styles = EditorStyleSnapshot::for_lines(
+            Path::new("a.org"),
+            &snapshot,
+            0..3,
+            &EditorSyntaxCache::default(),
+        );
+        let text = snapshot.copy_range(styles.lines[1].source_range);
+        let theme = current_theme();
+        let runs = runs(
+            Path::new("a.org"),
+            &text,
+            base_run(text.len()),
+            &styles.lines[1],
+            None,
+            theme,
+        );
+        let keyword_color: gpui::Hsla = rgb(theme.keyword).into();
+        let function_color: gpui::Hsla = rgb(theme.function).into();
+
+        assert_eq!(styles.lines[1].code_language.as_deref(), Some("rust"));
+        assert!(runs.iter().any(|run| run.color == keyword_color));
+        assert!(runs.iter().any(|run| run.color == function_color));
     }
 
     #[test]

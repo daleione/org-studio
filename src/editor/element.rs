@@ -240,6 +240,7 @@ impl Element for EditorElement {
                 marked_display,
                 effective_wrap_width,
                 line_style.id.cache_key(),
+                line_style.code_language.clone(),
             );
             let layout = editor
                 .shape_cache
@@ -638,12 +639,14 @@ fn shape_key(
     marked: Option<std::ops::Range<usize>>,
     wrap_width: Option<Pixels>,
     syntax_key: u8,
+    code_language: Option<Arc<str>>,
 ) -> ShapeKey {
     ShapeKey {
         text: text.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
         wrap_width_bits: wrap_width.map_or(0, |width| f32::from(width).to_bits()),
         syntax_key,
+        code_language,
         marked: marked.map(|range| (range.start, range.end)),
     }
 }

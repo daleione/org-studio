@@ -132,6 +132,7 @@ pub(super) struct ShapeKey {
     pub(super) font_size_bits: u32,
     pub(super) wrap_width_bits: u32,
     pub(super) syntax_key: u8,
+    pub(super) code_language: Option<Arc<str>>,
     pub(super) marked: Option<(usize, usize)>,
 }
 
