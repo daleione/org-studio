@@ -1,8 +1,9 @@
 use super::{
     Arc, BlockKind, BlockNode, DocumentFormat, FoldDirection, FoldSegment, FontWeight, Instant,
-    PreviewRow, PreviewSnapshot, ReadingInteraction, ReadingRowContext, ReadingRowHost,
-    WorkspaceWindow, div, img, minimap, px, render_code_row, render_markdown_block,
-    render_table_row, resolve_image_path, rgb, styled_inline_runs,
+    PreviewRow, PreviewSnapshot, ReadingActionDispatcher, ReadingInteraction,
+    ReadingMinimapWidthDispatcher, ReadingRowContext, ReadingRowHost, div, img, minimap, px,
+    render_code_row, render_markdown_block, render_table_row, resolve_image_path, rgb,
+    styled_inline_runs,
 };
 use crate::preview::BlockId;
 use crate::preview::{
@@ -15,21 +16,22 @@ use crate::preview::{
 };
 use gpui::{list, prelude::*};
 
-pub(in crate::preview) struct ReadingRenderOptions {
-    pub(in crate::preview) minimap_visible: bool,
-    pub(in crate::preview) pane_width: f32,
-    pub(in crate::preview) minimap_width: f32,
-    pub(in crate::preview) minimap_resize_preview: Option<f32>,
-    pub(in crate::preview) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
-    pub(in crate::preview) generation: u64,
-    pub(in crate::preview) opened_at: Instant,
-    pub(in crate::preview) style: super::PreviewStyle,
+pub(crate) struct ReadingRenderOptions {
+    pub(crate) minimap_visible: bool,
+    pub(crate) pane_width: f32,
+    pub(crate) minimap_width: f32,
+    pub(crate) minimap_resize_preview: Option<f32>,
+    pub(crate) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
+    pub(crate) generation: u64,
+    pub(crate) opened_at: Instant,
+    pub(crate) style: super::PreviewStyle,
+    pub(crate) dispatch_action: ReadingActionDispatcher,
+    pub(crate) change_minimap_width: ReadingMinimapWidthDispatcher,
 }
 
-pub(in crate::preview) fn render_reading_document(
+pub(crate) fn render_reading_document(
     state: ReadingRenderState,
     panel_entity: gpui::Entity<ReadingPreviewPanel>,
-    workspace_entity: gpui::Entity<WorkspaceWindow>,
     options: ReadingRenderOptions,
 ) -> gpui::Div {
     let ReadingRenderState {
@@ -54,16 +56,17 @@ pub(in crate::preview) fn render_reading_document(
         generation,
         opened_at,
         style,
+        dispatch_action,
+        change_minimap_width,
     } = options;
     let palette = style.palette;
     let reading_display_map = document.display_map.clone();
     let minimap_list_state = list_state.clone();
     let minimap_entity = panel_entity.clone();
-    let minimap_resize_entity = workspace_entity.clone();
     let allow_minimap_refinement = fold_animation.is_none();
     let interaction = ReadingInteraction {
         panel: panel_entity.clone(),
-        workspace: workspace_entity.clone(),
+        dispatch: dispatch_action,
         action_states,
         copy_feedback,
     };
@@ -194,11 +197,7 @@ pub(in crate::preview) fn render_reading_document(
                             this.seek_minimap(geometry_revision, offset, window, cx);
                         });
                     },
-                    move |change, _, cx| {
-                        minimap_resize_entity.update(cx, |this, cx| {
-                            this.change_minimap_width(change, cx);
-                        });
-                    },
+                    move |change, _, cx| change_minimap_width(change, cx),
                 ))
             },
         )
@@ -523,14 +522,12 @@ fn render_block(
                     )
                     .when_some(action.zip(interaction), |element, (action, interaction)| {
                         element.cursor_pointer().on_click(move |_, window, cx| {
-                            interaction.workspace.update(cx, |workspace, cx| {
-                                workspace.dispatch_preview_action(
-                                    action.clone(),
-                                    interaction.panel.clone(),
-                                    window,
-                                    cx,
-                                );
-                            });
+                            (interaction.dispatch)(
+                                action.clone(),
+                                interaction.panel.clone(),
+                                window,
+                                cx,
+                            );
                         })
                     }),
             )
@@ -706,7 +703,7 @@ fn reading_chip(
         .child(text.into())
 }
 
-pub(super) fn render_list_item(
+pub(crate) fn render_list_item(
     document: &Arc<PreviewSnapshot>,
     display_row: usize,
     content: gpui::AnyElement,
@@ -803,14 +800,7 @@ fn reading_list_marker(
             .child(label)
             .when_some(action.zip(interaction), |element, (action, interaction)| {
                 element.cursor_pointer().on_click(move |_, window, cx| {
-                    interaction.workspace.update(cx, |workspace, cx| {
-                        workspace.dispatch_preview_action(
-                            action.clone(),
-                            interaction.panel.clone(),
-                            window,
-                            cx,
-                        );
-                    });
+                    (interaction.dispatch)(action.clone(), interaction.panel.clone(), window, cx);
                 })
             });
     }
@@ -841,7 +831,7 @@ fn reading_marker_width(label: &str, ordered: bool) -> f32 {
     }
 }
 
-pub(super) fn reading_code_label(
+pub(crate) fn reading_code_label(
     language: Option<&str>,
     action: Option<crate::preview::PreviewAction>,
     interaction: Option<&ReadingInteraction>,
@@ -924,20 +914,18 @@ pub(super) fn reading_code_label(
                     })
                     .child(copy_label)
                     .on_click(move |_, window, cx| {
-                        interaction.workspace.update(cx, |workspace, cx| {
-                            workspace.dispatch_preview_action(
-                                action.clone(),
-                                interaction.panel.clone(),
-                                window,
-                                cx,
-                            );
-                        });
+                        (interaction.dispatch)(
+                            action.clone(),
+                            interaction.panel.clone(),
+                            window,
+                            cx,
+                        );
                     }),
             )
         })
 }
 
-pub(super) fn reading_inline(
+pub(crate) fn reading_inline(
     document: &PreviewSnapshot,
     display_row: usize,
     runs: &DisplayRuns,
@@ -974,14 +962,12 @@ pub(super) fn reading_inline(
             let Some(action) = actions.get(index).cloned() else {
                 return;
             };
-            interaction.workspace.update(cx, |workspace, cx| {
-                workspace.dispatch_preview_action(action, interaction.panel.clone(), window, cx);
-            });
+            (interaction.dispatch)(action, interaction.panel.clone(), window, cx);
         })
         .into_any_element()
 }
 
-pub(super) fn reading_fallback(
+pub(crate) fn reading_fallback(
     content: impl IntoElement,
     font_size: f32,
     line_height: f32,

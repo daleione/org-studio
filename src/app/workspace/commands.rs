@@ -1,15 +1,24 @@
 use gpui::{ListOffset, px};
 use std::{sync::Arc, time::Duration};
 
-use super::{
-    BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
-    ContentRoute, Context, EmacsOutcome, InvocationOrigin, KEY_FEEDBACK_DURATION, KeyDownEvent,
-    KeyStroke, PrefixArgument, Window, WorkspaceWindow, built_in_contexts, command_count,
-    compile_input_profile, dired_bindings, preview_bindings, workspace_bindings,
+use gpui::{Context, KeyDownEvent, Window};
+
+use crate::{
+    app::{ContentRoute, WorkspaceWindow},
+    command::{
+        BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
+        InvocationOrigin, PrefixArgument,
+    },
+    input::{EmacsOutcome, compile_input_profile},
+    keymap::KeyStroke,
+    preview::{
+        KEY_FEEDBACK_DURATION, PreviewStyleId, built_in_contexts, command_count, dired_bindings,
+        preview_bindings, preview_style, workspace_bindings,
+    },
 };
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn dispatch_command(
+    pub(crate) fn dispatch_command(
         &mut self,
         name: &str,
         window: &mut Window,
@@ -34,7 +43,7 @@ impl WorkspaceWindow {
         );
     }
 
-    pub(in crate::preview) fn dispatch_command_key(
+    pub(crate) fn dispatch_command_key(
         &mut self,
         command: CommandKey,
         prefix: PrefixArgument,
@@ -61,7 +70,7 @@ impl WorkspaceWindow {
         );
     }
 
-    pub(in crate::preview) fn execute_command(
+    pub(crate) fn execute_command(
         &mut self,
         implementation: CommandImplementation,
         prefix: PrefixArgument,
@@ -71,7 +80,7 @@ impl WorkspaceWindow {
         if !matches!(
             implementation,
             CommandImplementation::Builtin(BuiltinCommand::GlobalVisibilityCycle)
-        ) && let Some(panel) = self.preview_panel()
+        ) && let Some(panel) = self.reading_panel()
         {
             panel.update(cx, |panel, _| panel.reset_cycle_continuation());
         }
@@ -116,7 +125,7 @@ impl WorkspaceWindow {
                 self.request_quit(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ScrollForward) => {
-                if let Some(panel) = self.preview_panel() {
+                if let Some(panel) = self.reading_panel() {
                     panel.update(cx, |panel, _| {
                         panel.scroll_by(px(640.0 * command_count(prefix)));
                     });
@@ -124,7 +133,7 @@ impl WorkspaceWindow {
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::ScrollBackward) => {
-                if let Some(panel) = self.preview_panel() {
+                if let Some(panel) = self.reading_panel() {
                     panel.update(cx, |panel, _| {
                         panel.scroll_by(px(-640.0 * command_count(prefix)));
                     });
@@ -132,7 +141,7 @@ impl WorkspaceWindow {
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::BeginningOfDocument) => {
-                if let Some(panel) = self.preview_panel() {
+                if let Some(panel) = self.reading_panel() {
                     panel.update(cx, |panel, _| {
                         panel.scroll_to(ListOffset::default());
                     });
@@ -140,7 +149,7 @@ impl WorkspaceWindow {
                 cx.notify();
             }
             CommandImplementation::Builtin(BuiltinCommand::EndOfDocument) => {
-                if let Some(panel) = self.preview_panel() {
+                if let Some(panel) = self.reading_panel() {
                     panel.update(cx, |panel, _| {
                         panel.scroll_to_end();
                     });
@@ -222,17 +231,17 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn show_editor(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_editor(&mut self, cx: &mut Context<Self>) {
         self.document_workspace.layout = crate::app::WorkspaceLayout::Single;
         self.set_active_surface(crate::app::PaneSurface::Editor, cx);
     }
 
-    pub(in crate::preview) fn show_reading(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_reading(&mut self, cx: &mut Context<Self>) {
         self.document_workspace.layout = crate::app::WorkspaceLayout::Single;
         self.set_active_surface(crate::app::PaneSurface::Reading, cx);
     }
 
-    pub(in crate::preview) fn show_split(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_split(&mut self, cx: &mut Context<Self>) {
         self.document_workspace.layout = crate::app::WorkspaceLayout::Split;
         self.cancel_split_resize();
         self.reconcile_visible_editor_panes(cx);
@@ -243,7 +252,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn toggle_pane_surface(
+    pub(crate) fn toggle_pane_surface(
         &mut self,
         pane: crate::app::PaneSide,
         cx: &mut Context<Self>,
@@ -256,11 +265,7 @@ impl WorkspaceWindow {
         self.set_active_surface(surface, cx);
     }
 
-    pub(in crate::preview) fn activate_pane(
-        &mut self,
-        pane: crate::app::PaneSide,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn activate_pane(&mut self, pane: crate::app::PaneSide, cx: &mut Context<Self>) {
         let dismissed_popover = self.status.dismiss_popover();
         if self.document_workspace.active_pane == pane {
             if dismissed_popover {
@@ -288,7 +293,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(super) fn set_active_surface(
+    pub(crate) fn set_active_surface(
         &mut self,
         surface: crate::app::PaneSurface,
         cx: &mut Context<Self>,
@@ -313,7 +318,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(super) fn focus_active_surface(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn focus_active_surface(&mut self, cx: &mut Context<Self>) {
         match self.document_workspace.active_surface() {
             crate::app::PaneSurface::Editor => {
                 if let Some(editor) = self.editor(self.document_workspace.active_pane) {
@@ -326,7 +331,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn toggle_soft_wrap(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_soft_wrap(&mut self, cx: &mut Context<Self>) {
         self.soft_wrap = !self.soft_wrap;
         if let Some(ready) = self.state.ready() {
             for editor in [&ready.editors.left, &ready.editors.right]
@@ -340,7 +345,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn key_down(
+    pub(crate) fn key_down(
         &mut self,
         event: &KeyDownEvent,
         window: &mut Window,
@@ -422,7 +427,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn install_document_keymap(&mut self) {
+    pub(crate) fn install_document_keymap(&mut self) {
         if matches!(
             self.document_workspace.active_surface(),
             crate::app::PaneSurface::Reading
@@ -453,15 +458,15 @@ impl WorkspaceWindow {
         self.keyboard.replace_configuration(configuration);
     }
 
-    pub(in crate::preview) fn install_dired_keymap(&mut self) {
+    pub(crate) fn install_dired_keymap(&mut self) {
         self.install_route_keymap(true, false);
     }
 
-    pub(in crate::preview) fn install_sidebar_keymap(&mut self) {
+    pub(crate) fn install_sidebar_keymap(&mut self) {
         self.install_route_keymap(true, true);
     }
 
-    pub(in crate::preview) fn install_route_keymap(&mut self, dired: bool, sidebar: bool) {
+    pub(crate) fn install_route_keymap(&mut self, dired: bool, sidebar: bool) {
         let contexts = built_in_contexts();
         let generation = self.keyboard.generation().wrapping_add(1);
         let bindings = if dired {
@@ -491,7 +496,7 @@ impl WorkspaceWindow {
         self.keyboard.replace_configuration(configuration);
     }
 
-    pub(in crate::preview) fn schedule_which_key(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_which_key(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         let request = self.which_key_request;
         self.file_manager.set_help_visible(false);
@@ -530,7 +535,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn cancel_which_key(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn cancel_which_key(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
         self.which_key_task = None;
         if !self.which_key_items.is_empty() || self.file_manager.help_visible() {
@@ -540,7 +545,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn schedule_key_feedback_clear(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_key_feedback_clear(&mut self, cx: &mut Context<Self>) {
         self.key_feedback_request = self.key_feedback_request.wrapping_add(1);
         let request = self.key_feedback_request;
         let delay = cx.background_executor().timer(KEY_FEEDBACK_DURATION);
@@ -558,14 +563,14 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn cancel_key_feedback(&mut self) {
+    pub(crate) fn cancel_key_feedback(&mut self) {
         self.key_feedback_request = self.key_feedback_request.wrapping_add(1);
         self.key_feedback_task = None;
     }
 
-    pub(in crate::preview) fn select_reading_style(
+    pub(crate) fn select_reading_style(
         &mut self,
-        style_id: super::super::PreviewStyleId,
+        style_id: PreviewStyleId,
         cx: &mut Context<Self>,
     ) {
         let changed = self.apply_reading_style(style_id, cx);
@@ -576,16 +581,16 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn apply_reading_style(
+    pub(crate) fn apply_reading_style(
         &mut self,
-        style_id: super::super::PreviewStyleId,
+        style_id: PreviewStyleId,
         cx: &mut Context<Self>,
     ) -> bool {
         if self.reading_style == style_id {
             return false;
         }
-        let previous = *super::super::preview_style(self.reading_style);
-        let next = *super::super::preview_style(style_id);
+        let previous = *preview_style(self.reading_style);
+        let next = *preview_style(style_id);
         self.reading_style = style_id;
         self.status.clear_layout_cache();
         if let Some(ready) = self.state.ready() {

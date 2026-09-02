@@ -1,26 +1,25 @@
-use super::{Context, Duration, Instant, Window, WorkspaceWindow, px};
+use gpui::{Context, Window, px};
+use std::time::{Duration, Instant};
+
+use crate::{app::WorkspaceWindow, preview::PreviewStyleId};
 
 pub(crate) struct ScrollBenchmark {
-    pub(in crate::preview) target_frames: usize,
-    pub(in crate::preview) warmup_remaining: usize,
-    pub(in crate::preview) sampling_started: bool,
-    pub(in crate::preview) scroll_pixels: f32,
-    pub(in crate::preview) samples: Vec<Duration>,
-    pub(in crate::preview) last_frame: Instant,
-    pub(in crate::preview) style_switches_remaining: usize,
-    pub(in crate::preview) style_switch_interval: usize,
-    pub(in crate::preview) style_switch_count: usize,
-    pub(in crate::preview) resize_narrow_width: f32,
-    pub(in crate::preview) resize_wide_width: f32,
-    pub(in crate::preview) resize_to_wide: bool,
+    pub(crate) target_frames: usize,
+    pub(crate) warmup_remaining: usize,
+    pub(crate) sampling_started: bool,
+    pub(crate) scroll_pixels: f32,
+    pub(crate) samples: Vec<Duration>,
+    pub(crate) last_frame: Instant,
+    pub(crate) style_switches_remaining: usize,
+    pub(crate) style_switch_interval: usize,
+    pub(crate) style_switch_count: usize,
+    pub(crate) resize_narrow_width: f32,
+    pub(crate) resize_wide_width: f32,
+    pub(crate) resize_to_wide: bool,
 }
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn schedule_scroll_sample(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn schedule_scroll_sample(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         cx.on_next_frame(window, |this, window, cx| {
             let now = Instant::now();
             let Some(benchmark) = this.scroll_benchmark.as_mut() else {
@@ -51,7 +50,7 @@ impl WorkspaceWindow {
                 crate::perf_tracing::reset_samples();
                 benchmark.last_frame = now;
                 let scroll_pixels = benchmark.scroll_pixels;
-                if let Some(panel) = this.preview_panel() {
+                if let Some(panel) = this.reading_panel() {
                     panel.update(cx, |panel, _| panel.scroll_by(px(scroll_pixels)));
                 }
                 this.schedule_scroll_sample(window, cx);
@@ -136,18 +135,14 @@ impl WorkspaceWindow {
                 let scroll_pixels = benchmark.scroll_pixels;
                 if let Some(width) = resize_width {
                     let next_style = match this.reading_style {
-                        super::super::PreviewStyleId::Base => {
-                            super::super::PreviewStyleId::WarmClay
-                        }
-                        super::super::PreviewStyleId::WarmClay => {
-                            super::super::PreviewStyleId::Base
-                        }
+                        PreviewStyleId::Base => PreviewStyleId::WarmClay,
+                        PreviewStyleId::WarmClay => PreviewStyleId::Base,
                     };
                     this.apply_reading_style(next_style, cx);
                     let viewport = window.viewport_size();
                     window.resize(gpui::size(px(width), viewport.height));
                 }
-                if let Some(panel) = this.preview_panel() {
+                if let Some(panel) = this.reading_panel() {
                     panel.update(cx, |panel, _| panel.scroll_by(px(scroll_pixels)));
                 }
                 this.schedule_scroll_sample(window, cx);

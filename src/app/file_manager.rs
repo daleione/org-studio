@@ -10,26 +10,23 @@ use gpui::{
     MouseButton, ParentElement, PathPromptOptions, Styled, Window, div, list, prelude::*, px, rgb,
 };
 
-use super::{ContentRoute, DiredStatus, PreviewLoadState, WorkspaceWindow};
+use super::{ContentRoute, DiredStatus, WorkspaceLoadState, WorkspaceWindow};
 use crate::{
     file_manager::{
         ConflictPolicy, DiredSession, EntryKind, Mark, OperationPlan, scan_directory_cancellable,
     },
     navigation::{NavigationCause, SelectionIntent, TransactionId, ViewRevision},
+    preview::dired_command_items,
     theme::current_theme,
 };
 
-#[path = "file_manager_breadcrumb.rs"]
 mod breadcrumb;
-#[path = "file_manager_operations.rs"]
 mod operations;
-#[path = "sidebar.rs"]
-pub(super) mod sidebar;
-#[path = "file_manager_watch.rs"]
+pub(crate) mod sidebar;
 mod watch;
 
 #[derive(Clone, Copy)]
-pub(super) struct DiredContextMenu {
+pub(crate) struct DiredContextMenu {
     position: gpui::Point<gpui::Pixels>,
 }
 
@@ -80,7 +77,7 @@ pub(crate) struct FileManagerHost {
 }
 
 impl FileManagerHost {
-    pub(super) fn new(sidebar_width: u16) -> Self {
+    pub(crate) fn new(sidebar_width: u16) -> Self {
         Self {
             watch_task: None,
             watch_request: 0,
@@ -108,52 +105,52 @@ impl FileManagerHost {
         }
     }
 
-    pub(super) fn reset_for_document(&mut self) {
+    pub(crate) fn reset_for_document(&mut self) {
         self.sidebar_focused = false;
         self.task = None;
         self.scan_transaction = None;
         self.refresh_pending = false;
     }
 
-    pub(super) fn sidebar_width(&self) -> u16 {
+    pub(crate) fn sidebar_width(&self) -> u16 {
         self.sidebar_width
     }
 
-    pub(super) fn sidebar_visible(&self) -> bool {
+    pub(crate) fn sidebar_visible(&self) -> bool {
         self.sidebar_visible
     }
 
-    pub(super) fn sidebar_focused(&self) -> bool {
+    pub(crate) fn sidebar_focused(&self) -> bool {
         self.sidebar_focused
     }
 
-    pub(super) fn session(&self) -> Option<&DiredSession> {
+    pub(crate) fn session(&self) -> Option<&DiredSession> {
         self.session.as_ref()
     }
 
-    pub(super) fn status(&self) -> Option<&DiredStatus> {
+    pub(crate) fn status(&self) -> Option<&DiredStatus> {
         self.status.as_ref()
     }
 
-    pub(super) fn dismiss_context_menu(&mut self) -> bool {
+    pub(crate) fn dismiss_context_menu(&mut self) -> bool {
         self.context_menu.take().is_some()
     }
 
-    pub(super) fn set_help_visible(&mut self, visible: bool) {
+    pub(crate) fn set_help_visible(&mut self, visible: bool) {
         self.help_visible = visible;
     }
 
-    pub(super) fn help_visible(&self) -> bool {
+    pub(crate) fn help_visible(&self) -> bool {
         self.help_visible
     }
 
-    pub(super) fn is_resizing_sidebar(&self) -> bool {
+    pub(crate) fn is_resizing_sidebar(&self) -> bool {
         self.sidebar_resize.is_some()
     }
 }
 
 impl WorkspaceWindow {
-    pub(super) fn schedule_file_manager_presentation(
+    pub(crate) fn schedule_file_manager_presentation(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -192,17 +189,17 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn document_path<'a>(&'a self, cx: &'a gpui::App) -> Option<&'a std::path::Path> {
+    pub(crate) fn document_path<'a>(&'a self, cx: &'a gpui::App) -> Option<&'a std::path::Path> {
         match &self.state {
-            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
+            WorkspaceLoadState::Loading { path, .. } | WorkspaceLoadState::Failed { path, .. } => {
                 Some(path)
             }
-            PreviewLoadState::Ready { document } => Some(document.session.read(cx).path()),
-            PreviewLoadState::Empty => None,
+            WorkspaceLoadState::Ready { document } => Some(document.session.read(cx).path()),
+            WorkspaceLoadState::Empty => None,
         }
     }
 
-    pub(super) fn choose_directory(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn choose_directory(&mut self, cx: &mut Context<Self>) {
         let prompt = cx.prompt_for_paths(PathPromptOptions {
             files: false,
             directories: true,
@@ -220,7 +217,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(super) fn open_default_dired(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn open_default_dired(&mut self, cx: &mut Context<Self>) {
         let directory = self
             .file_manager
             .session
@@ -236,7 +233,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn open_file_manager(&mut self, directory: PathBuf, cx: &mut Context<Self>) {
+    pub(crate) fn open_file_manager(&mut self, directory: PathBuf, cx: &mut Context<Self>) {
         let directory = absolute_directory(directory);
         self.content_route = ContentRoute::FileManager;
         self.file_manager.sidebar_focused = false;
@@ -404,7 +401,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(super) fn dired_history(&mut self, forward: bool, cx: &mut Context<Self>) {
+    pub(crate) fn dired_history(&mut self, forward: bool, cx: &mut Context<Self>) {
         let viewport = self.file_manager.list_state.logical_scroll_top();
         if let Some(current) = self
             .file_manager
@@ -431,7 +428,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn return_to_document(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn return_to_document(&mut self, cx: &mut Context<Self>) {
         self.content_route = ContentRoute::Document;
         self.file_manager.sidebar_focused = false;
         if !self.file_manager.sidebar_visible {
@@ -466,7 +463,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(super) fn dired_move(&mut self, delta: i64, cx: &mut Context<Self>) {
+    pub(crate) fn dired_move(&mut self, delta: i64, cx: &mut Context<Self>) {
         if let Some(session) = self.file_manager.session.as_mut() {
             session.move_cursor(delta);
             if let Some(id) = session.cursor()
@@ -484,7 +481,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn dired_open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn dired_open_selected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let opened_from_full_page = self.content_route == ContentRoute::FileManager;
         let current_directory = self
             .file_manager
@@ -521,7 +518,7 @@ impl WorkspaceWindow {
             Some((path, EntryKind::OrgFile | EntryKind::Markdown)) => {
                 let already_open = matches!(
                     &self.state,
-                    PreviewLoadState::Loading { path: current, .. }
+                    WorkspaceLoadState::Loading { path: current, .. }
                         if current == &path
                 ) || self.document_path(cx) == Some(path.as_path());
                 self.content_route = ContentRoute::Document;
@@ -542,7 +539,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn dired_up(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_up(&mut self, cx: &mut Context<Self>) {
         let current = self
             .file_manager
             .session
@@ -568,11 +565,11 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn reload_file_manager(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reload_file_manager(&mut self, cx: &mut Context<Self>) {
         self.refresh_file_manager(NavigationCause::Refresh, cx);
     }
 
-    pub(super) fn refresh_file_manager(&mut self, cause: NavigationCause, cx: &mut Context<Self>) {
+    pub(crate) fn refresh_file_manager(&mut self, cause: NavigationCause, cx: &mut Context<Self>) {
         if self.file_manager.scan_transaction.is_some() {
             self.file_manager.refresh_pending = true;
             return;
@@ -588,27 +585,27 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn dired_mark(&mut self, mark: Mark, cx: &mut Context<Self>) {
+    pub(crate) fn dired_mark(&mut self, mark: Mark, cx: &mut Context<Self>) {
         if let Some(session) = self.file_manager.session.as_mut() {
             session.mark_selected(mark);
             self.reveal_dired_cursor();
             cx.notify();
         }
     }
-    pub(super) fn dired_unmark(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_unmark(&mut self, cx: &mut Context<Self>) {
         if let Some(session) = self.file_manager.session.as_mut() {
             session.unmark_selected();
             self.reveal_dired_cursor();
             cx.notify();
         }
     }
-    pub(super) fn dired_unmark_all(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_unmark_all(&mut self, cx: &mut Context<Self>) {
         if let Some(session) = self.file_manager.session.as_mut() {
             session.unmark_all();
             cx.notify();
         }
     }
-    pub(super) fn dired_invert_marks(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_invert_marks(&mut self, cx: &mut Context<Self>) {
         if let Some(session) = self.file_manager.session.as_mut() {
             session.invert_marks();
             cx.notify();
@@ -633,21 +630,21 @@ impl WorkspaceWindow {
                 .scroll_to_reveal_item(index);
         }
     }
-    pub(super) fn show_dired_shortcuts(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_dired_shortcuts(&mut self, cx: &mut Context<Self>) {
         self.which_key_request = self.which_key_request.wrapping_add(1);
-        self.which_key_items = Arc::new(super::dired_command_items(&self.commands));
+        self.which_key_items = Arc::new(dired_command_items(&self.commands));
         self.file_manager.help_visible = true;
         cx.notify();
     }
 
-    pub(super) fn workspace_body(
+    pub(crate) fn workspace_body(
         &self,
         entity: Entity<Self>,
         viewport_width: f32,
         window: &Window,
         cx: &gpui::App,
     ) -> gpui::Div {
-        if matches!(self.state, PreviewLoadState::Empty)
+        if matches!(self.state, WorkspaceLoadState::Empty)
             && self.content_route == ContentRoute::Document
         {
             return self.body(entity, viewport_width, window, cx);

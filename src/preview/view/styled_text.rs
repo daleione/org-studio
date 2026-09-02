@@ -42,7 +42,7 @@ pub(in crate::preview) fn code_highlight_style(
     }
 }
 
-pub(in crate::preview) fn styled_inline_runs(
+pub(crate) fn styled_inline_runs(
     text: gpui::SharedString,
     spans: Arc<[InlineSpan]>,
     preview_style: PreviewStyle,

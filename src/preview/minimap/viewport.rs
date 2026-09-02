@@ -12,36 +12,32 @@ use crate::preview::{
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[cfg(test)]
-pub(in crate::preview) struct MinimapHitRow {
-    pub(in crate::preview) top: f32,
-    pub(in crate::preview) bottom: f32,
-    pub(in crate::preview) presentation_index: usize,
-    pub(in crate::preview) offset_in_item: f32,
+pub(crate) struct MinimapHitRow {
+    pub(crate) top: f32,
+    pub(crate) bottom: f32,
+    pub(crate) presentation_index: usize,
+    pub(crate) offset_in_item: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(in crate::preview) struct MinimapViewport {
-    pub(in crate::preview) content_top: f32,
-    pub(in crate::preview) thumb: ThumbGeometry,
-    pub(in crate::preview) scroll_ratio: f32,
-    pub(in crate::preview) interaction_height: f32,
+pub(crate) struct MinimapViewport {
+    pub(crate) content_top: f32,
+    pub(crate) thumb: ThumbGeometry,
+    pub(crate) scroll_ratio: f32,
+    pub(crate) interaction_height: f32,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(in crate::preview) struct MinimapInteractionAnchor {
-    pub(in crate::preview) layout: crate::preview::layout::LayoutKey,
-    pub(in crate::preview) width: u16,
-    pub(in crate::preview) rows_signature: u64,
-    pub(in crate::preview) interaction_height: f32,
-    pub(in crate::preview) content_top: f32,
+pub(crate) struct MinimapInteractionAnchor {
+    pub(crate) layout: crate::preview::layout::LayoutKey,
+    pub(crate) width: u16,
+    pub(crate) rows_signature: u64,
+    pub(crate) interaction_height: f32,
+    pub(crate) content_top: f32,
 }
 
 impl MinimapInteractionAnchor {
-    pub(in crate::preview) fn matches(
-        self,
-        index: &MinimapLineIndex,
-        interaction_height: f32,
-    ) -> bool {
+    pub(crate) fn matches(self, index: &MinimapLineIndex, interaction_height: f32) -> bool {
         self.layout == index.layout
             && self.width == index.width
             && self.rows_signature == index.rows_signature
@@ -49,7 +45,7 @@ impl MinimapInteractionAnchor {
     }
 }
 
-pub(in crate::preview) fn minimap_projection_height(
+pub(crate) fn minimap_projection_height(
     total_lines: usize,
     track_height: f32,
     density: MinimapDensity,
@@ -59,7 +55,7 @@ pub(in crate::preview) fn minimap_projection_height(
         .max(0.0)
 }
 
-pub(in crate::preview) fn minimap_visible_display_range(
+pub(crate) fn minimap_visible_display_range(
     index: &MinimapLineIndex,
     scroll_pixels: f32,
     viewport_pixels: f32,
@@ -71,7 +67,7 @@ pub(in crate::preview) fn minimap_visible_display_range(
     (top, bottom.max(top))
 }
 
-pub(in crate::preview) fn minimap_thumb_height_for_scroll(
+pub(crate) fn minimap_thumb_height_for_scroll(
     index: &MinimapLineIndex,
     scroll_pixels: f32,
     viewport_pixels: f32,
@@ -88,7 +84,7 @@ pub(in crate::preview) fn minimap_thumb_height_for_scroll(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn minimap_viewport(
+pub(crate) fn minimap_viewport(
     metrics: ScrollMetrics,
     total_lines: usize,
     track_height: f32,
@@ -119,7 +115,7 @@ pub(in crate::preview) fn minimap_viewport(
     }
 }
 
-pub(in crate::preview) fn minimap_viewport_for_list(
+pub(crate) fn minimap_viewport_for_list(
     index: &MinimapLineIndex,
     list_state: &ListState,
     track_height: f32,
@@ -162,7 +158,7 @@ pub(in crate::preview) fn minimap_viewport_for_list(
     }
 }
 
-pub(in crate::preview) fn minimap_viewport_for_list_with_anchor(
+pub(crate) fn minimap_viewport_for_list_with_anchor(
     index: &MinimapLineIndex,
     list_state: &ListState,
     track_height: f32,
@@ -199,7 +195,7 @@ pub(in crate::preview) fn minimap_viewport_for_list_with_anchor(
     viewport
 }
 
-pub(in crate::preview) fn minimap_anchor_for_thumb_top(
+pub(crate) fn minimap_anchor_for_thumb_top(
     index: &MinimapLineIndex,
     list_state: &ListState,
     track_height: f32,
@@ -237,7 +233,7 @@ pub(in crate::preview) fn minimap_anchor_for_thumb_top(
     }
 }
 
-pub(in crate::preview) fn minimap_thumb_for_drag(
+pub(crate) fn minimap_thumb_for_drag(
     viewport: MinimapViewport,
     session: Option<MinimapDragSession>,
 ) -> ThumbGeometry {
@@ -253,21 +249,21 @@ pub(in crate::preview) fn minimap_thumb_for_drag(
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(in crate::preview) struct MinimapClickTarget {
-    pub(in crate::preview) offset: ListOffset,
-    pub(in crate::preview) ratio: f32,
-    pub(in crate::preview) clicked_display: f32,
-    pub(in crate::preview) thumb_top: f32,
+pub(crate) struct MinimapClickTarget {
+    pub(crate) offset: ListOffset,
+    pub(crate) ratio: f32,
+    pub(crate) clicked_display: f32,
+    pub(crate) thumb_top: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct MinimapSourceTarget {
-    pub(in crate::preview) point: SourcePoint,
-    pub(in crate::preview) row: VisualRowId,
-    pub(in crate::preview) bias: Bias,
+pub(crate) struct MinimapSourceTarget {
+    pub(crate) point: SourcePoint,
+    pub(crate) row: VisualRowId,
+    pub(crate) bias: Bias,
 }
 
-pub(in crate::preview) fn source_target_for_list_offset(
+pub(crate) fn source_target_for_list_offset(
     projection: &ReadingProjection,
     presentation_rows: &[usize],
     offset: ListOffset,
@@ -289,7 +285,7 @@ pub(in crate::preview) fn source_target_for_list_offset(
     })
 }
 
-pub(in crate::preview) fn minimap_click_target_for_viewport(
+pub(crate) fn minimap_click_target_for_viewport(
     index: &MinimapLineIndex,
     list_state: &ListState,
     viewport: MinimapViewport,
@@ -326,7 +322,7 @@ pub(in crate::preview) fn minimap_click_target_for_viewport(
     }
 }
 
-pub(in crate::preview) fn minimap_drag_target(
+pub(crate) fn minimap_drag_target(
     local_y: f32,
     session: MinimapDragSession,
     thumb_height: f32,
@@ -335,7 +331,7 @@ pub(in crate::preview) fn minimap_drag_target(
     crate::minimap::drag_target(local_y, session, thumb_height, track_height)
 }
 
-pub(in crate::preview) fn scroll_ratio_after_wheel(
+pub(crate) fn scroll_ratio_after_wheel(
     index: &MinimapLineIndex,
     list_state: &ListState,
     wheel_delta_y: f32,
@@ -351,11 +347,7 @@ pub(in crate::preview) fn scroll_ratio_after_wheel(
     (current - wheel_delta_y).clamp(0.0, max_scroll_pixels) / max_scroll_pixels
 }
 
-pub(in crate::preview) fn scroll_list_to_ratio(
-    index: &MinimapLineIndex,
-    list_state: &ListState,
-    ratio: f32,
-) {
+pub(crate) fn scroll_list_to_ratio(index: &MinimapLineIndex, list_state: &ListState, ratio: f32) {
     let ratio = ratio.clamp(0.0, 1.0);
     if ratio >= 1.0 - f32::EPSILON && list_state.item_count() > 0 {
         list_state.scroll_to(ListOffset {
@@ -371,43 +363,37 @@ pub(in crate::preview) fn scroll_list_to_ratio(
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(in crate::preview) struct ThumbGeometry {
+pub(crate) struct ThumbGeometry {
     pub top: f32,
     pub height: f32,
 }
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(in crate::preview) struct MinimapLayout {
-    pub(in crate::preview) first_line: usize,
-    pub(in crate::preview) thumb: ThumbGeometry,
+pub(crate) struct MinimapLayout {
+    pub(crate) first_line: usize,
+    pub(crate) thumb: ThumbGeometry,
 }
 
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub(in crate::preview) struct ScrollMetrics {
-    pub(in crate::preview) offset: f32,
-    pub(in crate::preview) max_offset: f32,
-    pub(in crate::preview) viewport: f32,
+pub(crate) struct ScrollMetrics {
+    pub(crate) offset: f32,
+    pub(crate) max_offset: f32,
+    pub(crate) viewport: f32,
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn hit_test_minimap_row(
-    rows: &[MinimapHitRow],
-    y: f32,
-) -> Option<MinimapHitRow> {
+pub(crate) fn hit_test_minimap_row(rows: &[MinimapHitRow], y: f32) -> Option<MinimapHitRow> {
     rows.iter()
         .find(|row| y >= row.top && y < row.bottom)
         .copied()
 }
 
-pub(in crate::preview) use crate::minimap::thumb_alphas;
+pub(crate) use crate::minimap::thumb_alphas;
 
 #[cfg(test)]
-pub(in crate::preview) fn local_y_ratio(
-    pointer_y: gpui::Pixels,
-    bounds: Bounds<gpui::Pixels>,
-) -> f32 {
+pub(crate) fn local_y_ratio(pointer_y: gpui::Pixels, bounds: Bounds<gpui::Pixels>) -> f32 {
     let height = f32::from(bounds.size.height);
     if height <= 0.0 {
         0.0
@@ -417,7 +403,7 @@ pub(in crate::preview) fn local_y_ratio(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn seek_to_ratio(list_state: &ListState, ratio: f32, center: bool) {
+pub(crate) fn seek_to_ratio(list_state: &ListState, ratio: f32, center: bool) {
     let metrics = scroll_metrics(list_state);
     let mut offset = ratio.clamp(0.0, 1.0) * metrics.max_offset;
     if center {
@@ -429,7 +415,7 @@ pub(in crate::preview) fn seek_to_ratio(list_state: &ListState, ratio: f32, cent
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn thumb_geometry(
+pub(crate) fn thumb_geometry(
     list_state: &ListState,
     total_lines: usize,
     track_height: f32,
@@ -439,7 +425,7 @@ pub(in crate::preview) fn thumb_geometry(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn minimap_layout_from_metrics(
+pub(crate) fn minimap_layout_from_metrics(
     total_lines: usize,
     minimap_capacity: usize,
     track_height: f32,
@@ -462,7 +448,7 @@ pub(in crate::preview) fn minimap_layout_from_metrics(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn scroll_metrics(list_state: &ListState) -> ScrollMetrics {
+pub(crate) fn scroll_metrics(list_state: &ListState) -> ScrollMetrics {
     ScrollMetrics {
         offset: -f32::from(list_state.scroll_px_offset_for_scrollbar().y),
         max_offset: f32::from(list_state.max_offset_for_scrollbar().y).max(0.0),
@@ -471,7 +457,7 @@ pub(in crate::preview) fn scroll_metrics(list_state: &ListState) -> ScrollMetric
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn thumb_geometry_for_document(
+pub(crate) fn thumb_geometry_for_document(
     metrics: ScrollMetrics,
     total_lines: usize,
     track_height: f32,
@@ -480,7 +466,7 @@ pub(in crate::preview) fn thumb_geometry_for_document(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn minimap_layout_from_range(
+pub(crate) fn minimap_layout_from_range(
     total_lines: usize,
     visible_start: usize,
     visible_end: usize,
@@ -513,7 +499,7 @@ pub(in crate::preview) fn minimap_layout_from_range(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn thumb_geometry_from_metrics(
+pub(crate) fn thumb_geometry_from_metrics(
     scroll: f32,
     max_offset: f32,
     viewport: f32,

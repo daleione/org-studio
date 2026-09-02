@@ -1,13 +1,13 @@
-use super::{WorkspaceWindow, div, img, px, rgb};
+use super::WorkspaceWindow;
 use crate::i18n::Language;
 use crate::recent_documents::RecentDocument;
-use gpui::{Entity, ExternalPaths, FontWeight, SharedString, prelude::*};
+use gpui::{Entity, ExternalPaths, FontWeight, SharedString, div, img, prelude::*, px, rgb};
 use std::{
     path::PathBuf,
     time::{SystemTime, UNIX_EPOCH},
 };
 
-pub(in crate::preview) fn render_home(
+pub(crate) fn render_home(
     entity: Entity<WorkspaceWindow>,
     recent_documents: &[RecentDocument],
     error: Option<&str>,
@@ -190,7 +190,7 @@ pub(in crate::preview) fn render_home(
         )
 }
 
-pub(in crate::preview) fn render_loading(path: &std::path::Path, language: Language) -> gpui::Div {
+pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui::Div {
     let name = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())

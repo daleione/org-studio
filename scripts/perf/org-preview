@@ -166,6 +166,7 @@ run_first_frame() {
     new_run_dir "first-frame-${mib}m"
     printf 'inactive_window_throttle_disabled=%s\n' "$DEFAULT_DISABLE_INACTIVE_THROTTLE" >>"$RUN_DIR/metadata.txt"
     run_measured env \
+        ORG_STUDIO_SCROLL_BENCH_SURFACE=reading \
         ORG_STUDIO_RELOAD_BENCH=1 \
         ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
         ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE="$DEFAULT_DISABLE_INACTIVE_THROTTLE" \
@@ -184,6 +185,7 @@ run_minimap_first_frame() {
     ORG_STUDIO_MINIMAP=1 \
     ORG_STUDIO_MINIMAP_PERF=1 \
     ORG_STUDIO_EXIT_AFTER_MINIMAP_FRAME=1 \
+    ORG_STUDIO_SCROLL_BENCH_SURFACE=reading \
     ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE="$DEFAULT_DISABLE_INACTIVE_THROTTLE" \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" \
         2>&1 | tee "$RUN_DIR/minimap-first-frame.log"
@@ -212,6 +214,7 @@ run_scroll() {
     printf 'Move the benchmark window to the Mac internal display during the %s-frame warmup.\n' \
         "$DEFAULT_WARMUP"
     local -a env_args=(
+        "ORG_STUDIO_SCROLL_BENCH_SURFACE=reading"
         "ORG_STUDIO_SCROLL_BENCH_WARMUP_FRAMES=$DEFAULT_WARMUP"
         "ORG_STUDIO_SCROLL_BENCH_FRAMES=$DEFAULT_FRAMES"
         "ORG_STUDIO_SCROLL_BENCH_PIXELS=$pixels"

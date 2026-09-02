@@ -8,7 +8,7 @@
   "export.quality": "清晰度",
   "export.standard": "标准",
   "export.high": "高清",
-  "export.themes": "主题模板",
+  "export.templates": "导出模板",
   "export.snapshot_hint": "将基于当前文档生成文件",
   "export.reveal": "在 Finder 中查看",
   "export.cancel": "取消",

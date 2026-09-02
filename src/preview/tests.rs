@@ -5,6 +5,7 @@ use super::{
 };
 
 use crate::{
+    app::{WorkspaceLoadState, WorkspaceWindow},
     document::{
         ByteOffset, ByteRange, DocumentCommand, EditOrigin, EditTransaction, Selection, TextEdit,
         TextSnapshot,
@@ -108,6 +109,87 @@ fn markdown_reading_semantics_match_golden() {
 }
 
 #[test]
+fn reading_component_fixtures_have_stable_layout_contracts_for_both_styles_and_widths() {
+    use super::{
+        PreviewStyleId, layout::reading_content_width, projection::VisualRowKind,
+        style::RowStyleKind,
+    };
+
+    for (path, source) in [
+        (
+            "reading-basic.org",
+            include_str!("../../tests/fixtures/reading-basic.org"),
+        ),
+        (
+            "reading-basic.md",
+            include_str!("../../tests/fixtures/reading-basic.md"),
+        ),
+    ] {
+        let document = loaded_document(path, source).into_preview();
+        let display_map = document.display_map.as_deref().unwrap();
+        let rows = &document.projection.rows;
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::Heading(_)))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::Text))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::List(_)))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::Table(_)))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::Quote))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::Code(_)))
+        );
+        assert!(
+            rows.iter()
+                .any(|row| matches!(row.kind, VisualRowKind::Image { .. }))
+        );
+
+        for style_id in PreviewStyleId::ALL {
+            let style = *super::preview_style(style_id);
+            for pane_width in [720.0, 1_400.0] {
+                let content_width = reading_content_width(pane_width, 120.0, style);
+                assert!(content_width >= 120.0);
+                assert!(content_width <= pane_width - 120.0);
+                for row in 0..document.projection.rows.len() {
+                    let measure = display_map.estimated_measure(row, content_width, 1.0, style);
+                    assert!(
+                        measure.pixels.is_finite(),
+                        "{path} row {row} has invalid height"
+                    );
+                    assert!(measure.display_lines >= 1);
+                    if document
+                        .projection
+                        .rows
+                        .get(row)
+                        .expect("fixture row exists")
+                        .style_kind
+                        != RowStyleKind::Hidden
+                    {
+                        assert!(
+                            measure.pixels > 0.0,
+                            "{path} row {row} collapsed unexpectedly"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn markdown_closing_fence_is_zero_height_in_reading() {
     let document = loaded_document("code.md", "```rust\nlet value = 1;\n```\n").into_preview();
     let closing = document
@@ -190,11 +272,11 @@ fn large_reading_projection_keeps_display_materialization_viewport_bounded() {
 }
 
 fn visible_source_lines(
-    app: &super::WorkspaceWindow,
+    app: &WorkspaceWindow,
     document: &super::PreviewSnapshot,
     cx: &gpui::App,
 ) -> Vec<u64> {
-    app.preview_panel()
+    app.reading_panel()
         .unwrap()
         .read(cx)
         .visible_rows()
@@ -247,7 +329,7 @@ fn loaded_document(path: &str, source: &str) -> super::LoadedDocument {
 
 #[gpui::test]
 fn opening_split_from_single_reading_reuses_the_current_snapshot(cx: &mut gpui::TestAppContext) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(false));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
         workspace.show_reading(cx);
         assert!(workspace.apply_load_result(
@@ -283,7 +365,7 @@ fn opening_split_from_single_reading_reuses_the_current_snapshot(cx: &mut gpui::
 
 #[gpui::test]
 fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::TestAppContext) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
@@ -316,7 +398,7 @@ fn pane_reading_zoom_survives_surface_switch_and_is_not_shared(cx: &mut gpui::Te
 fn reading_style_switch_reuses_projection_and_invalidates_geometry_once(
     cx: &mut gpui::TestAppContext,
 ) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
@@ -378,7 +460,7 @@ fn reading_style_switch_reuses_projection_and_invalidates_geometry_once(
 fn reopening_a_hidden_reading_pane_catches_it_up_without_losing_its_viewport(
     cx: &mut gpui::TestAppContext,
 ) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     let session = workspace.update(cx, |workspace, cx| {
         workspace.toggle_pane_surface(crate::app::PaneSide::Left, cx);
         assert!(
@@ -466,7 +548,7 @@ fn reopening_a_hidden_reading_pane_catches_it_up_without_losing_its_viewport(
 
 #[gpui::test]
 fn editors_are_created_on_demand(cx: &mut gpui::TestAppContext) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(false));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
         assert!(
             workspace.apply_load_result(
@@ -511,7 +593,7 @@ fn editors_are_created_on_demand(cx: &mut gpui::TestAppContext) {
 
 #[gpui::test]
 fn loading_two_editor_panes_only_autofocuses_the_active_one(cx: &mut gpui::TestAppContext) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     workspace.update(cx, |workspace, cx| {
         workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
         workspace.activate_pane(crate::app::PaneSide::Left, cx);
@@ -564,7 +646,7 @@ fn a_path_change_invalidates_and_rebuilds_the_shared_reading_snapshot(
     std::fs::write(&old_path, "* Heading\nbody\n").unwrap();
     std::fs::write(&new_path, "* Heading\nbody\n").unwrap();
     let loaded = super::load_document(old_path.clone()).unwrap();
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     let session = workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(0, Ok(loaded), cx));
         assert!(workspace.latest_preview_is_current(cx));
@@ -589,7 +671,7 @@ fn a_path_change_invalidates_and_rebuilds_the_shared_reading_snapshot(
         assert_eq!(workspace.derived.latest.as_ref().unwrap().path, new_path);
         assert_eq!(
             workspace
-                .preview_panel_for(crate::app::PaneSide::Right)
+                .reading_panel_for(crate::app::PaneSide::Right)
                 .unwrap()
                 .read(cx)
                 .document()
@@ -602,7 +684,7 @@ fn a_path_change_invalidates_and_rebuilds_the_shared_reading_snapshot(
 
 #[gpui::test]
 fn minimap_width_changes_reach_every_materialized_editor(cx: &mut gpui::TestAppContext) {
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(false));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
         assert!(
             workspace.apply_load_result(
@@ -764,7 +846,7 @@ fn trailing_space_update_does_not_rebind_or_jump_split_reading(cx: &mut gpui::Te
         before.clone(),
     );
     let loaded = super::LoadedDocument::new(session, preview).unwrap();
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
@@ -823,7 +905,7 @@ fn pane_layout_changes_preserve_editor_state_and_publish_only_latest_revision(
         b"* Heading\nbody\n".to_vec(),
     )
     .unwrap();
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(false));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
@@ -845,7 +927,7 @@ fn pane_layout_changes_preserve_editor_state_and_publish_only_latest_revision(
 
     workspace.update(cx, |workspace, cx| {
         workspace.show_split(cx);
-        assert!(workspace.preview_panel().is_none());
+        assert!(workspace.reading_panel().is_none());
         assert!(
             workspace
                 .document_status_snapshot(crate::app::PaneSide::Left, cx)
@@ -895,7 +977,7 @@ fn pane_layout_changes_preserve_editor_state_and_publish_only_latest_revision(
     let panel_revision = cx.read(|cx| {
         workspace
             .read(cx)
-            .preview_panel()
+            .reading_panel()
             .unwrap()
             .read(cx)
             .document()
@@ -951,7 +1033,7 @@ fn pane_layout_changes_preserve_editor_state_and_publish_only_latest_revision(
 fn each_split_pane_switches_surface_independently(cx: &mut gpui::TestAppContext) {
     use crate::app::{PaneSide, PaneSurface};
 
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(false));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
         workspace.show_split(cx);
         assert!(workspace.document_workspace.is_split());
@@ -995,7 +1077,7 @@ fn opening_split_preserves_ime_until_reading_receives_focus(cx: &mut gpui::TestA
     )
     .unwrap();
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_split_layout(false)
+        WorkspaceWindow::with_split_layout(false)
     });
     let editor = window
         .update(cx, |workspace, _, cx| {
@@ -1065,12 +1147,9 @@ fn finish_fold_animation<V: gpui::Render + 'static>(
     assert!(simulate_next_frame(window, cx) > 0);
 }
 
-fn ready_document(
-    app: &super::WorkspaceWindow,
-    cx: &gpui::App,
-) -> std::sync::Arc<super::PreviewSnapshot> {
+fn ready_document(app: &WorkspaceWindow, cx: &gpui::App) -> std::sync::Arc<super::PreviewSnapshot> {
     match &app.state {
-        super::PreviewLoadState::Ready { document } => document
+        WorkspaceLoadState::Ready { document } => document
             .readers
             .right
             .as_ref()
@@ -1083,7 +1162,7 @@ fn ready_document(
 }
 
 fn apply_load_result(
-    app: &mut super::WorkspaceWindow,
+    app: &mut WorkspaceWindow,
     generation: u64,
     result: Result<super::LoadedDocument, (std::path::PathBuf, String)>,
     cx: &mut gpui::TestAppContext,
@@ -1091,31 +1170,31 @@ fn apply_load_result(
     cx.update(|cx| app.apply_load_result(generation, result, cx))
 }
 
-fn cycle_panel_global_visibility(app: &super::WorkspaceWindow, cx: &mut gpui::App) {
-    app.preview_panel()
+fn cycle_panel_global_visibility(app: &WorkspaceWindow, cx: &mut gpui::App) {
+    app.reading_panel()
         .unwrap()
         .update(cx, |panel, _| panel.cycle_global_visibility());
 }
 
 fn toggle_panel_fold(
-    app: &super::WorkspaceWindow,
+    app: &WorkspaceWindow,
     block_id: crate::org_syntax::BlockId,
     cx: &mut gpui::App,
 ) {
-    app.preview_panel()
+    app.reading_panel()
         .unwrap()
         .update(cx, |panel, _| panel.toggle_fold(block_id));
 }
 
 fn toggle_panel_fold_animated(
-    app: &super::WorkspaceWindow,
+    app: &WorkspaceWindow,
     block_id: crate::org_syntax::BlockId,
     viewport_height: f32,
     available_width: f32,
     window: Option<&mut gpui::Window>,
     cx: &mut gpui::App,
 ) {
-    app.preview_panel().unwrap().update(cx, |panel, cx| {
+    app.reading_panel().unwrap().update(cx, |panel, cx| {
         panel.toggle_fold_animated(
             block_id,
             viewport_height,
@@ -1189,7 +1268,7 @@ fn reading_keymap_routes_platform_undo_and_redo_to_document_history() {
 
 #[test]
 fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
-    let mut app = super::WorkspaceWindow::with_split_layout(true);
+    let mut app = WorkspaceWindow::with_split_layout(true);
     app.install_sidebar_keymap();
     let contexts = super::built_in_contexts();
     assert!(app.key_context.contains(contexts.key("workspace").unwrap()));
@@ -1200,7 +1279,7 @@ fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
 
 #[test]
 fn source_keymap_passes_text_keys_to_the_editor() {
-    let mut app = super::WorkspaceWindow::with_split_layout(false);
+    let mut app = WorkspaceWindow::with_split_layout(false);
     for key in ["g", "q", "space", "backspace"] {
         assert!(
             matches!(
@@ -1232,11 +1311,11 @@ fn editor_only_workspace_load_does_not_build_a_hidden_preview(cx: &mut gpui::Tes
     std::fs::write(&path, "* Heading\nbody\n").unwrap();
     let loaded = super::load_workspace_document(path.clone(), false).unwrap();
     let _ = std::fs::remove_file(&path);
-    let mut app = super::WorkspaceWindow::with_split_layout(false);
+    let mut app = WorkspaceWindow::with_split_layout(false);
     app.generation = 1;
     assert!(cx.update(|cx| app.apply_load_result(1, Ok(loaded), cx)));
     assert!(app.document_session().is_some());
-    assert!(app.preview_panel().is_none());
+    assert!(app.reading_panel().is_none());
 }
 
 #[gpui::test]
@@ -1249,7 +1328,7 @@ fn opening_preview_while_a_source_load_finishes_schedules_the_new_document(
         b"* Current document\nbody\n".to_vec(),
     )
     .unwrap();
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(false));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
         let generation = workspace.begin_open(path, std::time::Instant::now());
         workspace.show_split(cx);
@@ -1292,13 +1371,13 @@ fn hiding_reading_preserves_its_view_state_but_rejects_a_new_hidden_projection(
     let loaded = super::load_document(path.clone()).unwrap();
     let late_loaded = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
 
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(0, Ok(loaded), cx));
-        assert!(workspace.preview_panel().is_some());
+        assert!(workspace.reading_panel().is_some());
         workspace.show_editor(cx);
-        assert!(workspace.preview_panel().is_none());
+        assert!(workspace.reading_panel().is_none());
         assert!(workspace.derived.latest.is_some());
         assert!(
             workspace
@@ -1311,7 +1390,7 @@ fn hiding_reading_preserves_its_view_state_but_rejects_a_new_hidden_projection(
 
         workspace.generation = 1;
         assert!(workspace.apply_load_result(1, Ok(late_loaded), cx));
-        assert!(workspace.preview_panel().is_none());
+        assert!(workspace.reading_panel().is_none());
         assert!(workspace.derived.latest.is_none());
     });
 }
@@ -1327,7 +1406,7 @@ fn lagging_reading_keeps_preview_status_even_when_the_pane_retains_an_editor(
     std::fs::write(&path, "* Heading\nbody\n").unwrap();
     let loaded = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let workspace = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     let session = workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(0, Ok(loaded), cx));
         workspace.activate_pane(crate::app::PaneSide::Right, cx);
@@ -1371,7 +1450,7 @@ fn export_source_uses_the_live_edited_session(cx: &mut gpui::TestAppContext) {
     std::fs::write(&path, "old").unwrap();
     let loaded = super::load_workspace_document(path.clone(), false).unwrap();
     let _ = std::fs::remove_file(&path);
-    let mut app = super::WorkspaceWindow::with_split_layout(false);
+    let mut app = WorkspaceWindow::with_split_layout(false);
     app.generation = 1;
     assert!(cx.update(|cx| app.apply_load_result(1, Ok(loaded), cx)));
     let session = app.document_session().unwrap().clone();
@@ -1409,7 +1488,7 @@ fn unchanged_viewport_does_not_cancel_an_active_sidebar_resize(cx: &mut gpui::Te
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_split_layout(true)
+        WorkspaceWindow::with_split_layout(true)
     });
     window
         .update(cx, |app, _, cx| {
@@ -1450,75 +1529,75 @@ fn app_global_visibility_cycle_updates_list_fold_and_minimap_projection_together
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
         cycle_panel_global_visibility(app, cx);
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).global_visibility(),
+            app.reading_panel().unwrap().read(cx).global_visibility(),
             GlobalVisibility::Overview
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            app.reading_panel().unwrap().read(cx).visible_rows().len(),
             2
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).fold_markers().len(),
+            app.reading_panel().unwrap().read(cx).fold_markers().len(),
             2
         );
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .item_count(),
-            app.preview_panel().unwrap().read(cx).visible_rows().len()
+            app.reading_panel().unwrap().read(cx).visible_rows().len()
         );
         cycle_panel_global_visibility(app, cx);
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).global_visibility(),
+            app.reading_panel().unwrap().read(cx).global_visibility(),
             GlobalVisibility::Contents
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            app.reading_panel().unwrap().read(cx).visible_rows().len(),
             3
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).fold_markers().len(),
+            app.reading_panel().unwrap().read(cx).fold_markers().len(),
             2
         );
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .item_count(),
-            app.preview_panel().unwrap().read(cx).visible_rows().len()
+            app.reading_panel().unwrap().read(cx).visible_rows().len()
         );
         cycle_panel_global_visibility(app, cx);
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).global_visibility(),
+            app.reading_panel().unwrap().read(cx).global_visibility(),
             GlobalVisibility::All
         );
         assert!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
                 .is_empty()
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            app.reading_panel().unwrap().read(cx).visible_rows().len(),
             7
         );
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .item_count(),
-            app.preview_panel().unwrap().read(cx).visible_rows().len()
+            app.reading_panel().unwrap().read(cx).visible_rows().len()
         );
     });
 }
@@ -1537,7 +1616,7 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_split_layout(true)
+        WorkspaceWindow::with_split_layout(true)
     });
     window
         .update(cx, |app, _, cx| {
@@ -1557,11 +1636,11 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
             .update(cx, |app, window, cx| {
                 app.cycle_global_visibility_animated(window, cx);
                 assert_eq!(
-                    app.preview_panel().unwrap().read(cx).global_visibility(),
+                    app.reading_panel().unwrap().read(cx).global_visibility(),
                     visibility
                 );
                 let animation = app
-                    .preview_panel()
+                    .reading_panel()
                     .unwrap()
                     .read(cx)
                     .fold_animation()
@@ -1579,19 +1658,19 @@ fn shift_tab_animates_all_three_global_visibility_transitions(cx: &mut gpui::Tes
         window
             .update(cx, |app, _, cx| {
                 assert!(
-                    app.preview_panel()
+                    app.reading_panel()
                         .unwrap()
                         .read(cx)
                         .fold_animation()
                         .is_none()
                 );
                 assert_eq!(
-                    app.preview_panel()
+                    app.reading_panel()
                         .unwrap()
                         .read(cx)
                         .list_state()
                         .item_count(),
-                    app.preview_panel().unwrap().read(cx).visible_rows().len()
+                    app.reading_panel().unwrap().read(cx).visible_rows().len()
                 );
             })
             .unwrap();
@@ -1611,7 +1690,7 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::T
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -1623,14 +1702,14 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::T
         let child = heading_id(&document, 2, 0);
 
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
                 .contains(&parent)
         );
         assert!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
@@ -1639,18 +1718,18 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::T
 
         toggle_panel_fold(app, child, cx);
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).global_visibility(),
+            app.reading_panel().unwrap().read(cx).global_visibility(),
             GlobalVisibility::Contents
         );
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
                 .contains(&parent)
         );
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
@@ -1660,22 +1739,22 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::T
 
         toggle_panel_fold(app, child, cx);
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).global_visibility(),
+            app.reading_panel().unwrap().read(cx).global_visibility(),
             GlobalVisibility::Contents
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            app.reading_panel().unwrap().read(cx).visible_rows().len(),
             3
         );
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
                 .contains(&parent)
         );
         assert!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
@@ -1684,11 +1763,11 @@ fn expanding_a_child_from_contents_does_not_collapse_its_parent(cx: &mut gpui::T
 
         cycle_panel_global_visibility(app, cx);
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).global_visibility(),
+            app.reading_panel().unwrap().read(cx).global_visibility(),
             GlobalVisibility::Overview
         );
         assert_eq!(
-            app.preview_panel().unwrap().read(cx).visible_rows().len(),
+            app.reading_panel().unwrap().read(cx).visible_rows().len(),
             2
         );
     });
@@ -1709,7 +1788,7 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -1722,7 +1801,7 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent(
 
         assert_eq!(visible_source_lines(app, &document, cx), vec![1, 3, 5, 7]);
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
@@ -1732,14 +1811,14 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent(
         toggle_panel_fold(app, child, cx);
         assert_eq!(visible_source_lines(app, &document, cx), vec![1, 3, 7]);
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
                 .contains(&parent)
         );
         assert!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
@@ -1752,7 +1831,7 @@ fn clicking_a_second_level_heading_in_contents_never_folds_its_parent(
             vec![1, 3, 4, 5, 7]
         );
         assert!(
-            !app.preview_panel()
+            !app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_markers()
@@ -1774,7 +1853,7 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(document), cx));
@@ -1784,7 +1863,7 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states(
 
         toggle_panel_fold(app, parent, cx);
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .local_cycle_continuation(),
@@ -1797,7 +1876,7 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states(
 
         toggle_panel_fold(app, parent, cx);
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .local_cycle_continuation(),
@@ -1810,7 +1889,7 @@ fn heading_click_cycles_only_its_subtree_through_official_local_states(
 
         toggle_panel_fold(app, parent, cx);
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .local_cycle_continuation(),
@@ -1835,7 +1914,7 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
     .unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
 
     app.update(cx, |app, cx| {
         app.generation = 1;
@@ -1846,7 +1925,7 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
         toggle_panel_fold_animated(app, parent, 700.0, 790.0, None, cx);
         assert_eq!(visible_source_lines(app, &document, cx), vec![1, 5, 6]);
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -1854,12 +1933,12 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
             Some(1)
         );
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .item_count(),
-            app.preview_panel().unwrap().read(cx).visible_rows().len() + 1
+            app.reading_panel().unwrap().read(cx).visible_rows().len() + 1
         );
 
         toggle_panel_fold_animated(app, parent, 700.0, 790.0, None, cx);
@@ -1868,7 +1947,7 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
             vec![1, 2, 3, 5, 6]
         );
         let expansion = app
-            .preview_panel()
+            .reading_panel()
             .unwrap()
             .read(cx)
             .fold_animation()
@@ -1876,33 +1955,33 @@ fn animated_collapse_inserts_one_flow_shell_and_fast_reclick_finishes_it(
         assert!(matches!(expansion.direction, super::FoldDirection::Expand));
         assert_eq!(expansion.segments[0].target_len, 2);
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .item_count(),
-            app.preview_panel().unwrap().read(cx).visible_rows().len() - 1
+            app.reading_panel().unwrap().read(cx).visible_rows().len() - 1
         );
-        app.preview_panel()
+        app.reading_panel()
             .unwrap()
             .update(cx, |panel, _| panel.discard_fold_animation());
     });
 
     app.update(cx, |app, cx| {
         assert!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
                 .is_none()
         );
         assert_eq!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .item_count(),
-            app.preview_panel().unwrap().read(cx).visible_rows().len()
+            app.reading_panel().unwrap().read(cx).visible_rows().len()
         );
     });
 }
@@ -1917,7 +1996,7 @@ fn reduced_motion_applies_local_fold_without_a_delayed_projection(cx: &mut gpui:
     std::fs::write(&path, "* Parent\nbody\n** Child\nchild body\n").unwrap();
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
 
     app.update(cx, |app, cx| {
         app.generation = 1;
@@ -1928,7 +2007,7 @@ fn reduced_motion_applies_local_fold_without_a_delayed_projection(cx: &mut gpui:
         toggle_panel_fold_animated(app, parent, 700.0, 790.0, None, cx);
         assert_eq!(visible_source_lines(app, &document, cx), vec![1]);
         assert!(
-            app.preview_panel()
+            app.reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -1951,7 +2030,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(700.0)), |_, _| {
-        super::WorkspaceWindow::with_split_layout(true)
+        WorkspaceWindow::with_split_layout(true)
     });
     window
         .update(cx, |app, _window, cx| {
@@ -1967,14 +2046,14 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             let document = ready_document(app, cx);
             let parent = heading_id(&document, 1, 0);
             let first_hidden = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(1)
                 .unwrap();
             let following = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -1984,7 +2063,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
 
             toggle_panel_fold_animated(app, parent, 700.0, 790.0, Some(window), cx);
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -1993,12 +2072,12 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             assert_eq!(shell.transition_index, 1);
             assert!((shell.distance - expected_distance).abs() < 0.01);
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len() + 1
+                app.reading_panel().unwrap().read(cx).visible_rows().len() + 1
             );
             cx.notify();
         })
@@ -2011,7 +2090,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let first_gap = window
         .update(cx, |app, _, cx| {
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -2019,14 +2098,14 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             assert_eq!(animation.progress, 0.0);
             assert!(animation.started_at.is_some());
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2040,28 +2119,28 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let later_gap = window
         .update(cx, |app, _, cx| {
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
                 .unwrap();
             assert!(animation.progress > 0.0);
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(1)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2085,19 +2164,19 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     window
         .update(cx, |app, _, cx| {
             assert!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .fold_animation()
                     .is_none()
             );
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len()
+                app.reading_panel().unwrap().read(cx).visible_rows().len()
             );
         })
         .unwrap();
@@ -2108,7 +2187,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             let parent = heading_id(&document, 1, 0);
             toggle_panel_fold_animated(app, parent, 700.0, 790.0, Some(window), cx);
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -2117,12 +2196,12 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             assert_eq!(animation.segments[0].transition_index, 1);
             assert_eq!(animation.segments[0].target_len, 3);
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len() - 2
+                app.reading_panel().unwrap().read(cx).visible_rows().len() - 2
             );
             cx.notify();
         })
@@ -2132,28 +2211,28 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let first_gap = window
         .update(cx, |app, _, cx| {
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
                 .unwrap();
             assert_eq!(animation.progress, 0.0);
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(1)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2169,28 +2248,28 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     let later_gap = window
         .update(cx, |app, _, cx| {
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
                 .unwrap();
             assert!(animation.progress > 0.0);
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(1)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2214,29 +2293,29 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     window
         .update(cx, |app, _, cx| {
             assert!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .fold_animation()
                     .is_none()
             );
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len()
+                app.reading_panel().unwrap().read(cx).visible_rows().len()
             );
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2252,7 +2331,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             let parent = heading_id(&document, 1, 0);
             toggle_panel_fold_animated(app, parent, 700.0, 790.0, Some(window), cx);
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -2270,14 +2349,14 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     window
         .update(cx, |app, _, cx| {
             let first_shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(3)
                 .unwrap();
             let second_shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2292,42 +2371,42 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     window
         .update(cx, |app, _, cx| {
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
                 .unwrap();
             assert!(animation.progress > 0.0);
             let first_child = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(2)
                 .unwrap();
             let first_shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(3)
                 .unwrap();
             let second_child = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(4)
                 .unwrap();
             let second_shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(5)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2339,7 +2418,7 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             assert!((f32::from(peer.top() - second_shell.bottom())).abs() < 0.01);
             for (index, shell) in animation.segments.iter().enumerate() {
                 let bounds = app
-                    .preview_panel()
+                    .reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
@@ -2357,43 +2436,43 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
     window
         .update(cx, |app, _, cx| {
             assert!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .fold_animation()
                     .is_none()
             );
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len()
+                app.reading_panel().unwrap().read(cx).visible_rows().len()
             );
             let first_child_body = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(3)
                 .unwrap();
             let second_child = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(4)
                 .unwrap();
             let second_child_body = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(5)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2422,7 +2501,7 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(path);
     let window = cx.open_window(gpui::size(gpui::px(900.0), gpui::px(320.0)), |_, _| {
-        super::WorkspaceWindow::with_split_layout(true)
+        WorkspaceWindow::with_split_layout(true)
     });
     window
         .update(cx, |app, _window, cx| {
@@ -2445,14 +2524,14 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
                 .position(|row| row.block_id == peer)
                 .unwrap();
             let old_peer_position = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .visible_rows()
                 .binary_search(&peer_row)
                 .unwrap();
             assert!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
@@ -2464,7 +2543,7 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
 
             toggle_panel_fold_animated(app, parent, 320.0, 790.0, Some(window), cx);
             let animation = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .fold_animation()
@@ -2474,16 +2553,16 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
             assert!(shell.distance <= 320.0);
             assert!(shell.rendered_rows.len() < 20);
             assert_eq!(
-                app.preview_panel().unwrap().read(cx).visible_rows()[1],
+                app.reading_panel().unwrap().read(cx).visible_rows()[1],
                 peer_row
             );
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len() + 1
+                app.reading_panel().unwrap().read(cx).visible_rows().len() + 1
             );
             cx.notify();
         })
@@ -2494,21 +2573,21 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
     window
         .update(cx, |app, _, cx| {
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let shell = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(1)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2518,7 +2597,7 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             assert!(f32::from(peer.top() - heading.bottom()) > 24.0);
             assert!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .fold_animation()
@@ -2530,14 +2609,14 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
     window
         .update(cx, |app, _, cx| {
             let heading = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
                 .bounds_for_item(0)
                 .unwrap();
             let peer = app
-                .preview_panel()
+                .reading_panel()
                 .unwrap()
                 .read(cx)
                 .list_state()
@@ -2545,15 +2624,15 @@ fn collapse_keeps_an_offscreen_peer_behind_a_bounded_flow_shell(cx: &mut gpui::T
                 .unwrap();
             assert!((f32::from(peer.top() - heading.bottom())).abs() < 0.01);
             assert_eq!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .list_state()
                     .item_count(),
-                app.preview_panel().unwrap().read(cx).visible_rows().len()
+                app.reading_panel().unwrap().read(cx).visible_rows().len()
             );
             assert!(
-                app.preview_panel()
+                app.reading_panel()
                     .unwrap()
                     .read(cx)
                     .fold_animation()
@@ -2575,7 +2654,7 @@ fn open_failure_retains_previous_session_and_rejects_stale_completion(
     let document = super::load_document(path.clone()).unwrap();
     let _ = std::fs::remove_file(&path);
 
-    let mut app = super::WorkspaceWindow::with_split_layout(true);
+    let mut app = WorkspaceWindow::with_split_layout(true);
     app.generation = 1;
     assert!(apply_load_result(&mut app, 1, Ok(document), cx));
     assert!(app.state.ready().is_some());
@@ -2588,7 +2667,7 @@ fn open_failure_retains_previous_session_and_rejects_stale_completion(
         Err((path.clone(), "reload failed".to_owned())),
         cx,
     ));
-    assert!(matches!(app.state, super::PreviewLoadState::Failed { .. }));
+    assert!(matches!(app.state, WorkspaceLoadState::Failed { .. }));
     assert!(app.state.ready().is_some());
     assert_eq!(app.document_session(), Some(&session));
 
@@ -2597,7 +2676,7 @@ fn open_failure_retains_previous_session_and_rejects_stale_completion(
     let stale = super::load_document(stale_path.clone()).unwrap();
     let _ = std::fs::remove_file(stale_path);
     assert!(!apply_load_result(&mut app, 1, Ok(stale), cx));
-    assert!(matches!(app.state, super::PreviewLoadState::Failed { .. }));
+    assert!(matches!(app.state, WorkspaceLoadState::Failed { .. }));
     assert!(app.state.ready().is_some());
     assert_eq!(app.document_session(), Some(&session));
 }
@@ -2612,12 +2691,12 @@ fn reload_keeps_session_identity_and_publishes_a_coherent_preview(cx: &mut gpui:
     ));
     std::fs::write(&path, "* Before\nold\n").unwrap();
     let loaded = super::load_document(path.clone()).unwrap();
-    let app = cx.new(|_| super::WorkspaceWindow::with_split_layout(true));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
     let (session_before, document_id, panel, events) = app.update(cx, |app, cx| {
         app.generation = 1;
         assert!(app.apply_load_result(1, Ok(loaded), cx));
         let session = app.document_session().unwrap().clone();
-        let panel = app.preview_panel().unwrap();
+        let panel = app.reading_panel().unwrap();
         let events = Arc::new(Mutex::new(Vec::new()));
         panel.update(cx, |_, cx| {
             let events = events.clone();

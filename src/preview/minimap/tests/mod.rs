@@ -230,7 +230,7 @@ fn projection_scheduler_prioritizes_the_current_view_before_sequential_work() {
     ));
     let mut builder = MinimapLineIndexBuilder {
         key: MinimapLineIndexKey {
-            presentation_rows: 1,
+            presentation_identity: 1,
             width: 800,
             density: MinimapDensity::Compact,
             layout: LayoutKey {
@@ -611,9 +611,9 @@ fn style_invalidation_retains_the_previous_complete_tile_frame() {
             height: 10.0,
         });
 
-    state.invalidate_style(false);
+    state.invalidate_style();
 
-    assert!(state.raster_tiles.lock().unwrap().entries.is_empty());
+    assert_eq!(state.raster_tiles.lock().unwrap().entries.len(), 1);
     assert!(state.raster_tiles.lock().unwrap().in_flight.is_empty());
     assert!(
         state
@@ -621,6 +621,111 @@ fn style_invalidation_retains_the_previous_complete_tile_frame() {
             .load(std::sync::atomic::Ordering::Acquire)
     );
     assert_eq!(state.retained_style_frame.lock().unwrap().len(), 1);
+}
+
+#[test]
+fn recent_style_line_indices_are_reused_without_rebuilding_the_document() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let buffer = DocumentBuffer::from_utf8(b"* Heading\nbody\n".to_vec()).unwrap();
+    let document = derive_preview(
+        std::path::PathBuf::from("style-cache.org"),
+        buffer.snapshot(),
+    );
+    let model = document.display_map.as_deref().unwrap();
+    let presentation = Arc::new((0..document.projection.rows.len()).collect::<Vec<_>>());
+    let density = MinimapDensity::Comfortable;
+    let base = base_style();
+    let warm = *crate::preview::preview_style(crate::preview::PreviewStyleId::WarmClay);
+    let build_index = |style| {
+        let key = MinimapLineIndexKey::new(
+            &presentation,
+            800.0,
+            density,
+            document.revision,
+            0,
+            1.0,
+            style,
+        );
+        model.estimated_minimap_line_index(
+            &presentation,
+            key.width,
+            1,
+            800.0,
+            density,
+            key.layout,
+            1.0,
+            style,
+        )
+    };
+    let base_index = build_index(base);
+    let base_layout = base_index.layout;
+    let warm_index = build_index(warm);
+    let warm_layout = warm_index.layout;
+    let state = MinimapState::new();
+
+    state.publish_line_index(CachedMinimapLineIndex {
+        presentation_rows: presentation.clone(),
+        index: base_index,
+    });
+    state.publish_line_index(CachedMinimapLineIndex {
+        presentation_rows: presentation.clone(),
+        index: warm_index,
+    });
+
+    assert!(
+        state
+            .cached_line_index(&presentation, base_layout, density)
+            .is_some()
+    );
+    assert!(
+        state
+            .cached_line_index(&presentation, warm_layout, density)
+            .is_some()
+    );
+}
+
+#[test]
+fn in_progress_line_index_builder_resumes_after_switching_styles() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let buffer = DocumentBuffer::from_utf8(b"* Heading\nbody\n".to_vec()).unwrap();
+    let document = derive_preview(
+        std::path::PathBuf::from("style-builder-cache.org"),
+        buffer.snapshot(),
+    );
+    let model = document.display_map.as_deref().unwrap();
+    let presentation = Arc::new((0..document.projection.rows.len()).collect::<Vec<_>>());
+    let density = MinimapDensity::Comfortable;
+    let style = base_style();
+    let key = MinimapLineIndexKey::new(
+        &presentation,
+        800.0,
+        density,
+        document.revision,
+        0,
+        1.0,
+        style,
+    );
+    let mut builder =
+        MinimapLineIndexBuilder::new(model, key, presentation, 800.0, density, 1.0, style);
+    assert_eq!(
+        builder.exact_bits.len(),
+        document.projection.rows.len().div_ceil(64)
+    );
+    builder.exact_rows = 1;
+    let state = MinimapState::new();
+
+    state.remember_line_index_builder(builder);
+    let resumed = state
+        .take_line_index_builder(key)
+        .expect("recent in-progress builder should be retained");
+
+    assert_eq!(resumed.key, key);
+    assert_eq!(resumed.exact_rows, 1);
+    assert!(state.take_line_index_builder(key).is_none());
 }
 
 #[test]

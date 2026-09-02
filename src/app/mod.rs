@@ -14,11 +14,25 @@ use gpui::{FocusHandle, Subscription, Task};
 use crate::{
     command::CommandRegistry,
     input::{ContextSet, KeyboardRouter},
-    preview::{
-        ContentRoute, ExportHost, FileManagerHost, PreviewLoadState, SaveHost, ScrollBenchmark,
-        StatusLineHost,
-    },
 };
+
+use export_ui::ExportHost;
+use file_manager::FileManagerHost;
+use save::SaveHost;
+use status_line::StatusLineHost;
+use workspace::ScrollBenchmark;
+
+mod command_window;
+mod derived;
+pub(crate) mod export_ui;
+mod file_manager;
+mod home;
+mod overlays;
+mod render;
+mod save;
+mod split_layout;
+pub(crate) mod status_line;
+mod workspace;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PaneSurface {
@@ -118,6 +132,101 @@ pub struct DocumentViewPreferences {
     pub(crate) split_ratio: u16,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ContentRoute {
+    Document,
+    FileManager,
+}
+
+#[derive(Clone)]
+pub(crate) enum DiredStatus {
+    Working(Arc<str>),
+    Success(Arc<str>),
+    Error(Arc<str>),
+}
+
+impl DiredStatus {
+    pub(crate) fn message(&self) -> Arc<str> {
+        match self {
+            Self::Working(message) | Self::Success(message) | Self::Error(message) => {
+                message.clone()
+            }
+        }
+    }
+}
+
+pub(crate) enum WorkspaceLoadState {
+    Empty,
+    Loading {
+        path: PathBuf,
+        previous: Option<ReadyDocument>,
+    },
+    Ready {
+        document: ReadyDocument,
+    },
+    Failed {
+        path: PathBuf,
+        message: String,
+        previous: Option<ReadyDocument>,
+    },
+}
+
+#[derive(Clone)]
+pub(crate) struct ReadyDocument {
+    pub(crate) session: gpui::Entity<crate::document::DocumentSession>,
+    pub(crate) editors: PanePair<Option<gpui::Entity<crate::editor::SemanticEditor>>>,
+    pub(crate) readers: PanePair<Option<gpui::Entity<crate::preview::ReadingPreviewPanel>>>,
+    pub(crate) notice: Option<Arc<str>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct PanePair<T> {
+    pub(crate) left: T,
+    pub(crate) right: T,
+}
+
+impl<T> PanePair<T> {
+    pub(crate) fn get(&self, pane: PaneSide) -> &T {
+        match pane {
+            PaneSide::Left => &self.left,
+            PaneSide::Right => &self.right,
+        }
+    }
+
+    pub(crate) fn get_mut(&mut self, pane: PaneSide) -> &mut T {
+        match pane {
+            PaneSide::Left => &mut self.left,
+            PaneSide::Right => &mut self.right,
+        }
+    }
+}
+
+impl WorkspaceLoadState {
+    pub(crate) fn ready(&self) -> Option<&ReadyDocument> {
+        match self {
+            Self::Ready { document } => Some(document),
+            Self::Loading { previous, .. } | Self::Failed { previous, .. } => previous.as_ref(),
+            Self::Empty => None,
+        }
+    }
+
+    pub(crate) fn take_ready(&mut self) -> Option<ReadyDocument> {
+        match std::mem::replace(self, Self::Empty) {
+            Self::Ready { document } => Some(document),
+            Self::Loading { previous, .. } | Self::Failed { previous, .. } => previous,
+            Self::Empty => None,
+        }
+    }
+
+    pub(crate) fn ready_mut(&mut self) -> Option<&mut ReadyDocument> {
+        match self {
+            Self::Ready { document } => Some(document),
+            Self::Loading { previous, .. } | Self::Failed { previous, .. } => previous.as_mut(),
+            Self::Empty => None,
+        }
+    }
+}
+
 pub struct WorkspaceWindow {
     pub(crate) language: crate::i18n::Language,
     pub(crate) focus_handle: Option<FocusHandle>,
@@ -126,7 +235,7 @@ pub struct WorkspaceWindow {
     pub(crate) commands: Arc<CommandRegistry>,
     pub(crate) keyboard: KeyboardRouter,
     pub(crate) key_context: ContextSet,
-    pub(crate) state: PreviewLoadState,
+    pub(crate) state: WorkspaceLoadState,
     pub(crate) document_subscription: Option<Subscription>,
     pub(crate) editor_minimap_width_subscriptions: Vec<Subscription>,
     pub(crate) subscribed_document: Option<crate::document::DocumentId>,
@@ -156,7 +265,7 @@ pub struct WorkspaceWindow {
     pub(crate) content_route: ContentRoute,
     pub(crate) document_workspace: DocumentWorkspaceState,
     pub(crate) document_view_preferences: DocumentViewPreferences,
-    pub(crate) split_resize: Option<crate::preview::SplitResizeSession>,
+    pub(crate) split_resize: Option<split_layout::ResizeSession>,
     pub(crate) soft_wrap: bool,
     pub(crate) minimap_visible: bool,
     pub(crate) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
@@ -170,6 +279,6 @@ pub struct WorkspaceWindow {
 pub(crate) struct DerivedHost {
     pub(crate) task: Option<Task<()>>,
     pub(crate) sender: Option<async_channel::Sender<()>>,
-    pub(crate) pending: Arc<Mutex<Option<crate::preview::derived::DerivedRequest>>>,
+    pub(crate) pending: Arc<Mutex<Option<derived::DerivedRequest>>>,
     pub(crate) latest: Option<Arc<crate::preview::PreviewSnapshot>>,
 }

@@ -1,17 +1,17 @@
 use std::fmt::Write;
 
 use super::{
-    ExportDiagnostic, ExportOptions, LayoutMode, Theme,
+    ExportDiagnostic, ExportOptions, ExportTemplate, LayoutMode,
     model::{ExportBlock, ExportDocument, ExportInline},
 };
 
 pub(super) fn emit(
     document: &ExportDocument,
-    theme: &Theme,
+    template: &ExportTemplate,
     options: &ExportOptions,
     _diagnostics: &mut Vec<ExportDiagnostic>,
 ) -> String {
-    let mut output = String::with_capacity(theme.source.len() + document.blocks.len() * 80);
+    let mut output = String::with_capacity(template.source.len() + document.blocks.len() * 80);
     let paged = matches!(options.layout, LayoutMode::Paged);
     let _ = writeln!(output, "#let divider() = line(length: 100%)");
     let _ = writeln!(output, "#let md-toc() = none");
@@ -23,7 +23,7 @@ pub(super) fn emit(
         output,
         "#let signature-row(author: \"\", date: \"\") = none"
     );
-    output.push_str(theme.source);
+    output.push_str(template.source);
     let _ = writeln!(output, "\n#show: conf\n");
 
     if let Some(title) = &document.meta.title {
@@ -51,7 +51,7 @@ pub(super) fn emit(
         );
     }
     // Themes consume this through sys.inputs in the final implementation.
-    // Keep the value in source for the built-in bootstrap theme as well.
+    // Keep the value in source for the built-in bootstrap template as well.
     if !paged {
         output.insert_str(0, "#set page(height: auto)\n");
     }
@@ -207,7 +207,7 @@ fn string_literal(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::export::{ExportMeta, PaperSize, themes};
+    use crate::export::{ExportMeta, PaperSize, export_templates};
 
     #[test]
     fn escapes_typst_string_literals() {
@@ -230,7 +230,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let source = emit(
             &document,
-            themes().first().unwrap(),
+            export_templates().first().unwrap(),
             &ExportOptions {
                 paper: PaperSize::A4,
                 ..ExportOptions::default()
@@ -258,7 +258,7 @@ mod tests {
         let mut diagnostics = Vec::new();
         let source = emit(
             &document,
-            themes().first().unwrap(),
+            export_templates().first().unwrap(),
             &ExportOptions::default(),
             &mut diagnostics,
         );

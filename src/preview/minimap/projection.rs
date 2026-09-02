@@ -20,67 +20,67 @@ use super::{
 };
 
 #[derive(Clone)]
-pub(in crate::preview) struct MinimapLineIndex {
-    pub(in crate::preview) layout: LayoutKey,
-    pub(in crate::preview) width: u16,
-    pub(in crate::preview) rows_signature: u64,
-    pub(in crate::preview) density: MinimapDensity,
-    pub(in crate::preview) projection: Arc<LayoutSnapshot>,
-    pub(in crate::preview) total: usize,
+pub(crate) struct MinimapLineIndex {
+    pub(crate) layout: LayoutKey,
+    pub(crate) width: u16,
+    pub(crate) rows_signature: u64,
+    pub(crate) density: MinimapDensity,
+    pub(crate) projection: Arc<LayoutSnapshot>,
+    pub(crate) total: usize,
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct CachedMinimapLineIndex {
-    pub(in crate::preview) presentation_rows: Arc<Vec<usize>>,
-    pub(in crate::preview) index: MinimapLineIndex,
+pub(crate) struct CachedMinimapLineIndex {
+    pub(crate) presentation_rows: Arc<Vec<usize>>,
+    pub(crate) index: MinimapLineIndex,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct MinimapLineIndexKey {
-    pub(in crate::preview) presentation_rows: usize,
-    pub(in crate::preview) width: u16,
-    pub(in crate::preview) density: MinimapDensity,
-    pub(in crate::preview) layout: LayoutKey,
+pub(crate) struct MinimapLineIndexKey {
+    pub(crate) presentation_identity: usize,
+    pub(crate) width: u16,
+    pub(crate) density: MinimapDensity,
+    pub(crate) layout: LayoutKey,
 }
 
-pub(in crate::preview) struct MinimapLineIndexBuilder {
-    pub(in crate::preview) key: MinimapLineIndexKey,
-    pub(in crate::preview) presentation_rows: Arc<Vec<usize>>,
-    pub(in crate::preview) rows_signature: u64,
-    pub(in crate::preview) sequential_cursor: usize,
-    pub(in crate::preview) priority_range: Range<usize>,
-    pub(in crate::preview) priority_cursor: usize,
-    pub(in crate::preview) exact_bits: Vec<u64>,
-    pub(in crate::preview) exact_rows: usize,
-    pub(in crate::preview) started_at: Instant,
-    pub(in crate::preview) projection: Arc<LayoutSnapshot>,
-    pub(in crate::preview) pending_updates: Vec<(usize, ResolvedRow)>,
-    pub(in crate::preview) slices: usize,
-    pub(in crate::preview) work: Duration,
-    pub(in crate::preview) max_slice: Duration,
+pub(crate) struct MinimapLineIndexBuilder {
+    pub(crate) key: MinimapLineIndexKey,
+    pub(crate) presentation_rows: Arc<Vec<usize>>,
+    pub(crate) rows_signature: u64,
+    pub(crate) sequential_cursor: usize,
+    pub(crate) priority_range: Range<usize>,
+    pub(crate) priority_cursor: usize,
+    pub(crate) exact_bits: Vec<u64>,
+    pub(crate) exact_rows: usize,
+    pub(crate) started_at: Instant,
+    pub(crate) projection: Arc<LayoutSnapshot>,
+    pub(crate) pending_updates: Vec<(usize, ResolvedRow)>,
+    pub(crate) slices: usize,
+    pub(crate) work: Duration,
+    pub(crate) max_slice: Duration,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum MinimapProjectionReadiness {
+pub(crate) enum MinimapProjectionReadiness {
     Estimated,
     PartiallyExact,
     Exact,
 }
 
-pub(in crate::preview) struct MinimapLineIndexProgress {
-    pub(in crate::preview) index: MinimapLineIndex,
-    pub(in crate::preview) readiness: MinimapProjectionReadiness,
-    pub(in crate::preview) exact_rows: usize,
+pub(crate) struct MinimapLineIndexProgress {
+    pub(crate) index: MinimapLineIndex,
+    pub(crate) readiness: MinimapProjectionReadiness,
+    pub(crate) exact_rows: usize,
 }
 
-pub(super) struct MinimapRefinement {
-    pub(super) priority_row: usize,
-    pub(super) allow: bool,
-    pub(super) geometry_revision: u64,
+pub(crate) struct MinimapRefinement {
+    pub(crate) priority_row: usize,
+    pub(crate) allow: bool,
+    pub(crate) geometry_revision: u64,
 }
 
 impl MinimapLineIndexKey {
-    pub(in crate::preview) fn new(
+    pub(crate) fn new(
         presentation_rows: &Arc<Vec<usize>>,
         available_width: f32,
         density: MinimapDensity,
@@ -90,7 +90,7 @@ impl MinimapLineIndexKey {
         style: PreviewStyle,
     ) -> Self {
         Self {
-            presentation_rows: Arc::as_ptr(presentation_rows) as usize,
+            presentation_identity: Arc::as_ptr(presentation_rows) as usize,
             width: available_width.round().clamp(1.0, u16::MAX as f32) as u16,
             density,
             layout: LayoutKey {
@@ -104,7 +104,7 @@ impl MinimapLineIndexKey {
 }
 
 impl MinimapLineIndexBuilder {
-    pub(in crate::preview) fn new(
+    pub(crate) fn new(
         model: &PreviewDisplayMap,
         key: MinimapLineIndexKey,
         presentation_rows: Arc<Vec<usize>>,
@@ -114,6 +114,7 @@ impl MinimapLineIndexBuilder {
         style: PreviewStyle,
     ) -> MinimapLineIndexBuilder {
         let started_at = Instant::now();
+        let row_count = presentation_rows.len();
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         presentation_rows.hash(&mut hasher);
         let rows_signature = hasher.finish();
@@ -135,7 +136,7 @@ impl MinimapLineIndexBuilder {
             sequential_cursor: 0,
             priority_range: 0..0,
             priority_cursor: 0,
-            exact_bits: vec![0; key.presentation_rows.div_ceil(64)],
+            exact_bits: vec![0; row_count.div_ceil(64)],
             exact_rows: 0,
             started_at,
             pending_updates: Vec::with_capacity(16),
@@ -145,8 +146,34 @@ impl MinimapLineIndexBuilder {
         }
     }
 
+    fn seeded(
+        key: MinimapLineIndexKey,
+        presentation_rows: Arc<Vec<usize>>,
+        rows_signature: u64,
+        projection: Arc<LayoutSnapshot>,
+    ) -> Self {
+        debug_assert_eq!(projection.rows, presentation_rows.len());
+        let row_count = presentation_rows.len();
+        Self {
+            key,
+            presentation_rows,
+            rows_signature,
+            sequential_cursor: 0,
+            priority_range: 0..0,
+            priority_cursor: 0,
+            exact_bits: vec![0; row_count.div_ceil(64)],
+            exact_rows: 0,
+            started_at: Instant::now(),
+            projection,
+            pending_updates: Vec::with_capacity(16),
+            slices: 0,
+            work: Duration::ZERO,
+            max_slice: Duration::ZERO,
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn rebased(
+    pub(crate) fn rebased(
         model: &PreviewDisplayMap,
         key: MinimapLineIndexKey,
         presentation_rows: Arc<Vec<usize>>,
@@ -262,13 +289,13 @@ impl MinimapLineIndexBuilder {
         }
     }
 
-    pub(in crate::preview) fn record_slice(&mut self, elapsed: Duration) {
+    pub(crate) fn record_slice(&mut self, elapsed: Duration) {
         self.slices += 1;
         self.work += elapsed;
         self.max_slice = self.max_slice.max(elapsed);
     }
 
-    pub(in crate::preview) fn publish_pending(&mut self) {
+    pub(crate) fn publish_pending(&mut self) {
         if self.pending_updates.is_empty() {
             return;
         }
@@ -276,7 +303,7 @@ impl MinimapLineIndexBuilder {
         self.pending_updates.clear();
     }
 
-    pub(in crate::preview) fn index(&self, density: MinimapDensity) -> MinimapLineIndex {
+    pub(crate) fn index(&self, density: MinimapDensity) -> MinimapLineIndex {
         MinimapLineIndex {
             layout: self.key.layout,
             width: self.key.width,
@@ -287,13 +314,13 @@ impl MinimapLineIndexBuilder {
         }
     }
 
-    pub(in crate::preview) fn is_exact(&self, row: usize) -> bool {
+    pub(crate) fn is_exact(&self, row: usize) -> bool {
         self.exact_bits
             .get(row / 64)
             .is_some_and(|bits| bits & (1u64 << (row % 64)) != 0)
     }
 
-    pub(in crate::preview) fn mark_exact(&mut self, row: usize) {
+    pub(crate) fn mark_exact(&mut self, row: usize) {
         let bit = 1u64 << (row % 64);
         let word = &mut self.exact_bits[row / 64];
         if *word & bit == 0 {
@@ -302,7 +329,7 @@ impl MinimapLineIndexBuilder {
         }
     }
 
-    pub(in crate::preview) fn prioritize(&mut self, center: usize) {
+    pub(crate) fn prioritize(&mut self, center: usize) {
         if self.presentation_rows.is_empty() {
             return;
         }
@@ -316,7 +343,7 @@ impl MinimapLineIndexBuilder {
         self.priority_cursor = start;
     }
 
-    pub(in crate::preview) fn next_candidate(&mut self) -> Option<usize> {
+    pub(crate) fn next_candidate(&mut self) -> Option<usize> {
         while self.priority_cursor < self.priority_range.end {
             let row = self.priority_cursor;
             self.priority_cursor += 1;
@@ -336,11 +363,11 @@ impl MinimapLineIndexBuilder {
 }
 
 impl MinimapLineIndex {
-    pub(in crate::preview) fn locate(&self, display_line: usize) -> (usize, usize) {
+    pub(crate) fn locate(&self, display_line: usize) -> (usize, usize) {
         self.projection.locate_display(display_line)
     }
 
-    pub(in crate::preview) fn pixel_for_list_offset(&self, offset: ListOffset) -> f32 {
+    pub(crate) fn pixel_for_list_offset(&self, offset: ListOffset) -> f32 {
         if self.projection.rows == 0 {
             return 0.0;
         }
@@ -351,7 +378,7 @@ impl MinimapLineIndex {
             .clamp(0.0, self.projection.total_pixels())
     }
 
-    pub(in crate::preview) fn list_offset_for_display_position(&self, position: f32) -> ListOffset {
+    pub(crate) fn list_offset_for_display_position(&self, position: f32) -> ListOffset {
         if self.projection.rows == 0 {
             return ListOffset::default();
         }
@@ -369,7 +396,7 @@ impl MinimapLineIndex {
         }
     }
 
-    pub(in crate::preview) fn display_position_for_pixel(&self, pixel: f32) -> f32 {
+    pub(crate) fn display_position_for_pixel(&self, pixel: f32) -> f32 {
         if self.projection.rows == 0 {
             return 0.0;
         }
@@ -383,7 +410,7 @@ impl MinimapLineIndex {
                 * measure.display_lines.max(1) as f32
     }
 
-    pub(in crate::preview) fn list_offset_for_pixel(&self, pixel: f32) -> ListOffset {
+    pub(crate) fn list_offset_for_pixel(&self, pixel: f32) -> ListOffset {
         if self.projection.rows == 0 {
             return ListOffset::default();
         }
@@ -396,14 +423,14 @@ impl MinimapLineIndex {
         }
     }
 
-    pub(in crate::preview) fn document_pixels(&self) -> f32 {
+    pub(crate) fn document_pixels(&self) -> f32 {
         self.projection.total_pixels()
     }
 }
 
 impl PreviewDisplayMap {
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn estimated_minimap_line_index(
+    pub(crate) fn estimated_minimap_line_index(
         &self,
         presentation_rows: &[usize],
         width: u16,
@@ -440,7 +467,7 @@ impl PreviewDisplayMap {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub(super) fn advance_minimap_line_index(
+    pub(crate) fn advance_minimap_line_index(
         &self,
         state: &super::MinimapState,
         presentation_rows: &Arc<Vec<usize>>,
@@ -460,17 +487,7 @@ impl PreviewDisplayMap {
             zoom,
             style,
         );
-        let cached = state
-            .line_index
-            .lock()
-            .expect("minimap line index poisoned")
-            .as_ref()
-            .filter(|cached| {
-                Arc::ptr_eq(&cached.presentation_rows, presentation_rows)
-                    && cached.index.layout == key.layout
-                    && cached.index.density == density
-            })
-            .map(|cached| cached.index.clone());
+        let cached = state.cached_line_index(presentation_rows, key.layout, density);
         if let Some(index) = cached {
             return MinimapLineIndexProgress {
                 exact_rows: presentation_rows.len(),
@@ -492,6 +509,7 @@ impl PreviewDisplayMap {
                         (
                             builder.presentation_rows.clone(),
                             builder.projection.clone(),
+                            builder.rows_signature,
                         )
                     })
             });
@@ -510,11 +528,43 @@ impl PreviewDisplayMap {
                         (
                             cached.presentation_rows.clone(),
                             cached.index.projection.clone(),
+                            cached.index.rows_signature,
                         )
                     })
             });
-            *build = Some(
-                if let Some((previous_rows, previous_projection)) = reusable {
+            let seed = build
+                .as_ref()
+                .filter(|builder| {
+                    builder.key.presentation_identity == key.presentation_identity
+                        && builder.projection.rows == presentation_rows.len()
+                })
+                .map(|builder| (builder.projection.clone(), builder.rows_signature))
+                .or_else(|| {
+                    state
+                        .line_index
+                        .lock()
+                        .expect("minimap line index poisoned")
+                        .as_ref()
+                        .filter(|cached| {
+                            Arc::ptr_eq(&cached.presentation_rows, presentation_rows)
+                                && cached.index.projection.rows == presentation_rows.len()
+                        })
+                        .map(|cached| {
+                            (cached.index.projection.clone(), cached.index.rows_signature)
+                        })
+                });
+            if let Some(previous) = build.take() {
+                state.remember_line_index_builder(previous);
+            }
+            *build = state.take_line_index_builder(key).or_else(|| {
+                Some(if let Some((projection, rows_signature)) = seed {
+                    MinimapLineIndexBuilder::seeded(
+                        key,
+                        presentation_rows.clone(),
+                        rows_signature,
+                        projection,
+                    )
+                } else if let Some((previous_rows, previous_projection, _)) = reusable {
                     MinimapLineIndexBuilder::rebased(
                         self,
                         key,
@@ -535,8 +585,8 @@ impl PreviewDisplayMap {
                         zoom,
                         style,
                     )
-                },
-            );
+                })
+            });
         }
         if created {
             let builder = build.as_mut().expect("line-index builder initialized");
@@ -670,10 +720,7 @@ fn finish_line_index(
 ) -> MinimapLineIndexProgress {
     let exact_rows = builder.presentation_rows.len();
     let index = builder.index(density);
-    *state
-        .line_index
-        .lock()
-        .expect("minimap line index poisoned") = Some(CachedMinimapLineIndex {
+    state.publish_line_index(CachedMinimapLineIndex {
         presentation_rows: builder.presentation_rows,
         index: index.clone(),
     });

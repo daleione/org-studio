@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use crate::preview::command_window;
+use super::command_window;
 
 pub(super) fn dired_help_window(
     items: Arc<Vec<(Arc<str>, Arc<str>)>>,

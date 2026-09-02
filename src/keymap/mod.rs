@@ -73,10 +73,7 @@ impl KeyStroke {
         }
         let mut rest = source;
         let mut modifiers = 0;
-        loop {
-            let Some((modifier, tail)) = modifier_prefix(rest) else {
-                break;
-            };
+        while let Some((modifier, tail)) = modifier_prefix(rest) {
             if modifiers & modifier != 0 {
                 return Err(KeyParseError::DuplicateModifier(source.into()));
             }

@@ -1,15 +1,23 @@
-use super::{
-    Arc, Context, Duration, InitialDocumentLoad, Instant, PathBuf, PathPromptOptions,
-    PreviewLoadState, WorkspaceLoadedDocument, WorkspaceWindow, accept_generation,
-    load_workspace_document, minimap,
+use std::{
+    path::PathBuf,
+    sync::Arc,
+    time::{Duration, Instant},
 };
-use crate::preview::{
-    PanePair, ReadyDocument, WorkspaceReloadedDocument, reload_workspace_document,
+
+use gpui::{Context, PathPromptOptions};
+
+use crate::preview::{WorkspaceReloadedDocument, reload_workspace_document};
+use crate::{
+    app::{ContentRoute, PanePair, ReadyDocument, WorkspaceLoadState, WorkspaceWindow},
+    preview::{
+        InitialDocumentLoad, ReadingPreviewPanel, WorkspaceLoadedDocument, accept_generation,
+        is_supported_document, load_workspace_document, minimap,
+    },
 };
 use gpui::AppContext;
 
 impl WorkspaceWindow {
-    pub(super) fn show_home_now(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn show_home_now(&mut self, cx: &mut Context<Self>) {
         self.suspend_derived_preview();
         self.derived.latest = None;
         self.generation = self.generation.wrapping_add(1);
@@ -17,20 +25,20 @@ impl WorkspaceWindow {
         self.stop_document_watch();
         self.editor_minimap_width_subscriptions.clear();
         self.save.status = None;
-        self.save.interaction = crate::preview::SaveInteraction::Idle;
-        self.state = PreviewLoadState::Empty;
+        self.save.interaction = crate::app::save::SaveInteraction::Idle;
+        self.state = WorkspaceLoadState::Empty;
         self.opened_at = None;
         self.first_frame_scheduled = None;
         self.home_error = None;
         self.pending_navigation = None;
-        self.content_route = super::super::ContentRoute::Document;
+        self.content_route = ContentRoute::Document;
         self.file_manager.reset_for_document();
         self.stop_dired_directory_watch();
         self.install_document_keymap();
         cx.notify();
     }
 
-    pub(in crate::preview) fn begin_open(&mut self, path: PathBuf, opened_at: Instant) -> u64 {
+    pub(crate) fn begin_open(&mut self, path: PathBuf, opened_at: Instant) -> u64 {
         self.begin_open_with_previous(path, opened_at, true)
     }
 
@@ -48,7 +56,7 @@ impl WorkspaceWindow {
         self.first_frame_scheduled = None;
         let generation = self.generation;
         let previous = preserve_previous.then(|| self.state.take_ready()).flatten();
-        self.state = PreviewLoadState::Loading {
+        self.state = WorkspaceLoadState::Loading {
             path: path.clone(),
             previous,
         };
@@ -100,7 +108,7 @@ impl WorkspaceWindow {
         self.open_with_previous(path, true, cx);
     }
 
-    pub(super) fn open_discarding_current(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+    pub(crate) fn open_discarding_current(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.open_with_previous(path, false, cx);
     }
 
@@ -154,7 +162,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn reload_current(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reload_current(&mut self, cx: &mut Context<Self>) {
         let Some(session) = self.document_session().cloned() else {
             return;
         };
@@ -197,7 +205,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(super) fn set_document_notice(&mut self, error: Option<Arc<str>>) {
+    pub(crate) fn set_document_notice(&mut self, error: Option<Arc<str>>) {
         if let Some(document) = self.state.ready_mut() {
             document.notice = error;
         }
@@ -255,7 +263,7 @@ impl WorkspaceWindow {
         true
     }
 
-    pub(in crate::preview) fn watch_document_profiled(
+    pub(crate) fn watch_document_profiled(
         &mut self,
         path: PathBuf,
         generation: u64,
@@ -449,7 +457,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn apply_load_result<T>(
+    pub(crate) fn apply_load_result<T>(
         &mut self,
         generation: u64,
         result: Result<T, (PathBuf, String)>,
@@ -483,7 +491,7 @@ impl WorkspaceWindow {
                         "org_preview_document_ready generation={} bytes={} rows={} read_ms={:.3} rope_ms={:.3} parse_ms={:.3} display_map_ms={:.3} load_total_ms={:.3} since_open_ms={:.3}",
                         generation,
                         preview.metrics.bytes,
-                        preview.projection.presentation.len(),
+                        preview.row_count(),
                         preview.metrics.read.as_secs_f64() * 1000.0,
                         preview.metrics.rope.as_secs_f64() * 1000.0,
                         preview.metrics.parse.as_secs_f64() * 1000.0,
@@ -535,12 +543,7 @@ impl WorkspaceWindow {
                             .then(|| {
                                 cx.new({
                                     let document = document.clone();
-                                    move |_| {
-                                        super::super::ReadingPreviewPanel::new(
-                                            document,
-                                            list_overdraw,
-                                        )
-                                    }
+                                    move |_| ReadingPreviewPanel::new(document, list_overdraw)
                                 })
                             }),
                         right: document_workspace
@@ -549,16 +552,14 @@ impl WorkspaceWindow {
                                 crate::app::PaneSurface::Reading,
                             )
                             .then(|| {
-                                cx.new(move |_| {
-                                    super::super::ReadingPreviewPanel::new(document, list_overdraw)
-                                })
+                                cx.new(move |_| ReadingPreviewPanel::new(document, list_overdraw))
                             }),
                     })
                     .unwrap_or(PanePair {
                         left: None,
                         right: None,
                     });
-                PreviewLoadState::Ready {
+                WorkspaceLoadState::Ready {
                     document: ReadyDocument {
                         session,
                         editors: PanePair {
@@ -574,7 +575,7 @@ impl WorkspaceWindow {
                 if previous.is_none() {
                     self.derived.latest = None;
                 }
-                PreviewLoadState::Failed {
+                WorkspaceLoadState::Failed {
                     path,
                     message,
                     previous,
@@ -585,7 +586,7 @@ impl WorkspaceWindow {
         true
     }
 
-    pub(super) fn apply_pending_navigation(&mut self, generation: u64, cx: &mut impl AppContext) {
+    pub(crate) fn apply_pending_navigation(&mut self, generation: u64, cx: &mut impl AppContext) {
         let Some((pending_generation, anchor)) = self.pending_navigation.clone() else {
             return;
         };
@@ -612,11 +613,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn choose_file(
-        &mut self,
-        window: &mut gpui::Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn choose_file(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
@@ -634,8 +631,8 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn open_recent(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if super::super::is_supported_document(&path) {
+    pub(crate) fn open_recent(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if is_supported_document(&path) {
             self.open(path, cx);
         } else {
             crate::recent_documents::remove(&mut self.recent_documents, &path);
@@ -650,13 +647,13 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn clear_recent_documents(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn clear_recent_documents(&mut self, cx: &mut Context<Self>) {
         crate::recent_documents::clear(&mut self.recent_documents);
         self.home_error = None;
         cx.notify();
     }
 
-    pub(in crate::preview) fn open_dropped_paths(
+    pub(crate) fn open_dropped_paths(
         &mut self,
         paths: &gpui::ExternalPaths,
         window: &mut gpui::Window,
@@ -665,7 +662,7 @@ impl WorkspaceWindow {
         if let Some(path) = paths
             .paths()
             .iter()
-            .find(|path| super::super::is_supported_document(path))
+            .find(|path| is_supported_document(path))
         {
             self.request_open(path.clone(), window, cx);
             return;
@@ -674,12 +671,12 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn reload(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+    pub(crate) fn reload(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
         let path = match &self.state {
-            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
+            WorkspaceLoadState::Loading { path, .. } | WorkspaceLoadState::Failed { path, .. } => {
                 Some(path.clone())
             }
-            PreviewLoadState::Ready { document } if document.session.read(cx).is_dirty() => {
+            WorkspaceLoadState::Ready { document } if document.session.read(cx).is_dirty() => {
                 let path = document.session.read(cx).path().to_path_buf();
                 let answer = window.prompt(
                     gpui::PromptLevel::Warning,
@@ -704,11 +701,11 @@ impl WorkspaceWindow {
                 }));
                 None
             }
-            PreviewLoadState::Ready { .. } => {
+            WorkspaceLoadState::Ready { .. } => {
                 self.reload_current(cx);
                 None
             }
-            PreviewLoadState::Empty => None,
+            WorkspaceLoadState::Empty => None,
         };
         if let Some(path) = path {
             self.open(path, cx);

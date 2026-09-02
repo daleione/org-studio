@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
 
-use syn::{Fields, ItemStruct, ItemUse, Path as SynPath, UseTree, Visibility, visit::Visit};
+use syn::{
+    Fields, Item, ItemStruct, ItemUse, Path as SynPath, Type, UseTree, Visibility, visit::Visit,
+};
 
 fn rust_files_under(root: &Path, files: &mut Vec<PathBuf>) {
     for entry in std::fs::read_dir(root).expect("architecture root must exist") {
@@ -162,14 +164,51 @@ fn product_shell_has_one_definition_in_app() {
 }
 
 #[test]
+fn workspace_state_types_live_in_app() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files_under(&root.join("src"), &mut files);
+    let workspace_types = [
+        "WorkspaceWindow",
+        "WorkspaceLoadState",
+        "ReadyDocument",
+        "DocumentWorkspaceState",
+        "DocumentViewPreferences",
+        "ContentRoute",
+    ];
+    let mut violations = Vec::new();
+    for path in files {
+        for item in parse(&path).items {
+            let name = match item {
+                Item::Struct(item) => Some(item.ident),
+                Item::Enum(item) => Some(item.ident),
+                Item::Type(item) => Some(item.ident),
+                _ => None,
+            };
+            if let Some(name) = name
+                && workspace_types.iter().any(|workspace| name == *workspace)
+                && path != root.join("src/app/mod.rs")
+            {
+                violations.push(format!("{} defines {name}", path.display()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "workspace state ownership violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
 fn entity_and_load_boundaries_keep_their_fields_private() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     for (relative, name) in [
         ("src/preview/reading_panel.rs", "ReadingPreviewPanel"),
         ("src/preview/document.rs", "LoadedDocument"),
-        ("src/preview/file_manager_host.rs", "FileManagerHost"),
-        ("src/preview/export_ui.rs", "ExportHost"),
-        ("src/preview/status_line.rs", "StatusLineHost"),
+        ("src/app/file_manager.rs", "FileManagerHost"),
+        ("src/app/export_ui.rs", "ExportHost"),
+        ("src/app/status_line.rs", "StatusLineHost"),
         ("src/editor/mod.rs", "SemanticEditor"),
     ] {
         for field in fields_of(&root.join(relative), name) {
@@ -182,6 +221,64 @@ fn entity_and_load_boundaries_keep_their_fields_private() {
             );
         }
     }
+}
+
+#[test]
+fn workspace_window_implementations_live_in_app() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files_under(&root.join("src"), &mut files);
+    let app_root = root.join("src/app");
+    let mut violations = Vec::new();
+
+    for path in files {
+        for item in parse(&path).items {
+            let Item::Impl(item) = item else {
+                continue;
+            };
+            let Type::Path(self_type) = item.self_ty.as_ref() else {
+                continue;
+            };
+            if self_type
+                .path
+                .segments
+                .last()
+                .is_some_and(|segment| segment.ident == "WorkspaceWindow")
+                && !path.starts_with(&app_root)
+            {
+                violations.push(path.display().to_string());
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "WorkspaceWindow implementations must live in src/app:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn preview_production_code_has_no_product_shell_dependency() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files_under(&root.join("src/preview"), &mut files);
+    files.retain(|path| path.file_name().is_none_or(|name| name != "tests.rs"));
+    let mut violations = Vec::new();
+
+    for path in files {
+        for dependency in dependencies(&path) {
+            if dependency.starts_with("crate::app") || dependency.contains("WorkspaceWindow") {
+                violations.push(format!("{} depends on {dependency}", path.display()));
+            }
+        }
+    }
+
+    assert!(
+        violations.is_empty(),
+        "preview product-shell dependency violations:\n{}",
+        violations.join("\n")
+    );
 }
 
 #[test]
@@ -218,4 +315,100 @@ fn removed_product_types_do_not_return_as_items() {
         }
     }
     assert!(violations.is_empty(), "{}", violations.join("\n"));
+}
+
+#[test]
+fn reading_core_does_not_own_the_workspace_or_export_pipeline() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = [
+        "src/preview/action.rs",
+        "src/preview/projection.rs",
+        "src/preview/reading_panel.rs",
+        "src/preview/style.rs",
+    ]
+    .into_iter()
+    .map(|relative| root.join(relative))
+    .collect::<Vec<_>>();
+    for relative in [
+        "src/preview/display_map",
+        "src/preview/minimap",
+        "src/preview/view",
+    ] {
+        rust_files_under(&root.join(relative), &mut files);
+    }
+
+    let mut violations = Vec::new();
+    for path in files {
+        for dependency in dependencies(&path) {
+            if dependency.starts_with("crate::app")
+                || dependency.starts_with("crate::export")
+                || dependency.starts_with("typst")
+                || dependency.contains("WorkspaceWindow")
+            {
+                violations.push(format!("{} depends on {dependency}", path.display()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Reading core dependency violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn reading_panel_has_no_mutable_text_or_command_capability() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fields = fields_of(
+        &root.join("src/preview/reading_panel.rs"),
+        "ReadingPreviewPanel",
+    );
+    let forbidden = [
+        "DocumentBuffer",
+        "DocumentSession",
+        "CommandRegistry",
+        "CapabilitySet",
+        "CommandImplementation",
+    ];
+    let mut collector = DependencyCollector::default();
+    for field in fields {
+        collector.visit_type(&field.ty);
+    }
+    for name in forbidden {
+        assert!(
+            !collector
+                .paths
+                .iter()
+                .any(|path| path.split("::").any(|segment| segment == name)),
+            "ReadingPreviewPanel must not own {name}"
+        );
+    }
+}
+
+#[test]
+fn minimap_runtime_state_is_host_owned() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let mut files = Vec::new();
+    rust_files_under(&root.join("src/preview/minimap"), &mut files);
+
+    let mut violations = Vec::new();
+    for path in files {
+        for item in parse(&path).items {
+            if let Item::Static(item) = item {
+                let name = item.ident.to_string();
+                if ["CACHE", "RASTER", "GENERATION", "TILE", "THUMB"]
+                    .iter()
+                    .any(|token| name.contains(token))
+                    && name != "TEXT_RASTERIZER_PREWARMED"
+                {
+                    violations.push(format!("{} defines static {name}", path.display()));
+                }
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Minimap host-isolation violations:\n{}",
+        violations.join("\n")
+    );
 }

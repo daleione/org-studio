@@ -603,10 +603,11 @@ fn sort_entries(entries: &mut [FileEntry], spec: SortSpec) {
         if matches!(right.kind, EntryKind::Parent) {
             return std::cmp::Ordering::Greater;
         }
-        let directory_order = spec
-            .directories_first
-            .then(|| right.is_directory().cmp(&left.is_directory()))
-            .unwrap_or(std::cmp::Ordering::Equal);
+        let directory_order = if spec.directories_first {
+            right.is_directory().cmp(&left.is_directory())
+        } else {
+            std::cmp::Ordering::Equal
+        };
         let name_order = left
             .display_name
             .to_lowercase()

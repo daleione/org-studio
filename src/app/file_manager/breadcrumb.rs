@@ -7,8 +7,7 @@ use gpui::{
     AnyElement, Entity, InteractiveElement, ParentElement, Styled, div, prelude::*, px, rgb,
 };
 
-use super::WorkspaceWindow;
-use crate::theme::current_theme;
+use crate::{app::WorkspaceWindow, theme::current_theme};
 
 const MAX_VISIBLE_SEGMENTS: usize = 5;
 

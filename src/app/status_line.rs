@@ -8,8 +8,14 @@ use gpui::{
 #[cfg(test)]
 use unicode_width::UnicodeWidthStr;
 
-use super::{ContentRoute, DocumentFormat, WorkspaceWindow, current_theme};
-use crate::{i18n::Language, navigation::PaneId, settings::StatusLineSettings};
+use super::{ContentRoute, WorkspaceWindow};
+use crate::{
+    i18n::Language,
+    navigation::PaneId,
+    preview::{DocumentFormat, preview_style},
+    settings::StatusLineSettings,
+    theme::current_theme,
+};
 
 mod host;
 mod model;
@@ -17,8 +23,8 @@ mod popover;
 #[cfg(test)]
 use host::reading_progress;
 use model::*;
-pub(super) use model::{CachedStatusLayout, StatusLineLayout, StatusLineSnapshot, StatusPopover};
-pub(super) use popover::render_status_popover;
+pub(crate) use model::{CachedStatusLayout, StatusLineLayout, StatusLineSnapshot, StatusPopover};
+pub(crate) use popover::render_status_popover;
 
 pub(crate) struct StatusLineHost {
     settings: StatusLineSettings,
@@ -27,7 +33,7 @@ pub(crate) struct StatusLineHost {
 }
 
 impl StatusLineHost {
-    pub(super) fn new(settings: StatusLineSettings) -> Self {
+    pub(crate) fn new(settings: StatusLineSettings) -> Self {
         Self {
             settings,
             popover: None,
@@ -35,19 +41,19 @@ impl StatusLineHost {
         }
     }
 
-    pub(super) fn settings(&self) -> StatusLineSettings {
+    pub(crate) fn settings(&self) -> StatusLineSettings {
         self.settings
     }
 
-    pub(super) fn dismiss_popover(&mut self) -> bool {
+    pub(crate) fn dismiss_popover(&mut self) -> bool {
         self.popover.take().is_some()
     }
 
-    pub(super) fn clear_layout_cache(&self) {
+    pub(crate) fn clear_layout_cache(&self) {
         self.layout_cache.borrow_mut().clear();
     }
 
-    pub(super) fn popover_for(&self, pane: PaneId) -> Option<StatusPopover> {
+    pub(crate) fn popover_for(&self, pane: PaneId) -> Option<StatusPopover> {
         self.popover
             .as_ref()
             .filter(|popover| popover.pane == pane)
@@ -55,7 +61,7 @@ impl StatusLineHost {
     }
 }
 
-pub(super) const STATUS_LINE_HEIGHT: f32 = 30.0;
+pub(crate) const STATUS_LINE_HEIGHT: f32 = 30.0;
 const OUTLINE_FULL_RESERVE: f32 = 260.0;
 const OUTLINE_COMPACT_WIDTH: f32 = 150.0;
 const POSITION_FULL_CHROME: f32 = 40.0;
@@ -83,11 +89,11 @@ impl StatusLineSnapshot {
     }
 
     #[cfg(test)]
-    pub(super) fn layout(&self, width: f32, settings: StatusLineSettings) -> StatusLineLayout {
+    pub(crate) fn layout(&self, width: f32, settings: StatusLineSettings) -> StatusLineLayout {
         self.layout_with_measure(width, settings, &text_width)
     }
 
-    pub(super) fn layout_in_window(
+    pub(crate) fn layout_in_window(
         &self,
         width: f32,
         settings: StatusLineSettings,
@@ -176,7 +182,7 @@ impl StatusLineSnapshot {
     fn mode_label(&self) -> &'static str {
         match self.host {
             StatusHost::Dired => "FILES",
-            StatusHost::Preview | StatusHost::Editor => match self.surface {
+            StatusHost::Reading | StatusHost::Editor => match self.surface {
                 crate::app::PaneSurface::Editor => "EDITOR",
                 crate::app::PaneSurface::Reading => "READING",
             },
@@ -238,9 +244,7 @@ impl StatusLineLayout {
             Variant::Hidden => 0.0,
         };
         let reading_style = match (self.reading_style, snapshot.reading_style) {
-            (Variant::Full, Some(id)) => {
-                measure(super::preview_style(id).name(snapshot.language)) + 24.0
-            }
+            (Variant::Full, Some(id)) => measure(preview_style(id).name(snapshot.language)) + 24.0,
             (Variant::Compact, Some(_)) => {
                 measure(match snapshot.language {
                     Language::Chinese => "样式",
@@ -321,7 +325,7 @@ fn measured_text_width(text: &str, window: &Window) -> f32 {
     )
 }
 
-pub(super) fn reading_style_popover_left(
+pub(crate) fn reading_style_popover_left(
     snapshot: &StatusLineSnapshot,
     layout: &StatusLineLayout,
     window: &Window,
@@ -349,7 +353,7 @@ fn format_label(format: DocumentFormat) -> &'static str {
 
 fn position_text(position: StatusPosition, compact: bool, language: Language) -> String {
     match position {
-        StatusPosition::PreviewSource { line, .. } => {
+        StatusPosition::ReadingSource { line, .. } => {
             if compact {
                 line.to_string()
             } else {
@@ -379,7 +383,7 @@ fn position_text(position: StatusPosition, compact: bool, language: Language) ->
 fn position_reserve_text(position: StatusPosition, compact: bool, language: Language) -> String {
     let digits = |value: u64| value.max(1).ilog10() as usize + 1;
     match position {
-        StatusPosition::PreviewSource { total_lines, .. } => {
+        StatusPosition::ReadingSource { total_lines, .. } => {
             let number = "9".repeat(digits(total_lines));
             if compact {
                 number
@@ -435,7 +439,7 @@ fn progress_slot_width(compact: bool, measure: &impl Fn(&str) -> f32) -> f32 {
         }
 }
 
-pub(super) fn render_status_line(
+pub(crate) fn render_status_line(
     snapshot: &StatusLineSnapshot,
     layout: StatusLineLayout,
     entity: Entity<WorkspaceWindow>,
@@ -477,7 +481,7 @@ pub(super) fn render_status_line(
                             Language::English => "Style",
                         }
                     } else {
-                        super::preview_style(style_id).name(snapshot.language)
+                        preview_style(style_id).name(snapshot.language)
                     })
                     .child("⌃"),
             )
@@ -742,7 +746,7 @@ fn progress_ring(progress: u8) -> impl gpui::IntoElement {
 }
 
 impl WorkspaceWindow {
-    pub(super) fn status_snapshot(&self, cx: &gpui::App) -> Option<StatusLineSnapshot> {
+    pub(crate) fn status_snapshot(&self, cx: &gpui::App) -> Option<StatusLineSnapshot> {
         match self.content_route {
             ContentRoute::Document => {
                 self.document_status_snapshot(self.document_workspace.active_pane, cx)
@@ -751,7 +755,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn status_layout(
+    pub(crate) fn status_layout(
         &self,
         snapshot: &StatusLineSnapshot,
         width: f32,
@@ -961,7 +965,7 @@ fn info_text(
         };
     }
     if segment == StatusSegment::Mode
-        && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Preview)
+        && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Reading)
     {
         return match language {
             Language::Chinese => {
@@ -974,7 +978,7 @@ fn info_text(
         };
     }
     if segment == StatusSegment::Position
-        && let Some(StatusPosition::PreviewSource { line, .. }) =
+        && let Some(StatusPosition::ReadingSource { line, .. }) =
             snapshot.and_then(|snapshot| snapshot.position)
     {
         return match language {
@@ -997,7 +1001,7 @@ fn info_text(
         StatusSegment::Mode => Some(snapshot.mode_label().to_owned()),
         StatusSegment::ReadingStyle => snapshot
             .reading_style
-            .map(|id| super::preview_style(id).name(language).to_owned()),
+            .map(|id| preview_style(id).name(language).to_owned()),
         StatusSegment::More => None,
     });
     match (language, value) {
@@ -1016,11 +1020,11 @@ mod tests {
         StatusLineSnapshot {
             pane: PaneId(7),
             language: Language::Chinese,
-            host: StatusHost::Preview,
+            host: StatusHost::Reading,
             surface: crate::app::PaneSurface::Reading,
             reading_style: Some(crate::preview::PreviewStyleId::Base),
             outline: Some("性能优化 / Minimap".into()),
-            position: Some(StatusPosition::PreviewSource {
+            position: Some(StatusPosition::ReadingSource {
                 line: 259,
                 total_lines: 9_842,
             }),
@@ -1176,7 +1180,7 @@ mod tests {
     fn preview_and_editor_positions_have_distinct_semantics() {
         assert_eq!(
             position_text(
-                StatusPosition::PreviewSource {
+                StatusPosition::ReadingSource {
                     line: 259,
                     total_lines: 9_842,
                 },
@@ -1282,11 +1286,11 @@ mod tests {
 
     #[test]
     fn position_reserves_the_total_line_digit_count() {
-        let first = StatusPosition::PreviewSource {
+        let first = StatusPosition::ReadingSource {
             line: 1,
             total_lines: 999,
         };
-        let last = StatusPosition::PreviewSource {
+        let last = StatusPosition::ReadingSource {
             line: 999,
             total_lines: 999,
         };
@@ -1334,7 +1338,7 @@ mod tests {
     fn scrolling_changes_values_without_changing_status_geometry() {
         let mut first = snapshot();
         first.outline = Some("短标题".into());
-        first.position = Some(StatusPosition::PreviewSource {
+        first.position = Some(StatusPosition::ReadingSource {
             line: 1,
             total_lines: 9_842,
         });
@@ -1343,7 +1347,7 @@ mod tests {
         let mut later = first.clone();
         later.outline =
             Some("一个在滚动后出现的明显更长标题 / 但它不应改变状态栏的响应式分档".into());
-        later.position = Some(StatusPosition::PreviewSource {
+        later.position = Some(StatusPosition::ReadingSource {
             line: 9_842,
             total_lines: 9_842,
         });

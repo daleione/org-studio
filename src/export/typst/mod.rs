@@ -145,7 +145,9 @@ fn diagnostics(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::export::{ExportOptions, PaperSize, emit, markdown, template_inputs, themes};
+    use crate::export::{
+        ExportOptions, PaperSize, emit, export_templates, markdown, template_inputs,
+    };
     use typst::layout::{Frame, FrameItem};
 
     fn frame_text(frame: &Frame, output: &mut String) {
@@ -202,7 +204,7 @@ mod tests {
         let (document, _) = markdown::parse("# Paper size\n\nBody");
         let document = document.unwrap();
         let engine = TypstEngine::default();
-        for theme in themes() {
+        for template in export_templates() {
             for (paper, expected) in [
                 (PaperSize::A4, (595.28, 841.89)),
                 (PaperSize::A5, (419.53, 595.28)),
@@ -210,29 +212,29 @@ mod tests {
             ] {
                 let options = ExportOptions {
                     paper,
-                    theme_id: theme.id.into(),
+                    template_id: template.id.into(),
                     ..ExportOptions::default()
                 };
                 let mut diagnostics = Vec::new();
-                let source = emit::emit(&document, theme, &options, &mut diagnostics);
+                let source = emit::emit(&document, template, &options, &mut diagnostics);
                 let inputs = template_inputs(&options);
                 let world = OrgStudioWorld::new(&engine.shared, source, None, &inputs);
                 let compiled = ::typst::compile::<PagedDocument>(&world);
                 let output = compiled
                     .output
-                    .unwrap_or_else(|errors| panic!("{} {paper:?}: {errors:?}", theme.id));
+                    .unwrap_or_else(|errors| panic!("{} {paper:?}: {errors:?}", template.id));
                 for page in output.pages() {
                     let size = page.frame.size();
                     assert!(
                         (size.x.to_pt() - expected.0).abs() < 0.2,
                         "{} {paper:?} width was {}",
-                        theme.id,
+                        template.id,
                         size.x.to_pt()
                     );
                     assert!(
                         (size.y.to_pt() - expected.1).abs() < 0.2,
                         "{} {paper:?} height was {}",
-                        theme.id,
+                        template.id,
                         size.y.to_pt()
                     );
                 }
@@ -245,9 +247,9 @@ mod tests {
         let (document, _) = markdown::parse("- `overlays-at`, `overlays-in`;\n");
         let document = document.unwrap();
         let options = ExportOptions::default();
-        let theme = themes().first().unwrap();
+        let template = export_templates().first().unwrap();
         let mut diagnostics = Vec::new();
-        let source = emit::emit(&document, theme, &options, &mut diagnostics);
+        let source = emit::emit(&document, template, &options, &mut diagnostics);
         let inputs = template_inputs(&options);
         let engine = TypstEngine::default();
         assert!(

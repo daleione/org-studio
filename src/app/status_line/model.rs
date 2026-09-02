@@ -2,54 +2,53 @@ use std::sync::Arc;
 
 use crate::{i18n::Language, navigation::PaneId, settings::StatusLineSettings};
 
-use super::super::DocumentFormat;
-use super::super::PreviewStyleId;
+use crate::preview::{DocumentFormat, PreviewStyleId};
 
-pub(super) const DOCUMENT_PANE_ID: PaneId = PaneId(1);
-pub(super) const DIRED_PANE_ID: PaneId = PaneId(2);
-pub(super) const RIGHT_DOCUMENT_PANE_ID: PaneId = PaneId(3);
+pub(crate) const DOCUMENT_PANE_ID: PaneId = PaneId(1);
+pub(crate) const DIRED_PANE_ID: PaneId = PaneId(2);
+pub(crate) const RIGHT_DOCUMENT_PANE_ID: PaneId = PaneId(3);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StatusHost {
-    Preview,
+pub(crate) enum StatusHost {
+    Reading,
     Editor,
     Dired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StatusPosition {
-    PreviewSource { line: u64, total_lines: u64 },
+pub(crate) enum StatusPosition {
+    ReadingSource { line: u64, total_lines: u64 },
     EditorCaret { line: u64, column: u64 },
     DiredSelection { selected: usize, total: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StatusTone {
+pub(crate) enum StatusTone {
     Working,
     Success,
     Error,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct StatusMessage {
+pub(crate) struct StatusMessage {
     pub text: Arc<str>,
     pub tone: StatusTone,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct StatusLineSnapshot {
-    pub(in crate::preview) pane: PaneId,
-    pub(super) language: Language,
-    pub(super) host: StatusHost,
-    pub(super) surface: crate::app::PaneSurface,
-    pub(super) reading_style: Option<PreviewStyleId>,
-    pub(super) outline: Option<Arc<str>>,
-    pub(super) position: Option<StatusPosition>,
-    pub(super) progress: Option<u8>,
-    pub(super) statistics: Option<Arc<str>>,
-    pub(super) document_statistics: Option<DocumentStatistics>,
-    pub(super) format: Option<DocumentFormat>,
-    pub(super) transient: Option<StatusMessage>,
+pub(crate) struct StatusLineSnapshot {
+    pub(crate) pane: PaneId,
+    pub(crate) language: Language,
+    pub(crate) host: StatusHost,
+    pub(crate) surface: crate::app::PaneSurface,
+    pub(crate) reading_style: Option<PreviewStyleId>,
+    pub(crate) outline: Option<Arc<str>>,
+    pub(crate) position: Option<StatusPosition>,
+    pub(crate) progress: Option<u8>,
+    pub(crate) statistics: Option<Arc<str>>,
+    pub(crate) document_statistics: Option<DocumentStatistics>,
+    pub(crate) format: Option<DocumentFormat>,
+    pub(crate) transient: Option<StatusMessage>,
 }
 
 impl StatusLineSnapshot {
@@ -63,7 +62,7 @@ impl StatusLineSnapshot {
         self.transient.as_ref().map(|message| message.text.as_ref())
     }
 
-    pub(super) fn has_segment(&self, segment: StatusSegment) -> bool {
+    pub(crate) fn has_segment(&self, segment: StatusSegment) -> bool {
         match segment {
             StatusSegment::Mode | StatusSegment::More => true,
             StatusSegment::ReadingStyle => self.reading_style.is_some(),
@@ -77,34 +76,34 @@ impl StatusLineSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct DocumentStatistics {
+pub(crate) struct DocumentStatistics {
     pub characters: u64,
     pub lines: u64,
     pub bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Variant {
+pub(crate) enum Variant {
     Full,
     Compact,
     Hidden,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(in crate::preview) struct StatusLineLayout {
-    pub(super) mode: Variant,
-    pub(super) reading_style: Variant,
-    pub(super) outline: Variant,
-    pub(super) position: Variant,
-    pub(super) progress: Variant,
-    pub(super) statistics: Variant,
-    pub(super) format: Variant,
-    pub(super) outline_max_width: f32,
-    pub(super) overflow: Arc<[StatusSegment]>,
+pub(crate) struct StatusLineLayout {
+    pub(crate) mode: Variant,
+    pub(crate) reading_style: Variant,
+    pub(crate) outline: Variant,
+    pub(crate) position: Variant,
+    pub(crate) progress: Variant,
+    pub(crate) statistics: Variant,
+    pub(crate) format: Variant,
+    pub(crate) outline_max_width: f32,
+    pub(crate) overflow: Arc<[StatusSegment]>,
 }
 
 impl StatusLineLayout {
-    pub(super) fn variant(&self, segment: StatusSegment) -> Variant {
+    pub(crate) fn variant(&self, segment: StatusSegment) -> Variant {
         match segment {
             StatusSegment::Mode => self.mode,
             StatusSegment::ReadingStyle => self.reading_style,
@@ -119,7 +118,7 @@ impl StatusLineLayout {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum StatusSegment {
+pub(crate) enum StatusSegment {
     Mode,
     Outline,
     Position,
@@ -130,7 +129,7 @@ pub(super) enum StatusSegment {
     ReadingStyle,
 }
 
-pub(super) const CONFIGURABLE_SEGMENTS: [StatusSegment; 5] = [
+pub(crate) const CONFIGURABLE_SEGMENTS: [StatusSegment; 5] = [
     StatusSegment::Outline,
     StatusSegment::Position,
     StatusSegment::Progress,
@@ -139,7 +138,7 @@ pub(super) const CONFIGURABLE_SEGMENTS: [StatusSegment; 5] = [
 ];
 
 impl StatusSegment {
-    pub(super) fn enabled(self, settings: StatusLineSettings) -> bool {
+    pub(crate) fn enabled(self, settings: StatusLineSettings) -> bool {
         match self {
             Self::Outline => settings.outline,
             Self::Position => settings.position,
@@ -152,13 +151,13 @@ impl StatusSegment {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct StatusPopover {
-    pub(in crate::preview) pane: PaneId,
-    pub(super) content: StatusPopoverContent,
+pub(crate) struct StatusPopover {
+    pub(crate) pane: PaneId,
+    pub(crate) content: StatusPopoverContent,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum StatusPopoverContent {
+pub(crate) enum StatusPopoverContent {
     ReadingStyle,
     Info(StatusSegment),
     Overflow(Arc<[StatusSegment]>),
@@ -166,7 +165,7 @@ pub(super) enum StatusPopoverContent {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct StatusLayoutKey {
+pub(crate) struct StatusLayoutKey {
     pub width_bits: u32,
     pub settings: StatusLineSettings,
     pub host: StatusHost,
@@ -181,7 +180,7 @@ pub(super) struct StatusLayoutKey {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct CachedStatusLayout {
-    pub(super) key: StatusLayoutKey,
-    pub(super) layout: StatusLineLayout,
+pub(crate) struct CachedStatusLayout {
+    pub(crate) key: StatusLayoutKey,
+    pub(crate) layout: StatusLineLayout,
 }

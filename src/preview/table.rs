@@ -26,12 +26,12 @@ const MIN_COLUMN_CONTENT_CHARS: usize = 4;
 const TABLE_FRAME_WIDTH_PX: f32 = 2.0;
 
 #[derive(Clone, Debug)]
-pub(super) struct TableRenderProjection {
+pub(crate) struct TableRenderProjection {
     columns: Arc<[TableColumnSpec]>,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct TableRowProjection {
+pub(crate) struct TableRowProjection {
     table: Arc<TableRenderProjection>,
     group_id: BlockId,
     cells: Arc<[TableCell]>,
@@ -41,11 +41,11 @@ pub(super) struct TableRowProjection {
 }
 
 impl TableRenderProjection {
-    pub(super) fn columns(&self) -> &[TableColumnSpec] {
+    pub(crate) fn columns(&self) -> &[TableColumnSpec] {
         &self.columns
     }
 
-    pub(super) fn resolve(&self) -> ResolvedTable {
+    pub(crate) fn resolve(&self) -> ResolvedTable {
         let mut cursor = PIPE_WIDTH_PX;
         let mut separators = Vec::with_capacity(self.columns.len() + 1);
         separators.push(PIPE_WIDTH_PX * 0.5);
@@ -72,7 +72,7 @@ impl TableRenderProjection {
         }
     }
 
-    pub(super) fn same_geometry(&self, other: &Self) -> bool {
+    pub(crate) fn same_geometry(&self, other: &Self) -> bool {
         self.columns == other.columns
     }
 
@@ -138,40 +138,40 @@ impl TableRenderProjection {
 }
 
 impl TableRowProjection {
-    pub(super) fn table(&self) -> &TableRenderProjection {
+    pub(crate) fn table(&self) -> &TableRenderProjection {
         &self.table
     }
 
-    pub(super) fn columns(&self) -> &[TableColumnSpec] {
+    pub(crate) fn columns(&self) -> &[TableColumnSpec] {
         self.table.columns()
     }
 
-    pub(super) fn group_id(&self) -> BlockId {
+    pub(crate) fn group_id(&self) -> BlockId {
         self.group_id
     }
 
-    pub(super) fn cells(&self) -> &[TableCell] {
+    pub(crate) fn cells(&self) -> &[TableCell] {
         &self.cells
     }
 
-    pub(super) fn is_separator(&self) -> bool {
+    pub(crate) fn is_separator(&self) -> bool {
         self.separator
     }
 
-    pub(super) fn is_header(&self) -> bool {
+    pub(crate) fn is_header(&self) -> bool {
         self.header
     }
 
-    pub(super) fn is_first(&self) -> bool {
+    pub(crate) fn is_first(&self) -> bool {
         self.first
     }
 
     #[cfg(test)]
-    pub(super) fn resolve(&self) -> ResolvedTable {
+    pub(crate) fn resolve(&self) -> ResolvedTable {
         self.table.resolve()
     }
 
-    pub(super) fn estimated_line_count(
+    pub(crate) fn estimated_line_count(
         &self,
         source: &str,
         available_width: f32,
@@ -210,7 +210,7 @@ impl TableRowProjection {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(super) enum Alignment {
+pub(crate) enum Alignment {
     #[default]
     Left,
     Center,
@@ -218,39 +218,39 @@ pub(super) enum Alignment {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct TableCell {
+pub(crate) struct TableCell {
     text_range: Range<usize>,
     align_right: bool,
 }
 
 impl TableCell {
-    pub(super) fn text<'a>(&self, source: &'a str) -> &'a str {
+    pub(crate) fn text<'a>(&self, source: &'a str) -> &'a str {
         source.get(self.text_range.clone()).unwrap_or_default()
     }
 
-    pub(super) fn align_right(&self) -> bool {
+    pub(crate) fn align_right(&self) -> bool {
         self.align_right
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) struct TableColumnSpec {
+pub(crate) struct TableColumnSpec {
     width_chars: usize,
     alignment: Alignment,
 }
 
 impl TableColumnSpec {
-    pub(super) fn alignment(self) -> Alignment {
+    pub(crate) fn alignment(self) -> Alignment {
         self.alignment
     }
 
-    pub(super) fn width_px(self) -> f32 {
+    pub(crate) fn width_px(self) -> f32 {
         self.width_chars as f32 * CELL_WIDTH_PX + CELL_PADDING_PX
     }
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn test_table_projection() -> TableRowProjection {
+pub(crate) fn test_table_projection() -> TableRowProjection {
     TableRowProjection {
         table: Arc::new(TableRenderProjection {
             columns: Arc::from([
@@ -282,18 +282,18 @@ pub(in crate::preview) fn test_table_projection() -> TableRowProjection {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ResolvedTableColumn {
-    pub(super) start_x: f32,
-    pub(super) end_x: f32,
-    pub(super) content_start_x: f32,
-    pub(super) content_end_x: f32,
+pub(crate) struct ResolvedTableColumn {
+    pub(crate) start_x: f32,
+    pub(crate) end_x: f32,
+    pub(crate) content_start_x: f32,
+    pub(crate) content_end_x: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct ResolvedTable {
-    pub(super) width: f32,
-    pub(super) columns: Arc<[ResolvedTableColumn]>,
-    pub(super) separators: Arc<[f32]>,
+pub(crate) struct ResolvedTable {
+    pub(crate) width: f32,
+    pub(crate) columns: Arc<[ResolvedTableColumn]>,
+    pub(crate) separators: Arc<[f32]>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -304,21 +304,21 @@ struct ReadingTableLayout {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ProjectedTableColumn {
-    pub(super) start_x: f32,
-    pub(super) end_x: f32,
-    pub(super) content_start_x: f32,
-    pub(super) content_end_x: f32,
+pub(crate) struct ProjectedTableColumn {
+    pub(crate) start_x: f32,
+    pub(crate) end_x: f32,
+    pub(crate) content_start_x: f32,
+    pub(crate) content_end_x: f32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct ProjectedTable {
-    pub(super) columns: SmallVec<[ProjectedTableColumn; 8]>,
-    pub(super) separators: SmallVec<[f32; 9]>,
+pub(crate) struct ProjectedTable {
+    pub(crate) columns: SmallVec<[ProjectedTableColumn; 8]>,
+    pub(crate) separators: SmallVec<[f32; 9]>,
 }
 
 /// Transforms canonical table geometry into a bounded target viewport.
-pub(super) fn project_table(
+pub(crate) fn project_table(
     projection: &TableRenderProjection,
     source_width: f32,
     target_width: f32,
@@ -345,7 +345,7 @@ pub(super) fn project_table(
     }
 }
 
-pub(super) fn build_table_styles(
+pub(crate) fn build_table_styles(
     text: &dyn TextSnapshot,
     blocks: &BlockArena,
 ) -> HashMap<BlockId, TableRowProjection> {
@@ -370,7 +370,7 @@ pub(super) fn build_table_styles(
     result
 }
 
-pub(super) fn build_markdown_table_styles(
+pub(crate) fn build_markdown_table_styles(
     text: &dyn TextSnapshot,
     blocks: &[MarkdownBlock],
 ) -> HashMap<BlockId, TableRowProjection> {
@@ -466,7 +466,7 @@ fn build_table_group(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn render_table_row(
+pub(crate) fn render_table_row(
     source: &str,
     projection: &TableRowProjection,
     format: DocumentFormat,

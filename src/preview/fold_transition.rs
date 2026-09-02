@@ -6,71 +6,71 @@ use gpui::{ListState, Window};
 use super::{PreviewSnapshot, PreviewStyle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum FoldDirection {
+pub(crate) enum FoldDirection {
     Collapse,
     Expand,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct FoldListEdit {
-    pub(super) range: Range<usize>,
-    pub(super) new_count: usize,
+pub(crate) struct FoldListEdit {
+    pub(crate) range: Range<usize>,
+    pub(crate) new_count: usize,
 }
 
 impl FoldListEdit {
-    pub(super) fn replace(range: Range<usize>, new_count: usize) -> Self {
+    pub(crate) fn replace(range: Range<usize>, new_count: usize) -> Self {
         Self { range, new_count }
     }
 
-    pub(super) fn insert(at: usize, new_count: usize) -> Self {
+    pub(crate) fn insert(at: usize, new_count: usize) -> Self {
         Self::replace(at..at, new_count)
     }
 }
 
 #[derive(Clone)]
-pub(super) struct FoldSegment {
+pub(crate) struct FoldSegment {
     /// Start of the represented range in the final semantic projection.
-    pub(super) target_start: usize,
+    pub(crate) target_start: usize,
     /// Position of this segment in the temporary physical list.
-    pub(super) transition_index: usize,
+    pub(crate) transition_index: usize,
     /// Number of final rows represented by the temporary segment.
-    pub(super) target_len: usize,
+    pub(crate) target_len: usize,
     /// Viewport-bounded rows painted inside the segment.
-    pub(super) rendered_rows: Arc<[usize]>,
-    pub(super) distance: f32,
+    pub(crate) rendered_rows: Arc<[usize]>,
+    pub(crate) distance: f32,
 }
 
 #[derive(Clone)]
-pub(super) struct FoldTransition {
-    pub(super) revision: u64,
-    pub(super) suppressed_markers: Arc<HashSet<BlockId>>,
-    pub(super) direction: FoldDirection,
-    pub(super) segments: Arc<[FoldSegment]>,
-    pub(super) initial_edits: Arc<[FoldListEdit]>,
-    pub(super) started_at: Option<Instant>,
-    pub(super) progress: f32,
+pub(crate) struct FoldTransition {
+    pub(crate) revision: u64,
+    pub(crate) suppressed_markers: Arc<HashSet<BlockId>>,
+    pub(crate) direction: FoldDirection,
+    pub(crate) segments: Arc<[FoldSegment]>,
+    pub(crate) initial_edits: Arc<[FoldListEdit]>,
+    pub(crate) started_at: Option<Instant>,
+    pub(crate) progress: f32,
     target_item_count: usize,
 }
 
 #[derive(Clone, Copy)]
-pub(super) enum FoldMeasurement<'a> {
+pub(crate) enum FoldMeasurement<'a> {
     Rendered(&'a Window),
     Estimated,
 }
 
-pub(super) struct FoldTransitionInput<'a> {
-    pub(super) current_rows: &'a [usize],
-    pub(super) target_rows: &'a [usize],
-    pub(super) document: &'a PreviewSnapshot,
-    pub(super) list_state: &'a ListState,
-    pub(super) viewport_height: f32,
-    pub(super) available_width: f32,
-    pub(super) zoom: f32,
-    pub(super) style: PreviewStyle,
-    pub(super) measurement: FoldMeasurement<'a>,
+pub(crate) struct FoldTransitionInput<'a> {
+    pub(crate) current_rows: &'a [usize],
+    pub(crate) target_rows: &'a [usize],
+    pub(crate) document: &'a PreviewSnapshot,
+    pub(crate) list_state: &'a ListState,
+    pub(crate) viewport_height: f32,
+    pub(crate) available_width: f32,
+    pub(crate) zoom: f32,
+    pub(crate) style: PreviewStyle,
+    pub(crate) measurement: FoldMeasurement<'a>,
 }
 
-pub(super) struct FoldTransitionPlan {
+pub(crate) struct FoldTransitionPlan {
     direction: FoldDirection,
     segments: Vec<FoldSegment>,
     initial_edits: Vec<FoldListEdit>,
@@ -78,7 +78,7 @@ pub(super) struct FoldTransitionPlan {
 }
 
 impl FoldTransition {
-    pub(super) fn new(
+    pub(crate) fn new(
         revision: u64,
         suppressed_markers: HashSet<BlockId>,
         direction: FoldDirection,
@@ -108,14 +108,14 @@ impl FoldTransition {
         }
     }
 
-    pub(super) fn segment_at(&self, transition_index: usize) -> Option<&FoldSegment> {
+    pub(crate) fn segment_at(&self, transition_index: usize) -> Option<&FoldSegment> {
         self.segments
             .binary_search_by_key(&transition_index, |segment| segment.transition_index)
             .ok()
             .map(|index| &self.segments[index])
     }
 
-    pub(super) fn target_index_for_item(&self, transition_index: usize) -> usize {
+    pub(crate) fn target_index_for_item(&self, transition_index: usize) -> usize {
         let mut physical_cursor = 0usize;
         let mut target_cursor = 0usize;
         for segment in self.segments.iter() {
@@ -131,7 +131,7 @@ impl FoldTransition {
         target_cursor + transition_index - physical_cursor
     }
 
-    pub(super) fn transition_item_count(&self) -> usize {
+    pub(crate) fn transition_item_count(&self) -> usize {
         self.segments
             .iter()
             .fold(self.target_item_count, |count, segment| {
@@ -139,7 +139,7 @@ impl FoldTransition {
             })
     }
 
-    pub(super) fn completion_edits(&self) -> impl Iterator<Item = FoldListEdit> + '_ {
+    pub(crate) fn completion_edits(&self) -> impl Iterator<Item = FoldListEdit> + '_ {
         self.segments.iter().rev().map(|segment| {
             FoldListEdit::replace(
                 segment.transition_index..segment.transition_index + 1,
@@ -150,7 +150,7 @@ impl FoldTransition {
 }
 
 impl FoldTransitionPlan {
-    pub(super) fn build(input: FoldTransitionInput<'_>) -> Option<Self> {
+    pub(crate) fn build(input: FoldTransitionInput<'_>) -> Option<Self> {
         let disappearing = difference(input.current_rows, input.target_rows);
         let appearing = difference(input.target_rows, input.current_rows);
         match (disappearing.is_empty(), appearing.is_empty()) {
@@ -160,7 +160,7 @@ impl FoldTransitionPlan {
         }
     }
 
-    pub(super) fn into_transition(
+    pub(crate) fn into_transition(
         self,
         revision: u64,
         suppressed_markers: HashSet<BlockId>,

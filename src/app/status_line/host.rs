@@ -2,15 +2,16 @@ use std::sync::Arc;
 
 use gpui::{ListState, px};
 
-use crate::preview::SaveStatus;
-use crate::preview::export_ui::ExportRunState;
+use crate::app::export_ui::ExportRunState;
+use crate::app::save::SaveStatus;
 use crate::{
     document::{ByteOffset, DocumentSession},
     i18n::Language,
     navigation::PaneId,
+    preview::{DocumentFormat, PreviewSnapshot, ReadingPreviewPanel},
 };
 
-use super::super::{DiredStatus, PreviewLoadState, WorkspaceWindow};
+use super::super::{DiredStatus, WorkspaceLoadState, WorkspaceWindow};
 use super::{
     format_character_count,
     model::{
@@ -19,30 +20,27 @@ use super::{
     },
 };
 
-fn preview_matches_session(
-    preview: &super::super::ReadingPreviewPanel,
-    session: &DocumentSession,
-) -> bool {
+fn preview_matches_session(preview: &ReadingPreviewPanel, session: &DocumentSession) -> bool {
     preview.document().document_id == session.id()
         && preview.document().revision <= session.revision()
         && preview.document().path == session.path()
 }
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn document_status_snapshot(
+    pub(crate) fn document_status_snapshot(
         &self,
         pane: crate::app::PaneSide,
         cx: &gpui::App,
     ) -> Option<StatusLineSnapshot> {
         let document = match &self.state {
-            PreviewLoadState::Ready { document }
-            | PreviewLoadState::Failed {
+            WorkspaceLoadState::Ready { document }
+            | WorkspaceLoadState::Failed {
                 previous: Some(document),
                 ..
             } => document,
-            PreviewLoadState::Empty
-            | PreviewLoadState::Loading { .. }
-            | PreviewLoadState::Failed { previous: None, .. } => return None,
+            WorkspaceLoadState::Empty
+            | WorkspaceLoadState::Loading { .. }
+            | WorkspaceLoadState::Failed { previous: None, .. } => return None,
         };
         let status_pane = match pane {
             crate::app::PaneSide::Left => super::model::DOCUMENT_PANE_ID,
@@ -126,9 +124,7 @@ impl WorkspaceWindow {
                 format_character_count(document_statistics.characters, self.language).into(),
             ),
             document_statistics: Some(document_statistics),
-            format: Some(super::super::DocumentFormat::from_path(
-                ready.session.read(cx).path(),
-            )),
+            format: Some(DocumentFormat::from_path(ready.session.read(cx).path())),
             transient: self.document_transient_status(None, cx),
         })
     }
@@ -137,7 +133,7 @@ impl WorkspaceWindow {
         &self,
         pane: PaneId,
         pane_side: crate::app::PaneSide,
-        panel: &gpui::Entity<super::super::ReadingPreviewPanel>,
+        panel: &gpui::Entity<ReadingPreviewPanel>,
         cx: &gpui::App,
     ) -> StatusLineSnapshot {
         let panel = panel.read(cx);
@@ -172,23 +168,23 @@ impl WorkspaceWindow {
         StatusLineSnapshot {
             pane,
             language: self.language,
-            host: StatusHost::Preview,
+            host: StatusHost::Reading,
             surface: crate::app::PaneSurface::Reading,
             reading_style: Some(self.reading_style),
             outline: current_outline(document, source_index),
-            position: Some(StatusPosition::PreviewSource {
+            position: Some(StatusPosition::ReadingSource {
                 line,
                 total_lines: document.statistics.lines,
             }),
             progress: Some(progress),
             statistics: Some(statistics),
             document_statistics: Some(document_statistics),
-            format: Some(super::super::DocumentFormat::from_path(&document.path)),
+            format: Some(DocumentFormat::from_path(&document.path)),
             transient: self.document_transient_status(Some(pane_side), cx),
         }
     }
 
-    pub(super) fn dired_status_snapshot(&self, pane: PaneId) -> Option<StatusLineSnapshot> {
+    pub(crate) fn dired_status_snapshot(&self, pane: PaneId) -> Option<StatusLineSnapshot> {
         let session = self.file_manager.session()?;
         let total = session.entries().len();
         let selected = session
@@ -316,10 +312,7 @@ impl WorkspaceWindow {
     }
 }
 
-fn current_outline(
-    document: &super::super::PreviewSnapshot,
-    source_index: usize,
-) -> Option<Arc<str>> {
+fn current_outline(document: &PreviewSnapshot, source_index: usize) -> Option<Arc<str>> {
     let block_id = document.projection.source_row(source_index)?.block_id as usize;
     document.outline_paths.get(block_id).cloned().flatten()
 }
@@ -342,7 +335,7 @@ fn visible_item_end(list_state: &ListState, item_count: usize) -> usize {
 }
 
 fn visible_source_bottom_line(
-    document: &super::super::PreviewSnapshot,
+    document: &PreviewSnapshot,
     visible_rows: &[usize],
     visible_end: usize,
 ) -> u64 {
@@ -378,7 +371,7 @@ fn list_reached_bottom(list_state: &ListState, visible_end: usize, item_count: u
     last_item.bottom() <= viewport.bottom() + px(0.5)
 }
 
-pub(super) fn reading_progress(bottom_line: u64, total_lines: u64, reached_end: bool) -> u8 {
+pub(crate) fn reading_progress(bottom_line: u64, total_lines: u64, reached_end: bool) -> u8 {
     if total_lines == 0 {
         return 0;
     }

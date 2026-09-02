@@ -5,7 +5,7 @@ use crate::document::Revision;
 const LAYOUT_CHUNK_ROWS: usize = 256;
 const READING_MIN_CONTENT_WIDTH: f32 = 120.0;
 
-pub(in crate::preview) fn reading_content_width(
+pub(crate) fn reading_content_width(
     pane_width: f32,
     minimap_width: f32,
     style: super::style::PreviewStyle,
@@ -14,7 +14,7 @@ pub(in crate::preview) fn reading_content_width(
         .max(READING_MIN_CONTENT_WIDTH)
 }
 
-pub(in crate::preview) fn reading_frame_width(
+pub(crate) fn reading_frame_width(
     pane_width: f32,
     minimap_width: f32,
     style: super::style::PreviewStyle,
@@ -29,32 +29,32 @@ pub(in crate::preview) fn reading_frame_width(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct ResolvedRow {
-    pub(in crate::preview) display_lines: u32,
-    pub(in crate::preview) pixels: f32,
-    pub(in crate::preview) exact: bool,
+pub(crate) struct ResolvedRow {
+    pub(crate) display_lines: u32,
+    pub(crate) pixels: f32,
+    pub(crate) exact: bool,
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct LayoutChunk {
-    pub(in crate::preview) measures: Arc<[ResolvedRow]>,
-    pub(in crate::preview) display_lines: usize,
-    pub(in crate::preview) pixels: f32,
-    pub(in crate::preview) exact_rows: usize,
+pub(crate) struct LayoutChunk {
+    pub(crate) measures: Arc<[ResolvedRow]>,
+    pub(crate) display_lines: usize,
+    pub(crate) pixels: f32,
+    pub(crate) exact_rows: usize,
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct LayoutSnapshot {
-    pub(in crate::preview) chunks: Arc<[Arc<LayoutChunk>]>,
+pub(crate) struct LayoutSnapshot {
+    pub(crate) chunks: Arc<[Arc<LayoutChunk>]>,
     row_prefix: Arc<[usize]>,
     display_prefix: Arc<[usize]>,
     pixel_prefix: Arc<[f32]>,
-    pub(in crate::preview) rows: usize,
-    pub(in crate::preview) exact_rows: usize,
+    pub(crate) rows: usize,
+    pub(crate) exact_rows: usize,
 }
 
 impl ResolvedRow {
-    pub(in crate::preview) fn new(display_lines: usize, pixels: f32, exact: bool) -> Self {
+    pub(crate) fn new(display_lines: usize, pixels: f32, exact: bool) -> Self {
         Self {
             display_lines: display_lines.max(1).min(u32::MAX as usize) as u32,
             pixels: pixels.max(0.0),
@@ -78,7 +78,7 @@ impl LayoutChunk {
 }
 
 impl LayoutSnapshot {
-    pub(in crate::preview) fn new(measures: Vec<ResolvedRow>) -> Self {
+    pub(crate) fn new(measures: Vec<ResolvedRow>) -> Self {
         Self::from_chunks(
             measures
                 .chunks(LAYOUT_CHUNK_ROWS)
@@ -116,7 +116,7 @@ impl LayoutSnapshot {
         }
     }
 
-    pub(in crate::preview) fn replacing(&self, updates: &[(usize, ResolvedRow)]) -> Self {
+    pub(crate) fn replacing(&self, updates: &[(usize, ResolvedRow)]) -> Self {
         if updates.is_empty() {
             return self.clone();
         }
@@ -140,7 +140,7 @@ impl LayoutSnapshot {
         Self::from_chunks(chunks)
     }
 
-    pub(in crate::preview) fn replacing_range(
+    pub(crate) fn replacing_range(
         &self,
         range: Range<usize>,
         replacements: Vec<ResolvedRow>,
@@ -189,13 +189,13 @@ impl LayoutSnapshot {
         (chunk, row - self.row_prefix[chunk])
     }
 
-    pub(in crate::preview) fn total_display_lines(&self) -> usize {
+    pub(crate) fn total_display_lines(&self) -> usize {
         self.display_prefix.last().copied().unwrap_or(0)
     }
-    pub(in crate::preview) fn total_pixels(&self) -> f32 {
+    pub(crate) fn total_pixels(&self) -> f32 {
         self.pixel_prefix.last().copied().unwrap_or(0.0)
     }
-    pub(in crate::preview) fn estimated_heap_bytes(&self) -> usize {
+    pub(crate) fn estimated_heap_bytes(&self) -> usize {
         self.rows * std::mem::size_of::<ResolvedRow>()
             + self.chunks.len() * std::mem::size_of::<Arc<LayoutChunk>>()
             + self.row_prefix.len() * std::mem::size_of::<usize>()
@@ -203,7 +203,7 @@ impl LayoutSnapshot {
             + self.pixel_prefix.len() * std::mem::size_of::<f32>()
     }
 
-    pub(in crate::preview) fn prefix_for_row(&self, row: usize) -> (usize, f32) {
+    pub(crate) fn prefix_for_row(&self, row: usize) -> (usize, f32) {
         if self.rows == 0 {
             return (0, 0.0);
         }
@@ -225,12 +225,12 @@ impl LayoutSnapshot {
         (display, pixels)
     }
 
-    pub(in crate::preview) fn measure(&self, row: usize) -> ResolvedRow {
+    pub(crate) fn measure(&self, row: usize) -> ResolvedRow {
         let chunk = self.chunk_for_row(row);
         self.chunks[chunk].measures[row - self.row_prefix[chunk]]
     }
 
-    pub(in crate::preview) fn locate_display(&self, display_line: usize) -> (usize, usize) {
+    pub(crate) fn locate_display(&self, display_line: usize) -> (usize, usize) {
         if self.rows == 0 {
             return (0, 0);
         }
@@ -253,7 +253,7 @@ impl LayoutSnapshot {
         )
     }
 
-    pub(in crate::preview) fn locate_pixel(&self, pixel: f32) -> (usize, f32) {
+    pub(crate) fn locate_pixel(&self, pixel: f32) -> (usize, f32) {
         if self.rows == 0 {
             return (0, 0.0);
         }
@@ -287,11 +287,11 @@ impl LayoutSnapshot {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) struct LayoutKey {
-    pub(in crate::preview) document_revision: Revision,
-    pub(in crate::preview) content_width_px: u16,
-    pub(in crate::preview) text_metrics_revision: u64,
-    pub(in crate::preview) fold_revision: u64,
+pub(crate) struct LayoutKey {
+    pub(crate) document_revision: Revision,
+    pub(crate) content_width_px: u16,
+    pub(crate) text_metrics_revision: u64,
+    pub(crate) fold_revision: u64,
 }
 
 #[cfg(test)]

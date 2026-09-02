@@ -51,9 +51,10 @@ use super::{
     parse_document_inline,
 };
 
-pub(in crate::preview) mod projection;
+pub(crate) mod projection;
 mod raster;
 mod render;
+mod scene;
 mod state;
 #[cfg(test)]
 mod tests;
@@ -72,7 +73,7 @@ pub(super) use projection::{
     CachedMinimapLineIndex, MinimapLineIndex, MinimapLineIndexBuilder, MinimapProjectionReadiness,
 };
 pub(super) use raster::RasterTileCache;
-pub(super) use raster::prewarm_text_rasterizer;
+pub(crate) use raster::prewarm_text_rasterizer;
 use raster::{
     RasterRow, RasterTileKey, RasterTilePaint, RasterTileRequest, display_window_range,
     folded_signature, rasterize_tile, tile_key,
@@ -95,7 +96,7 @@ use width::{
     EDGE_PADDING_PX as MINIMAP_EDGE_PADDING_PX, FONT_PX as MINIMAP_FONT_PX,
     LINE_HEIGHT_PX as MINIMAP_LINE_HEIGHT_PX, manual_for_viewport as manual_width_for_viewport,
 };
-pub(super) use width::{
+pub(crate) use width::{
     MANUAL_MAX_PX as MINIMAP_MANUAL_MAX_PX, WidthChange as MinimapWidthChange,
     for_viewport as width_for_viewport,
 };
@@ -106,18 +107,18 @@ const MINIMAP_RESIZE_HANDLE_PX: f32 = 6.0;
 // Leave the overwhelming majority of a 120Hz frame (8.333ms) to GPUI layout,
 // paint and presentation. Projection refinement is cooperative and can take as
 // many frames as necessary because an estimated projection is available first.
-pub(super) const MINIMAP_INDEX_FRAME_BUDGET: Duration = Duration::from_micros(350);
+pub(crate) const MINIMAP_INDEX_FRAME_BUDGET: Duration = Duration::from_micros(350);
 #[cfg(test)]
 const PREVIEW_BASE_ROW_PX: f32 = 24.0;
 const RASTER_TILE_ROWS: usize = 128;
 const RASTER_TILE_CACHE_CAPACITY: usize = 6;
 
-pub(super) fn minimap_trace_enabled() -> bool {
+pub(crate) fn minimap_trace_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| std::env::var_os("ORG_STUDIO_MINIMAP_TRACE").is_some())
 }
 
-pub(super) fn minimap_perf_enabled() -> bool {
+pub(crate) fn minimap_perf_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var_os("ORG_STUDIO_MINIMAP_PERF").is_some() || minimap_trace_enabled()

@@ -1,6 +1,6 @@
 use gpui::{ClipboardItem, Context, Window};
 
-use super::WorkspaceWindow;
+use crate::app::WorkspaceWindow;
 use crate::document::{
     ByteOffset, ByteRange, DocumentCommand, DocumentSession, EditOrigin, EditTransaction,
     Selection, TextSnapshot,
@@ -8,7 +8,7 @@ use crate::document::{
 use crate::preview::{CopyFeedbackState, PreviewAction, PreviewActionTarget, ReadingPreviewPanel};
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn dispatch_preview_action(
+    pub(crate) fn dispatch_preview_action(
         &mut self,
         action: PreviewAction,
         panel: gpui::Entity<ReadingPreviewPanel>,

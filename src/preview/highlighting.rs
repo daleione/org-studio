@@ -35,14 +35,14 @@ const HIGHLIGHT_NAMES: &[&str] = &[
 ];
 
 #[derive(Clone, Copy, Debug)]
-pub(in crate::preview) struct CodeHighlightSpan {
-    pub(in crate::preview) start: usize,
-    pub(in crate::preview) end: usize,
-    pub(in crate::preview) kind: CodeHighlightKind,
+pub(crate) struct CodeHighlightSpan {
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+    pub(crate) kind: CodeHighlightKind,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(in crate::preview) enum CodeHighlightKind {
+pub(crate) enum CodeHighlightKind {
     Attribute,
     Boolean,
     Comment,
@@ -58,7 +58,7 @@ pub(in crate::preview) enum CodeHighlightKind {
     Variable,
 }
 
-pub(in crate::preview) fn highlight_code(
+pub(crate) fn highlight_code(
     language: &str,
     source: &str,
 ) -> Result<Vec<CodeHighlightSpan>, String> {

@@ -378,6 +378,9 @@ impl<L: Clone, S: Clone> HistoryTimeline<L, S> {
     pub fn len(&self) -> usize {
         self.entries.len()
     }
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -414,6 +417,9 @@ impl<K: Clone + Eq + Hash, S> LocationMemory<K, S> {
     }
     pub fn len(&self) -> usize {
         self.values.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.values.is_empty()
     }
 }
 

@@ -46,19 +46,18 @@ pub(crate) struct ReadingPreviewPanel {
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct ReadingRenderState {
-    pub(in crate::preview) document: Arc<PreviewSnapshot>,
-    pub(in crate::preview) minimap_state: Arc<minimap::MinimapState>,
-    pub(in crate::preview) table_scroll_handles: Arc<HashMap<BlockId, ScrollHandle>>,
-    pub(in crate::preview) list_state: ListState,
-    pub(in crate::preview) visible_rows: Arc<Vec<usize>>,
-    pub(in crate::preview) fold_markers: Arc<HashSet<BlockId>>,
-    pub(in crate::preview) fold_animation: Option<FoldTransition>,
-    pub(in crate::preview) geometry_revision: u64,
-    pub(in crate::preview) zoom: f32,
-    pub(in crate::preview) action_states:
-        Arc<Vec<(super::PreviewActionIdentity, PreviewActionVisualState)>>,
-    pub(in crate::preview) copy_feedback: Option<(crate::document::ByteRange, CopyFeedbackState)>,
+pub(crate) struct ReadingRenderState {
+    pub(crate) document: Arc<PreviewSnapshot>,
+    pub(crate) minimap_state: Arc<minimap::MinimapState>,
+    pub(crate) table_scroll_handles: Arc<HashMap<BlockId, ScrollHandle>>,
+    pub(crate) list_state: ListState,
+    pub(crate) visible_rows: Arc<Vec<usize>>,
+    pub(crate) fold_markers: Arc<HashSet<BlockId>>,
+    pub(crate) fold_animation: Option<FoldTransition>,
+    pub(crate) geometry_revision: u64,
+    pub(crate) zoom: f32,
+    pub(crate) action_states: Arc<Vec<(super::PreviewActionIdentity, PreviewActionVisualState)>>,
+    pub(crate) copy_feedback: Option<(crate::document::ByteRange, CopyFeedbackState)>,
 }
 
 impl EventEmitter<DerivedEvent> for ReadingPreviewPanel {}
@@ -89,7 +88,7 @@ fn table_scroll_handles(
 }
 
 impl ReadingPreviewPanel {
-    pub(in crate::preview) fn new(document: Arc<PreviewSnapshot>, list_overdraw: f32) -> Self {
+    pub(crate) fn new(document: Arc<PreviewSnapshot>, list_overdraw: f32) -> Self {
         let visible_rows = Arc::new((0..document.projection.rows.len()).collect::<Vec<_>>());
         let list_state = ListState::new(visible_rows.len(), ListAlignment::Top, px(list_overdraw));
         if should_eagerly_measure_rows(visible_rows.len()) {
@@ -123,7 +122,7 @@ impl ReadingPreviewPanel {
         }
     }
 
-    pub(in crate::preview) fn render_state(&self) -> ReadingRenderState {
+    pub(crate) fn render_state(&self) -> ReadingRenderState {
         ReadingRenderState {
             document: self.document.clone(),
             minimap_state: self.minimap_state.clone(),
@@ -149,7 +148,7 @@ impl ReadingPreviewPanel {
         }
     }
 
-    pub(in crate::preview) fn change_style(
+    pub(crate) fn change_style(
         &mut self,
         previous: super::PreviewStyle,
         next: super::PreviewStyle,
@@ -178,11 +177,11 @@ impl ReadingPreviewPanel {
         }
         self.minimap_pending_seek = None;
         self.minimap_seek_scheduled = false;
-        self.minimap_state.invalidate_style(layout_changed);
+        self.minimap_state.invalidate_style();
         cx.notify();
     }
 
-    pub(in crate::preview) fn show_copy_feedback(
+    pub(crate) fn show_copy_feedback(
         &mut self,
         target_range: crate::document::ByteRange,
         state: CopyFeedbackState,
@@ -207,10 +206,7 @@ impl ReadingPreviewPanel {
         cx.notify();
     }
 
-    pub(in crate::preview) fn begin_action(
-        &mut self,
-        identity: super::PreviewActionIdentity,
-    ) -> Option<u64> {
+    pub(crate) fn begin_action(&mut self, identity: super::PreviewActionIdentity) -> Option<u64> {
         if self
             .pending_actions
             .iter()
@@ -229,11 +225,7 @@ impl ReadingPreviewPanel {
         Some(id)
     }
 
-    pub(in crate::preview) fn commit_action(
-        &mut self,
-        id: u64,
-        revision: crate::document::Revision,
-    ) {
+    pub(crate) fn commit_action(&mut self, id: u64, revision: crate::document::Revision) {
         if let Some(action) = self
             .pending_actions
             .iter_mut()
@@ -243,7 +235,7 @@ impl ReadingPreviewPanel {
         }
     }
 
-    pub(in crate::preview) fn fail_action(&mut self, id: u64) {
+    pub(crate) fn fail_action(&mut self, id: u64) {
         let Some(index) = self
             .pending_actions
             .iter()
@@ -255,24 +247,24 @@ impl ReadingPreviewPanel {
         self.failed_action = Some(action.identity);
     }
 
-    pub(in crate::preview) fn document(&self) -> &Arc<PreviewSnapshot> {
+    pub(crate) fn document(&self) -> &Arc<PreviewSnapshot> {
         &self.document
     }
 
-    pub(in crate::preview) fn list_state(&self) -> &ListState {
+    pub(crate) fn list_state(&self) -> &ListState {
         &self.list_state
     }
 
-    pub(in crate::preview) fn visible_rows(&self) -> &[usize] {
+    pub(crate) fn visible_rows(&self) -> &[usize] {
         &self.visible_rows
     }
 
-    pub(in crate::preview) fn zoom(&self) -> f32 {
+    pub(crate) fn zoom(&self) -> f32 {
         self.zoom
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn set_zoom(&mut self, zoom: f32) -> bool {
+    pub(crate) fn set_zoom(&mut self, zoom: f32) -> bool {
         let zoom = zoom.clamp(0.75, 2.0);
         if (self.zoom - zoom).abs() < f32::EPSILON {
             return false;
@@ -283,7 +275,7 @@ impl ReadingPreviewPanel {
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn fold_markers(&self) -> &HashSet<BlockId> {
+    pub(crate) fn fold_markers(&self) -> &HashSet<BlockId> {
         &self.fold_markers
     }
 
@@ -293,7 +285,7 @@ impl ReadingPreviewPanel {
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn fold_animation(&self) -> Option<&FoldTransition> {
+    pub(crate) fn fold_animation(&self) -> Option<&FoldTransition> {
         self.fold_animation.as_ref()
     }
 
@@ -304,26 +296,26 @@ impl ReadingPreviewPanel {
         self.local_cycle_continuation
     }
 
-    pub(in crate::preview) fn bump_geometry_revision(&mut self) {
+    pub(crate) fn bump_geometry_revision(&mut self) {
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
     }
 
-    pub(in crate::preview) fn scroll_to(&mut self, offset: ListOffset) {
+    pub(crate) fn scroll_to(&mut self, offset: ListOffset) {
         self.list_state.scroll_to(offset);
     }
 
-    pub(in crate::preview) fn scroll_to_end(&mut self) {
+    pub(crate) fn scroll_to_end(&mut self) {
         self.list_state.scroll_to(ListOffset {
             item_ix: self.list_state.item_count(),
             offset_in_item: px(0.0),
         });
     }
 
-    pub(in crate::preview) fn scroll_by(&mut self, amount: gpui::Pixels) {
+    pub(crate) fn scroll_by(&mut self, amount: gpui::Pixels) {
         self.list_state.scroll_by(amount);
     }
 
-    pub(in crate::preview) fn replace_document_with_style(
+    pub(crate) fn replace_document_with_style(
         &mut self,
         document: Arc<PreviewSnapshot>,
         style: super::PreviewStyle,
@@ -629,7 +621,7 @@ impl ReadingPreviewPanel {
         });
     }
 
-    pub(in crate::preview) fn jump_to_destination(&mut self, destination: &str) -> bool {
+    pub(crate) fn jump_to_destination(&mut self, destination: &str) -> bool {
         let target = destination
             .strip_prefix('#')
             .or_else(|| destination.strip_prefix('*'))
@@ -672,7 +664,7 @@ impl ReadingPreviewPanel {
         true
     }
 
-    pub(in crate::preview) fn note_viewport(&mut self, viewport: (u32, u32)) -> bool {
+    pub(crate) fn note_viewport(&mut self, viewport: (u32, u32)) -> bool {
         if self.viewport_revision_key == Some(viewport) {
             return false;
         }
@@ -683,7 +675,7 @@ impl ReadingPreviewPanel {
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn toggle_fold(&mut self, block_id: BlockId) {
+    pub(crate) fn toggle_fold(&mut self, block_id: BlockId) {
         self.discard_fold_animation();
         let Some(projection) = self.local_fold_projection(block_id) else {
             return;
@@ -694,7 +686,7 @@ impl ReadingPreviewPanel {
         }
     }
 
-    pub(in crate::preview) fn toggle_fold_animated(
+    pub(crate) fn toggle_fold_animated(
         &mut self,
         block_id: BlockId,
         viewport_height: f32,
@@ -812,7 +804,7 @@ impl ReadingPreviewPanel {
         self.apply_visible_rows(Arc::new(visible_rows));
     }
 
-    pub(in crate::preview) fn discard_fold_animation(&mut self) {
+    pub(crate) fn discard_fold_animation(&mut self) {
         self.fold_animation_revision = self.fold_animation_revision.wrapping_add(1);
         self.finish_fold_transition();
     }
@@ -877,7 +869,7 @@ impl ReadingPreviewPanel {
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn cycle_global_visibility(&mut self) {
+    pub(crate) fn cycle_global_visibility(&mut self) {
         self.discard_fold_animation();
         let Some(projection) = self.next_global_visibility_projection() else {
             return;
@@ -886,7 +878,7 @@ impl ReadingPreviewPanel {
         self.apply_fold_projection(projection.visible_rows, projection.fold_markers);
     }
 
-    pub(in crate::preview) fn cycle_global_visibility_animated(
+    pub(crate) fn cycle_global_visibility_animated(
         &mut self,
         viewport_height: f32,
         available_width: f32,
@@ -958,12 +950,12 @@ impl ReadingPreviewPanel {
         self.visible_rows = visible_rows;
     }
 
-    pub(in crate::preview) fn reset_cycle_continuation(&mut self) {
+    pub(crate) fn reset_cycle_continuation(&mut self) {
         self.global_cycle_contiguous = false;
         self.local_cycle_continuation = None;
     }
 
-    pub(in crate::preview) fn seek_minimap(
+    pub(crate) fn seek_minimap(
         &mut self,
         geometry_revision: u64,
         offset: ListOffset,
@@ -986,7 +978,7 @@ impl ReadingPreviewPanel {
         });
     }
 
-    pub(in crate::preview) fn cancel_minimap_interaction(&mut self) -> bool {
+    pub(crate) fn cancel_minimap_interaction(&mut self) -> bool {
         self.minimap_pending_seek = None;
         self.minimap_seek_scheduled = false;
         let was_dragging = self.minimap_state.cancel_interaction();

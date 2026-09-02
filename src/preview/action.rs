@@ -8,21 +8,21 @@ use crate::{
 use super::{DocumentFormat, PreviewSnapshot, projection::VisualRow};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct PreviewActionTarget {
-    pub(in crate::preview) document_id: DocumentId,
-    pub(in crate::preview) base_revision: Revision,
-    pub(in crate::preview) syntax_id: Option<SyntaxId>,
-    pub(in crate::preview) source_range: ByteRange,
+pub(crate) struct PreviewActionTarget {
+    pub(crate) document_id: DocumentId,
+    pub(crate) base_revision: Revision,
+    pub(crate) syntax_id: Option<SyntaxId>,
+    pub(crate) source_range: ByteRange,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum PreviewActionIdentity {
+pub(crate) enum PreviewActionIdentity {
     Syntax(SyntaxId),
     Source(ByteRange),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum PreviewAction {
+pub(crate) enum PreviewAction {
     ToggleCheckbox {
         target: PreviewActionTarget,
         expected: Arc<str>,
@@ -39,7 +39,7 @@ pub(in crate::preview) enum PreviewAction {
 }
 
 impl PreviewAction {
-    pub(in crate::preview) fn target(&self) -> &PreviewActionTarget {
+    pub(crate) fn target(&self) -> &PreviewActionTarget {
         match self {
             Self::ToggleCheckbox { target, .. } | Self::CopyCode(target) => target,
             Self::OpenLink { target, .. } | Self::OpenImage { target, .. } => target,
@@ -157,14 +157,14 @@ pub(in crate::preview) fn image_action(
 }
 
 impl PreviewActionTarget {
-    pub(in crate::preview) fn revision_range(&self) -> RevisionRange {
+    pub(crate) fn revision_range(&self) -> RevisionRange {
         RevisionRange {
             revision: self.base_revision,
             range: self.source_range,
         }
     }
 
-    pub(in crate::preview) fn identity(&self) -> PreviewActionIdentity {
+    pub(crate) fn identity(&self) -> PreviewActionIdentity {
         self.syntax_id.map_or(
             PreviewActionIdentity::Source(self.source_range),
             PreviewActionIdentity::Syntax,
@@ -173,20 +173,20 @@ impl PreviewActionTarget {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum PreviewActionVisualState {
+pub(crate) enum PreviewActionVisualState {
     Pending,
     Failed,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum CopyFeedbackState {
+pub(crate) enum CopyFeedbackState {
     Succeeded,
     Failed,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct PendingPreviewAction {
-    pub(in crate::preview) id: u64,
-    pub(in crate::preview) identity: PreviewActionIdentity,
-    pub(in crate::preview) committed_revision: Option<Revision>,
+pub(crate) struct PendingPreviewAction {
+    pub(crate) id: u64,
+    pub(crate) identity: PreviewActionIdentity,
+    pub(crate) committed_revision: Option<Revision>,
 }

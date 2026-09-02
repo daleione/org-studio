@@ -9,11 +9,7 @@ use crate::{
 };
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn dired_prepare_execute(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn dired_prepare_execute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -32,14 +28,14 @@ impl WorkspaceWindow {
         self.confirm_dired_trash(plan, window, cx);
     }
 
-    pub(in crate::preview) fn dired_create_file(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_create_file(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
         self.prompt_dired_creation(false, cx);
     }
 
-    pub(in crate::preview) fn dired_create_directory(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_create_directory(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -74,7 +70,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn dired_rename(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_rename(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -105,14 +101,14 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn dired_copy(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_copy(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
         self.prompt_dired_transfer(false, cx);
     }
 
-    pub(in crate::preview) fn dired_move_to(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn dired_move_to(&mut self, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -158,7 +154,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn dired_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn dired_trash(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }
@@ -213,11 +209,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn execute_dired_operation(
-        &mut self,
-        plan: OperationPlan,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn execute_dired_operation(&mut self, plan: OperationPlan, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
         }

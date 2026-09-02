@@ -8,7 +8,7 @@ use std::{
 const SETTINGS_VERSION: u32 = 5;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PreviewSettings {
+pub struct WorkspaceSettings {
     /// Preferred left-pane share in basis points when the workspace is split.
     pub split_ratio: u16,
     pub soft_wrap: bool,
@@ -52,7 +52,7 @@ pub enum MinimapThumbVisibility {
     Hover,
 }
 
-impl Default for PreviewSettings {
+impl Default for WorkspaceSettings {
     fn default() -> Self {
         Self {
             split_ratio: 5_000,
@@ -68,7 +68,7 @@ impl Default for PreviewSettings {
     }
 }
 
-impl PreviewSettings {
+impl WorkspaceSettings {
     pub fn load() -> Self {
         settings_path()
             .and_then(|path| fs::read_to_string(path).ok())
@@ -90,9 +90,9 @@ impl PreviewSettings {
     }
 
     pub fn save_async(self) {
-        static SENDER: OnceLock<mpsc::Sender<PreviewSettings>> = OnceLock::new();
+        static SENDER: OnceLock<mpsc::Sender<WorkspaceSettings>> = OnceLock::new();
         let sender = SENDER.get_or_init(|| {
-            let (sender, receiver) = mpsc::channel::<PreviewSettings>();
+            let (sender, receiver) = mpsc::channel::<WorkspaceSettings>();
             std::thread::Builder::new()
                 .name("org-studio-settings".into())
                 .spawn(move || {
@@ -239,7 +239,7 @@ pub fn initial_minimap_enabled() -> bool {
             "0" | "false" | "off" => Some(false),
             _ => None,
         })
-        .unwrap_or_else(|| PreviewSettings::load().minimap_enabled)
+        .unwrap_or_else(|| WorkspaceSettings::load().minimap_enabled)
 }
 
 pub fn initial_minimap_thumb_visibility(
@@ -311,7 +311,7 @@ mod tests {
 
     #[test]
     fn settings_round_trip_and_reject_unknown_versions() {
-        let settings = PreviewSettings {
+        let settings = WorkspaceSettings {
             split_ratio: 5_360,
             soft_wrap: false,
             language: Language::English,
@@ -329,11 +329,11 @@ mod tests {
             },
         };
         assert_eq!(
-            PreviewSettings::parse(&settings.serialize()),
+            WorkspaceSettings::parse(&settings.serialize()),
             Some(settings)
         );
         assert_eq!(
-            PreviewSettings::parse("version=99\nminimap_enabled=false\n"),
+            WorkspaceSettings::parse("version=99\nminimap_enabled=false\n"),
             None
         );
     }
@@ -341,48 +341,48 @@ mod tests {
     #[test]
     fn missing_field_uses_product_default() {
         assert_eq!(
-            PreviewSettings::parse("version=5\n"),
-            Some(PreviewSettings::default())
+            WorkspaceSettings::parse("version=5\n"),
+            Some(WorkspaceSettings::default())
         );
         assert_eq!(
-            PreviewSettings::parse(
+            WorkspaceSettings::parse(
                 "version=5\nminimap_width=auto\nminimap_thumb_visibility=always\n"
             )
             .expect("auto width settings"),
-            PreviewSettings::default()
+            WorkspaceSettings::default()
         );
         assert_eq!(
-            PreviewSettings::parse("version=5\nminimap_width=480\n")
+            WorkspaceSettings::parse("version=5\nminimap_width=480\n")
                 .expect("manual width settings")
                 .minimap_width,
             Some(480)
         );
         assert_eq!(
-            PreviewSettings::parse("version=5\nminimap_width=999\n")
+            WorkspaceSettings::parse("version=5\nminimap_width=999\n")
                 .expect("invalid width falls back")
                 .minimap_width,
             None
         );
         assert_eq!(
-            PreviewSettings::parse("version=5\nsidebar_width=320\n")
+            WorkspaceSettings::parse("version=5\nsidebar_width=320\n")
                 .expect("manual sidebar width settings")
                 .sidebar_width,
             320
         );
         assert_eq!(
-            PreviewSettings::parse("version=5\nsidebar_width=999\n")
+            WorkspaceSettings::parse("version=5\nsidebar_width=999\n")
                 .expect("invalid sidebar width falls back")
                 .sidebar_width,
             240
         );
         assert_eq!(
-            PreviewSettings::parse("version=5\nreading_style=warm-clay\n")
+            WorkspaceSettings::parse("version=5\nreading_style=warm-clay\n")
                 .expect("known reading style")
                 .reading_style,
             crate::preview::PreviewStyleId::WarmClay
         );
         assert_eq!(
-            PreviewSettings::parse("version=5\nreading_style=old-preview\n")
+            WorkspaceSettings::parse("version=5\nreading_style=old-preview\n")
                 .expect("unknown reading style falls back")
                 .reading_style,
             crate::preview::PreviewStyleId::Base

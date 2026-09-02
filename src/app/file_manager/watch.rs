@@ -8,7 +8,7 @@ use crate::{
 };
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn ensure_dired_directory_watch(
+    pub(crate) fn ensure_dired_directory_watch(
         &mut self,
         directory: PathBuf,
         cx: &mut Context<Self>,
@@ -99,7 +99,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn stop_dired_directory_watch(&mut self) {
+    pub(crate) fn stop_dired_directory_watch(&mut self) {
         self.file_manager.watch_request = self.file_manager.watch_request.wrapping_add(1);
         self.file_manager.watch_task = None;
         self.file_manager.watch_directory = None;

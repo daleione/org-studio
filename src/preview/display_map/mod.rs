@@ -24,7 +24,7 @@ use crate::{
 use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum PreviewLineKind {
+pub(crate) enum PreviewLineKind {
     Blank,
     Text,
     Heading(u8),
@@ -38,21 +38,21 @@ pub(super) enum PreviewLineKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct RowLayout {
-    pub(in crate::preview) font_size: f32,
-    pub(in crate::preview) line_height: f32,
-    pub(in crate::preview) min_height: f32,
-    pub(in crate::preview) padding_left: f32,
-    pub(in crate::preview) padding_right: f32,
-    pub(in crate::preview) padding_top: f32,
-    pub(in crate::preview) padding_bottom: f32,
-    pub(in crate::preview) margin_top: f32,
-    pub(in crate::preview) margin_bottom: f32,
-    pub(in crate::preview) fixed_height: Option<f32>,
+pub(crate) struct RowLayout {
+    pub(crate) font_size: f32,
+    pub(crate) line_height: f32,
+    pub(crate) min_height: f32,
+    pub(crate) padding_left: f32,
+    pub(crate) padding_right: f32,
+    pub(crate) padding_top: f32,
+    pub(crate) padding_bottom: f32,
+    pub(crate) margin_top: f32,
+    pub(crate) margin_bottom: f32,
+    pub(crate) fixed_height: Option<f32>,
 }
 
 impl RowLayout {
-    pub(super) const fn text(font_size: f32, line_height: f32) -> Self {
+    pub(crate) const fn text(font_size: f32, line_height: f32) -> Self {
         Self {
             font_size,
             line_height,
@@ -67,7 +67,7 @@ impl RowLayout {
         }
     }
 
-    pub(super) fn scaled(self, scale: f32) -> Self {
+    pub(crate) fn scaled(self, scale: f32) -> Self {
         let scale = scale.clamp(0.75, 2.0);
         Self {
             font_size: self.font_size * scale,
@@ -85,29 +85,29 @@ impl RowLayout {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct DisplayRuns {
-    pub(in crate::preview) text: SharedString,
-    pub(in crate::preview) inline_spans: Arc<[InlineSpan]>,
-    pub(in crate::preview) links: Arc<[InlineLink]>,
-    pub(in crate::preview) code_spans: Arc<[CodeHighlightSpan]>,
+pub(crate) struct DisplayRuns {
+    pub(crate) text: SharedString,
+    pub(crate) inline_spans: Arc<[InlineSpan]>,
+    pub(crate) links: Arc<[InlineLink]>,
+    pub(crate) code_spans: Arc<[CodeHighlightSpan]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct InlineLink {
-    pub(in crate::preview) range: Range<usize>,
-    pub(in crate::preview) destination: Arc<str>,
+pub(crate) struct InlineLink {
+    pub(crate) range: Range<usize>,
+    pub(crate) destination: Arc<str>,
 }
 
-pub(in crate::preview) struct PreviewDisplayMap {
-    pub(super) text: SharedTextSnapshot,
-    pub(super) format: DocumentFormat,
-    pub(super) projection: Arc<ReadingProjection>,
-    pub(super) display_runs: Mutex<DisplayRunCache>,
-    pub(super) display_lines: Mutex<DisplayLineCache>,
+pub(crate) struct PreviewDisplayMap {
+    pub(crate) text: SharedTextSnapshot,
+    pub(crate) format: DocumentFormat,
+    pub(crate) projection: Arc<ReadingProjection>,
+    pub(crate) display_runs: Mutex<DisplayRunCache>,
+    pub(crate) display_lines: Mutex<DisplayLineCache>,
 }
 
 impl PreviewDisplayMap {
-    pub(super) fn source_row(&self, row: usize) -> PreviewRow {
+    pub(crate) fn source_row(&self, row: usize) -> PreviewRow {
         self.projection
             .source_row(row)
             .expect("preview row range maps to the current revision")
@@ -115,12 +115,12 @@ impl PreviewDisplayMap {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) struct DisplayLines {
-    pub(super) ranges: Arc<[Range<usize>]>,
-    pub(super) parent_height: f32,
+pub(crate) struct DisplayLines {
+    pub(crate) ranges: Arc<[Range<usize>]>,
+    pub(crate) parent_height: f32,
 }
 
-pub(super) struct DisplayLineCache {
+pub(crate) struct DisplayLineCache {
     entries: HashMap<((VisualRowId, u64), u16, u16, u64), DisplayLines>,
     order: VecDeque<((VisualRowId, u64), u16, u16, u64)>,
 }
@@ -128,7 +128,7 @@ pub(super) struct DisplayLineCache {
 impl DisplayLineCache {
     const CAPACITY: usize = 4096;
 
-    pub(super) fn insert(&mut self, key: ((VisualRowId, u64), u16, u16, u64), lines: DisplayLines) {
+    pub(crate) fn insert(&mut self, key: ((VisualRowId, u64), u16, u16, u64), lines: DisplayLines) {
         if self.entries.contains_key(&key) {
             return;
         }
@@ -142,15 +142,15 @@ impl DisplayLineCache {
     }
 }
 
-pub(super) struct DisplayRunCache {
-    pub(super) entries: HashMap<(VisualRowId, u64), DisplayRuns>,
-    pub(super) order: VecDeque<(VisualRowId, u64)>,
+pub(crate) struct DisplayRunCache {
+    pub(crate) entries: HashMap<(VisualRowId, u64), DisplayRuns>,
+    pub(crate) order: VecDeque<(VisualRowId, u64)>,
 }
 
 impl DisplayRunCache {
-    pub(super) const CAPACITY: usize = 4096;
+    pub(crate) const CAPACITY: usize = 4096;
 
-    pub(super) fn insert(&mut self, identity: (VisualRowId, u64), runs: DisplayRuns) {
+    pub(crate) fn insert(&mut self, identity: (VisualRowId, u64), runs: DisplayRuns) {
         if self.entries.contains_key(&identity) {
             return;
         }
@@ -165,7 +165,7 @@ impl DisplayRunCache {
 }
 
 impl PreviewDisplayMap {
-    pub(in crate::preview) fn runs(&self, row: usize) -> DisplayRuns {
+    pub(crate) fn runs(&self, row: usize) -> DisplayRuns {
         let visual_row = self
             .projection
             .rows
@@ -190,14 +190,14 @@ impl PreviewDisplayMap {
         runs
     }
 
-    pub(in crate::preview) fn is_heading(&self, row: usize) -> bool {
+    pub(crate) fn is_heading(&self, row: usize) -> bool {
         self.projection
             .rows
             .get(row)
             .is_some_and(|_| matches!(self.row_kind(row), PreviewLineKind::Heading(_)))
     }
 
-    pub(super) fn display_lines(
+    pub(crate) fn display_lines(
         &self,
         row: usize,
         available_width: f32,
@@ -326,7 +326,7 @@ impl PreviewDisplayMap {
         lines
     }
 
-    pub(in crate::preview) fn layout(&self, row: usize, style: PreviewStyle) -> RowLayout {
+    pub(crate) fn layout(&self, row: usize, style: PreviewStyle) -> RowLayout {
         let visual_row = self
             .projection
             .rows
@@ -342,7 +342,7 @@ impl PreviewDisplayMap {
         layout
     }
 
-    pub(in crate::preview) fn estimated_measure(
+    pub(crate) fn estimated_measure(
         &self,
         row: usize,
         available_width: f32,
@@ -395,7 +395,7 @@ impl PreviewDisplayMap {
         crate::preview::layout::ResolvedRow::new(line_count, parent_height, false)
     }
 
-    pub(in crate::preview) fn with_presentation_tail_padding(
+    pub(crate) fn with_presentation_tail_padding(
         &self,
         row: usize,
         presentation_index: usize,
@@ -414,7 +414,7 @@ impl PreviewDisplayMap {
         )
     }
 
-    pub(in crate::preview) fn without_presentation_tail_padding(
+    pub(crate) fn without_presentation_tail_padding(
         &self,
         row: usize,
         presentation_index: usize,
@@ -434,18 +434,14 @@ impl PreviewDisplayMap {
         )
     }
 
-    pub(in crate::preview) fn table_projection(&self, row: usize) -> Option<&TableRowProjection> {
+    pub(crate) fn table_projection(&self, row: usize) -> Option<&TableRowProjection> {
         match &self.projection.rows.get(row)?.kind {
             VisualRowKind::Table(table) => Some(table),
             _ => None,
         }
     }
 
-    pub(in crate::preview) fn image_size(
-        &self,
-        row: usize,
-        available_width: f32,
-    ) -> Option<(f32, f32)> {
+    pub(crate) fn image_size(&self, row: usize, available_width: f32) -> Option<(f32, f32)> {
         match self.projection.rows.get(row)?.kind {
             VisualRowKind::Image { dimensions } => dimensions,
             _ => None,
@@ -453,7 +449,7 @@ impl PreviewDisplayMap {
         .map(|(width, height)| crate::preview::fitted_image_size(width, height, available_width))
     }
 
-    pub(super) fn row_kind(&self, row: usize) -> PreviewLineKind {
+    pub(crate) fn row_kind(&self, row: usize) -> PreviewLineKind {
         match &self
             .projection
             .rows
@@ -475,7 +471,7 @@ impl PreviewDisplayMap {
     }
 }
 
-pub(in crate::preview) fn build_display_map(document: &PreviewSnapshot) -> PreviewDisplayMap {
+pub(crate) fn build_display_map(document: &PreviewSnapshot) -> PreviewDisplayMap {
     PreviewDisplayMap {
         text: document.text.clone(),
         format: document.format,
@@ -491,7 +487,7 @@ pub(in crate::preview) fn build_display_map(document: &PreviewSnapshot) -> Previ
     }
 }
 
-pub(in crate::preview) fn build_display_map_reusing(
+pub(crate) fn build_display_map_reusing(
     document: &PreviewSnapshot,
     previous: &PreviewDisplayMap,
 ) -> PreviewDisplayMap {
@@ -528,7 +524,7 @@ pub(in crate::preview) fn build_display_map_reusing(
     }
 }
 
-pub(super) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> DisplayRuns {
+pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> DisplayRuns {
     let visual = model
         .projection
         .rows
@@ -621,12 +617,12 @@ fn link_destination(format: DocumentFormat, raw: &str) -> Option<&str> {
 }
 
 #[cfg(test)]
-pub(super) fn truncate_for_minimap(text: &str) -> String {
+pub(crate) fn truncate_for_minimap(text: &str) -> String {
     const MAX_MINIMAP_COLUMNS: usize = 1024;
     text.graphemes(true).take(MAX_MINIMAP_COLUMNS).collect()
 }
 
-pub(super) fn preview_minimap_font(style: PreviewStyle, kind: PreviewLineKind) -> gpui::Font {
+pub(crate) fn preview_minimap_font(style: PreviewStyle, kind: PreviewLineKind) -> gpui::Font {
     let (family, fallbacks) = if kind == PreviewLineKind::Code {
         (
             style.typography.code_family,
@@ -650,14 +646,14 @@ pub(super) fn preview_minimap_font(style: PreviewStyle, kind: PreviewLineKind) -
 }
 
 #[cfg(test)]
-pub(super) fn minimap_font() -> gpui::Font {
+pub(crate) fn minimap_font() -> gpui::Font {
     preview_minimap_font(
         *crate::preview::preview_style(crate::preview::PreviewStyleId::Base),
         PreviewLineKind::Text,
     )
 }
 
-pub(super) fn kind_color(kind: PreviewLineKind, style: PreviewStyle) -> u32 {
+pub(crate) fn kind_color(kind: PreviewLineKind, style: PreviewStyle) -> u32 {
     let palette = style.palette;
     match kind {
         PreviewLineKind::Heading(level) => palette.heading[level.saturating_sub(1).min(3) as usize],
@@ -672,11 +668,11 @@ pub(super) fn kind_color(kind: PreviewLineKind, style: PreviewStyle) -> u32 {
     }
 }
 
-pub(super) fn minimap_runs(runs: DisplayRuns) -> DisplayRuns {
+pub(crate) fn minimap_runs(runs: DisplayRuns) -> DisplayRuns {
     runs
 }
 
-pub(super) fn slice_display_runs(runs: &DisplayRuns, range: Range<usize>) -> DisplayRuns {
+pub(crate) fn slice_display_runs(runs: &DisplayRuns, range: Range<usize>) -> DisplayRuns {
     let start = range.start.min(runs.text.len());
     let end = range.end.min(runs.text.len()).max(start);
     DisplayRuns {
@@ -717,7 +713,7 @@ pub(super) fn slice_display_runs(runs: &DisplayRuns, range: Range<usize>) -> Dis
     }
 }
 
-pub(super) fn minimap_text_runs(
+pub(crate) fn minimap_text_runs(
     kind: PreviewLineKind,
     line: &DisplayRuns,
     base_font: gpui::Font,

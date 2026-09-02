@@ -2,10 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     hash::{Hash, Hasher},
     ops::Range,
-    sync::{
-        Arc,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
 };
 
 use crate::{
@@ -22,17 +19,20 @@ use super::{
 };
 
 const ROW_CHUNK_CAPACITY: usize = 128;
-static NEXT_VISUAL_ROW_ID: AtomicU64 = AtomicU64::new(1);
-
-fn next_visual_row_id() -> VisualRowId {
-    VisualRowId(NEXT_VISUAL_ROW_ID.fetch_add(1, Ordering::Relaxed))
+fn visual_row_id(row: &PreviewRow, revision: Revision) -> VisualRowId {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    revision.hash(&mut hasher);
+    row.block_id.hash(&mut hasher);
+    row.content.range.start.0.hash(&mut hasher);
+    row.content.range.end.0.hash(&mut hasher);
+    VisualRowId(hasher.finish())
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(in crate::preview) struct VisualRowId(pub(in crate::preview) u64);
+pub(crate) struct VisualRowId(pub(crate) u64);
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) enum VisualRowKind {
+pub(crate) enum VisualRowKind {
     Text,
     Heading(u8),
     List(ReadingListMarker),
@@ -47,49 +47,49 @@ pub(in crate::preview) enum VisualRowKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum ReadingCodeRow {
+pub(crate) enum ReadingCodeRow {
     Start,
     Body,
     End,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct ReadingListMarker {
-    pub(in crate::preview) marker: Arc<str>,
-    pub(in crate::preview) checkbox: Option<CheckboxState>,
-    pub(in crate::preview) indent: u16,
+pub(crate) struct ReadingListMarker {
+    pub(crate) marker: Arc<str>,
+    pub(crate) checkbox: Option<CheckboxState>,
+    pub(crate) indent: u16,
     /// Hash of the rendered term/body, deliberately excluding checkbox state.
     /// Checkbox state changes paint the marker but do not change row geometry.
-    pub(in crate::preview) text_signature: u64,
+    pub(crate) text_signature: u64,
 }
 
 #[derive(Clone, Copy)]
-pub(in crate::preview) struct ReadingProjectionResources<'a> {
-    pub(in crate::preview) tables: &'a HashMap<BlockId, TableRowProjection>,
-    pub(in crate::preview) images: &'a HashMap<BlockId, (u32, u32)>,
+pub(crate) struct ReadingProjectionResources<'a> {
+    pub(crate) tables: &'a HashMap<BlockId, TableRowProjection>,
+    pub(crate) images: &'a HashMap<BlockId, (u32, u32)>,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct VisualRow {
-    pub(in crate::preview) id: VisualRowId,
-    pub(in crate::preview) source: RevisionRange,
-    pub(in crate::preview) block_id: BlockId,
-    pub(in crate::preview) semantic_revision: u64,
-    pub(in crate::preview) kind: VisualRowKind,
-    pub(in crate::preview) code_language: Option<Arc<str>>,
-    pub(in crate::preview) code_action_range: Option<crate::document::ByteRange>,
-    pub(in crate::preview) style_kind: RowStyleKind,
-    pub(in crate::preview) render: PreviewRow,
+pub(crate) struct VisualRow {
+    pub(crate) id: VisualRowId,
+    pub(crate) source: RevisionRange,
+    pub(crate) block_id: BlockId,
+    pub(crate) semantic_revision: u64,
+    pub(crate) kind: VisualRowKind,
+    pub(crate) code_language: Option<Arc<str>>,
+    pub(crate) code_action_range: Option<crate::document::ByteRange>,
+    pub(crate) style_kind: RowStyleKind,
+    pub(crate) render: PreviewRow,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::preview) struct VisualRowSummary {
-    pub(in crate::preview) rows: usize,
-    pub(in crate::preview) source_bytes: u64,
+pub(crate) struct VisualRowSummary {
+    pub(crate) rows: usize,
+    pub(crate) source_bytes: u64,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct VisualRowChunk {
+pub(crate) struct VisualRowChunk {
     rows: Arc<[VisualRow]>,
     summary: VisualRowSummary,
     first_source: Option<RevisionRange>,
@@ -124,14 +124,14 @@ impl VisualRowChunk {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct VisualRowTree {
+pub(crate) struct VisualRowTree {
     chunks: Arc<[Arc<VisualRowChunk>]>,
     row_prefix: Arc<[usize]>,
     summary: VisualRowSummary,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct PresentationTree {
+pub(crate) struct PresentationTree {
     chunks: Arc<[Arc<[VisualRowId]>]>,
     row_prefix: Arc<[usize]>,
     len: usize,
@@ -147,7 +147,7 @@ impl PresentationTree {
         )
     }
 
-    pub(in crate::preview) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len
     }
 
@@ -208,7 +208,7 @@ impl PresentationTree {
 }
 
 impl VisualRowTree {
-    pub(in crate::preview) fn from_rows(rows: Vec<VisualRow>) -> Self {
+    pub(crate) fn from_rows(rows: Vec<VisualRow>) -> Self {
         let chunks = rows
             .chunks(ROW_CHUNK_CAPACITY)
             .map(|rows| Arc::new(VisualRowChunk::new(rows.to_vec())))
@@ -234,11 +234,11 @@ impl VisualRowTree {
         }
     }
 
-    pub(in crate::preview) fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.summary.rows
     }
 
-    pub(in crate::preview) fn get(&self, index: usize) -> Option<&VisualRow> {
+    pub(crate) fn get(&self, index: usize) -> Option<&VisualRow> {
         if index >= self.summary.rows {
             return None;
         }
@@ -249,11 +249,10 @@ impl VisualRowTree {
         self.chunks[chunk].rows.get(index - self.row_prefix[chunk])
     }
 
-    pub(in crate::preview) fn iter(&self) -> impl Iterator<Item = &VisualRow> {
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &VisualRow> {
         self.chunks.iter().flat_map(|chunk| chunk.rows.iter())
     }
 
-    #[allow(dead_code)] // Called by the editing pipeline once a syntax adapter supplies replacements.
     fn replace(&self, range: Range<usize>, replacements: Vec<VisualRow>) -> Self {
         assert!(range.start <= range.end && range.end <= self.len());
         let (start_chunk, start_local) = self.locate_boundary(range.start);
@@ -283,7 +282,6 @@ impl VisualRowTree {
         Self::from_chunks(chunks.into())
     }
 
-    #[allow(dead_code)]
     fn locate_boundary(&self, position: usize) -> (usize, usize) {
         if position >= self.summary.rows {
             return (self.chunks.len(), 0);
@@ -302,45 +300,50 @@ impl VisualRowTree {
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct ReadingProjection {
-    pub(in crate::preview) revision: Revision,
-    pub(in crate::preview) revisions: VisualRevisions,
-    pub(in crate::preview) rows: VisualRowTree,
-    pub(in crate::preview) presentation: PresentationTree,
+pub(crate) struct ReadingProjection {
+    pub(crate) revision: Revision,
+    pub(crate) revisions: VisualRevisions,
+    pub(crate) rows: VisualRowTree,
+    pub(crate) presentation: PresentationTree,
     edit_log: Arc<EditLog>,
 }
 
+impl ReadingProjection {
+    pub(crate) fn row_count(&self) -> usize {
+        self.presentation.len()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::preview) struct VisualRevisions {
-    pub(in crate::preview) geometry: u64,
-    pub(in crate::preview) paint: u64,
+pub(crate) struct VisualRevisions {
+    pub(crate) geometry: u64,
+    pub(crate) paint: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
-pub(in crate::preview) struct InvalidationFlags(u8);
+pub(crate) struct InvalidationFlags(u8);
 
 impl InvalidationFlags {
-    pub(in crate::preview) const CONTENT: Self = Self(1 << 0);
-    pub(in crate::preview) const GEOMETRY: Self = Self(1 << 1);
-    pub(in crate::preview) const PAINT: Self = Self(1 << 2);
+    pub(crate) const CONTENT: Self = Self(1 << 0);
+    pub(crate) const GEOMETRY: Self = Self(1 << 1);
+    pub(crate) const PAINT: Self = Self(1 << 2);
 
-    pub(in crate::preview) const fn union(self, other: Self) -> Self {
+    pub(crate) const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
-    pub(in crate::preview) const fn contains(self, other: Self) -> bool {
+    pub(crate) const fn contains(self, other: Self) -> bool {
         self.0 & other.0 == other.0
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct VisualPatch {
-    pub(in crate::preview) before_revision: Revision,
-    pub(in crate::preview) after_revision: Revision,
-    pub(in crate::preview) old_visual: Range<usize>,
-    pub(in crate::preview) new_visual: Range<usize>,
-    pub(in crate::preview) invalidation: InvalidationFlags,
+pub(crate) struct VisualPatch {
+    pub(crate) before_revision: Revision,
+    pub(crate) after_revision: Revision,
+    pub(crate) old_visual: Range<usize>,
+    pub(crate) new_visual: Range<usize>,
+    pub(crate) invalidation: InvalidationFlags,
 }
 
 /// The changed-row envelope bound to the exact revision chain that produced it.
@@ -348,21 +351,20 @@ pub(in crate::preview) struct VisualPatch {
 /// Keeping this opaque prevents callers from accidentally pairing a range calculated for one
 /// delta chain with a different patch operation.
 #[derive(Clone, Debug)]
-pub(in crate::preview) struct VisualPatchPlan {
+pub(crate) struct VisualPatchPlan {
     before_revision: Revision,
     after_revision: Revision,
     affected: Range<usize>,
 }
 
 impl VisualPatchPlan {
-    pub(in crate::preview) fn affected(&self) -> Range<usize> {
+    pub(crate) fn affected(&self) -> Range<usize> {
         self.affected.clone()
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-#[allow(dead_code)]
-pub(in crate::preview) enum ProjectionPatchError {
+pub(crate) enum ProjectionPatchError {
     StaleSnapshot,
     InvalidVisualRange,
     ReplacementRevision,
@@ -396,7 +398,7 @@ impl ReadingProjection {
         })
     }
 
-    pub(in crate::preview) fn visual_row_for_source_offset(
+    pub(crate) fn visual_row_for_source_offset(
         &self,
         offset: crate::document::ByteOffset,
     ) -> Option<usize> {
@@ -416,7 +418,7 @@ impl ReadingProjection {
         Some(low.min(self.rows.len() - 1))
     }
 
-    pub(in crate::preview) fn source_row(&self, index: usize) -> Option<PreviewRow> {
+    pub(crate) fn source_row(&self, index: usize) -> Option<PreviewRow> {
         let visual = self.rows.get(index)?;
         let mut row = visual.render;
         row.content = self.edit_log.map_range(visual.source, self.revision).ok()?;
@@ -496,7 +498,7 @@ impl ReadingProjection {
         Ok(affected_start..affected_end.max(affected_start))
     }
 
-    pub(in crate::preview) fn patch_plan(
+    pub(crate) fn patch_plan(
         &self,
         deltas: &[RevisionDelta],
     ) -> Result<VisualPatchPlan, ProjectionPatchError> {
@@ -537,7 +539,7 @@ impl ReadingProjection {
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn apply_patch(
+    pub(crate) fn apply_patch(
         &self,
         delta: &RevisionDelta,
         old_visual: Range<usize>,
@@ -547,7 +549,7 @@ impl ReadingProjection {
     }
 
     #[cfg(test)]
-    pub(in crate::preview) fn apply_patch_chain(
+    pub(crate) fn apply_patch_chain(
         &self,
         deltas: &[RevisionDelta],
         old_visual: Range<usize>,
@@ -557,7 +559,7 @@ impl ReadingProjection {
         self.apply_patch_chain_with_plan(deltas, old_visual, replacements, plan)
     }
 
-    pub(in crate::preview) fn apply_patch_chain_with_plan(
+    pub(crate) fn apply_patch_chain_with_plan(
         &self,
         deltas: &[RevisionDelta],
         old_visual: Range<usize>,
@@ -645,10 +647,7 @@ impl ReadingProjection {
         ))
     }
 
-    pub(in crate::preview) fn replacement_rows(
-        &self,
-        range: Range<usize>,
-    ) -> Option<Vec<VisualRow>> {
+    pub(crate) fn replacement_rows(&self, range: Range<usize>) -> Option<Vec<VisualRow>> {
         (range.start <= range.end && range.end <= self.rows.len()).then(|| {
             range
                 .filter_map(|index| self.rows.get(index).cloned())
@@ -656,7 +655,7 @@ impl ReadingProjection {
         })
     }
 
-    pub(in crate::preview) fn shared_chunk_count(&self, other: &Self) -> usize {
+    pub(crate) fn shared_chunk_count(&self, other: &Self) -> usize {
         let other_chunks = other
             .rows
             .chunks
@@ -670,7 +669,7 @@ impl ReadingProjection {
             .count()
     }
 
-    pub(in crate::preview) fn chunk_count(&self) -> usize {
+    pub(crate) fn chunk_count(&self) -> usize {
         self.rows.chunks.len()
     }
 }
@@ -686,7 +685,7 @@ fn edit_intersects_range(
     }
 }
 
-pub(in crate::preview) fn build_projection_snapshot(
+pub(crate) fn build_projection_snapshot(
     text: &dyn TextSnapshot,
     revision: Revision,
     format: DocumentFormat,
@@ -714,7 +713,7 @@ pub(in crate::preview) fn build_projection_snapshot(
     })
 }
 
-pub(in crate::preview) fn build_visual_rows(
+pub(crate) fn build_visual_rows(
     text: &dyn TextSnapshot,
     revision: Revision,
     format: DocumentFormat,
@@ -730,7 +729,7 @@ pub(in crate::preview) fn build_visual_rows(
             let style_kind =
                 visual_row_style_kind(format, &kind, row.block_id, blocks, markdown_blocks);
             VisualRow {
-                id: next_visual_row_id(),
+                id: visual_row_id(row, revision),
                 source: row.content,
                 block_id: row.block_id,
                 semantic_revision: revision.0,

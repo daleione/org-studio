@@ -1,15 +1,19 @@
-use super::{
-    Arc, BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
-    ContentRoute, Context, Duration, EmacsOutcome, InitialDocumentLoad, Instant, InvocationOrigin,
-    KEY_FEEDBACK_DURATION, KeyDownEvent, KeyStroke, PathBuf, PathPromptOptions, PrefixArgument,
-    PreviewLoadState, ReadingRenderOptions, Window, WorkspaceLoadedDocument, WorkspaceWindow,
-    accept_generation, built_in_contexts, command_count, compile_input_profile,
-    configured_minimap_visible, current_theme, dired_bindings, document_input,
-    load_workspace_document, minimap, preview_bindings, px, render_home, render_loading,
-    render_reading_document, split_layout, workspace_bindings,
+use std::{sync::Arc, time::Instant};
+
+use gpui::{Context, Window, div, prelude::*, px, rgb};
+
+use crate::app::home::{render_home, render_loading};
+use crate::{
+    app::{
+        ContentRoute, DocumentViewPreferences, DocumentWorkspaceState, PaneSide, PaneSurface,
+        ReadyDocument, WorkspaceLoadState, WorkspaceWindow, split_layout,
+    },
+    preview::{
+        ReadingPreviewPanel, ReadingRenderOptions, configured_minimap_visible, document_input,
+        minimap, preview_style, render_reading_document,
+    },
+    theme::current_theme,
 };
-use crate::app::{DocumentViewPreferences, DocumentWorkspaceState, PaneSide, PaneSurface};
-use gpui::{div, prelude::*, rgb};
 
 mod actions;
 mod benchmark;
@@ -43,20 +47,20 @@ impl Default for WorkspaceWindow {
 
 impl WorkspaceWindow {
     pub fn new() -> Self {
-        let settings = crate::settings::PreviewSettings::load();
+        let settings = crate::settings::WorkspaceSettings::load();
         Self::with_settings(settings)
     }
 
     #[cfg(test)]
     pub(crate) fn with_split_layout(split: bool) -> Self {
-        let mut workspace = Self::with_settings(crate::settings::PreviewSettings::default());
+        let mut workspace = Self::with_settings(crate::settings::WorkspaceSettings::default());
         if split {
             workspace.document_workspace.layout = crate::app::WorkspaceLayout::Split;
         }
         workspace
     }
 
-    fn with_settings(preview_settings: crate::settings::PreviewSettings) -> Self {
+    fn with_settings(preview_settings: crate::settings::WorkspaceSettings) -> Self {
         let list_overdraw = std::env::var("ORG_STUDIO_LIST_OVERDRAW")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -64,9 +68,15 @@ impl WorkspaceWindow {
         let (commands, keyboard, key_context) = document_input();
         let minimap_visible = configured_minimap_visible();
         let mut document_workspace = DocumentWorkspaceState::default();
-        if std::env::var("ORG_STUDIO_SCROLL_BENCH_SURFACE").as_deref() == Ok("reading") {
+        let benchmark_reading =
+            std::env::var("ORG_STUDIO_SCROLL_BENCH_SURFACE").as_deref() == Ok("reading");
+        if benchmark_reading {
             document_workspace.set_surface(PaneSide::Left, PaneSurface::Reading);
         }
+        let benchmark_reading_style = benchmark_reading
+            .then(|| std::env::var("ORG_STUDIO_SCROLL_BENCH_STYLE").ok())
+            .flatten()
+            .and_then(|style| crate::preview::PreviewStyleId::parse(&style));
         Self {
             language: preview_settings.language,
             focus_handle: None,
@@ -75,7 +85,7 @@ impl WorkspaceWindow {
             commands,
             keyboard,
             key_context,
-            state: PreviewLoadState::Empty,
+            state: WorkspaceLoadState::Empty,
             document_subscription: None,
             editor_minimap_width_subscriptions: Vec::new(),
             subscribed_document: None,
@@ -89,12 +99,12 @@ impl WorkspaceWindow {
             file_watch_request: 0,
             file_watch_directory: None,
             file_watch_target: None,
-            file_manager: super::file_manager_host::FileManagerHost::new(
+            file_manager: crate::app::file_manager::FileManagerHost::new(
                 preview_settings.sidebar_width,
             ),
             picker_task: None,
-            export: super::export_ui::ExportHost::default(),
-            save: super::SaveHost::default(),
+            export: crate::app::export_ui::ExportHost::default(),
+            save: crate::app::save::SaveHost::default(),
             list_overdraw,
             opened_at: None,
             first_frame_scheduled: None,
@@ -160,8 +170,8 @@ impl WorkspaceWindow {
             ),
             minimap_width: crate::settings::initial_minimap_width(preview_settings.minimap_width),
             minimap_resize_preview: None,
-            reading_style: preview_settings.reading_style,
-            status: super::status_line::StatusLineHost::new(preview_settings.status_line),
+            reading_style: benchmark_reading_style.unwrap_or(preview_settings.reading_style),
+            status: crate::app::status_line::StatusLineHost::new(preview_settings.status_line),
         }
     }
 
@@ -169,12 +179,12 @@ impl WorkspaceWindow {
         self.state.ready().map(|document| &document.session)
     }
 
-    pub(super) fn request_document_focus(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn request_document_focus(&mut self, cx: &mut Context<Self>) {
         self.install_document_keymap();
         self.focus_active_surface(cx);
     }
 
-    pub(super) fn editor(
+    pub(crate) fn editor(
         &self,
         pane: PaneSide,
     ) -> Option<gpui::Entity<crate::editor::SemanticEditor>> {
@@ -183,14 +193,14 @@ impl WorkspaceWindow {
             .and_then(|document| document.editors.get(pane).clone())
     }
 
-    pub(super) fn visible_panes(&self) -> impl Iterator<Item = PaneSide> + use<> {
+    pub(crate) fn visible_panes(&self) -> impl Iterator<Item = PaneSide> + use<> {
         let workspace = self.document_workspace;
         [PaneSide::Left, PaneSide::Right]
             .into_iter()
             .filter(move |pane| workspace.pane_is_visible(*pane))
     }
 
-    pub(super) fn ensure_editor_for(&mut self, pane: PaneSide, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_editor_for(&mut self, pane: PaneSide, cx: &mut Context<Self>) {
         let Some(ready) = self.state.ready() else {
             return;
         };
@@ -212,7 +222,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn reconcile_visible_editor_panes(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reconcile_visible_editor_panes(&mut self, cx: &mut Context<Self>) {
         let panes = self
             .visible_panes()
             .filter(|pane| matches!(self.document_workspace.surface(*pane), PaneSurface::Editor))
@@ -222,31 +232,31 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn preview_panel(&self) -> Option<gpui::Entity<super::ReadingPreviewPanel>> {
+    pub(crate) fn reading_panel(&self) -> Option<gpui::Entity<ReadingPreviewPanel>> {
         let active = self.document_workspace.active_pane;
         if matches!(
             self.document_workspace.active_surface(),
             PaneSurface::Reading
         ) {
-            return self.preview_panel_for(active);
+            return self.reading_panel_for(active);
         }
         let other = active.other();
         (self.document_workspace.is_split()
             && matches!(self.document_workspace.surface(other), PaneSurface::Reading))
-        .then(|| self.preview_panel_for(other))
+        .then(|| self.reading_panel_for(other))
         .flatten()
     }
 
-    pub(super) fn preview_panel_for(
+    pub(crate) fn reading_panel_for(
         &self,
         pane: PaneSide,
-    ) -> Option<gpui::Entity<super::ReadingPreviewPanel>> {
+    ) -> Option<gpui::Entity<ReadingPreviewPanel>> {
         self.state
             .ready()
             .and_then(|document| document.readers.get(pane).clone())
     }
 
-    pub(super) fn latest_preview_is_current(&self, cx: &gpui::App) -> bool {
+    pub(crate) fn latest_preview_is_current(&self, cx: &gpui::App) -> bool {
         self.derived.latest.as_ref().is_some_and(|preview| {
             self.document_session().is_some_and(|session| {
                 let session = session.read(cx);
@@ -257,7 +267,7 @@ impl WorkspaceWindow {
         })
     }
 
-    pub(super) fn reconcile_visible_reading_panes(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn reconcile_visible_reading_panes(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.latest_preview_is_current(cx) {
             return false;
         }
@@ -283,7 +293,7 @@ impl WorkspaceWindow {
                     || current.path != document.path
                 {
                     let document = document.clone();
-                    let style = *super::preview_style(self.reading_style);
+                    let style = *preview_style(self.reading_style);
                     panel.update(cx, |panel, cx| {
                         panel.replace_document_with_style(document, style, cx)
                     });
@@ -291,14 +301,14 @@ impl WorkspaceWindow {
             } else {
                 let document = document.clone();
                 *ready.readers.get_mut(pane) =
-                    Some(cx.new(move |_| super::ReadingPreviewPanel::new(document, list_overdraw)));
+                    Some(cx.new(move |_| ReadingPreviewPanel::new(document, list_overdraw)));
             }
         }
         self.apply_pending_navigation(self.generation, cx);
         true
     }
 
-    pub(super) fn visible_reading_panes_are_current(&self, cx: &gpui::App) -> bool {
+    pub(crate) fn visible_reading_panes_are_current(&self, cx: &gpui::App) -> bool {
         self.latest_preview_is_current(cx)
             && self
                 .visible_panes()
@@ -306,7 +316,7 @@ impl WorkspaceWindow {
                     matches!(self.document_workspace.surface(*pane), PaneSurface::Reading)
                 })
                 .all(|pane| {
-                    self.preview_panel_for(pane).is_some_and(|panel| {
+                    self.reading_panel_for(pane).is_some_and(|panel| {
                         let preview = panel.read(cx);
                         let latest = self
                             .derived
@@ -320,23 +330,23 @@ impl WorkspaceWindow {
                 })
     }
 
-    pub(super) fn bump_preview_revision(&self, cx: &mut Context<Self>) {
+    pub(crate) fn bump_preview_revision(&self, cx: &mut Context<Self>) {
         for panel in self
             .visible_panes()
-            .filter_map(|pane| self.preview_panel_for(pane))
+            .filter_map(|pane| self.reading_panel_for(pane))
         {
             panel.update(cx, |panel, _| panel.bump_geometry_revision());
         }
     }
 
-    pub(super) fn cancel_minimap_interaction(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(crate) fn cancel_minimap_interaction(&mut self, cx: &mut Context<Self>) -> bool {
         self.minimap_resize_preview = None;
-        self.preview_panel()
+        self.reading_panel()
             .is_some_and(|panel| panel.update(cx, |panel, _| panel.cancel_minimap_interaction()))
     }
 
-    pub(super) fn save_preview_settings(&self) {
-        crate::settings::PreviewSettings {
+    pub(crate) fn save_preview_settings(&self) {
+        crate::settings::WorkspaceSettings {
             split_ratio: self.document_view_preferences.split_ratio,
             soft_wrap: self.soft_wrap,
             language: self.language,
@@ -354,7 +364,7 @@ impl WorkspaceWindow {
         self.language
     }
 
-    pub(super) fn set_language(&mut self, language: crate::i18n::Language, cx: &mut Context<Self>) {
+    pub(crate) fn set_language(&mut self, language: crate::i18n::Language, cx: &mut Context<Self>) {
         if self.language != language {
             self.language = language;
             self.export.clear_status();
@@ -363,7 +373,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn change_minimap_width(
+    pub(crate) fn change_minimap_width(
         &mut self,
         change: minimap::MinimapWidthChange,
         cx: &mut Context<Self>,
@@ -424,15 +434,15 @@ impl WorkspaceWindow {
 
     pub fn current_document_path<'a>(&'a self, cx: &'a gpui::App) -> Option<&'a std::path::Path> {
         match &self.state {
-            PreviewLoadState::Loading { path, .. } | PreviewLoadState::Failed { path, .. } => {
+            WorkspaceLoadState::Loading { path, .. } | WorkspaceLoadState::Failed { path, .. } => {
                 Some(path)
             }
-            PreviewLoadState::Ready { document } => Some(document.session.read(cx).path()),
-            PreviewLoadState::Empty => None,
+            WorkspaceLoadState::Ready { document } => Some(document.session.read(cx).path()),
+            WorkspaceLoadState::Empty => None,
         }
     }
 
-    pub(super) fn body(
+    pub(crate) fn body(
         &self,
         entity: gpui::Entity<Self>,
         editor_width: f32,
@@ -442,15 +452,15 @@ impl WorkspaceWindow {
         let theme = current_theme();
         let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);
         let content = match &self.state {
-            PreviewLoadState::Empty => render_home(
+            WorkspaceLoadState::Empty => render_home(
                 entity.clone(),
                 &self.recent_documents,
                 self.home_error.as_deref(),
                 None,
                 self.language,
             ),
-            PreviewLoadState::Loading { path, .. } => render_loading(path, self.language),
-            PreviewLoadState::Failed {
+            WorkspaceLoadState::Loading { path, .. } => render_loading(path, self.language),
+            WorkspaceLoadState::Failed {
                 path,
                 message,
                 previous,
@@ -495,7 +505,7 @@ impl WorkspaceWindow {
                     )
                 }
             }
-            PreviewLoadState::Ready { document: ready } => {
+            WorkspaceLoadState::Ready { document: ready } => {
                 let notice = &ready.notice;
                 let document = self.render_document_layout(
                     ready,
@@ -537,7 +547,7 @@ impl WorkspaceWindow {
         };
         let layout = self.status_layout(&snapshot, editor_width, window);
         let style_popover_left =
-            super::status_line::reading_style_popover_left(&snapshot, &layout, window);
+            crate::app::status_line::reading_style_popover_left(&snapshot, &layout, window);
         let status_popover = self.status.popover_for(snapshot.pane);
         div()
             .relative()
@@ -545,14 +555,14 @@ impl WorkspaceWindow {
             .flex()
             .flex_col()
             .child(div().flex_1().min_h_0().child(content))
-            .child(super::status_line::render_status_line(
+            .child(crate::app::status_line::render_status_line(
                 &snapshot,
                 layout,
                 entity.clone(),
                 window,
             ))
             .when_some(status_popover, |view, popover| {
-                view.child(super::status_line::render_status_popover(
+                view.child(crate::app::status_line::render_status_popover(
                     popover,
                     Some(&snapshot),
                     self.status.settings(),
@@ -566,7 +576,7 @@ impl WorkspaceWindow {
 
     fn render_document_layout(
         &self,
-        ready: &super::ReadyDocument,
+        ready: &ReadyDocument,
         entity: gpui::Entity<Self>,
         editor_width: f32,
         minimap_width: f32,
@@ -638,7 +648,7 @@ impl WorkspaceWindow {
 
     fn render_pane_content(
         &self,
-        ready: &super::ReadyDocument,
+        ready: &ReadyDocument,
         entity: gpui::Entity<Self>,
         pane: PaneSide,
         render: PaneRenderContext<'_>,
@@ -666,7 +676,7 @@ impl WorkspaceWindow {
         };
         let layout = self.status_layout(&snapshot, render.width, render.window);
         let style_popover_left =
-            super::status_line::reading_style_popover_left(&snapshot, &layout, render.window);
+            crate::app::status_line::reading_style_popover_left(&snapshot, &layout, render.window);
         let status_popover = self.status.popover_for(snapshot.pane);
         div()
             .w(px(render.width))
@@ -679,14 +689,14 @@ impl WorkspaceWindow {
                 activate_entity.update(cx, |this, cx| this.activate_pane(pane, cx));
             })
             .child(div().flex_1().min_h_0().child(content))
-            .child(super::status_line::render_status_line(
+            .child(crate::app::status_line::render_status_line(
                 &snapshot,
                 layout,
                 entity.clone(),
                 render.window,
             ))
             .when_some(status_popover, |view, popover| {
-                view.child(super::status_line::render_status_popover(
+                view.child(crate::app::status_line::render_status_popover(
                     popover,
                     Some(&snapshot),
                     self.status.settings(),
@@ -700,7 +710,7 @@ impl WorkspaceWindow {
 
     fn render_reading(
         &self,
-        ready: &super::ReadyDocument,
+        ready: &ReadyDocument,
         entity: gpui::Entity<Self>,
         pane: PaneSide,
         render: PaneRenderContext<'_>,
@@ -737,7 +747,6 @@ impl WorkspaceWindow {
         render_reading_document(
             panel.render_state(),
             panel_entity.clone(),
-            entity,
             ReadingRenderOptions {
                 minimap_visible,
                 pane_width: render.width,
@@ -746,17 +755,33 @@ impl WorkspaceWindow {
                 minimap_thumb_visibility: self.minimap_thumb_visibility,
                 generation: self.generation,
                 opened_at: self.opened_at.unwrap_or_else(Instant::now),
-                style: *super::preview_style(self.reading_style),
+                style: *preview_style(self.reading_style),
+                dispatch_action: {
+                    let workspace = entity.clone();
+                    Arc::new(move |action, panel, window, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.dispatch_preview_action(action, panel, window, cx);
+                        });
+                    })
+                },
+                change_minimap_width: {
+                    let workspace = entity;
+                    Arc::new(move |change, cx| {
+                        workspace.update(cx, |workspace, cx| {
+                            workspace.change_minimap_width(change, cx);
+                        });
+                    })
+                },
             },
         )
     }
 
-    pub(super) fn cycle_global_visibility_animated(
+    pub(crate) fn cycle_global_visibility_animated(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(panel) = self.preview_panel() else {
+        let Some(panel) = self.reading_panel() else {
             return;
         };
         let viewport = window.viewport_size();
@@ -764,8 +789,8 @@ impl WorkspaceWindow {
         let editor_width = if self.file_manager.sidebar_visible() {
             (viewport_width
                 - self.rendered_sidebar_width(viewport_width)
-                - super::file_manager_host::sidebar::RESIZE_HANDLE_PX)
-                .max(super::file_manager_host::sidebar::MIN_DOCUMENT_WIDTH_PX)
+                - crate::app::file_manager::sidebar::RESIZE_HANDLE_PX)
+                .max(crate::app::file_manager::sidebar::MIN_DOCUMENT_WIDTH_PX)
         } else {
             viewport_width
         };
@@ -786,23 +811,23 @@ impl WorkspaceWindow {
         } else {
             0.0
         };
-        let available_width = super::layout::reading_content_width(
+        let available_width = crate::preview::layout::reading_content_width(
             pane_width,
             minimap_space,
-            *super::preview_style(self.reading_style),
+            *preview_style(self.reading_style),
         );
         panel.update(cx, |panel, cx| {
             panel.cycle_global_visibility_animated(
                 f32::from(viewport.height),
                 available_width,
-                *super::preview_style(self.reading_style),
+                *preview_style(self.reading_style),
                 window,
                 cx,
             )
         });
     }
 
-    pub(super) fn window_title(&self, cx: &gpui::App) -> String {
+    pub(crate) fn window_title(&self, cx: &gpui::App) -> String {
         if self.content_route == ContentRoute::FileManager
             && let Some(session) = self.file_manager.session()
         {
@@ -816,18 +841,18 @@ impl WorkspaceWindow {
             );
         }
         let path: Option<&std::path::Path> = match &self.state {
-            PreviewLoadState::Loading { path, .. } => Some(path.as_path()),
-            PreviewLoadState::Failed {
+            WorkspaceLoadState::Loading { path, .. } => Some(path.as_path()),
+            WorkspaceLoadState::Failed {
                 previous: Some(document),
                 ..
             } => Some(document.session.read(cx).path()),
-            PreviewLoadState::Failed {
+            WorkspaceLoadState::Failed {
                 path,
                 previous: None,
                 ..
             } => Some(path.as_path()),
-            PreviewLoadState::Ready { document } => Some(document.session.read(cx).path()),
-            PreviewLoadState::Empty => None,
+            WorkspaceLoadState::Ready { document } => Some(document.session.read(cx).path()),
+            WorkspaceLoadState::Empty => None,
         };
         let title = path
             .and_then(|path| path.file_name())

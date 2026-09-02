@@ -1,22 +1,22 @@
 use gpui::Context;
 
-use super::WorkspaceWindow;
+use crate::app::WorkspaceWindow;
 
-pub(in crate::preview) const DEFAULT_WIDTH_PX: f32 = 240.0;
-pub(in crate::preview) const MIN_WIDTH_PX: f32 = 180.0;
-pub(in crate::preview) const MAX_WIDTH_PX: f32 = 420.0;
-pub(in crate::preview) const MAX_WINDOW_FRACTION: f32 = 0.40;
-pub(in crate::preview) const RESIZE_HANDLE_PX: f32 = 6.0;
-pub(in crate::preview) const MIN_DOCUMENT_WIDTH_PX: f32 = 120.0;
+pub(crate) const DEFAULT_WIDTH_PX: f32 = 240.0;
+pub(crate) const MIN_WIDTH_PX: f32 = 180.0;
+pub(crate) const MAX_WIDTH_PX: f32 = 420.0;
+pub(crate) const MAX_WINDOW_FRACTION: f32 = 0.40;
+pub(crate) const RESIZE_HANDLE_PX: f32 = 6.0;
+pub(crate) const MIN_DOCUMENT_WIDTH_PX: f32 = 120.0;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct ResizeSession {
-    pub(in crate::preview) start_pointer_x: f32,
-    pub(in crate::preview) start_width: f32,
-    pub(in crate::preview) current_width: f32,
+pub(crate) struct ResizeSession {
+    pub(crate) start_pointer_x: f32,
+    pub(crate) start_width: f32,
+    pub(crate) current_width: f32,
 }
 
-pub(in crate::preview) fn width_for_viewport(viewport_width: f32, desired: f32) -> f32 {
+pub(crate) fn width_for_viewport(viewport_width: f32, desired: f32) -> f32 {
     let fraction_max = viewport_width * MAX_WINDOW_FRACTION;
     let document_max = viewport_width - RESIZE_HANDLE_PX - MIN_DOCUMENT_WIDTH_PX;
     let maximum = fraction_max.min(document_max).clamp(0.0, MAX_WIDTH_PX);
@@ -24,7 +24,7 @@ pub(in crate::preview) fn width_for_viewport(viewport_width: f32, desired: f32) 
     desired.clamp(minimum, maximum)
 }
 
-pub(in crate::preview) fn width_from_resize(
+pub(crate) fn width_from_resize(
     viewport_width: f32,
     session: ResizeSession,
     pointer_x: f32,
@@ -36,7 +36,7 @@ pub(in crate::preview) fn width_from_resize(
 }
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn focus_sidebar(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn focus_sidebar(&mut self, cx: &mut Context<Self>) {
         if self.file_manager.sidebar_visible && !self.file_manager.sidebar_focused {
             self.file_manager.sidebar_focused = true;
             self.install_sidebar_keymap();
@@ -44,7 +44,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn focus_document(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn focus_document(&mut self, cx: &mut Context<Self>) {
         if self.file_manager.sidebar_focused {
             self.file_manager.sidebar_focused = false;
             self.request_document_focus(cx);
@@ -52,7 +52,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn rendered_sidebar_width(&self, viewport_width: f32) -> f32 {
+    pub(crate) fn rendered_sidebar_width(&self, viewport_width: f32) -> f32 {
         let desired = self
             .file_manager
             .sidebar_resize
@@ -61,7 +61,7 @@ impl WorkspaceWindow {
         width_for_viewport(viewport_width, desired)
     }
 
-    pub(in crate::preview) fn begin_sidebar_resize(
+    pub(crate) fn begin_sidebar_resize(
         &mut self,
         pointer_x: f32,
         viewport_width: f32,
@@ -76,7 +76,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn update_sidebar_resize(
+    pub(crate) fn update_sidebar_resize(
         &mut self,
         pointer_x: f32,
         viewport_width: f32,
@@ -101,7 +101,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn finish_sidebar_resize(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn finish_sidebar_resize(&mut self, cx: &mut Context<Self>) {
         let Some(resize) = self.file_manager.sidebar_resize.take() else {
             return;
         };
@@ -117,7 +117,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn reset_sidebar_width(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reset_sidebar_width(&mut self, cx: &mut Context<Self>) {
         self.file_manager.sidebar_resize = None;
         let width = DEFAULT_WIDTH_PX as u16;
         if self.file_manager.sidebar_width != width {
@@ -128,7 +128,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(in crate::preview) fn cancel_sidebar_resize(&mut self) -> bool {
+    pub(crate) fn cancel_sidebar_resize(&mut self) -> bool {
         self.file_manager.sidebar_resize.take().is_some()
     }
 }

@@ -2,18 +2,14 @@ use std::{path::PathBuf, sync::Arc};
 
 use gpui::{Context, PromptButton, PromptLevel, Window};
 
-use super::{
-    super::{PendingTransition, SaveInteraction, SaveStatus},
-    WorkspaceWindow,
-};
 use crate::document::{SaveError, SaveStartError, write_atomic};
+use crate::{
+    app::WorkspaceWindow,
+    app::save::{PendingTransition, SaveInteraction, SaveStatus},
+};
 
 impl WorkspaceWindow {
-    pub(in crate::preview) fn save_document(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_document_then(None, window, cx);
     }
 
@@ -32,11 +28,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(in crate::preview) fn save_document_as(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.save_document_as_then(None, window, cx);
     }
 
@@ -253,7 +245,7 @@ impl WorkspaceWindow {
         self.request_transition(PendingTransition::Open { path, anchor: None }, window, cx);
     }
 
-    pub(in crate::preview) fn request_open_at(
+    pub(crate) fn request_open_at(
         &mut self,
         path: PathBuf,
         anchor: Arc<str>,
@@ -270,11 +262,11 @@ impl WorkspaceWindow {
         );
     }
 
-    pub(in crate::preview) fn request_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_home(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.request_transition(PendingTransition::Home, window, cx);
     }
 
-    pub(in crate::preview) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_quit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.request_transition(PendingTransition::Quit, window, cx);
     }
 
@@ -349,11 +341,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(in crate::preview) fn install_close_guard(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
+    pub(crate) fn install_close_guard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.save.close_hook_installed {
             return;
         }

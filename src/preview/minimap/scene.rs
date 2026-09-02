@@ -1,6 +1,6 @@
 use smallvec::SmallVec;
 
-use super::{
+use super::super::{
     display_map::{PreviewDisplayMap, PreviewLineKind, kind_color},
     projection::{ReadingCodeRow, VisualRowKind},
     style::{CodeBlockVariant, PreviewStyle, TableVariant},
@@ -163,7 +163,7 @@ pub(in crate::preview) fn resolve_visual_row(
         VisualRowKind::Image { dimensions } => {
             let fitted_width =
                 dimensions.map_or(target_width.max(10.0) - 10.0, |(width, height)| {
-                    super::fitted_image_size(width, height, target_width.max(10.0) - 10.0).0
+                    super::super::fitted_image_size(width, height, target_width.max(10.0) - 10.0).0
                 });
             primitives.push(VisualPrimitive::Rect {
                 x: 5.0,

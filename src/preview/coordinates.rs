@@ -3,33 +3,33 @@ use crate::document::{ByteOffset, Revision};
 use super::projection::{ReadingProjection, VisualRowId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum Bias {
+pub(crate) enum Bias {
     Left,
     Right,
 }
 
 impl Bias {
-    pub(in crate::preview) const fn for_boundary(at_end: bool) -> Self {
+    pub(crate) const fn for_boundary(at_end: bool) -> Self {
         if at_end { Self::Left } else { Self::Right }
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct SourcePoint {
-    pub(in crate::preview) revision: Revision,
-    pub(in crate::preview) offset: ByteOffset,
+pub(crate) struct SourcePoint {
+    pub(crate) revision: Revision,
+    pub(crate) offset: ByteOffset,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct VisualPoint {
-    pub(in crate::preview) revision: Revision,
-    pub(in crate::preview) row: VisualRowId,
-    pub(in crate::preview) offset_in_row: u64,
-    pub(in crate::preview) bias: Bias,
+pub(crate) struct VisualPoint {
+    pub(crate) revision: Revision,
+    pub(crate) row: VisualRowId,
+    pub(crate) offset_in_row: u64,
+    pub(crate) bias: Bias,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum PointMapError {
+pub(crate) enum PointMapError {
     RevisionMismatch,
     NotRepresented,
     RowNotFound,
@@ -37,7 +37,7 @@ pub(in crate::preview) enum PointMapError {
 }
 
 impl ReadingProjection {
-    pub(in crate::preview) fn source_to_visual(
+    pub(crate) fn source_to_visual(
         &self,
         point: SourcePoint,
         bias: Bias,
@@ -65,7 +65,7 @@ impl ReadingProjection {
         Err(PointMapError::NotRepresented)
     }
 
-    pub(in crate::preview) fn visual_to_source(
+    pub(crate) fn visual_to_source(
         &self,
         point: VisualPoint,
     ) -> Result<SourcePoint, PointMapError> {

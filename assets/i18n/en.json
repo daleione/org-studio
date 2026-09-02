@@ -8,7 +8,7 @@
   "export.quality": "Quality",
   "export.standard": "Standard",
   "export.high": "High",
-  "export.themes": "Themes",
+  "export.templates": "Export Templates",
   "export.snapshot_hint": "A file will be generated from the current document",
   "export.reveal": "Show in Finder",
   "export.cancel": "Cancel",

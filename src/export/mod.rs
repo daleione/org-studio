@@ -10,12 +10,12 @@ mod markdown;
 mod model;
 mod org;
 mod output;
-mod theme;
+mod template;
 mod typst;
 
 pub use diagnostic::{ExportDiagnostic, ExportSeverity};
 pub use model::{ExportDocument, ExportMeta};
-pub use theme::{Theme, themes};
+pub use template::{ExportTemplate, export_templates};
 pub use typst::{CompileOutput, TypstEngine};
 
 use std::{
@@ -56,7 +56,7 @@ pub enum LayoutMode {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaperSize {
-    Theme,
+    TemplateDefault,
     A4,
     A5,
     B5,
@@ -64,7 +64,7 @@ pub enum PaperSize {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Orientation {
-    Theme,
+    TemplateDefault,
     Portrait,
     Landscape,
 }
@@ -72,7 +72,7 @@ pub enum Orientation {
 #[derive(Clone, Debug)]
 pub struct ExportOptions {
     pub format: ExportFormat,
-    pub theme_id: String,
+    pub template_id: String,
     pub layout: LayoutMode,
     pub per_page: bool,
     pub png_ppi: f32,
@@ -92,13 +92,13 @@ impl Default for ExportOptions {
     fn default() -> Self {
         Self {
             format: ExportFormat::Pdf,
-            theme_id: "minimal-blue".into(),
+            template_id: "minimal-blue".into(),
             layout: LayoutMode::Paged,
             per_page: false,
             png_ppi: 144.0,
             include_org_task_metadata: true,
             paper: PaperSize::A4,
-            orientation: Orientation::Theme,
+            orientation: Orientation::TemplateDefault,
             font_scale: 1.0,
             margin_scale: 1.0,
             line_height_scale: 1.0,
@@ -119,7 +119,7 @@ pub struct ExportArtifacts {
 #[derive(Debug)]
 pub enum ExportError {
     Parse(String),
-    UnknownTheme(String),
+    UnknownTemplate(String),
     Compile(Vec<ExportDiagnostic>),
     Render(String),
     Io { path: PathBuf, message: String },
@@ -129,7 +129,9 @@ impl std::fmt::Display for ExportError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Parse(message) | Self::Render(message) => f.write_str(message),
-            Self::UnknownTheme(theme) => write!(f, "unknown export theme `{theme}`"),
+            Self::UnknownTemplate(template) => {
+                write!(f, "unknown export template `{template}`")
+            }
             Self::Compile(diagnostics) => write!(
                 f,
                 "{}",
@@ -164,9 +166,9 @@ pub fn export_snapshot(
         document_path.parent(),
         &mut diagnostics,
     );
-    let theme = theme::theme(&options.theme_id)
-        .ok_or_else(|| ExportError::UnknownTheme(options.theme_id.clone()))?;
-    let emitted = emit::emit(&document, theme, options, &mut diagnostics);
+    let template = template::export_template(&options.template_id)
+        .ok_or_else(|| ExportError::UnknownTemplate(options.template_id.clone()))?;
+    let emitted = emit::emit(&document, template, options, &mut diagnostics);
     let inputs = template_inputs(options);
     let output = engine.compile_with_inputs(
         emitted,
@@ -185,7 +187,7 @@ pub fn export_snapshot(
 
 fn template_inputs(options: &ExportOptions) -> BTreeMap<String, String> {
     let mut inputs = BTreeMap::new();
-    let print_layout = options.paper != PaperSize::Theme;
+    let print_layout = options.paper != PaperSize::TemplateDefault;
     inputs.insert(
         "paged".into(),
         (options.layout == LayoutMode::Paged).to_string(),
@@ -193,7 +195,7 @@ fn template_inputs(options: &ExportOptions) -> BTreeMap<String, String> {
     inputs.insert(
         "paper".into(),
         match options.paper {
-            PaperSize::Theme => "",
+            PaperSize::TemplateDefault => "",
             PaperSize::A4 => "a4",
             PaperSize::A5 => "a5",
             PaperSize::B5 => "iso-b5",
@@ -203,7 +205,7 @@ fn template_inputs(options: &ExportOptions) -> BTreeMap<String, String> {
     inputs.insert(
         "orientation".into(),
         match options.orientation {
-            Orientation::Theme => "",
+            Orientation::TemplateDefault => "",
             Orientation::Portrait => "portrait",
             Orientation::Landscape => "landscape",
         }
@@ -257,9 +259,10 @@ fn filter_unavailable_assets(
     blocks.retain_mut(|block| match block {
         model::ExportBlock::Image { path, .. } => {
             let raw = path.to_string_lossy();
-            let allowed = if raw.starts_with("http://") || raw.starts_with("https://") {
-                false
-            } else if path.is_absolute() {
+            let allowed = if raw.starts_with("http://")
+                || raw.starts_with("https://")
+                || path.is_absolute()
+            {
                 false
             } else if let Some(root) = root {
                 let canonical_root = root.canonicalize().ok();
@@ -359,7 +362,7 @@ mod tests {
 
         let long_image = template_inputs(&ExportOptions {
             format: ExportFormat::Png,
-            paper: PaperSize::Theme,
+            paper: PaperSize::TemplateDefault,
             layout: LayoutMode::Continuous,
             ..ExportOptions::default()
         });
@@ -385,15 +388,15 @@ mod tests {
         let engine = TypstEngine::default();
         let options = ExportOptions::default();
         let mut failures = Vec::new();
-        for theme in themes() {
-            let source = emit::emit(&document, theme, &options, &mut diagnostics);
+        for template in export_templates() {
+            let source = emit::emit(&document, template, &options, &mut diagnostics);
             let mut inputs = BTreeMap::new();
             inputs.insert("paged".into(), "true".into());
             for format in [ExportFormat::Pdf, ExportFormat::Png, ExportFormat::Svg] {
                 if let Err(error) =
                     engine.compile_with_inputs(source.clone(), format, false, 72.0, None, &inputs)
                 {
-                    failures.push(format!("{} {format:?}: {error}", theme.id));
+                    failures.push(format!("{} {format:?}: {error}", template.id));
                 }
             }
         }

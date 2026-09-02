@@ -142,7 +142,7 @@ fn parse_blocks<'a>(
                     CodeBlockKind::Indented => None,
                 };
                 let mut code = String::new();
-                while let Some((event, _)) = events.next() {
+                for (event, _) in events.by_ref() {
                     match event {
                         Event::End(TagEnd::CodeBlock) => break,
                         Event::Text(text) | Event::Code(text) => code.push_str(&text),
@@ -207,10 +207,10 @@ fn parse_table<'a>(
             Event::Start(Tag::TableCell) => {
                 current_row.push(parse_inlines(events, TagEnd::TableCell, diagnostics));
             }
-            Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow) => {
-                if !current_row.is_empty() {
-                    rows.push(std::mem::take(&mut current_row));
-                }
+            Event::End(TagEnd::TableHead) | Event::End(TagEnd::TableRow)
+                if !current_row.is_empty() =>
+            {
+                rows.push(std::mem::take(&mut current_row));
             }
             _ => {}
         }

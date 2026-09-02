@@ -24,7 +24,7 @@ use super::{
 const TABLE_DEPENDENCY: u8 = 1 << 0;
 const CODE_DEPENDENCY: u8 = 1 << 1;
 
-pub(super) fn resolve_image_path(document_path: &Path, source: &str) -> PathBuf {
+pub(crate) fn resolve_image_path(document_path: &Path, source: &str) -> PathBuf {
     let source = PathBuf::from(source);
     if source.is_absolute() {
         source
@@ -36,7 +36,7 @@ pub(super) fn resolve_image_path(document_path: &Path, source: &str) -> PathBuf 
     }
 }
 
-pub(super) fn build_image_sizes(
+pub(crate) fn build_image_sizes(
     document_path: &Path,
     blocks: &BlockArena,
 ) -> HashMap<BlockId, (u32, u32)> {
@@ -56,7 +56,7 @@ pub(super) fn build_image_sizes(
         .collect()
 }
 
-pub(super) fn build_markdown_image_sizes(
+pub(crate) fn build_markdown_image_sizes(
     document_path: &Path,
     blocks: &[markdown::MarkdownBlock],
 ) -> HashMap<BlockId, (u32, u32)> {
@@ -75,7 +75,7 @@ pub(super) fn build_markdown_image_sizes(
         .collect()
 }
 
-pub(super) fn fitted_image_size(
+pub(crate) fn fitted_image_size(
     source_width: u32,
     source_height: u32,
     available_width: f32,
@@ -153,7 +153,7 @@ fn load_document_profiled_impl(
     LoadedDocument::new(session, preview).map_err(|error| (path, error))
 }
 
-pub(in crate::preview) fn reload_document_profiled(
+pub(crate) fn reload_document_profiled(
     request: ReloadRequest,
 ) -> Result<ReloadedDocument, (PathBuf, String)> {
     let total_started = Instant::now();
@@ -188,7 +188,7 @@ pub(in crate::preview) fn reload_document_profiled(
     ReloadedDocument::new(prepared, preview).map_err(|error| (path, error))
 }
 
-pub(in crate::preview) fn reload_workspace_document(
+pub(crate) fn reload_workspace_document(
     request: ReloadRequest,
     build_preview: bool,
 ) -> Result<super::WorkspaceReloadedDocument, (PathBuf, String)> {
@@ -364,10 +364,7 @@ fn build_preview(
 }
 
 #[cfg(test)]
-pub(in crate::preview) fn derive_preview(
-    path: PathBuf,
-    snapshot: DocumentSnapshot,
-) -> PreviewSnapshot {
+pub(crate) fn derive_preview(path: PathBuf, snapshot: DocumentSnapshot) -> PreviewSnapshot {
     let bytes = snapshot.len_bytes();
     build_preview(
         path,
@@ -385,7 +382,7 @@ pub(in crate::preview) fn derive_preview(
     )
 }
 
-pub(in crate::preview) fn derive_preview_incremental(
+pub(crate) fn derive_preview_incremental(
     path: PathBuf,
     snapshot: DocumentSnapshot,
     previous: Option<&PreviewSnapshot>,

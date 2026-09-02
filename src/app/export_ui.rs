@@ -16,19 +16,19 @@ pub(crate) struct ExportHost {
 }
 
 impl ExportHost {
-    pub(super) fn panel(&self) -> Option<&ExportPanelState> {
+    pub(crate) fn panel(&self) -> Option<&ExportPanelState> {
         self.panel.as_ref()
     }
 
-    pub(super) fn status(&self) -> Option<&ExportRunState> {
+    pub(crate) fn status(&self) -> Option<&ExportRunState> {
         self.status.as_ref()
     }
 
-    pub(super) fn is_open(&self) -> bool {
+    pub(crate) fn is_open(&self) -> bool {
         self.panel.is_some()
     }
 
-    pub(super) fn clear_status(&mut self) {
+    pub(crate) fn clear_status(&mut self) {
         self.status = None;
     }
 }
@@ -40,39 +40,43 @@ use gpui::{
 
 use crate::export::{
     ExportFormat, ExportOptions, ExportSourceFormat, LayoutMode, PaperSize, export_snapshot,
-    shared_engine, themes, write_artifacts,
+    export_templates, shared_engine, write_artifacts,
 };
 use crate::i18n::Language;
 
-use super::{DocumentFormat, PreviewLoadState, WorkspaceWindow, current_theme};
+use crate::{
+    app::{WorkspaceLoadState, WorkspaceWindow},
+    preview::DocumentFormat,
+    theme::current_theme,
+};
 
 #[derive(Clone)]
-pub(super) struct ExportPanelState {
-    pub(super) options: ExportOptions,
-    pub(super) theme_index: usize,
+pub(crate) struct ExportPanelState {
+    pub(crate) options: ExportOptions,
+    pub(crate) template_index: usize,
 }
 
 impl Default for ExportPanelState {
     fn default() -> Self {
         Self {
             options: ExportOptions::default(),
-            theme_index: themes()
+            template_index: export_templates()
                 .iter()
-                .position(|theme| theme.id == "minimal-blue")
+                .position(|template| template.id == "minimal-blue")
                 .unwrap_or(0),
         }
     }
 }
 
 #[derive(Clone)]
-pub(super) enum ExportRunState {
+pub(crate) enum ExportRunState {
     Working(Arc<str>),
     Success { message: Arc<str>, path: PathBuf },
     Error(Arc<str>),
 }
 
 impl WorkspaceWindow {
-    pub(super) fn current_export_source(
+    pub(crate) fn current_export_source(
         &self,
         cx: &gpui::App,
     ) -> Option<(crate::document::DocumentSnapshot, PathBuf, DocumentFormat)> {
@@ -84,8 +88,8 @@ impl WorkspaceWindow {
         })
     }
 
-    pub(super) fn show_export_panel(&mut self, cx: &mut Context<Self>) {
-        if !matches!(self.state, PreviewLoadState::Ready { .. }) {
+    pub(crate) fn show_export_panel(&mut self, cx: &mut Context<Self>) {
+        if !matches!(self.state, WorkspaceLoadState::Ready { .. }) {
             return;
         }
         self.export.panel = Some(ExportPanelState::default());
@@ -93,7 +97,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(super) fn close_export_panel(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn close_export_panel(&mut self, cx: &mut Context<Self>) {
         if matches!(self.export.status, Some(ExportRunState::Working(_))) {
             if let Some(cancel) = self.export.cancel.take() {
                 cancel.store(true, Ordering::Release);
@@ -109,7 +113,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(super) fn select_export_format(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
+    pub(crate) fn select_export_format(&mut self, format: ExportFormat, cx: &mut Context<Self>) {
         let Some(panel) = self.export.panel.as_mut() else {
             return;
         };
@@ -122,27 +126,27 @@ impl WorkspaceWindow {
         panel.options.paper = if format == ExportFormat::Pdf {
             PaperSize::A4
         } else {
-            PaperSize::Theme
+            PaperSize::TemplateDefault
         };
         panel.options.per_page = false;
         self.export.status = None;
         cx.notify();
     }
 
-    pub(super) fn select_export_theme(&mut self, index: usize, cx: &mut Context<Self>) {
+    pub(crate) fn select_export_theme(&mut self, index: usize, cx: &mut Context<Self>) {
         let Some(panel) = self.export.panel.as_mut() else {
             return;
         };
-        if index >= themes().len() {
+        if index >= export_templates().len() {
             return;
         }
-        panel.theme_index = index;
-        panel.options.theme_id = themes()[panel.theme_index].id.into();
+        panel.template_index = index;
+        panel.options.template_id = export_templates()[panel.template_index].id.into();
         self.export.status = None;
         cx.notify();
     }
 
-    pub(super) fn select_export_paper(&mut self, paper: PaperSize, cx: &mut Context<Self>) {
+    pub(crate) fn select_export_paper(&mut self, paper: PaperSize, cx: &mut Context<Self>) {
         if let Some(panel) = self.export.panel.as_mut() {
             panel.options.paper = paper;
             panel.options.layout = LayoutMode::Paged;
@@ -152,7 +156,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn select_export_ppi(&mut self, ppi: f32, cx: &mut Context<Self>) {
+    pub(crate) fn select_export_ppi(&mut self, ppi: f32, cx: &mut Context<Self>) {
         if let Some(panel) = self.export.panel.as_mut() {
             panel.options.png_ppi = ppi;
             self.export.status = None;
@@ -160,7 +164,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn choose_export_destination(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn choose_export_destination(&mut self, cx: &mut Context<Self>) {
         let Some(panel) = self.export.panel.as_ref() else {
             return;
         };
@@ -245,7 +249,7 @@ impl WorkspaceWindow {
         }));
     }
 
-    pub(super) fn reveal_export(&self, cx: &mut Context<Self>) {
+    pub(crate) fn reveal_export(&self, cx: &mut Context<Self>) {
         if let Some(ExportRunState::Success { path, .. }) = &self.export.status {
             cx.reveal_path(path);
         }
@@ -268,7 +272,7 @@ fn export_success_message(language: Language, files: usize, warnings: usize) -> 
     message
 }
 
-pub(super) fn render_export_panel(
+pub(crate) fn render_export_panel(
     entity: Entity<WorkspaceWindow>,
     panel: ExportPanelState,
     status: Option<ExportRunState>,
@@ -335,14 +339,14 @@ pub(super) fn render_export_panel(
                 paper_entity.update(cx, |this, cx| this.select_export_paper(paper, cx));
             })
     };
-    let theme_grid = themes().iter().enumerate().fold(
+    let theme_grid = export_templates().iter().enumerate().fold(
         div().flex().flex_wrap().gap_3().pb_2(),
-        |grid, (index, theme)| {
-            let selected = panel.theme_index == index;
+        |grid, (index, template)| {
+            let selected = panel.template_index == index;
             let theme_entity = entity.clone();
             grid.child(
                 div()
-                    .id(("export-theme", index))
+                    .id(("export-template", index))
                     .w(px(168.0))
                     .flex_none()
                     .overflow_hidden()
@@ -362,7 +366,7 @@ pub(super) fn render_export_panel(
                             .child(
                                 img(Arc::new(Image::from_bytes(
                                     ImageFormat::Png,
-                                    theme.thumbnail.to_vec(),
+                                    template.thumbnail.to_vec(),
                                 )))
                                 .size_full()
                                 .object_fit(ObjectFit::Cover),
@@ -384,14 +388,14 @@ pub(super) fn render_export_panel(
                                     } else {
                                         palette.foreground
                                     }))
-                                    .child(theme.name(language)),
+                                    .child(template.name(language)),
                             )
                             .child(
                                 div()
                                     .mt_1()
                                     .text_size(px(10.0))
                                     .text_color(rgb(palette.foreground_dim))
-                                    .child(theme.family(language)),
+                                    .child(template.family(language)),
                             ),
                     )
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -632,19 +636,19 @@ pub(super) fn render_export_panel(
                                     div()
                                         .text_size(px(12.0))
                                         .text_color(rgb(palette.foreground_dim))
-                                        .child(language.text("export.themes")),
+                                        .child(language.text("export.templates")),
                                 )
                                 .child(div().text_size(px(11.0)).text_color(rgb(0x3a81c3)).child(
                                     format!(
                                         "{} · {}",
-                                        themes()[panel.theme_index].name(language),
-                                        themes()[panel.theme_index].family(language)
+                                        export_templates()[panel.template_index].name(language),
+                                        export_templates()[panel.template_index].family(language)
                                     ),
                                 )),
                         )
                         .child(
                             div()
-                                .id("export-theme-grid")
+                                .id("export-template-grid")
                                 .mt_2()
                                 .h(px(292.0))
                                 .p_1()

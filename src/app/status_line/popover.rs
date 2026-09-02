@@ -1,9 +1,11 @@
 use gpui::{Entity, MouseButton, ParentElement, Styled, div, prelude::*, px, rgb};
 
-use crate::{i18n::Language, settings::StatusLineSettings};
+use crate::{
+    app::WorkspaceWindow, i18n::Language, settings::StatusLineSettings, theme::current_theme,
+};
 
 use super::{
-    STATUS_LINE_HEIGHT, WorkspaceWindow, current_theme, info_text,
+    STATUS_LINE_HEIGHT, info_text,
     model::{
         CONFIGURABLE_SEGMENTS, StatusLineSnapshot, StatusPopover, StatusPopoverContent,
         StatusSegment,
@@ -11,7 +13,7 @@ use super::{
     render_document_statistics, segment_title,
 };
 
-pub(in crate::preview) fn render_status_popover(
+pub(crate) fn render_status_popover(
     popover: StatusPopover,
     snapshot: Option<&StatusLineSnapshot>,
     settings: StatusLineSettings,

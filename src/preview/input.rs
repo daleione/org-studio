@@ -28,7 +28,7 @@ use super::{
 };
 
 #[cfg(test)]
-pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
+pub(crate) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let (commands, _, _) = document_input();
     let contexts = built_in_contexts();
     let active_contexts = vec!["workspace", "preview"];
@@ -53,7 +53,7 @@ pub(super) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
     (commands, keyboard, active_context)
 }
 
-pub(super) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
+pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
     builder
         .register_builtin(BuiltinCommandSpec {
@@ -453,7 +453,7 @@ pub(super) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
     (commands, keyboard, active_context)
 }
 
-pub(super) fn document_keymap(commands: &Arc<CommandRegistry>) -> (KeyboardRouter, ContextSet) {
+pub(crate) fn document_keymap(commands: &Arc<CommandRegistry>) -> (KeyboardRouter, ContextSet) {
     let contexts = built_in_contexts();
     // Editing remains the primary interaction surface whether the right preview is open or not.
     let bindings = workspace_bindings();
@@ -479,7 +479,7 @@ pub(super) fn document_keymap(commands: &Arc<CommandRegistry>) -> (KeyboardRoute
     (keyboard, active_context)
 }
 
-pub(super) fn built_in_contexts() -> crate::input::ContextRegistry {
+pub(crate) fn built_in_contexts() -> crate::input::ContextRegistry {
     let mut builder = ContextRegistryBuilder::default();
     for name in [
         "workspace",
@@ -496,7 +496,7 @@ pub(super) fn built_in_contexts() -> crate::input::ContextRegistry {
     builder.build()
 }
 
-pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
+pub(crate) fn preview_bindings() -> Vec<BindingSpec<'static>> {
     let mut bindings = workspace_bindings();
     bindings.extend([
         BindingSpec {
@@ -539,7 +539,7 @@ pub(super) fn preview_bindings() -> Vec<BindingSpec<'static>> {
     bindings
 }
 
-pub(super) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
+pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
     vec![
         BindingSpec {
             keys: "C-x C-f",
@@ -584,7 +584,7 @@ pub(super) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
     ]
 }
 
-pub(super) fn dired_bindings() -> Vec<BindingSpec<'static>> {
+pub(crate) fn dired_bindings() -> Vec<BindingSpec<'static>> {
     vec![
         BindingSpec {
             keys: "C-x C-b",
@@ -701,7 +701,7 @@ pub(super) fn dired_bindings() -> Vec<BindingSpec<'static>> {
     ]
 }
 
-pub(super) fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, Arc<str>)> {
+pub(crate) fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, Arc<str>)> {
     let mut items: Vec<(crate::command::CommandKey, Vec<&'static str>)> = Vec::new();
     for binding in dired_bindings() {
         let BindingBehavior::Command(name) = binding.behavior else {
@@ -738,7 +738,7 @@ pub(super) fn dired_command_items(commands: &CommandRegistry) -> Vec<(Arc<str>, 
     result
 }
 
-pub(super) fn display_dired_key(key: &str) -> &str {
+pub(crate) fn display_dired_key(key: &str) -> &str {
     match key {
         "S-6" => "^",
         "S-/" => "?",
@@ -755,6 +755,6 @@ pub(super) fn display_dired_key(key: &str) -> &str {
     }
 }
 
-pub(super) fn command_count(prefix: PrefixArgument) -> f32 {
+pub(crate) fn command_count(prefix: PrefixArgument) -> f32 {
     prefix.effective_count().unwrap_or(1).clamp(-1_000, 1_000) as f32
 }

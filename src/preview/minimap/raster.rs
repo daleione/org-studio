@@ -13,50 +13,45 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     org_syntax::inline::InlineKind,
-    preview::{
-        PreviewStyle,
-        table::Alignment,
-        visual_recipe::{
-            PrimitiveWidth, VisualContent as RowContent, VisualPrimitive as RowPrimitive,
-            resolve_visual_row,
-        },
-    },
+    preview::{PreviewStyle, table::Alignment},
 };
 
 use super::{
     DisplayLines, DisplayRuns, MinimapDensity, PreviewDisplayMap, PreviewLineKind,
-    RASTER_TILE_CACHE_CAPACITY, kind_color, minimap_perf_enabled, minimap_runs, slice_display_runs,
+    RASTER_TILE_CACHE_CAPACITY, kind_color, minimap_perf_enabled, minimap_runs,
+    scene::{
+        PrimitiveWidth, VisualContent as RowContent, VisualPrimitive as RowPrimitive,
+        resolve_visual_row,
+    },
+    slice_display_runs,
 };
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) struct RasterTileKey {
+pub(crate) struct RasterTileKey {
     /// Tile position in the current presentation. Stable across a local fold even when the rows
     /// occupying this slot change.
-    pub(in crate::preview) tile_start: usize,
+    pub(crate) tile_start: usize,
     /// Stable visual identity of the first row, used for exact-content fallback across reflow.
-    pub(in crate::preview) first_row_id: usize,
-    pub(in crate::preview) row_signature: u64,
-    pub(in crate::preview) width: u16,
-    pub(in crate::preview) theme_signature: u64,
-    pub(in crate::preview) folded_signature: u64,
-    pub(in crate::preview) wrap_signature: u64,
-    pub(in crate::preview) scale_factor_x100: u16,
-    pub(in crate::preview) density: MinimapDensity,
+    pub(crate) first_row_id: usize,
+    pub(crate) row_signature: u64,
+    pub(crate) width: u16,
+    pub(crate) theme_signature: u64,
+    pub(crate) folded_signature: u64,
+    pub(crate) wrap_signature: u64,
+    pub(crate) scale_factor_x100: u16,
+    pub(crate) density: MinimapDensity,
 }
 
-pub(in crate::preview) struct RasterTileCache {
-    pub(in crate::preview) entries: HashMap<RasterTileKey, Arc<RenderImage>>,
-    pub(in crate::preview) order: VecDeque<RasterTileKey>,
-    pub(in crate::preview) in_flight: HashSet<RasterTileKey>,
+pub(crate) struct RasterTileCache {
+    pub(crate) entries: HashMap<RasterTileKey, Arc<RenderImage>>,
+    pub(crate) order: VecDeque<RasterTileKey>,
+    pub(crate) in_flight: HashSet<RasterTileKey>,
 }
 
 impl RasterTileCache {
-    pub(in crate::preview) const CAPACITY: usize = RASTER_TILE_CACHE_CAPACITY;
+    pub(crate) const CAPACITY: usize = RASTER_TILE_CACHE_CAPACITY;
 
-    pub(in crate::preview) fn image_or_fallback(
-        &self,
-        key: RasterTileKey,
-    ) -> (Option<Arc<RenderImage>>, bool) {
+    pub(crate) fn image_or_fallback(&self, key: RasterTileKey) -> (Option<Arc<RenderImage>>, bool) {
         if let Some(image) = self.entries.get(&key).cloned() {
             return (Some(image), false);
         }
@@ -88,7 +83,7 @@ impl RasterTileCache {
         (fallback, true)
     }
 
-    pub(in crate::preview) fn reserve(&mut self, keys: &[RasterTileKey]) -> bool {
+    pub(crate) fn reserve(&mut self, keys: &[RasterTileKey]) -> bool {
         if keys.is_empty() || !self.in_flight.is_empty() {
             return false;
         }
@@ -100,7 +95,7 @@ impl RasterTileCache {
         !self.in_flight.is_empty()
     }
 
-    pub(in crate::preview) fn insert_batch(
+    pub(crate) fn insert_batch(
         &mut self,
         tiles: Vec<(RasterTileKey, Arc<RenderImage>)>,
         visible_keys: &[RasterTileKey],
@@ -139,40 +134,40 @@ impl RasterTileCache {
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct RasterTilePaint {
-    pub(in crate::preview) image: Arc<RenderImage>,
-    pub(in crate::preview) y: f32,
-    pub(in crate::preview) width: f32,
-    pub(in crate::preview) height: f32,
+pub(crate) struct RasterTilePaint {
+    pub(crate) image: Arc<RenderImage>,
+    pub(crate) y: f32,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
 }
 
-pub(in crate::preview) struct RasterizedTile {
-    pub(in crate::preview) image: Arc<RenderImage>,
-    pub(in crate::preview) line_count: usize,
-    pub(in crate::preview) total: Duration,
-    pub(in crate::preview) text_system_wait: Duration,
-    pub(in crate::preview) cold_text_system: bool,
+pub(crate) struct RasterizedTile {
+    pub(crate) image: Arc<RenderImage>,
+    pub(crate) line_count: usize,
+    pub(crate) total: Duration,
+    pub(crate) text_system_wait: Duration,
+    pub(crate) cold_text_system: bool,
 }
 
-pub(in crate::preview) struct RasterTileRequest {
-    pub(in crate::preview) key: RasterTileKey,
-    pub(in crate::preview) rows: Vec<RasterRow>,
+pub(crate) struct RasterTileRequest {
+    pub(crate) key: RasterTileKey,
+    pub(crate) rows: Vec<RasterRow>,
 }
 
 #[derive(Clone)]
-pub(in crate::preview) struct RasterRow {
-    pub(in crate::preview) document_index: usize,
-    pub(in crate::preview) lines: DisplayLines,
+pub(crate) struct RasterRow {
+    pub(crate) document_index: usize,
+    pub(crate) lines: DisplayLines,
 }
 
 impl RasterRow {
-    pub(in crate::preview) fn line_count(&self) -> usize {
+    pub(crate) fn line_count(&self) -> usize {
         self.lines.ranges.len().max(1)
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::preview) fn tile_key(
+pub(crate) fn tile_key(
     rows: &[usize],
     tile_start: usize,
     width: usize,
@@ -197,7 +192,7 @@ pub(in crate::preview) fn tile_key(
     }
 }
 
-pub(in crate::preview) fn folded_signature(
+pub(crate) fn folded_signature(
     model: &PreviewDisplayMap,
     rows: &[usize],
     folded: &HashSet<u32>,
@@ -213,12 +208,12 @@ pub(in crate::preview) fn folded_signature(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(in crate::preview) struct DisplayWindow {
-    pub(in crate::preview) rows: Range<usize>,
-    pub(in crate::preview) skip_display_lines: usize,
+pub(crate) struct DisplayWindow {
+    pub(crate) rows: Range<usize>,
+    pub(crate) skip_display_lines: usize,
 }
 
-pub(in crate::preview) fn display_window_range(
+pub(crate) fn display_window_range(
     total_rows: usize,
     anchor_row: usize,
     anchor_inner_line: usize,
@@ -254,14 +249,11 @@ pub(in crate::preview) fn display_window_range(
     }
 }
 
-pub(in crate::preview) fn cosmic_color(rgb: u32) -> cosmic_text::Color {
+pub(crate) fn cosmic_color(rgb: u32) -> cosmic_text::Color {
     cosmic_text::Color::rgb((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
 }
 
-pub(in crate::preview) fn syntax_color(
-    kind: crate::preview::CodeHighlightKind,
-    style: PreviewStyle,
-) -> u32 {
+pub(crate) fn syntax_color(kind: crate::preview::CodeHighlightKind, style: PreviewStyle) -> u32 {
     let palette = style.palette;
     match kind {
         crate::preview::CodeHighlightKind::Attribute => palette.attribute,
@@ -280,7 +272,7 @@ pub(in crate::preview) fn syntax_color(
     }
 }
 
-pub(in crate::preview) fn cosmic_runs(
+pub(crate) fn cosmic_runs(
     kind: PreviewLineKind,
     line: &DisplayRuns,
     preview_style: PreviewStyle,
@@ -363,7 +355,7 @@ pub(in crate::preview) fn cosmic_runs(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::preview) fn fill_bgra(
+pub(crate) fn fill_bgra(
     pixels: &mut [u8],
     image_width: usize,
     image_height: usize,
@@ -385,9 +377,9 @@ pub(in crate::preview) fn fill_bgra(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::preview) static TEXT_RASTERIZER_PREWARMED: OnceLock<()> = OnceLock::new();
+pub(crate) static TEXT_RASTERIZER_PREWARMED: OnceLock<()> = OnceLock::new();
 
-pub(in crate::preview) fn prewarm_text_rasterizer() {
+pub(crate) fn prewarm_text_rasterizer() {
     use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
 
     let started = Instant::now();
@@ -429,7 +421,7 @@ pub(in crate::preview) fn prewarm_text_rasterizer() {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(in crate::preview) fn rasterize_tile(
+pub(crate) fn rasterize_tile(
     model: &PreviewDisplayMap,
     presentation_rows: &[RasterRow],
     width: usize,

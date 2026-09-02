@@ -8,7 +8,7 @@ use crate::{
 use super::{CodeRowRole, PreviewRow};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum MarkdownKind {
+pub(crate) enum MarkdownKind {
     Blank,
     Heading {
         level: u16,
@@ -28,19 +28,19 @@ pub(super) enum MarkdownKind {
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct MarkdownBlock {
+pub(crate) struct MarkdownBlock {
     pub kind: MarkdownKind,
     pub source: ByteRange,
 }
 
 #[derive(Clone, Debug)]
-pub(super) struct MarkdownPatch {
-    pub(super) old_blocks: std::ops::Range<usize>,
-    pub(super) new_blocks: std::ops::Range<usize>,
-    pub(super) reparsed_bytes: u64,
+pub(crate) struct MarkdownPatch {
+    pub(crate) old_blocks: std::ops::Range<usize>,
+    pub(crate) new_blocks: std::ops::Range<usize>,
+    pub(crate) reparsed_bytes: u64,
 }
 
-pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Vec<PreviewRow>) {
+pub(crate) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Vec<PreviewRow>) {
     parse_markdown_range(text, ByteRange::new(0, text.len_bytes()), 0)
         .expect("the complete document is a valid Markdown parse range")
 }
@@ -48,7 +48,7 @@ pub(super) fn parse_markdown(text: &dyn TextSnapshot) -> (Vec<MarkdownBlock>, Ve
 /// Reparse a bounded line region when its surrounding parser state is known to be neutral.
 /// Fenced code, tables, images and line-count changes deliberately fall back to the full parser;
 /// those constructs have dependencies outside a single physical line.
-pub(super) fn parse_markdown_incremental(
+pub(crate) fn parse_markdown_incremental(
     text: &dyn TextSnapshot,
     previous_blocks: &[MarkdownBlock],
     previous_rows: &[PreviewRow],
@@ -249,7 +249,7 @@ fn map_delta_boundary(
         .map(crate::document::ByteOffset)
 }
 
-pub(super) fn parse_markdown_inline(source: &str) -> InlineText {
+pub(crate) fn parse_markdown_inline(source: &str) -> InlineText {
     // pulldown-cmark always starts in block context. A heading title such as `2. Design`
     // would therefore be reinterpreted as an ordered-list item and lose its marker. Prefixing
     // one ordinary paragraph fragment forces the parser into inline context; both rendered and

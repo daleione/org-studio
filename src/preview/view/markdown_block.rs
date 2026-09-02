@@ -181,14 +181,12 @@ pub(super) fn render_markdown_block(
                     })
                     .when_some(action.zip(interaction), |element, (action, interaction)| {
                         element.cursor_pointer().on_click(move |_, window, cx| {
-                            interaction.workspace.update(cx, |workspace, cx| {
-                                workspace.dispatch_preview_action(
-                                    action.clone(),
-                                    interaction.panel.clone(),
-                                    window,
-                                    cx,
-                                );
-                            });
+                            (interaction.dispatch)(
+                                action.clone(),
+                                interaction.panel.clone(),
+                                window,
+                                cx,
+                            );
                         })
                     }),
             )

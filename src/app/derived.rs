@@ -3,17 +3,18 @@ use std::{sync::Arc, time::Duration};
 use crate::document::TextSnapshot;
 use gpui::Context;
 
-use super::{WorkspaceWindow, derive_preview_incremental};
+use super::WorkspaceWindow;
+use crate::preview::{PreviewSnapshot, derive_preview_incremental};
 
 pub(crate) struct DerivedRequest {
     path: std::path::PathBuf,
     snapshot: crate::document::DocumentSnapshot,
     deltas: Vec<crate::document::RevisionDelta>,
-    previous: Option<Arc<super::PreviewSnapshot>>,
+    previous: Option<Arc<PreviewSnapshot>>,
 }
 
 impl WorkspaceWindow {
-    pub(super) fn suspend_derived_preview(&mut self) {
+    pub(crate) fn suspend_derived_preview(&mut self) {
         self.derived
             .pending
             .lock()
@@ -25,7 +26,7 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn reconcile_derived_preview(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn reconcile_derived_preview(&mut self, cx: &mut Context<Self>) {
         if self.document_workspace.needs_reading() {
             self.schedule_derived_update(cx);
         } else {
@@ -35,11 +36,11 @@ impl WorkspaceWindow {
 
     /// Rebuilds a coherent preview snapshot off the UI thread. Publication is revision-gated, so
     /// an older parse can never replace a newer source revision.
-    pub(super) fn schedule_derived_update(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_derived_update(&mut self, cx: &mut Context<Self>) {
         self.schedule_derived_update_with_delta(None, cx);
     }
 
-    pub(super) fn schedule_derived_update_with_delta(
+    pub(crate) fn schedule_derived_update_with_delta(
         &mut self,
         delta: Option<crate::document::RevisionDelta>,
         cx: &mut Context<Self>,
@@ -62,7 +63,7 @@ impl WorkspaceWindow {
             let pending = self.derived.pending.clone();
             let executor = cx.background_executor().clone();
             self.derived.task = Some(cx.spawn(async move |this, cx| {
-                let mut local_base: Option<Arc<super::PreviewSnapshot>> = None;
+                let mut local_base: Option<Arc<PreviewSnapshot>> = None;
                 while receiver.recv().await.is_ok() {
                     executor.timer(Duration::from_millis(24)).await;
                     while receiver.try_recv().is_ok() {}

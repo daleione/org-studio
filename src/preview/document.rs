@@ -18,19 +18,19 @@ pub struct PreviewSnapshot {
     pub path: PathBuf,
     pub revision: Revision,
     pub text: SharedTextSnapshot,
-    pub(in crate::preview) format: DocumentFormat,
+    pub(crate) format: DocumentFormat,
     pub blocks: Arc<BlockArena>,
-    pub(in crate::preview) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
-    pub(in crate::preview) outline_paths: Arc<Vec<Option<Arc<str>>>>,
-    pub(in crate::preview) projection: Arc<ReadingProjection>,
-    pub(in crate::preview) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
+    pub(crate) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
+    pub(crate) outline_paths: Arc<Vec<Option<Arc<str>>>>,
+    pub(crate) projection: Arc<ReadingProjection>,
+    pub(crate) display_map: Option<Arc<display_map::PreviewDisplayMap>>,
     pub statistics: TextStatistics,
     pub metrics: LoadMetrics,
-    pub(in crate::preview) update: DerivedUpdate,
+    pub(crate) update: DerivedUpdate,
 }
 
 #[derive(Clone, Debug)]
-pub(in crate::preview) enum DerivedUpdate {
+pub(crate) enum DerivedUpdate {
     Full,
     Incremental {
         patch: super::projection::VisualPatch,
@@ -57,17 +57,14 @@ impl From<LoadedDocument> for WorkspaceLoadedDocument {
 }
 
 impl LoadedDocument {
-    pub(in crate::preview) fn new(
-        session: DocumentSession,
-        preview: PreviewSnapshot,
-    ) -> Result<Self, String> {
+    pub(crate) fn new(session: DocumentSession, preview: PreviewSnapshot) -> Result<Self, String> {
         if session.id() != preview.document_id || session.revision() != preview.revision {
             return Err("loaded session and preview refer to different document versions".into());
         }
         Ok(Self { session, preview })
     }
 
-    pub(in crate::preview) fn into_parts(self) -> (DocumentSession, PreviewSnapshot) {
+    pub(crate) fn into_parts(self) -> (DocumentSession, PreviewSnapshot) {
         (self.session, self.preview)
     }
 
@@ -84,12 +81,12 @@ impl LoadedDocument {
     }
 }
 
-pub(in crate::preview) struct ReloadedDocument {
+pub(crate) struct ReloadedDocument {
     prepared: PreparedReload,
     preview: PreviewSnapshot,
 }
 
-pub(in crate::preview) enum WorkspaceReloadedDocument {
+pub(crate) enum WorkspaceReloadedDocument {
     Source(PreparedReload),
     Preview(Box<ReloadedDocument>),
 }
@@ -101,10 +98,7 @@ impl From<ReloadedDocument> for WorkspaceReloadedDocument {
 }
 
 impl ReloadedDocument {
-    pub(in crate::preview) fn new(
-        prepared: PreparedReload,
-        preview: PreviewSnapshot,
-    ) -> Result<Self, String> {
+    pub(crate) fn new(prepared: PreparedReload, preview: PreviewSnapshot) -> Result<Self, String> {
         let snapshot = prepared.snapshot();
         if snapshot.document_id() != preview.document_id || snapshot.revision() != preview.revision
         {
@@ -113,7 +107,7 @@ impl ReloadedDocument {
         Ok(Self { prepared, preview })
     }
 
-    pub(in crate::preview) fn into_parts(self) -> (PreparedReload, PreviewSnapshot) {
+    pub(crate) fn into_parts(self) -> (PreparedReload, PreviewSnapshot) {
         (self.prepared, self.preview)
     }
 }
@@ -128,6 +122,10 @@ pub enum DerivedEvent {
 }
 
 impl PreviewSnapshot {
+    pub(crate) fn row_count(&self) -> usize {
+        self.projection.row_count()
+    }
+
     pub fn derived_event(&self) -> DerivedEvent {
         DerivedEvent::Published {
             document_id: self.document_id,
@@ -137,9 +135,9 @@ impl PreviewSnapshot {
 }
 
 pub struct InitialDocumentLoad {
-    pub(in crate::preview) path: PathBuf,
-    pub(in crate::preview) started_at: Instant,
-    pub(in crate::preview) receiver:
+    pub(crate) path: PathBuf,
+    pub(crate) started_at: Instant,
+    pub(crate) receiver:
         async_channel::Receiver<Result<WorkspaceLoadedDocument, (PathBuf, String)>>,
 }
 
@@ -172,8 +170,8 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
     }
 }
 
-pub(in crate::preview) fn configured_minimap_visible() -> bool {
-    let preview_settings = crate::settings::PreviewSettings::load();
+pub(crate) fn configured_minimap_visible() -> bool {
+    let preview_settings = crate::settings::WorkspaceSettings::load();
     std::env::var("ORG_STUDIO_MINIMAP")
         .ok()
         .and_then(|value| match value.as_str() {
@@ -205,24 +203,24 @@ impl DocumentFormat {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::preview) enum CodeRowRole {
+pub(crate) enum CodeRowRole {
     Open,
     Body,
     Close,
 }
 
 impl CodeRowRole {
-    pub(in crate::preview) const fn is_boundary(self) -> bool {
+    pub(crate) const fn is_boundary(self) -> bool {
         matches!(self, Self::Open | Self::Close)
     }
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(super) struct PreviewRow {
-    pub(super) block_id: BlockId,
-    pub(super) content: RevisionRange,
-    pub(super) continuation: bool,
-    pub(super) blank: bool,
+pub(crate) struct PreviewRow {
+    pub(crate) block_id: BlockId,
+    pub(crate) content: RevisionRange,
+    pub(crate) continuation: bool,
+    pub(crate) blank: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default)]

@@ -31,92 +31,92 @@ impl PreviewStyleId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) enum TableVariant {
+pub(crate) enum TableVariant {
     Grid,
     HorizontalRules,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) enum CodeBlockVariant {
+pub(crate) enum CodeBlockVariant {
     AccentBar,
     Card,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) struct PreviewComponentVariants {
-    pub(in crate::preview) table: TableVariant,
-    pub(in crate::preview) code_block: CodeBlockVariant,
+pub(crate) struct PreviewComponentVariants {
+    pub(crate) table: TableVariant,
+    pub(crate) code_block: CodeBlockVariant,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) struct PreviewPalette {
-    pub(in crate::preview) background: u32,
-    pub(in crate::preview) surface: u32,
-    pub(in crate::preview) surface_elevated: u32,
-    pub(in crate::preview) hover: u32,
-    pub(in crate::preview) foreground: u32,
-    pub(in crate::preview) foreground_dim: u32,
-    pub(in crate::preview) border: u32,
-    pub(in crate::preview) border_strong: u32,
-    pub(in crate::preview) heading: [u32; 4],
-    pub(in crate::preview) accent: u32,
-    pub(in crate::preview) accent_text: u32,
-    pub(in crate::preview) accent_contrast: u32,
-    pub(in crate::preview) code_background: u32,
-    pub(in crate::preview) code_boundary_background: u32,
-    pub(in crate::preview) code_block_accent: u32,
-    pub(in crate::preview) code_foreground: u32,
-    pub(in crate::preview) code_boundary: u32,
-    pub(in crate::preview) quote: u32,
-    pub(in crate::preview) quote_border: u32,
-    pub(in crate::preview) link: u32,
-    pub(in crate::preview) meta: u32,
-    pub(in crate::preview) inline_code: u32,
-    pub(in crate::preview) inline_code_background: u32,
-    pub(in crate::preview) date: u32,
-    pub(in crate::preview) keyword: u32,
-    pub(in crate::preview) string: u32,
-    pub(in crate::preview) comment: u32,
-    pub(in crate::preview) type_name: u32,
-    pub(in crate::preview) function: u32,
-    pub(in crate::preview) constant: u32,
-    pub(in crate::preview) number: u32,
-    pub(in crate::preview) variable: u32,
-    pub(in crate::preview) operator: u32,
-    pub(in crate::preview) attribute: u32,
+pub(crate) struct PreviewPalette {
+    pub(crate) background: u32,
+    pub(crate) surface: u32,
+    pub(crate) surface_elevated: u32,
+    pub(crate) hover: u32,
+    pub(crate) foreground: u32,
+    pub(crate) foreground_dim: u32,
+    pub(crate) border: u32,
+    pub(crate) border_strong: u32,
+    pub(crate) heading: [u32; 4],
+    pub(crate) accent: u32,
+    pub(crate) accent_text: u32,
+    pub(crate) accent_contrast: u32,
+    pub(crate) code_background: u32,
+    pub(crate) code_boundary_background: u32,
+    pub(crate) code_block_accent: u32,
+    pub(crate) code_foreground: u32,
+    pub(crate) code_boundary: u32,
+    pub(crate) quote: u32,
+    pub(crate) quote_border: u32,
+    pub(crate) link: u32,
+    pub(crate) meta: u32,
+    pub(crate) inline_code: u32,
+    pub(crate) inline_code_background: u32,
+    pub(crate) date: u32,
+    pub(crate) keyword: u32,
+    pub(crate) string: u32,
+    pub(crate) comment: u32,
+    pub(crate) type_name: u32,
+    pub(crate) function: u32,
+    pub(crate) constant: u32,
+    pub(crate) number: u32,
+    pub(crate) variable: u32,
+    pub(crate) operator: u32,
+    pub(crate) attribute: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct PreviewTypography {
-    pub(in crate::preview) body_family: &'static str,
-    pub(in crate::preview) body_fallbacks: &'static [&'static str],
-    pub(in crate::preview) code_family: &'static str,
-    pub(in crate::preview) code_fallbacks: &'static [&'static str],
-    pub(in crate::preview) body_size: f32,
-    pub(in crate::preview) body_line_height: f32,
-    pub(in crate::preview) heading_sizes: [f32; 4],
-    pub(in crate::preview) heading_line_heights: [f32; 4],
+pub(crate) struct PreviewTypography {
+    pub(crate) body_family: &'static str,
+    pub(crate) body_fallbacks: &'static [&'static str],
+    pub(crate) code_family: &'static str,
+    pub(crate) code_fallbacks: &'static [&'static str],
+    pub(crate) body_size: f32,
+    pub(crate) body_line_height: f32,
+    pub(crate) heading_sizes: [f32; 4],
+    pub(crate) heading_line_heights: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct PreviewSpacing {
-    pub(in crate::preview) content_min_width: f32,
-    pub(in crate::preview) content_max_width: f32,
-    pub(in crate::preview) wide_pane_fill: f32,
-    pub(in crate::preview) horizontal_padding: f32,
-    pub(in crate::preview) content_padding_top: f32,
-    pub(in crate::preview) content_padding_bottom: f32,
-    pub(in crate::preview) paragraph_min_height: f32,
-    pub(in crate::preview) block_gap: f32,
-    pub(in crate::preview) table_cell_x: f32,
-    pub(in crate::preview) table_cell_y: f32,
-    pub(in crate::preview) quote_line_width: f32,
-    pub(in crate::preview) checkbox_size: f32,
-    pub(in crate::preview) radius: f32,
+pub(crate) struct PreviewSpacing {
+    pub(crate) content_min_width: f32,
+    pub(crate) content_max_width: f32,
+    pub(crate) wide_pane_fill: f32,
+    pub(crate) horizontal_padding: f32,
+    pub(crate) content_padding_top: f32,
+    pub(crate) content_padding_bottom: f32,
+    pub(crate) paragraph_min_height: f32,
+    pub(crate) block_gap: f32,
+    pub(crate) table_cell_x: f32,
+    pub(crate) table_cell_y: f32,
+    pub(crate) quote_line_width: f32,
+    pub(crate) checkbox_size: f32,
+    pub(crate) radius: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(in crate::preview) enum RowStyleKind {
+pub(crate) enum RowStyleKind {
     Heading(u8),
     Paragraph,
     Blank,
@@ -139,14 +139,14 @@ pub(in crate::preview) enum RowStyleKind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::preview) struct PreviewStyle {
+pub(crate) struct PreviewStyle {
     pub id: PreviewStyleId,
-    pub(in crate::preview) name_zh: &'static str,
-    pub(in crate::preview) name_en: &'static str,
-    pub(in crate::preview) palette: PreviewPalette,
-    pub(in crate::preview) typography: PreviewTypography,
-    pub(in crate::preview) spacing: PreviewSpacing,
-    pub(in crate::preview) variants: PreviewComponentVariants,
+    pub(crate) name_zh: &'static str,
+    pub(crate) name_en: &'static str,
+    pub(crate) palette: PreviewPalette,
+    pub(crate) typography: PreviewTypography,
+    pub(crate) spacing: PreviewSpacing,
+    pub(crate) variants: PreviewComponentVariants,
 }
 
 impl PreviewStyle {
@@ -157,14 +157,14 @@ impl PreviewStyle {
         }
     }
 
-    pub(in crate::preview) fn paint_key(self) -> u64 {
+    pub(crate) fn paint_key(self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.id.hash(&mut hasher);
         self.palette.hash(&mut hasher);
         hasher.finish()
     }
 
-    pub(in crate::preview) fn layout_key(self) -> u64 {
+    pub(crate) fn layout_key(self) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         self.typography.body_family.hash(&mut hasher);
         self.typography.body_fallbacks.hash(&mut hasher);
@@ -199,7 +199,7 @@ impl PreviewStyle {
         hasher.finish()
     }
 
-    pub(in crate::preview) fn row_layout(self, kind: RowStyleKind) -> RowLayout {
+    pub(crate) fn row_layout(self, kind: RowStyleKind) -> RowLayout {
         let body = || RowLayout {
             min_height: self.spacing.paragraph_min_height,
             ..RowLayout::text(self.typography.body_size, self.typography.body_line_height)
@@ -460,7 +460,7 @@ const WARM_CLAY_STYLE: PreviewStyle = PreviewStyle {
     },
 };
 
-pub(in crate::preview) fn preview_style(id: PreviewStyleId) -> &'static PreviewStyle {
+pub(crate) fn preview_style(id: PreviewStyleId) -> &'static PreviewStyle {
     match id {
         PreviewStyleId::Base => &BASE_STYLE,
         PreviewStyleId::WarmClay => &WARM_CLAY_STYLE,

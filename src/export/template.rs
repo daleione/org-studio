@@ -1,17 +1,17 @@
 use crate::i18n::Language;
 
-pub struct Theme {
+pub struct ExportTemplate {
     pub id: &'static str,
     pub name_en: &'static str,
     pub name_zh: &'static str,
     pub family_en: &'static str,
     pub family_zh: &'static str,
-    pub appearance: ThemeAppearance,
+    pub appearance: TemplateAppearance,
     pub source: &'static str,
     pub thumbnail: &'static [u8],
 }
 
-impl Theme {
+impl ExportTemplate {
     pub fn name(&self, language: Language) -> &'static str {
         match language {
             Language::English => self.name_en,
@@ -28,28 +28,28 @@ impl Theme {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThemeAppearance {
+pub enum TemplateAppearance {
     Light,
     Dark,
 }
 
-macro_rules! theme {
+macro_rules! export_template {
     ($id:literal, $name_en:literal, $name_zh:literal, $family_en:literal, $family_zh:literal, $appearance:ident) => {
-        Theme {
+        ExportTemplate {
             id: $id,
             name_en: $name_en,
             name_zh: $name_zh,
             family_en: $family_en,
             family_zh: $family_zh,
-            appearance: ThemeAppearance::$appearance,
+            appearance: TemplateAppearance::$appearance,
             source: include_str!(concat!("../../assets/export/themes/", $id, ".typ")),
             thumbnail: include_bytes!(concat!("../../assets/export/thumbnails/", $id, ".png")),
         }
     };
 }
 
-static THEMES: &[Theme] = &[
-    theme!(
+static EXPORT_TEMPLATES: &[ExportTemplate] = &[
+    export_template!(
         "minimal-blue",
         "Minimal Blue",
         "简约蓝",
@@ -57,7 +57,7 @@ static THEMES: &[Theme] = &[
         "简约文档系",
         Light
     ),
-    theme!(
+    export_template!(
         "lavender-dream",
         "Lavender Dream",
         "薰衣草梦",
@@ -65,7 +65,7 @@ static THEMES: &[Theme] = &[
         "自然文艺系",
         Light
     ),
-    theme!(
+    export_template!(
         "pixel-terminal",
         "Pixel Terminal",
         "像素终端",
@@ -73,7 +73,7 @@ static THEMES: &[Theme] = &[
         "极客系",
         Dark
     ),
-    theme!(
+    export_template!(
         "dedao-light",
         "Brand Light",
         "白色主题长图",
@@ -81,7 +81,7 @@ static THEMES: &[Theme] = &[
         "品牌长图系",
         Light
     ),
-    theme!(
+    export_template!(
         "dedao-dark",
         "Brand Dark",
         "暗黑主题长图",
@@ -89,7 +89,7 @@ static THEMES: &[Theme] = &[
         "品牌长图系",
         Dark
     ),
-    theme!(
+    export_template!(
         "clash-collage",
         "Clash Collage",
         "撞色拼贴",
@@ -97,7 +97,7 @@ static THEMES: &[Theme] = &[
         "艺术拼贴系",
         Light
     ),
-    theme!(
+    export_template!(
         "matisse-cutout",
         "Matisse Cutout",
         "马蒂斯剪纸",
@@ -105,7 +105,7 @@ static THEMES: &[Theme] = &[
         "艺术拼贴系",
         Light
     ),
-    theme!(
+    export_template!(
         "ember-glow",
         "Ember Glow",
         "余烬暖焰",
@@ -113,7 +113,7 @@ static THEMES: &[Theme] = &[
         "暗调系",
         Dark
     ),
-    theme!(
+    export_template!(
         "rational-grid",
         "Rational Grid",
         "理性格栅",
@@ -121,8 +121,8 @@ static THEMES: &[Theme] = &[
         "艺术拼贴系",
         Light
     ),
-    theme!("high-volt", "High Volt", "高压伏特", "Dark", "暗调系", Dark),
-    theme!(
+    export_template!("high-volt", "High Volt", "高压伏特", "Dark", "暗调系", Dark),
+    export_template!(
         "terra-nature",
         "Terra Nature",
         "大地自然",
@@ -130,7 +130,7 @@ static THEMES: &[Theme] = &[
         "自然文艺系",
         Light
     ),
-    theme!(
+    export_template!(
         "classified-brief",
         "Classified Brief",
         "机要简报",
@@ -138,7 +138,7 @@ static THEMES: &[Theme] = &[
         "编辑杂志系",
         Light
     ),
-    theme!(
+    export_template!(
         "letterpress",
         "Letterpress",
         "铅字打字机",
@@ -146,7 +146,7 @@ static THEMES: &[Theme] = &[
         "编辑杂志系",
         Light
     ),
-    theme!(
+    export_template!(
         "hockney-pool",
         "Hockney Pool",
         "霍克尼泳池",
@@ -154,7 +154,7 @@ static THEMES: &[Theme] = &[
         "艺术拼贴系",
         Light
     ),
-    theme!(
+    export_template!(
         "glacier-glass",
         "Glacier Glass",
         "冰川玻璃",
@@ -162,7 +162,7 @@ static THEMES: &[Theme] = &[
         "暗调系",
         Dark
     ),
-    theme!(
+    export_template!(
         "pin-waterfall",
         "Pin Waterfall",
         "拼趣瀑布",
@@ -170,7 +170,7 @@ static THEMES: &[Theme] = &[
         "艺术拼贴系",
         Light
     ),
-    theme!(
+    export_template!(
         "warm-editorial",
         "Warm Editorial",
         "暖调编辑",
@@ -178,7 +178,7 @@ static THEMES: &[Theme] = &[
         "编辑杂志系",
         Light
     ),
-    theme!(
+    export_template!(
         "editorial-magazine",
         "Editorial Magazine",
         "编辑杂志",
@@ -186,7 +186,7 @@ static THEMES: &[Theme] = &[
         "编辑杂志系",
         Light
     ),
-    theme!(
+    export_template!(
         "orange-journal",
         "Orange Journal",
         "暖橘手帐",
@@ -194,7 +194,7 @@ static THEMES: &[Theme] = &[
         "自然文艺系",
         Light
     ),
-    theme!(
+    export_template!(
         "bold-blue",
         "Bold Blue",
         "醒目蓝",
@@ -202,7 +202,7 @@ static THEMES: &[Theme] = &[
         "简约文档系",
         Light
     ),
-    theme!(
+    export_template!(
         "github-style",
         "GitHub Style",
         "GitHub 风",
@@ -210,7 +210,7 @@ static THEMES: &[Theme] = &[
         "简约文档系",
         Light
     ),
-    theme!(
+    export_template!(
         "bauhaus",
         "Bauhaus",
         "包豪斯",
@@ -218,7 +218,7 @@ static THEMES: &[Theme] = &[
         "艺术拼贴系",
         Light
     ),
-    theme!(
+    export_template!(
         "chinoiserie",
         "Chinoiserie",
         "中国风",
@@ -226,7 +226,7 @@ static THEMES: &[Theme] = &[
         "自然文艺系",
         Light
     ),
-    theme!(
+    export_template!(
         "ink-rhyme",
         "Ink Rhyme",
         "墨韵",
@@ -234,7 +234,7 @@ static THEMES: &[Theme] = &[
         "自然文艺系",
         Light
     ),
-    theme!(
+    export_template!(
         "sunset-orange",
         "Sunset Orange",
         "日落暖橙",
@@ -244,12 +244,12 @@ static THEMES: &[Theme] = &[
     ),
 ];
 
-pub fn themes() -> &'static [Theme] {
-    THEMES
+pub fn export_templates() -> &'static [ExportTemplate] {
+    EXPORT_TEMPLATES
 }
 
-pub(super) fn theme(id: &str) -> Option<&'static Theme> {
-    THEMES.iter().find(|theme| theme.id == id)
+pub(super) fn export_template(id: &str) -> Option<&'static ExportTemplate> {
+    EXPORT_TEMPLATES.iter().find(|template| template.id == id)
 }
 
 #[cfg(test)]
@@ -257,21 +257,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn catalog_contains_all_copied_themes() {
-        assert_eq!(themes().len(), 25);
-        for theme in themes() {
+    fn catalog_contains_all_copied_export_templates() {
+        assert_eq!(export_templates().len(), 25);
+        for template in export_templates() {
             assert!(
-                theme.source.contains("#let conf"),
+                template.source.contains("#let conf"),
                 "{} has no conf",
-                theme.id
+                template.id
             );
         }
         let manifest: serde_json::Value =
             serde_json::from_str(include_str!("../../assets/export/themes/manifest.json")).unwrap();
         let entries = manifest["themes"].as_array().unwrap();
-        assert_eq!(entries.len(), themes().len());
-        for theme in themes() {
-            assert!(entries.iter().any(|entry| entry["id"] == theme.id));
+        assert_eq!(entries.len(), export_templates().len());
+        for template in export_templates() {
+            assert!(entries.iter().any(|entry| entry["id"] == template.id));
         }
     }
 }
