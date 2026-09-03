@@ -107,6 +107,9 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::SaveDocumentAs) => {
                 self.save_document_as(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::ExecuteSourceBlock) => {
+                self.execute_source_block(window, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::UndoDocument) => {
                 if let Some(session) = self.document_session().cloned() {
                     let _ = session.update(cx, |session, cx| session.undo(cx));
@@ -530,7 +533,8 @@ impl WorkspaceWindow {
                 || self.file_manager.dismiss_context_menu()
                 || self.cancel_minimap_interaction(cx)
                 || self.cancel_sidebar_resize()
-                || self.cancel_split_resize())
+                || self.cancel_split_resize()
+                || self.dismiss_echo_message())
         {
             cx.stop_propagation();
             cx.notify();

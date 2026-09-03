@@ -18,8 +18,8 @@ use super::{
     DIRED_EXECUTE_COMMAND, DIRED_FORWARD_COMMAND, DIRED_HELP_COMMAND, DIRED_INVERT_COMMAND,
     DIRED_MARK_COMMAND, DIRED_MOVE_COMMAND, DIRED_NEXT_COMMAND, DIRED_OPEN_COMMAND,
     DIRED_PREVIOUS_COMMAND, DIRED_RENAME_COMMAND, DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND,
-    DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, EXPORT_DOCUMENT_COMMAND,
-    GLOBAL_VISIBILITY_CYCLE_COMMAND, INCREASE_CONTENT_FONT_SIZE_COMMAND,
+    DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, EXECUTE_SOURCE_BLOCK_COMMAND,
+    EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, INCREASE_CONTENT_FONT_SIZE_COMMAND,
     OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
     QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
     RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND,
@@ -90,6 +90,23 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in save-as command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: EXECUTE_SOURCE_BLOCK_COMMAND.into(),
+            aliases: &["org-babel-execute-src-block"],
+            title: "Execute Source Block",
+            description: "Execute the Org Babel source block at point",
+            command: BuiltinCommand::ExecuteSourceBlock,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::Transaction,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::WriteFileSystem,
+            required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in Babel command");
     for (name, title, command) in [
         (UNDO_DOCUMENT_COMMAND, "Undo", BuiltinCommand::UndoDocument),
         (REDO_DOCUMENT_COMMAND, "Redo", BuiltinCommand::RedoDocument),
@@ -557,6 +574,10 @@ pub(crate) fn preview_bindings() -> Vec<BindingSpec<'static>> {
 
 pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
     vec![
+        BindingSpec {
+            keys: "C-c C-c",
+            behavior: BindingBehavior::Command(EXECUTE_SOURCE_BLOCK_COMMAND),
+        },
         BindingSpec {
             keys: "C-x C-f",
             behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND),

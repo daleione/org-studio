@@ -16,6 +16,7 @@ use crate::{
     input::{ContextSet, KeyboardRouter},
 };
 
+use echo_area::EchoAreaHost;
 use export_ui::ExportHost;
 use file_manager::FileManagerHost;
 use save::SaveHost;
@@ -24,6 +25,7 @@ use workspace::ScrollBenchmark;
 
 mod command_window;
 mod derived;
+mod echo_area;
 pub(crate) mod export_ui;
 mod file_manager;
 mod home;
@@ -186,7 +188,6 @@ pub(crate) struct ReadyDocument {
     pub(crate) session: gpui::Entity<crate::document::DocumentSession>,
     pub(crate) editors: PanePair<Option<gpui::Entity<crate::editor::SemanticEditor>>>,
     pub(crate) readers: PanePair<Option<gpui::Entity<crate::preview::ReadingPreviewPanel>>>,
-    pub(crate) notice: Option<Arc<str>>,
 }
 
 #[derive(Clone)]
@@ -252,6 +253,7 @@ pub struct WorkspaceWindow {
     pub(crate) keyboard: KeyboardRouter,
     pub(crate) key_context: ContextSet,
     pub(crate) state: WorkspaceLoadState,
+    pub(crate) echo: EchoAreaHost,
     pub(crate) document_subscription: Option<Subscription>,
     pub(crate) editor_minimap_width_subscriptions: Vec<Subscription>,
     pub(crate) subscribed_document: Option<crate::document::DocumentId>,
@@ -261,6 +263,8 @@ pub struct WorkspaceWindow {
     pub(crate) pending_navigation: Option<(u64, Arc<str>)>,
     pub(crate) pending_surface_anchors: PanePair<Option<SurfaceAnchor>>,
     pub(crate) load_task: Option<Task<()>>,
+    pub(crate) babel_task: Option<Task<()>>,
+    pub(crate) babel_request: u64,
     pub(crate) derived: DerivedHost,
     pub(crate) file_watch_task: Option<Task<()>>,
     pub(crate) file_watch_request: u64,

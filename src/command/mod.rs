@@ -57,6 +57,7 @@ pub enum BuiltinCommand {
     ReloadDocument,
     SaveDocument,
     SaveDocumentAs,
+    ExecuteSourceBlock,
     UndoDocument,
     RedoDocument,
     ExportDocument,

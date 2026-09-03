@@ -8,6 +8,7 @@ use super::{
 use crate::preview::BlockId;
 use crate::preview::{
     CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
+    diagram::DiagramProjection,
     display_map::{DisplayRuns, PreviewLineKind},
     layout::reading_content_width,
     org_line::{CheckboxState, parse_heading},
@@ -623,31 +624,49 @@ fn render_block(
                 )
             },
         ),
-        BlockKind::SourceBlock { language } => div()
-            .w_full()
-            .when(!row.continuation, |element| {
-                element.child(reading_code_label(
-                    language.as_deref(),
-                    crate::preview::code_action(document, display_row),
-                    interaction,
+        BlockKind::SourceBlock { language } => {
+            if let Some(VisualRowKind::Diagram(diagram)) = document
+                .projection
+                .rows
+                .get(display_row)
+                .map(|row| &row.kind)
+            {
+                render_diagram(
+                    document,
                     display_row,
-                    false,
-                    style,
-                ))
-            })
-            .child(render_code_row(
-                text,
-                display_runs.code_spans,
-                row_layout,
-                CodeRowRole::Body,
-                document
-                    .projection
-                    .rows
-                    .get(display_row + 1)
-                    .is_none_or(|next| next.block_id != row.block_id),
-                style,
-                interaction.map(|interaction| (display_row, interaction)),
-            )),
+                    language.as_deref(),
+                    diagram,
+                    context,
+                    interaction,
+                )
+            } else {
+                div()
+                    .w_full()
+                    .when(!row.continuation, |element| {
+                        element.child(reading_code_label(
+                            language.as_deref(),
+                            crate::preview::code_action(document, display_row),
+                            interaction,
+                            display_row,
+                            false,
+                            style,
+                        ))
+                    })
+                    .child(render_code_row(
+                        text,
+                        display_runs.code_spans,
+                        row_layout,
+                        CodeRowRole::Body,
+                        document
+                            .projection
+                            .rows
+                            .get(display_row + 1)
+                            .is_none_or(|next| next.block_id != row.block_id),
+                        style,
+                        interaction.map(|interaction| (display_row, interaction)),
+                    ))
+            }
+        }
         BlockKind::ExampleBlock | BlockKind::Raw | BlockKind::ExportBlock { .. } => div()
             .min_h(px(row_layout.min_height))
             .pl(px(row_layout.padding_left))
@@ -727,6 +746,78 @@ fn render_block(
             .w_full()
             .bg(rgb(palette.border)),
     }
+}
+
+pub(super) fn render_diagram(
+    document: &PreviewSnapshot,
+    display_row: usize,
+    language: Option<&str>,
+    diagram: &DiagramProjection,
+    context: ReadingRowContext<'_>,
+    interaction: Option<&ReadingInteraction>,
+) -> gpui::Div {
+    let style = context.style;
+    let palette = style.palette;
+    let label = reading_code_label(
+        language,
+        crate::preview::code_action(document, display_row),
+        interaction,
+        display_row,
+        false,
+        style,
+    );
+    let body = match diagram {
+        DiagramProjection::Ready {
+            image, warnings, ..
+        } => {
+            let (width, height) = document
+                .display_map
+                .as_ref()
+                .and_then(|map| map.image_size(display_row, context.available_width))
+                .unwrap_or((context.available_width.min(640.0), 240.0));
+            div()
+                .w_full()
+                .flex()
+                .flex_col()
+                .items_center()
+                .gap_2()
+                .p_3()
+                .bg(rgb(palette.surface_elevated))
+                .border_1()
+                .border_color(rgb(palette.border))
+                .rounded_b(px(style.spacing.radius))
+                .child(img(image.clone()).w(px(width)).h(px(height)))
+                .children(warnings.first().map(|warning| {
+                    div()
+                        .w_full()
+                        .text_size(px(11.0))
+                        .text_color(rgb(palette.meta))
+                        .child(warning.to_string())
+                }))
+        }
+        DiagramProjection::Error { diagnostics } => div()
+            .w_full()
+            .min_h(px(72.0))
+            .p_3()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .bg(rgb(palette.code_background))
+            .border_1()
+            .border_color(rgb(palette.keyword))
+            .rounded_b(px(style.spacing.radius))
+            .text_size(px(12.0))
+            .line_height(px(18.0))
+            .text_color(rgb(palette.keyword))
+            .child("PlantUML render failed")
+            .children(
+                diagnostics
+                    .iter()
+                    .take(3)
+                    .map(|diagnostic| div().child(diagnostic.to_string())),
+            ),
+    };
+    div().w_full().child(label).child(body)
 }
 
 fn reading_chip(

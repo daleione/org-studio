@@ -1,7 +1,7 @@
 use super::{
-    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, MAX_EAGER_LAYOUT_ROWS,
-    REDO_DOCUMENT_COMMAND, UNDO_DOCUMENT_COMMAND, accept_generation, dired_command_items,
-    preview_input, should_eagerly_measure_rows,
+    EXECUTE_SOURCE_BLOCK_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility,
+    MAX_EAGER_LAYOUT_ROWS, REDO_DOCUMENT_COMMAND, UNDO_DOCUMENT_COMMAND, accept_generation,
+    dired_command_items, preview_input, should_eagerly_measure_rows,
 };
 
 use crate::{
@@ -74,6 +74,7 @@ fn reading_semantic_golden(document: &super::PreviewSnapshot) -> String {
                 )
             }
             VisualRowKind::Image { .. } => "image".to_owned(),
+            VisualRowKind::Diagram(_) => "diagram".to_owned(),
             VisualRowKind::Text => format!("text:{text}"),
         };
         output.push_str(&line);
@@ -204,6 +205,115 @@ fn markdown_closing_fence_is_zero_height_in_reading() {
         })
         .expect("fixture has a closing fence");
     assert_eq!(closing.style_kind, super::style::RowStyleKind::Hidden);
+}
+
+#[test]
+fn markdown_plantuml_fence_becomes_one_in_memory_diagram_row() {
+    use super::projection::VisualRowKind;
+
+    let document = loaded_document(
+        "diagram.md",
+        "before\n```plantuml\n@startuml\nAlice -> Bob: hello\n@enduml\n```\nafter\n",
+    )
+    .into_preview();
+
+    assert_eq!(document.projection.rows.len(), 7);
+    assert!(matches!(
+        document.projection.rows.get(1).unwrap().kind,
+        VisualRowKind::Diagram(super::diagram::DiagramProjection::Ready { .. })
+    ));
+    assert_eq!(
+        document.display_map.as_ref().unwrap().runs(1).text.as_ref(),
+        ""
+    );
+    assert_eq!(
+        document
+            .projection
+            .rows
+            .iter()
+            .filter(|row| matches!(row.kind, VisualRowKind::Hidden))
+            .count(),
+        4
+    );
+}
+
+#[test]
+fn org_plantuml_source_block_stays_source_until_babel_execution() {
+    use super::projection::VisualRowKind;
+
+    let document = loaded_document(
+        "diagram.org",
+        "before\n#+begin_src plantuml :file diagram.svg\n@startuml\nAlice -> Bob: hello\n@enduml\n#+end_src\nafter\n",
+    )
+    .into_preview();
+
+    assert_eq!(document.projection.rows.len(), 5);
+    assert!(
+        document
+            .projection
+            .rows
+            .iter()
+            .any(|row| matches!(row.kind, VisualRowKind::Code(_)))
+    );
+    assert!(
+        !document
+            .projection
+            .rows
+            .iter()
+            .any(|row| matches!(row.kind, VisualRowKind::Diagram(_)))
+    );
+}
+
+#[test]
+fn org_plantuml_result_image_is_rendered_below_the_source_block() {
+    use super::projection::VisualRowKind;
+
+    let document = loaded_document(
+        "diagram.org",
+        "#+begin_src plantuml :file diagram.svg\n@startuml\nAlice -> Bob: hello\n@enduml\n#+end_src\n\n#+RESULTS:\n[[file:diagram.svg]]\n",
+    )
+    .into_preview();
+    let code = document
+        .projection
+        .rows
+        .iter()
+        .position(|row| matches!(row.kind, VisualRowKind::Code(_)))
+        .expect("source code remains visible");
+    let image = document
+        .projection
+        .rows
+        .iter()
+        .position(|row| matches!(row.kind, VisualRowKind::Image { .. }))
+        .expect("the file result is projected as an image");
+
+    assert!(code < image);
+    assert!(
+        !document
+            .projection
+            .rows
+            .iter()
+            .any(|row| matches!(row.kind, VisualRowKind::Diagram(_)))
+    );
+}
+
+#[test]
+fn ordinary_org_source_block_keeps_its_physical_code_rows() {
+    use super::projection::VisualRowKind;
+
+    let document = loaded_document(
+        "code.org",
+        "#+begin_src rust\nfn main() {\n    println!(\"hello\");\n}\n#+end_src\n",
+    )
+    .into_preview();
+
+    assert_eq!(document.projection.rows.len(), 3);
+    assert!(
+        document
+            .projection
+            .rows
+            .iter()
+            .all(|row| matches!(row.kind, VisualRowKind::Code(_)))
+    );
 }
 
 #[test]
@@ -1674,6 +1784,22 @@ fn shift_tab_dispatches_the_global_visibility_cycle() {
         keyboard.route(KeyStroke::new("tab", false, false, true, false), context),
         EmacsOutcome::Command {
             command: expected,
+            prefix: crate::command::PrefixArgument::None,
+        }
+    );
+}
+
+#[test]
+fn control_c_control_c_dispatches_org_babel_execution() {
+    let (commands, mut keyboard, context) = super::document_input();
+    assert_eq!(
+        keyboard.route(KeyStroke::new("c", true, false, false, false), context),
+        EmacsOutcome::Pending
+    );
+    assert_eq!(
+        keyboard.route(KeyStroke::new("c", true, false, false, false), context),
+        EmacsOutcome::Command {
+            command: commands.key(EXECUTE_SOURCE_BLOCK_COMMAND).unwrap(),
             prefix: crate::command::PrefixArgument::None,
         }
     );

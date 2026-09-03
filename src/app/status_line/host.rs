@@ -232,14 +232,6 @@ impl WorkspaceWindow {
         reading_pane: Option<crate::app::PaneSide>,
         cx: &gpui::App,
     ) -> Option<StatusMessage> {
-        if self.which_key_items.is_empty()
-            && let Some(status) = self.keyboard.status()
-        {
-            return Some(StatusMessage {
-                text: Arc::from(status),
-                tone: StatusTone::Working,
-            });
-        }
         if let Some(SaveStatus::Saving(message)) = &self.save.status {
             return Some(StatusMessage {
                 text: message.clone(),

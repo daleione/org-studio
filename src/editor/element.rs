@@ -3,9 +3,9 @@ use std::time::Instant;
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    App, BorderStyle, Bounds, ContentMask, Corners, Element, ElementId, ElementInputHandler,
+    App, BorderStyle, Bounds, ContentMask, Corners, Edges, Element, ElementId, ElementInputHandler,
     GlobalElementId, LayoutId, PaintQuad, Pixels, RenderImage, ShapedLine, Style, TextAlign,
-    TextRun, Window, WrappedLine, fill, outline, point, px, relative, rgba, size,
+    TextRun, Window, WrappedLine, fill, outline, point, px, quad, relative, rgba, size,
 };
 
 use crate::{
@@ -19,6 +19,12 @@ use super::{HitRow, SemanticEditor, ShapeKey, layout_map::EditorLayoutMap, synta
 
 const GUTTER_PADDING: f32 = 16.0;
 const MAX_ANIMATED_PAINT_LINES: u64 = 192;
+const BLOCK_LEFT_INSET: f32 = 8.0;
+const BLOCK_RIGHT_INSET: f32 = 16.0;
+const BLOCK_TEXT_INSET: f32 = 16.0;
+const BLOCK_TEXT_RIGHT_PADDING: f32 = 8.0;
+const BLOCK_VERTICAL_INSET: f32 = 2.0;
+const BLOCK_RADIUS: f32 = 7.0;
 
 pub struct EditorElement {
     editor: gpui::Entity<SemanticEditor>,
@@ -42,6 +48,7 @@ pub struct PrepaintState {
     #[cfg(feature = "benchmarks")]
     started_at: Instant,
     rows: Vec<PaintRow>,
+    block_backgrounds: Vec<PaintQuad>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     gutter: PaintQuad,
@@ -74,6 +81,9 @@ struct PaintRow {
     visual_rows: usize,
     metrics: syntax::BlockMetrics,
     animated_height: f32,
+    block: Option<syntax::EditorBlockDecoration>,
+    active: bool,
+    folded: bool,
     background: Option<PaintQuad>,
     animation_clip_y: Option<(Pixels, Pixels)>,
 }
@@ -303,6 +313,13 @@ impl Element for EditorElement {
             let line_style = style_snapshot
                 .line(line_number)
                 .expect("visible style snapshot covers every visible source line");
+            let text_inset = editor_block_text_inset(line_style.block.as_ref());
+            let row_text_origin_x = text_origin_x + px(text_inset);
+            let row_wrap_width = if text_inset > 0.0 {
+                (wrap_width - text_inset - BLOCK_RIGHT_INSET - BLOCK_TEXT_RIGHT_PADDING).max(1.0)
+            } else {
+                wrap_width
+            };
             let metrics = line_style
                 .metrics
                 .scaled(editor.content_font_size().scale());
@@ -325,7 +342,7 @@ impl Element for EditorElement {
                 marked_display.clone(),
                 theme,
             );
-            let effective_wrap_width = editor.display_map.soft_wrap().then_some(px(wrap_width));
+            let effective_wrap_width = editor.display_map.soft_wrap().then_some(px(row_wrap_width));
             let shape_key = shape_key(
                 &text,
                 px(f32::from(font_size) * metrics.font_scale),
@@ -389,7 +406,7 @@ impl Element for EditorElement {
                 origin_y,
                 visible_top: block_top,
                 visible_bottom: block_top + px(animated_height),
-                text_origin_x,
+                text_origin_x: row_text_origin_x,
                 line_height: px(metrics.line_height),
                 display,
                 layout,
@@ -413,7 +430,7 @@ impl Element for EditorElement {
                     local_start,
                     local_end,
                     selected_end > source_content_range.end.0,
-                    px(wrap_width),
+                    px(row_wrap_width),
                 );
             }
 
@@ -435,7 +452,10 @@ impl Element for EditorElement {
                     .unwrap_or_default();
                 caret = Some(fill(
                     Bounds::new(
-                        point(text_origin_x + position.x, origin_y + position.y + px(2.0)),
+                        point(
+                            row_text_origin_x + position.x,
+                            origin_y + position.y + px(2.0),
+                        ),
                         size(px(1.5), px((metrics.line_height - 4.0).max(1.0))),
                     ),
                     gpui::rgb(theme.foreground),
@@ -448,12 +468,15 @@ impl Element for EditorElement {
                 visual_rows,
                 metrics,
                 animated_height,
+                block: line_style.block.clone(),
+                active: anchor.is_some(),
+                folded,
                 background: editor_row_background(
                     line_style.id,
                     anchor.is_some(),
                     Bounds::new(
-                        point(text_origin_x, block_top),
-                        size(px(wrap_width), px(animated_height)),
+                        point(row_text_origin_x, block_top),
+                        size(px(row_wrap_width), px(animated_height)),
                     ),
                     theme,
                 ),
@@ -489,10 +512,17 @@ impl Element for EditorElement {
         {
             schedule_minimap_raster(self.editor.clone(), request, cx);
         }
+        let block_backgrounds = editor_block_backgrounds(
+            &rows,
+            bounds.left() + px(gutter_width),
+            bounds.right() - px(minimap_width),
+            theme,
+        );
         PrepaintState {
             #[cfg(feature = "benchmarks")]
             started_at,
             rows,
+            block_backgrounds,
             selection: selection_quads,
             caret,
             gutter: fill(
@@ -594,6 +624,9 @@ impl Element for EditorElement {
                     bounds: text_bounds,
                 }),
                 |window| {
+                    for background in &state.block_backgrounds {
+                        window.paint_quad(background.clone());
+                    }
                     for background in state.rows.iter().filter_map(|row| row.background.clone()) {
                         window.paint_quad(background);
                     }
@@ -1058,6 +1091,148 @@ fn folded_display_text(mut text: String, folded: bool) -> String {
     text
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct EditorBlockPaintRow {
+    block: Option<syntax::EditorBlockDecoration>,
+    top: f32,
+    bottom: f32,
+    active: bool,
+    folded: bool,
+}
+
+fn editor_block_text_inset(block: Option<&syntax::EditorBlockDecoration>) -> f32 {
+    block.map_or(0.0, |_| BLOCK_TEXT_INSET)
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct EditorBlockPaintSegment {
+    kind: syntax::EditorBlockKind,
+    top: f32,
+    bottom: f32,
+    open: bool,
+    close: bool,
+    active: bool,
+}
+
+fn editor_block_segments(
+    rows: impl IntoIterator<Item = EditorBlockPaintRow>,
+) -> Vec<EditorBlockPaintSegment> {
+    let mut segments = Vec::new();
+    let mut current: Option<EditorBlockPaintSegment> = None;
+    for row in rows {
+        let Some(block) = row.block else {
+            if let Some(segment) = current.take() {
+                segments.push(segment);
+            }
+            continue;
+        };
+        let starts_new = current.as_ref().is_some_and(|segment| {
+            block.edge == syntax::EditorBlockEdge::Open
+                || block.kind != segment.kind
+                || (row.top - segment.bottom).abs() > 0.75
+        });
+        if starts_new && let Some(segment) = current.take() {
+            segments.push(segment);
+        }
+        let open = block.edge == syntax::EditorBlockEdge::Open;
+        let close = block.edge == syntax::EditorBlockEdge::Close || row.folded;
+        let segment = current.get_or_insert(EditorBlockPaintSegment {
+            kind: block.kind.clone(),
+            top: row.top,
+            bottom: row.bottom,
+            open,
+            close,
+            active: row.active,
+        });
+        segment.bottom = segment.bottom.max(row.bottom);
+        segment.open |= open;
+        segment.close |= close;
+        segment.active |= row.active;
+        if close && let Some(segment) = current.take() {
+            segments.push(segment);
+        }
+    }
+    if let Some(segment) = current {
+        segments.push(segment);
+    }
+    segments
+}
+
+fn editor_block_backgrounds(
+    rows: &[PaintRow],
+    text_left: Pixels,
+    text_right: Pixels,
+    theme: &crate::theme::Theme,
+) -> Vec<PaintQuad> {
+    let left = text_left + px(BLOCK_LEFT_INSET);
+    let right = text_right - px(BLOCK_RIGHT_INSET);
+    if right <= left {
+        return Vec::new();
+    }
+    editor_block_segments(rows.iter().map(|row| EditorBlockPaintRow {
+        block: row.block.clone(),
+        top: f32::from(row.hit.visible_top),
+        bottom: f32::from(row.hit.visible_bottom),
+        active: row.active,
+        folded: row.folded,
+    }))
+    .into_iter()
+    .filter_map(|segment| {
+        let top = segment.top
+            + if segment.open {
+                BLOCK_VERTICAL_INSET
+            } else {
+                0.0
+            };
+        let bottom = segment.bottom
+            - if segment.close {
+                BLOCK_VERTICAL_INSET
+            } else {
+                0.0
+            };
+        if bottom <= top {
+            return None;
+        }
+        let accent = match &segment.kind {
+            syntax::EditorBlockKind::Source => theme.meta,
+            syntax::EditorBlockKind::Example => theme.attribute,
+            syntax::EditorBlockKind::Quote => theme.string,
+            syntax::EditorBlockKind::Verse => theme.function,
+            syntax::EditorBlockKind::Center => theme.heading[2],
+            syntax::EditorBlockKind::Comment => theme.comment,
+            syntax::EditorBlockKind::Export => theme.type_name,
+            syntax::EditorBlockKind::Special(_) => theme.foreground_dim,
+            syntax::EditorBlockKind::MarkdownFence => theme.meta,
+        };
+        let radius = px(BLOCK_RADIUS);
+        let zero = px(0.0);
+        let border = px(1.0);
+        let corners = Corners {
+            top_left: if segment.open { radius } else { zero },
+            top_right: if segment.open { radius } else { zero },
+            bottom_right: if segment.close { radius } else { zero },
+            bottom_left: if segment.close { radius } else { zero },
+        };
+        let border_widths = Edges {
+            top: if segment.open { border } else { zero },
+            right: border,
+            bottom: if segment.close { border } else { zero },
+            left: border,
+        };
+        let fill_alpha = if segment.active { 0x11 } else { 0x0c };
+        let border_alpha = if segment.active { 0x57 } else { 0x2e };
+        Some(quad(
+            Bounds::from_corners(point(left, px(top)), point(right, px(bottom))),
+            corners,
+            rgba((accent << 8) | fill_alpha),
+            border_widths,
+            rgba((accent << 8) | border_alpha),
+            BorderStyle::default(),
+        ))
+    })
+    .collect()
+}
+
 fn editor_row_background(
     style: syntax::EditorStyleId,
     active: bool,
@@ -1065,9 +1240,7 @@ fn editor_row_background(
     theme: &crate::theme::Theme,
 ) -> Option<PaintQuad> {
     let color = match style {
-        syntax::EditorStyleId::CodeBoundary => theme.code_boundary_background,
-        syntax::EditorStyleId::Code if active => theme.code_active_background,
-        syntax::EditorStyleId::Code => theme.code_background,
+        syntax::EditorStyleId::CodeBoundary | syntax::EditorStyleId::Code => return None,
         _ if active => theme.background_alt,
         _ => return None,
     };
@@ -1129,10 +1302,26 @@ fn push_selection_quads(
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_ANIMATED_PAINT_LINES, animated_paint_lines, folded_display_text, scroll_is_at_end,
-        stabilized_scroll_y,
+        EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES, animated_paint_lines, editor_block_segments,
+        editor_block_text_inset, folded_display_text, scroll_is_at_end, stabilized_scroll_y,
     };
-    use crate::editor::layout_map::EditorLayoutMap;
+    use crate::editor::{
+        layout_map::EditorLayoutMap,
+        syntax::{EditorBlockDecoration, EditorBlockEdge, EditorBlockKind},
+    };
+
+    fn block_row(edge: EditorBlockEdge, top: f32) -> EditorBlockPaintRow {
+        EditorBlockPaintRow {
+            block: Some(EditorBlockDecoration {
+                kind: EditorBlockKind::Source,
+                edge,
+            }),
+            top,
+            bottom: top + 28.0,
+            active: edge == EditorBlockEdge::Body,
+            folded: false,
+        }
+    }
 
     #[test]
     fn folded_heading_display_adds_an_ellipsis_without_changing_source_text() {
@@ -1144,6 +1333,38 @@ mod tests {
             folded_display_text("* Heading".to_owned(), false),
             "* Heading"
         );
+    }
+
+    #[test]
+    fn contiguous_block_rows_form_one_active_closed_container() {
+        let segments = editor_block_segments([
+            block_row(EditorBlockEdge::Open, 0.0),
+            block_row(EditorBlockEdge::Body, 28.0),
+            block_row(EditorBlockEdge::Close, 56.0),
+        ]);
+
+        assert_eq!(segments.len(), 1);
+        assert!(segments[0].open);
+        assert!(segments[0].close);
+        assert!(segments[0].active);
+        assert_eq!(segments[0].top, 0.0);
+        assert_eq!(segments[0].bottom, 84.0);
+    }
+
+    #[test]
+    fn every_decorated_block_adds_visual_text_inset() {
+        let decoration = |kind| EditorBlockDecoration {
+            kind,
+            edge: EditorBlockEdge::Body,
+        };
+        let source = decoration(EditorBlockKind::Source);
+        let markdown = decoration(EditorBlockKind::MarkdownFence);
+        let quote = decoration(EditorBlockKind::Quote);
+
+        assert_eq!(editor_block_text_inset(Some(&source)), 16.0);
+        assert_eq!(editor_block_text_inset(Some(&markdown)), 16.0);
+        assert_eq!(editor_block_text_inset(Some(&quote)), 16.0);
+        assert_eq!(editor_block_text_inset(None), 0.0);
     }
 
     #[test]

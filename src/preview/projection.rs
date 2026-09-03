@@ -12,6 +12,7 @@ use crate::{
 
 use super::{
     DocumentFormat, PreviewRow,
+    diagram::DiagramProjection,
     markdown::{MarkdownBlock, MarkdownKind},
     org_line::{CheckboxState, parse_list_item},
     style::RowStyleKind,
@@ -42,6 +43,7 @@ pub(crate) enum VisualRowKind {
     Blank,
     Table(TableRowProjection),
     Image { dimensions: Option<(u32, u32)> },
+    Diagram(DiagramProjection),
     Rule,
     Hidden,
 }
@@ -80,6 +82,7 @@ impl ReadingListMarker {
 pub(crate) struct ReadingProjectionResources<'a> {
     pub(crate) tables: &'a HashMap<BlockId, TableRowProjection>,
     pub(crate) images: &'a HashMap<BlockId, (u32, u32)>,
+    pub(crate) diagrams: &'a HashMap<BlockId, DiagramProjection>,
 }
 
 #[derive(Clone, Debug)]
@@ -765,6 +768,7 @@ fn visual_row_style_kind(
 ) -> RowStyleKind {
     match visual {
         VisualRowKind::Caption => return RowStyleKind::Caption,
+        VisualRowKind::Diagram(_) => return RowStyleKind::Image,
         VisualRowKind::Code(ReadingCodeRow::End) | VisualRowKind::Hidden => {
             return RowStyleKind::Hidden;
         }
@@ -885,6 +889,9 @@ fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
                 dimensions: new_dimensions,
             },
         ) => old_dimensions == new_dimensions,
+        (VisualRowKind::Diagram(old), VisualRowKind::Diagram(new)) => {
+            old.dimensions() == new.dimensions()
+        }
         (VisualRowKind::Rule, VisualRowKind::Rule)
         | (VisualRowKind::Blank, VisualRowKind::Blank)
         | (VisualRowKind::Hidden, VisualRowKind::Hidden) => true,
@@ -908,6 +915,9 @@ fn visual_kind(
         return VisualRowKind::Image {
             dimensions: Some((width, height)),
         };
+    }
+    if let Some(diagram) = resources.diagrams.get(&block_id) {
+        return VisualRowKind::Diagram(diagram.clone());
     }
     match format {
         DocumentFormat::Org => match blocks.nodes()[block_id as usize].kind {
@@ -937,6 +947,11 @@ fn visual_kind(
             MarkdownKind::ListItem => list_visual_kind(&text.copy_range(row.content.range)),
             MarkdownKind::Quote => VisualRowKind::Quote,
             MarkdownKind::Image { .. } => VisualRowKind::Image { dimensions: None },
+            MarkdownKind::Code { ref language, .. }
+                if super::diagram::is_plantuml_language(language.as_deref()) =>
+            {
+                VisualRowKind::Hidden
+            }
             MarkdownKind::Code { role, .. } => VisualRowKind::Code(match role {
                 crate::preview::CodeRowRole::Open => ReadingCodeRow::Start,
                 crate::preview::CodeRowRole::Body => ReadingCodeRow::Body,

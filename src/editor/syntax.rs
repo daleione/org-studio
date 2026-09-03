@@ -150,6 +150,32 @@ pub(super) enum EditorStyleId {
     Comment,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(super) enum EditorBlockKind {
+    Source,
+    Example,
+    Quote,
+    Verse,
+    Center,
+    Comment,
+    Export,
+    Special(Arc<str>),
+    MarkdownFence,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EditorBlockEdge {
+    Open,
+    Body,
+    Close,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct EditorBlockDecoration {
+    pub(super) kind: EditorBlockKind,
+    pub(super) edge: EditorBlockEdge,
+}
+
 impl EditorStyleId {
     pub(super) const fn cache_key(self) -> u8 {
         match self {
@@ -202,6 +228,7 @@ pub(super) struct EditorLineStyle {
     pub(super) source_range: ByteRange,
     pub(super) id: EditorStyleId,
     pub(super) code_language: Option<Arc<str>>,
+    pub(super) block: Option<EditorBlockDecoration>,
     todo: Option<TodoSpan>,
     pub(super) metrics: BlockMetrics,
 }
@@ -234,6 +261,7 @@ impl EditorStyleSnapshot {
                 let source_range = snapshot.line_content_range(LineIndex(line)).ok()?;
                 let text = classification_text(snapshot, source_range);
                 let todo = heading_todo_span(language, &text, &code);
+                let block_before = code.block_kind.clone();
                 let id = classify_line(language, &text, &mut code);
                 Some(EditorLineStyle {
                     source_range,
@@ -241,6 +269,7 @@ impl EditorStyleSnapshot {
                     code_language: (id == EditorStyleId::Code)
                         .then(|| code.code_language.clone())
                         .flatten(),
+                    block: block_decoration(id, block_before, code.block_kind.clone()),
                     todo,
                     metrics: metrics_for(id),
                 })
@@ -268,6 +297,7 @@ impl SparseEditorStyleSnapshot {
                 let text = classification_text(snapshot, source_range);
                 let mut code = cache.context_at(snapshot, language, line);
                 let todo = heading_todo_span(language, &text, &code);
+                let block_before = code.block_kind.clone();
                 let id = classify_line(language, &text, &mut code);
                 Some((
                     line,
@@ -277,6 +307,7 @@ impl SparseEditorStyleSnapshot {
                         code_language: (id == EditorStyleId::Code)
                             .then(|| code.code_language.clone())
                             .flatten(),
+                        block: block_decoration(id, block_before, code.block_kind.clone()),
                         todo,
                         metrics: metrics_for(id),
                     },
@@ -324,6 +355,7 @@ struct TodoSpan {
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct CodeContext {
     in_block: bool,
+    block_kind: Option<EditorBlockKind>,
     org_end_marker: Option<Arc<str>>,
     markdown_fence: Option<u8>,
     code_language: Option<Arc<str>>,
@@ -335,6 +367,7 @@ impl Default for CodeContext {
     fn default() -> Self {
         Self {
             in_block: false,
+            block_kind: None,
             org_end_marker: None,
             markdown_fence: None,
             code_language: None,
@@ -425,6 +458,7 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
             if let Some(end_marker) = code.org_end_marker.as_deref() {
                 if text.trim().eq_ignore_ascii_case(end_marker) {
                     code.in_block = false;
+                    code.block_kind = None;
                     code.org_end_marker = None;
                     code.code_language = None;
                     return true;
@@ -433,6 +467,16 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
             }
             if let Some((name, language)) = org_block_start(text) {
                 code.in_block = true;
+                code.block_kind = Some(match name.as_str() {
+                    "src" => EditorBlockKind::Source,
+                    "example" => EditorBlockKind::Example,
+                    "quote" => EditorBlockKind::Quote,
+                    "verse" => EditorBlockKind::Verse,
+                    "center" => EditorBlockKind::Center,
+                    "comment" => EditorBlockKind::Comment,
+                    "export" => EditorBlockKind::Export,
+                    _ => EditorBlockKind::Special(Arc::from(name.as_str())),
+                });
                 code.org_end_marker = Some(Arc::from(format!("#+end_{name}")));
                 code.code_language = language;
                 true
@@ -456,10 +500,12 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
                     return false;
                 }
                 code.in_block = false;
+                code.block_kind = None;
                 code.markdown_fence = None;
                 code.code_language = None;
             } else {
                 code.in_block = true;
+                code.block_kind = Some(EditorBlockKind::MarkdownFence);
                 code.markdown_fence = Some(marker);
                 code.code_language = markdown_fence_language(text, marker);
             }
@@ -498,6 +544,31 @@ fn starts_with_ascii_case_insensitive(text: &str, prefix: &str) -> bool {
     text.as_bytes()
         .get(..prefix.len())
         .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
+fn block_decoration(
+    style: EditorStyleId,
+    before: Option<EditorBlockKind>,
+    after: Option<EditorBlockKind>,
+) -> Option<EditorBlockDecoration> {
+    match style {
+        EditorStyleId::CodeBoundary => match (before, after) {
+            (None, Some(kind)) => Some(EditorBlockDecoration {
+                kind,
+                edge: EditorBlockEdge::Open,
+            }),
+            (Some(kind), None) => Some(EditorBlockDecoration {
+                kind,
+                edge: EditorBlockEdge::Close,
+            }),
+            _ => None,
+        },
+        EditorStyleId::Code => after.or(before).map(|kind| EditorBlockDecoration {
+            kind,
+            edge: EditorBlockEdge::Body,
+        }),
+        _ => None,
+    }
 }
 
 fn update_code_context(language: Language, text: &str, code: &mut CodeContext) {
@@ -628,8 +699,7 @@ pub(super) fn runs(
             base.color = rgb(theme.heading[(level.saturating_sub(1) as usize).min(3)]).into();
         }
         EditorStyleId::CodeBoundary => {
-            base.color = rgb(theme.code_boundary).into();
-            base.font.style = FontStyle::Italic;
+            base.color = rgb(theme.meta).into();
         }
         EditorStyleId::Code => {
             base.color = rgb(theme.code_foreground).into();
@@ -1147,11 +1217,13 @@ mod tests {
 
     fn line_style(text: &str, context: &mut CodeContext) -> EditorLineStyle {
         let todo = heading_todo_span(Language::Org, text, context);
+        let block_before = context.block_kind.clone();
         let id = classify_line(Language::Org, text, context);
         EditorLineStyle {
             source_range: ByteRange::new(0, text.len() as u64),
             id,
             code_language: None,
+            block: block_decoration(id, block_before, context.block_kind.clone()),
             todo,
             metrics: metrics_for(id),
         }
@@ -1390,12 +1462,66 @@ mod tests {
         let cache = EditorSyntaxCache::default();
         let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..4, &cache);
         assert_eq!(styles.lines[0].id, EditorStyleId::CodeBoundary);
+        assert_eq!(
+            styles.lines[0].block,
+            Some(EditorBlockDecoration {
+                kind: EditorBlockKind::Source,
+                edge: EditorBlockEdge::Open,
+            })
+        );
         assert_eq!(styles.lines[1].id, EditorStyleId::Code);
         assert_eq!(styles.lines[1].code_language.as_deref(), Some("rust"));
         assert_eq!(styles.lines[2].id, EditorStyleId::CodeBoundary);
+        assert_eq!(
+            styles.lines[2].block,
+            Some(EditorBlockDecoration {
+                kind: EditorBlockKind::Source,
+                edge: EditorBlockEdge::Close,
+            })
+        );
         assert_eq!(styles.lines[3].id, EditorStyleId::Plain);
         let body_only = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 1..2, &cache);
         assert_eq!(body_only.lines[0].id, EditorStyleId::Code);
+    }
+
+    #[test]
+    fn every_standard_and_custom_org_block_keeps_its_decoration_kind() {
+        let source = concat!(
+            "#+begin_src rust\n#+end_src\n",
+            "#+begin_example\n#+end_example\n",
+            "#+begin_quote\n#+end_quote\n",
+            "#+begin_verse\n#+end_verse\n",
+            "#+begin_center\n#+end_center\n",
+            "#+begin_comment\n#+end_comment\n",
+            "#+begin_export html\n#+end_export\n",
+            "#+begin_details\n#+end_details\n",
+        );
+        let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let styles = EditorStyleSnapshot::for_lines(
+            Path::new("a.org"),
+            &snapshot,
+            0..16,
+            &EditorSyntaxCache::default(),
+        );
+        let expected = [
+            EditorBlockKind::Source,
+            EditorBlockKind::Example,
+            EditorBlockKind::Quote,
+            EditorBlockKind::Verse,
+            EditorBlockKind::Center,
+            EditorBlockKind::Comment,
+            EditorBlockKind::Export,
+            EditorBlockKind::Special(Arc::from("details")),
+        ];
+
+        for (index, kind) in expected.into_iter().enumerate() {
+            let open = styles.lines[index * 2].block.as_ref().unwrap();
+            let close = styles.lines[index * 2 + 1].block.as_ref().unwrap();
+            assert_eq!(open.kind, kind);
+            assert_eq!(open.edge, EditorBlockEdge::Open);
+            assert_eq!(close.kind, open.kind);
+            assert_eq!(close.edge, EditorBlockEdge::Close);
+        }
     }
 
     #[test]
@@ -1429,6 +1555,7 @@ mod tests {
             source_range: ByteRange::new(0, text.len() as u64),
             id: EditorStyleId::Code,
             code_language: None,
+            block: None,
             todo: None,
             metrics: metrics_for(EditorStyleId::Code),
         };
@@ -1499,8 +1626,8 @@ mod tests {
             None,
             theme,
         );
-        assert_eq!(boundary_runs[0].font.style, FontStyle::Italic);
-        assert_eq!(boundary_runs[0].color, rgb(theme.code_boundary).into());
+        assert_eq!(boundary_runs[0].font.style, FontStyle::Normal);
+        assert_eq!(boundary_runs[0].color, rgb(theme.meta).into());
 
         let include_text = snapshot.copy_range(styles.lines[1].source_range);
         let include_runs = runs(

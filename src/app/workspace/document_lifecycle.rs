@@ -214,9 +214,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn set_document_notice(&mut self, error: Option<Arc<str>>) {
-        if let Some(document) = self.state.ready_mut() {
-            document.notice = error;
-        }
+        self.set_echo_message(error.map(crate::app::echo_area::EchoMessage::error));
     }
 
     fn apply_reload_result(
@@ -592,7 +590,6 @@ impl WorkspaceWindow {
                             right: right_editor,
                         },
                         readers,
-                        notice: None,
                     },
                 }
             }

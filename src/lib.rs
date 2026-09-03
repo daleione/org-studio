@@ -1,4 +1,5 @@
 pub mod app;
+mod babel;
 pub mod command;
 pub mod document;
 pub mod editor;

@@ -302,7 +302,12 @@ impl PreviewDisplayMap {
         }
         let parent_height = self
             .image_size(row, available_width)
-            .map(|(_, height)| height + layout.padding_top + layout.padding_bottom)
+            .map(|(_, height)| {
+                height
+                    + self.media_layout_extra_height(row)
+                    + layout.padding_top
+                    + layout.padding_bottom
+            })
             .or(layout.fixed_height)
             .unwrap_or_else(|| {
                 (ranges.len().max(1) as f32 * layout.line_height
@@ -372,7 +377,12 @@ impl PreviewDisplayMap {
         };
         let parent_height = self
             .image_size(row, available_width)
-            .map(|(_, height)| height + layout.padding_top + layout.padding_bottom)
+            .map(|(_, height)| {
+                height
+                    + self.media_layout_extra_height(row)
+                    + layout.padding_top
+                    + layout.padding_bottom
+            })
             .or_else(|| {
                 (kind == PreviewLineKind::Table
                     && self
@@ -438,11 +448,25 @@ impl PreviewDisplayMap {
     }
 
     pub(crate) fn image_size(&self, row: usize, available_width: f32) -> Option<(f32, f32)> {
-        match self.projection.rows.get(row)?.kind {
-            VisualRowKind::Image { dimensions } => dimensions,
+        match &self.projection.rows.get(row)?.kind {
+            VisualRowKind::Image { dimensions } => dimensions.map(|(width, height)| {
+                crate::preview::fitted_image_size(width, height, available_width)
+            }),
+            VisualRowKind::Diagram(diagram) => diagram.dimensions().map(|(width, height)| {
+                let scale = (available_width.min(960.0) / width)
+                    .min(480.0 / height)
+                    .min(1.0);
+                (width * scale, height * scale)
+            }),
             _ => None,
         }
-        .map(|(width, height)| crate::preview::fitted_image_size(width, height, available_width))
+    }
+
+    fn media_layout_extra_height(&self, row: usize) -> f32 {
+        match &self.projection.rows.get(row).map(|row| &row.kind) {
+            Some(VisualRowKind::Diagram(diagram)) => diagram.layout_extra_height(),
+            _ => 0.0,
+        }
     }
 
     pub(crate) fn row_kind(&self, row: usize) -> PreviewLineKind {
@@ -461,7 +485,7 @@ impl PreviewDisplayMap {
             VisualRowKind::Code(_) => PreviewLineKind::Code,
             VisualRowKind::Blank | VisualRowKind::Hidden => PreviewLineKind::Blank,
             VisualRowKind::Table(_) => PreviewLineKind::Table,
-            VisualRowKind::Image { .. } => PreviewLineKind::Image,
+            VisualRowKind::Image { .. } | VisualRowKind::Diagram(_) => PreviewLineKind::Image,
             VisualRowKind::Rule => PreviewLineKind::Rule,
         }
     }
@@ -547,6 +571,8 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
             visual.code_language.as_deref().unwrap_or("code").to_owned()
         }
         (_, VisualRowKind::Code(ReadingCodeRow::End), _) => String::new(),
+        (_, VisualRowKind::Diagram(_), _) => String::new(),
+        (_, VisualRowKind::Hidden, _) => String::new(),
         _ => source.to_owned(),
     };
     let parse_inline = matches!(

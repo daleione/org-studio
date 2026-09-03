@@ -40,6 +40,16 @@ fn main() {
 Native Rust and GPUI preview.
 #+end_quote
 
+ #+begin_src plantuml :file images/login.svg
+  @startuml
+  Alice -> Bob: Hello
+  Bob --> Alice: World
+  @enduml
+  #+end_src
+
+#+RESULTS:
+[[file:images/login.svg]]
+
 ** 中文与 Unicode
 
 中文段落、emoji 😀、组合字符 é 应当保持完整。

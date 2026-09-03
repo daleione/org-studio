@@ -1,11 +1,13 @@
 use super::document::{
-    reading_code_label, reading_fallback, reading_inline, render_list_item, selectable_blank_row,
+    reading_code_label, reading_fallback, reading_inline, render_diagram, render_list_item,
+    selectable_blank_row,
 };
 use super::{
     Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingInteraction, ReadingRowContext, div,
     img, markdown, px, render_code_row, render_table_row, resolve_image_path, rgb,
 };
 use crate::preview::CodeRowRole;
+use crate::preview::projection::VisualRowKind;
 use gpui::prelude::*;
 
 pub(super) fn render_markdown_block(
@@ -27,6 +29,35 @@ pub(super) fn render_markdown_block(
     let row_layout = display_map.layout(display_row, style).scaled(context.zoom);
     let text = display_runs.text.clone();
     let inline = || reading_inline(document, display_row, &display_runs, style, interaction);
+    if let Some(VisualRowKind::Diagram(diagram)) = document
+        .projection
+        .rows
+        .get(display_row)
+        .map(|row| &row.kind)
+    {
+        let language = match &block.kind {
+            MarkdownKind::Code { language, .. } => language.as_deref(),
+            _ => None,
+        };
+        return render_diagram(
+            document,
+            display_row,
+            language,
+            diagram,
+            context,
+            interaction,
+        );
+    }
+    if matches!(
+        document
+            .projection
+            .rows
+            .get(display_row)
+            .map(|row| &row.kind),
+        Some(VisualRowKind::Hidden)
+    ) {
+        return div().h(px(0.0)).overflow_hidden();
+    }
     match &block.kind {
         MarkdownKind::Blank => selectable_blank_row(
             display_row,

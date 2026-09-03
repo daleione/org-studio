@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use gpui::{FontWeight, ParentElement, Pixels, Styled, div, prelude::*, px, relative, rgb};
 
+use crate::app::echo_area::ECHO_AREA_HEIGHT;
 use crate::theme::current_theme;
 
 pub(super) type CommandItem = (Arc<str>, Arc<str>);
@@ -54,7 +55,7 @@ impl CommandWindow {
             .absolute()
             .left(px(0.0))
             .right(px(0.0))
-            .bottom(px(0.0))
+            .bottom(px(ECHO_AREA_HEIGHT))
             .h(height)
             .bg(rgb(current_theme().background_alt))
             .border_t_1()

@@ -15,8 +15,8 @@ use crate::{
 
 use super::{
     DerivedUpdate, DocumentFormat, LoadMetrics, LoadedDocument, PreviewSnapshot, ReloadedDocument,
-    build_markdown_table_styles, build_preview_rows, build_projection_snapshot, build_table_styles,
-    markdown,
+    build_markdown_diagrams, build_markdown_table_styles, build_preview_rows,
+    build_projection_snapshot, build_table_styles, markdown,
     projection::{ReadingProjectionResources, build_visual_rows},
     rows::build_preview_rows_in_range,
 };
@@ -315,6 +315,12 @@ fn build_preview(
         DocumentFormat::Org => Arc::new(build_image_sizes(&path, &blocks)),
         DocumentFormat::Markdown => Arc::new(build_markdown_image_sizes(&path, &markdown_blocks)),
     };
+    let diagrams = match format {
+        DocumentFormat::Org => Arc::new(HashMap::new()),
+        DocumentFormat::Markdown => {
+            Arc::new(build_markdown_diagrams(text.as_ref(), &markdown_blocks))
+        }
+    };
     let projection = build_projection_snapshot(
         text.as_ref(),
         text.revision(),
@@ -325,6 +331,7 @@ fn build_preview(
         ReadingProjectionResources {
             tables: &table_projections,
             images: &image_sizes,
+            diagrams: &diagrams,
         },
     );
 
@@ -562,6 +569,7 @@ fn build_markdown_incremental(
         ReadingProjectionResources {
             tables: &HashMap::new(),
             images: &HashMap::new(),
+            diagrams: &HashMap::new(),
         },
     );
     if replacements.len() != old_visual.len() {
@@ -676,6 +684,7 @@ fn build_org_incremental(
         ReadingProjectionResources {
             tables: &HashMap::new(),
             images: &HashMap::new(),
+            diagrams: &HashMap::new(),
         },
     );
     let (projection, patch) = previous
@@ -1341,6 +1350,86 @@ mod tests {
                 .iter()
                 .all(|row| row.code_language.as_deref() == Some("python"))
         );
+    }
+
+    #[test]
+    fn plantuml_content_edit_rebuilds_the_rendered_diagram() {
+        use super::super::{diagram::DiagramProjection, projection::VisualRowKind};
+
+        let source = "before\n```plantuml\n@startuml\nAlice -> Bob: hello\n@enduml\n```\nafter\n";
+        let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let before = buffer.snapshot();
+        let previous = derive_preview(PathBuf::from("diagram.md"), before.clone());
+        let previous_svg = previous
+            .projection
+            .rows
+            .iter()
+            .find_map(|row| match &row.kind {
+                VisualRowKind::Diagram(DiagramProjection::Ready { image, .. }) => {
+                    Some(image.bytes().to_vec())
+                }
+                _ => None,
+            })
+            .expect("initial diagram renders");
+        let label = source.find("hello").unwrap() as u64;
+        let delta = buffer
+            .commit(EditTransaction::new(
+                before.revision(),
+                vec![TextEdit::new(
+                    ByteRange::new(label, label + "hello".len() as u64),
+                    "updated",
+                )],
+            ))
+            .unwrap();
+
+        let next = derive_preview_incremental(
+            PathBuf::from("diagram.md"),
+            buffer.snapshot(),
+            Some(&previous),
+            &[delta],
+        );
+        let next_svg = next
+            .projection
+            .rows
+            .iter()
+            .find_map(|row| match &row.kind {
+                VisualRowKind::Diagram(DiagramProjection::Ready { image, .. }) => {
+                    Some(image.bytes())
+                }
+                _ => None,
+            })
+            .expect("edited diagram renders");
+
+        assert!(matches!(next.update, DerivedUpdate::Incremental { .. }));
+        assert_ne!(next_svg, previous_svg);
+    }
+
+    #[test]
+    fn markdown_text_edit_keeps_incremental_projection_with_a_distant_diagram() {
+        let source =
+            "alpha\nbeta\ngamma\n\n```plantuml\n@startuml\nAlice -> Bob\n@enduml\n```\n\nomega\n";
+        let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let before = buffer.snapshot();
+        let previous = derive_preview(PathBuf::from("diagram.md"), before.clone());
+        let delta = buffer
+            .commit(EditTransaction::new(
+                before.revision(),
+                vec![TextEdit::new(ByteRange::new(0, 5), "ALPHA")],
+            ))
+            .unwrap();
+
+        let next = derive_preview_incremental(
+            PathBuf::from("diagram.md"),
+            buffer.snapshot(),
+            Some(&previous),
+            &[delta],
+        );
+
+        assert!(matches!(next.update, DerivedUpdate::Incremental { .. }));
+        assert!(next.projection.rows.iter().any(|row| matches!(
+            row.kind,
+            super::super::projection::VisualRowKind::Diagram(_)
+        )));
     }
 
     #[cfg(feature = "benchmarks")]

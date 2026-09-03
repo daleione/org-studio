@@ -1154,20 +1154,26 @@ impl SemanticEditor {
         let Some(viewport) = self.viewport else {
             return 0.0;
         };
-        let Some(first_row) = self.hit_rows.first() else {
+        if self.hit_rows.is_empty() {
             return 0.0;
-        };
-        let text_left = first_row.text_origin_x + px(self.scroll_x);
-        let text_right = self
-            .minimap
-            .bounds
-            .map_or(viewport.right(), |bounds| bounds.left());
-        let available_width = f32::from(text_right - text_left).max(1.0);
-        let content_width = self
+        }
+        let text_left = self
             .hit_rows
             .iter()
-            .map(|row| f32::from(row.layout.width()))
-            .fold(0.0_f32, f32::max);
+            .map(|row| f32::from(row.text_origin_x) + self.scroll_x)
+            .fold(f32::INFINITY, f32::min);
+        let text_right = f32::from(
+            self.minimap
+                .bounds
+                .map_or(viewport.right(), |bounds| bounds.left()),
+        );
+        let available_width = (text_right - text_left).max(1.0);
+        let content_right = self
+            .hit_rows
+            .iter()
+            .map(|row| f32::from(row.text_origin_x) + self.scroll_x + f32::from(row.layout.width()))
+            .fold(text_left, f32::max);
+        let content_width = (content_right - text_left).max(0.0);
         horizontal_scroll_limit(content_width, available_width)
     }
 

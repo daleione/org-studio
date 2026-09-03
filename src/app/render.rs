@@ -106,6 +106,7 @@ impl Render for WorkspaceWindow {
             });
         }
         let entity = cx.entity();
+        let echo_message = self.displayed_echo_message();
         let which_key_items = self.which_key_items.clone();
         let dired_help_visible = self.file_manager.help_visible();
         let command_window_width = f32::from(window.viewport_size().width);
@@ -190,7 +191,22 @@ impl Render for WorkspaceWindow {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.open_dropped_paths(paths, window, cx)
             }))
-            .child(self.workspace_body(entity.clone(), command_window_width, window, cx))
+            .child(
+                div()
+                    .size_full()
+                    .flex()
+                    .flex_col()
+                    .child(div().flex_1().min_h_0().child(self.workspace_body(
+                        entity.clone(),
+                        command_window_width,
+                        window,
+                        cx,
+                    )))
+                    .child(crate::app::echo_area::render_echo_area(
+                        echo_message,
+                        entity.clone(),
+                    )),
+            )
             .when(resizing_sidebar, |view| {
                 view.child(
                     div()

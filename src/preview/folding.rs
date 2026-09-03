@@ -266,6 +266,7 @@ mod tests {
             crate::preview::projection::ReadingProjectionResources {
                 tables: &std::collections::HashMap::new(),
                 images: &std::collections::HashMap::new(),
+                diagrams: &std::collections::HashMap::new(),
             },
         );
         let visible = visible_row_indices(&projection.rows, &blocks, &HashSet::from([heading]));
@@ -303,6 +304,7 @@ mod tests {
             crate::preview::projection::ReadingProjectionResources {
                 tables: &Default::default(),
                 images: &Default::default(),
+                diagrams: &Default::default(),
             },
         );
 
@@ -403,6 +405,7 @@ mod tests {
             crate::preview::projection::ReadingProjectionResources {
                 tables: &Default::default(),
                 images: &Default::default(),
+                diagrams: &Default::default(),
             },
         );
 
@@ -449,6 +452,7 @@ mod tests {
             crate::preview::projection::ReadingProjectionResources {
                 tables: &Default::default(),
                 images: &Default::default(),
+                diagrams: &Default::default(),
             },
         );
 

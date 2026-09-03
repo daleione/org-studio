@@ -37,6 +37,7 @@ pub use loading::{
 use view::code_highlight_style;
 pub(crate) use view::{ReadingRenderOptions, render_reading_document};
 mod coordinates;
+mod diagram;
 mod fold_transition;
 mod folding;
 pub(crate) mod markdown;
@@ -49,6 +50,8 @@ mod style;
 mod table;
 #[cfg(test)]
 mod tests;
+use diagram::build_markdown_diagrams;
+pub(crate) use diagram::is_plantuml_language;
 use fold_transition::{
     FoldDirection, FoldMeasurement, FoldSegment, FoldTransition, FoldTransitionInput,
     FoldTransitionPlan,
@@ -104,6 +107,7 @@ const SHOW_EDITOR_COMMAND: &str = "org-studio.workspace.show-editor";
 const SHOW_READING_COMMAND: &str = "org-studio.workspace.show-reading";
 const SHOW_SPLIT_COMMAND: &str = "org-studio.workspace.show-split";
 const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
+const EXECUTE_SOURCE_BLOCK_COMMAND: &str = "org-studio.babel.execute-source-block";
 pub(crate) const INCREASE_CONTENT_FONT_SIZE_COMMAND: &str =
     "org-studio.view.increase-content-font-size";
 pub(crate) const DECREASE_CONTENT_FONT_SIZE_COMMAND: &str =

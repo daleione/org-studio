@@ -16,6 +16,7 @@ use crate::{
 };
 
 mod actions;
+mod babel;
 mod benchmark;
 mod commands;
 mod document_lifecycle;
@@ -98,6 +99,8 @@ impl WorkspaceWindow {
                 right: None,
             },
             load_task: None,
+            babel_task: None,
+            babel_request: 0,
             derived: crate::app::DerivedHost::default(),
             file_watch_task: None,
             file_watch_request: 0,
@@ -161,6 +164,7 @@ impl WorkspaceWindow {
             key_feedback_task: None,
             key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
+            echo: crate::app::echo_area::EchoAreaHost::default(),
             content_route: ContentRoute::Document,
             document_workspace,
             document_view_preferences: DocumentViewPreferences {
@@ -467,7 +471,6 @@ impl WorkspaceWindow {
         window: &Window,
         cx: &gpui::App,
     ) -> gpui::Div {
-        let theme = current_theme();
         let minimap_width = minimap::width_for_viewport(editor_width, self.minimap_width);
         let content = match &self.state {
             WorkspaceLoadState::Empty => render_home(
@@ -485,34 +488,14 @@ impl WorkspaceWindow {
             } => {
                 let error = format!("{}: {message}", path.display());
                 if let Some(previous) = previous.as_ref() {
-                    let document = self.render_document_layout(
+                    self.render_document_layout(
                         previous,
                         entity.clone(),
                         editor_width,
                         minimap_width,
                         window,
                         cx,
-                    );
-                    div()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .bg(rgb(theme.background))
-                        .child(
-                            div()
-                                .flex_none()
-                                .px_6()
-                                .py_3()
-                                .bg(rgb(0xfff2f0))
-                                .border_b_1()
-                                .border_color(rgb(0xf2c8c2))
-                                .text_size(px(13.0))
-                                .text_color(rgb(0xa12b1f))
-                                .child(format!(
-                                    "Could not open document. Showing the previous file. {error}"
-                                )),
-                        )
-                        .child(document)
+                    )
                 } else {
                     render_home(
                         entity.clone(),
@@ -523,39 +506,14 @@ impl WorkspaceWindow {
                     )
                 }
             }
-            WorkspaceLoadState::Ready { document: ready } => {
-                let notice = &ready.notice;
-                let document = self.render_document_layout(
-                    ready,
-                    entity.clone(),
-                    editor_width,
-                    minimap_width,
-                    window,
-                    cx,
-                );
-                if let Some(error) = notice {
-                    div()
-                        .size_full()
-                        .flex()
-                        .flex_col()
-                        .bg(rgb(theme.background))
-                        .child(
-                            div()
-                                .flex_none()
-                                .px_6()
-                                .py_3()
-                                .bg(rgb(0xfff2f0))
-                                .border_b_1()
-                                .border_color(rgb(0xf2c8c2))
-                                .text_size(px(13.0))
-                                .text_color(rgb(0xa12b1f))
-                                .child(error.to_string()),
-                        )
-                        .child(document)
-                } else {
-                    document
-                }
-            }
+            WorkspaceLoadState::Ready { document: ready } => self.render_document_layout(
+                ready,
+                entity.clone(),
+                editor_width,
+                minimap_width,
+                window,
+                cx,
+            ),
         };
         if self.state.ready().is_some() {
             return content;

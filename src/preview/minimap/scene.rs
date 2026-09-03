@@ -172,6 +172,22 @@ pub(in crate::preview) fn resolve_visual_row(
             });
             VisualContent::None
         }
+        VisualRowKind::Diagram(diagram) => {
+            let fitted_width =
+                diagram
+                    .dimensions()
+                    .map_or(target_width.max(10.0) - 10.0, |(width, height)| {
+                        let available = target_width.max(10.0) - 10.0;
+                        let scale = (available / width).min(480.0 / height).min(1.0);
+                        width * scale
+                    });
+            primitives.push(VisualPrimitive::Rect {
+                x: 5.0,
+                width: PrimitiveWidth::Fixed(fitted_width),
+                color: PaintToken::Attribute,
+            });
+            VisualContent::None
+        }
         VisualRowKind::Heading(level) => {
             primitives.push(VisualPrimitive::Rect {
                 x: 3.0,
