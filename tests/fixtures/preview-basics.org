@@ -55,7 +55,8 @@ Native Rust and GPUI preview.
 #set page(width: 640pt, height: auto, margin: 18pt)
 #set text(size: 24pt)
 = Markup
-With built-in syntax for the most common document elements, Typst markup is designed to be pleasant to write and read:
+With built-in syntax for the most common document elements, 
+Typst markup is designed to be pleasant to write and read:
 
 - *Strong* and _normal_ emphasis
 - Math: $a, b in { 1/2, sqrt(4 a b) }$
@@ -67,7 +68,7 @@ But that's just the surface!
 [[file:images/typst-demo.svg]]
 
 
-** 中文与 Unicodex
+** 中文与 Unicode
 
 中文段落、emoji 😀、组合字符 é 应当保持完整。
 

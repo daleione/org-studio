@@ -258,11 +258,11 @@ fn marker_kind(marker: u8) -> Option<InlineKind> {
 }
 
 fn delimiter_can_open(source: &str, index: usize) -> bool {
-    (index == 0 || source.as_bytes()[index - 1] != b'\\')
-        && source
-            .as_bytes()
-            .get(index + 1)
-            .is_some_and(|next| !next.is_ascii_whitespace())
+    let previous = source[..index].chars().next_back();
+    let next = source[index + 1..].chars().next();
+    previous.is_none_or(|character| {
+        character != '\\' && (character.is_whitespace() || !is_word_character(character))
+    }) && next.is_some_and(|character| !character.is_whitespace())
 }
 
 fn find_closing_marker(source: &str, start: usize, marker: u8) -> Option<usize> {
@@ -271,6 +271,10 @@ fn find_closing_marker(source: &str, start: usize, marker: u8) -> Option<usize> 
     while index < bytes.len() {
         if bytes[index] == marker
             && bytes.get(index.wrapping_sub(1)) != Some(&b'\\')
+            && source[..index]
+                .chars()
+                .next_back()
+                .is_some_and(|character| !character.is_whitespace())
             && (index + 1 == bytes.len()
                 || bytes[index + 1].is_ascii_whitespace()
                 || matches!(
@@ -289,6 +293,10 @@ fn find_closing_marker(source: &str, start: usize, marker: u8) -> Option<usize> 
         index += 1;
     }
     None
+}
+
+fn is_word_character(character: char) -> bool {
+    character.is_alphanumeric() || character == '_'
 }
 
 fn timestamp_at(source: &str, start: usize) -> Option<(usize, &str)> {
@@ -383,6 +391,42 @@ mod tests {
         assert_eq!(parsed.spans[0].kind, InlineKind::Bold);
         assert_eq!(parsed.spans[1].kind, InlineKind::Italic);
         assert_eq!(&parsed.text[parsed.spans[1].range.clone()], "and italic");
+    }
+
+    #[test]
+    fn verbatim_identifiers_do_not_leak_underline_markup() {
+        let parsed = parse(
+            "*=render_document= returns formatted output.* \
+             Then call =load_config= to read settings.",
+        );
+        assert_eq!(
+            parsed
+                .spans
+                .iter()
+                .filter(|span| span.kind == InlineKind::Bold)
+                .count(),
+            1
+        );
+        assert_eq!(
+            parsed
+                .spans
+                .iter()
+                .filter(|span| span.kind == InlineKind::Verbatim)
+                .count(),
+            2
+        );
+        assert!(
+            parsed
+                .spans
+                .iter()
+                .all(|span| span.kind != InlineKind::Underline)
+        );
+
+        let identifiers = parse("render_document and load_config");
+        assert!(identifiers.spans.is_empty());
+        let underline = parse("_real underline_");
+        assert_eq!(underline.spans.len(), 1);
+        assert_eq!(underline.spans[0].kind, InlineKind::Underline);
     }
 
     #[test]

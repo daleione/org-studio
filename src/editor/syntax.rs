@@ -12,6 +12,7 @@ use crate::{
         ByteOffset, ByteRange, DocumentId, DocumentSnapshot, LineCursor, LineIndex, Revision,
         TextSnapshot,
     },
+    org_syntax::inline::{InlineKind, InlineText},
     theme::Theme,
 };
 
@@ -749,8 +750,10 @@ pub(super) fn runs(
         line_style.id,
         EditorStyleId::Code | EditorStyleId::CodeBoundary
     );
+    let document_language = language(path);
+    let mut opaque_inline_ranges = Vec::new();
     if !verbatim {
-        collect_common_semantics(text, theme, &mut spans);
+        opaque_inline_ranges = collect_inline_semantics(document_language, text, theme, &mut spans);
         if let Some(todo) = &line_style.todo {
             spans.push((
                 todo.range.clone(),
@@ -795,33 +798,30 @@ pub(super) fn runs(
             collect_cpp_namespace_qualifiers(text, theme.variable, theme.foreground, &mut spans);
         }
     }
-    match language(path) {
+    match document_language {
         Language::Org if !verbatim => {
-            collect_org_links(text, theme.link, &mut spans);
-            collect_org_timestamps(text, theme.date, &mut spans);
             for keyword in ["SCHEDULED:", "DEADLINE:"] {
-                collect_token(text, keyword, theme.meta, &mut spans);
+                collect_token_outside(text, keyword, theme.meta, &opaque_inline_ranges, &mut spans);
             }
-            collect_token(text, "CLOSED:", theme.done, &mut spans);
-            for priority in ["[#A]", "[#B]", "[#C]"] {
-                collect_token(text, priority, theme.keyword, &mut spans);
-            }
-            collect_org_tags(text, theme.attribute, &mut spans);
-        }
-        Language::Markdown if !verbatim => {
-            collect_delimited(
+            collect_token_outside(
                 text,
-                "[",
-                "]",
-                SpanStyle {
-                    color: Some(theme.link),
-                    underline: true,
-                    ..SpanStyle::default()
-                },
+                "CLOSED:",
+                theme.done,
+                &opaque_inline_ranges,
                 &mut spans,
             );
+            for priority in ["[#A]", "[#B]", "[#C]"] {
+                collect_token_outside(
+                    text,
+                    priority,
+                    theme.keyword,
+                    &opaque_inline_ranges,
+                    &mut spans,
+                );
+            }
+            collect_org_tags_outside(text, theme.attribute, &opaque_inline_ranges, &mut spans);
         }
-        Language::Org | Language::Markdown => {}
+        Language::Markdown | Language::Org => {}
     }
 
     let mut boundaries = vec![0, text.len()];
@@ -914,66 +914,99 @@ fn code_span_style(
     }
 }
 
-fn collect_common_semantics(text: &str, theme: &Theme, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
-    for (marker, style) in [
-        (
-            "*",
-            SpanStyle {
+fn collect_inline_semantics(
+    language: Language,
+    text: &str,
+    theme: &Theme,
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) -> Vec<Range<usize>> {
+    let inline = match language {
+        Language::Org => crate::org_syntax::inline::parse(text),
+        Language::Markdown => crate::preview::markdown::parse_markdown_inline(text),
+    };
+    let opaque_ranges = collect_inline_spans(language, text, &inline, theme, spans);
+
+    collect_token_outside(text, "[ ]", theme.todo, &opaque_ranges, spans);
+    collect_token_outside(text, "[-]", theme.todo_active, &opaque_ranges, spans);
+    collect_token_outside(text, "[?]", theme.waiting, &opaque_ranges, spans);
+    for checkbox in ["[X]", "[x]"] {
+        collect_token_outside(text, checkbox, theme.done, &opaque_ranges, spans);
+    }
+    opaque_ranges
+}
+
+fn collect_inline_spans(
+    language: Language,
+    text: &str,
+    inline: &InlineText,
+    theme: &Theme,
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) -> Vec<Range<usize>> {
+    let mut opaque_ranges = Vec::new();
+    for inline_span in &inline.spans {
+        let source = inline_span.source.clone();
+        if source.start >= source.end
+            || source.end > text.len()
+            || !text.is_char_boundary(source.start)
+            || !text.is_char_boundary(source.end)
+        {
+            continue;
+        }
+
+        let style = match inline_span.kind {
+            InlineKind::Bold => SpanStyle {
                 weight: Some(FontWeight::BOLD),
                 ..SpanStyle::default()
             },
-        ),
-        (
-            "/",
-            SpanStyle {
+            InlineKind::Italic => SpanStyle {
                 font_style: Some(FontStyle::Italic),
                 ..SpanStyle::default()
             },
-        ),
-        (
-            "_",
-            SpanStyle {
+            InlineKind::Underline => SpanStyle {
                 underline: true,
                 ..SpanStyle::default()
             },
-        ),
-        (
-            "+",
-            SpanStyle {
+            InlineKind::Strike => SpanStyle {
                 strikethrough: true,
                 ..SpanStyle::default()
             },
-        ),
-        (
-            "~",
-            SpanStyle {
+            InlineKind::Code => SpanStyle {
                 color: Some(theme.inline_code),
                 ..SpanStyle::default()
             },
-        ),
-        (
-            "=",
-            SpanStyle {
+            InlineKind::Verbatim => SpanStyle {
                 color: Some(theme.verbatim),
                 ..SpanStyle::default()
             },
-        ),
-        (
-            "`",
-            SpanStyle {
-                color: Some(theme.inline_code),
+            InlineKind::Link | InlineKind::FootnoteReference => SpanStyle {
+                color: Some(theme.link),
+                underline: language == Language::Markdown,
                 ..SpanStyle::default()
             },
-        ),
-    ] {
-        collect_delimited(text, marker, marker, style, spans);
+            InlineKind::Timestamp => SpanStyle {
+                color: Some(theme.date),
+                ..SpanStyle::default()
+            },
+            InlineKind::Target | InlineKind::RadioTarget => SpanStyle {
+                color: Some(theme.attribute),
+                ..SpanStyle::default()
+            },
+            InlineKind::Entity | InlineKind::Latex => SpanStyle {
+                color: Some(theme.constant),
+                ..SpanStyle::default()
+            },
+        };
+        spans.push((source.clone(), style));
+
+        if matches!(inline_span.kind, InlineKind::Code | InlineKind::Verbatim) {
+            opaque_ranges.push(source.clone());
+        }
+        if language == Language::Org && inline_span.kind == InlineKind::Link {
+            collect_org_link_inner_weights(text, source, spans);
+        }
     }
-    collect_token(text, "[ ]", theme.todo, spans);
-    collect_token(text, "[-]", theme.todo_active, spans);
-    collect_token(text, "[?]", theme.waiting, spans);
-    for checkbox in ["[X]", "[x]"] {
-        collect_token(text, checkbox, theme.done, spans);
-    }
+    opaque_ranges.sort_unstable_by_key(|range| range.start);
+    opaque_ranges
 }
 
 fn collect_cpp_namespace_qualifiers(
@@ -1013,88 +1046,42 @@ fn collect_cpp_namespace_qualifiers(
     }
 }
 
-fn collect_org_links(text: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
-    let mut cursor = 0;
-    while let Some(start) = text[cursor..].find("[[").map(|index| cursor + index) {
-        let body = start + 2;
-        let Some(end) = text[body..].find("]]").map(|index| body + index) else {
-            break;
-        };
-        let close = end + 2;
-        spans.push((
-            start..close,
-            SpanStyle {
-                color: Some(color),
-                ..SpanStyle::default()
-            },
-        ));
+fn collect_org_link_inner_weights(
+    text: &str,
+    source: Range<usize>,
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) {
+    let Some(link) = text.get(source.clone()) else {
+        return;
+    };
+    let Some(inside) = link
+        .strip_prefix("[[")
+        .and_then(|link| link.strip_suffix("]]"))
+    else {
+        return;
+    };
+    let body = source.start + 2;
+    let end = source.end - 2;
 
-        // The official illustration keeps the brackets regular and bolds the
-        // target/description text inside them.
-        if let Some(separator) = text[body..end].find("][").map(|index| body + index) {
-            if body < separator {
-                spans.push((
-                    body..separator,
-                    SpanStyle {
-                        weight: Some(FontWeight::BOLD),
-                        ..SpanStyle::default()
-                    },
-                ));
-            }
-            let description = separator + 2;
-            if description < end {
-                spans.push((
-                    description..end,
-                    SpanStyle {
-                        weight: Some(FontWeight::BOLD),
-                        ..SpanStyle::default()
-                    },
-                ));
-            }
-        } else if body < end {
-            spans.push((
-                body..end,
-                SpanStyle {
-                    weight: Some(FontWeight::BOLD),
-                    ..SpanStyle::default()
-                },
-            ));
-        }
-        cursor = close;
+    // Keep the brackets regular and emphasize the target/description source,
+    // matching the existing editor treatment while the parser owns recognition.
+    if let Some(separator) = inside.find("][").map(|index| body + index) {
+        push_bold_span(body..separator, spans);
+        push_bold_span(separator + 2..end, spans);
+    } else {
+        push_bold_span(body..end, spans);
     }
 }
 
-fn collect_org_timestamps(text: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
-    for (open, close) in [(b'<', b'>'), (b'[', b']')] {
-        let mut cursor = 0;
-        while let Some(start) = text[cursor..]
-            .bytes()
-            .position(|byte| byte == open)
-            .map(|index| cursor + index)
-        {
-            let body = start + 1;
-            let Some(end) = text[body..]
-                .bytes()
-                .position(|byte| byte == close)
-                .map(|index| body + index)
-            else {
-                break;
-            };
-            let candidate = &text[body..end];
-            if candidate.len() >= 10
-                && candidate.as_bytes()[..4].iter().all(u8::is_ascii_digit)
-                && candidate.as_bytes().get(4) == Some(&b'-')
-            {
-                spans.push((
-                    start..end + 1,
-                    SpanStyle {
-                        color: Some(color),
-                        ..SpanStyle::default()
-                    },
-                ));
-            }
-            cursor = end + 1;
-        }
+fn push_bold_span(range: Range<usize>, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
+    if range.start < range.end {
+        spans.push((
+            range,
+            SpanStyle {
+                weight: Some(FontWeight::BOLD),
+                ..SpanStyle::default()
+            },
+        ));
     }
 }
 
@@ -1156,66 +1143,64 @@ fn collect_list_marker(text: &str, color: u32, spans: &mut Vec<(Range<usize>, Sp
     }
 }
 
-fn collect_delimited(
+fn collect_token_outside(
     text: &str,
-    open: &str,
-    close: &str,
-    style: SpanStyle,
+    token: &str,
+    color: u32,
+    opaque_ranges: &[Range<usize>],
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) {
     let mut cursor = 0;
-    while let Some(start) = text[cursor..].find(open).map(|index| cursor + index) {
-        let body = start + open.len();
-        let Some(end) = text[body..]
-            .find(close)
-            .map(|index| body + index + close.len())
-        else {
-            break;
-        };
-        if end > body + close.len() {
-            spans.push((start..end, style));
-        }
-        cursor = end.max(cursor + open.len());
-    }
-}
-
-fn collect_token(text: &str, token: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
-    let mut cursor = 0;
     while let Some(start) = text[cursor..].find(token).map(|index| cursor + index) {
         let end = start + token.len();
-        spans.push((
-            start..end,
-            SpanStyle {
-                color: Some(color),
-                weight: Some(FontWeight::SEMIBOLD),
-                ..SpanStyle::default()
-            },
-        ));
+        if !range_intersects_any(&(start..end), opaque_ranges) {
+            spans.push((
+                start..end,
+                SpanStyle {
+                    color: Some(color),
+                    weight: Some(FontWeight::SEMIBOLD),
+                    ..SpanStyle::default()
+                },
+            ));
+        }
         cursor = end;
     }
 }
 
-fn collect_org_tags(text: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
+fn collect_org_tags_outside(
+    text: &str,
+    color: u32,
+    opaque_ranges: &[Range<usize>],
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) {
     let trimmed_end = text.trim_end();
     let Some(start) = trimmed_end.rfind(' ') else {
         return;
     };
     let candidate = &trimmed_end[start + 1..];
+    let range = start + 1..trimmed_end.len();
     if candidate.len() >= 3
         && candidate.starts_with(':')
         && candidate.ends_with(':')
         && candidate[1..candidate.len() - 1].chars().all(|character| {
             character.is_alphanumeric() || matches!(character, ':' | '_' | '@' | '#')
         })
+        && !range_intersects_any(&range, opaque_ranges)
     {
         spans.push((
-            start + 1..trimmed_end.len(),
+            range,
             SpanStyle {
                 color: Some(color),
                 ..SpanStyle::default()
             },
         ));
     }
+}
+
+fn range_intersects_any(range: &Range<usize>, others: &[Range<usize>]) -> bool {
+    others
+        .iter()
+        .any(|other| range.start < other.end && other.start < range.end)
 }
 
 #[cfg(test)]
@@ -1363,6 +1348,81 @@ mod tests {
                 rgb(expected).into()
             );
         }
+    }
+
+    #[test]
+    fn editor_uses_parser_spans_for_org_emphasis() {
+        let text = "*=render_document= returns formatted output.* \
+                    Then call =load_config= to read settings.";
+        let style = line_style(text, &mut CodeContext::default());
+        let theme = current_theme();
+        let markup_runs = runs(
+            Path::new("a.org"),
+            text,
+            base_run(text.len()),
+            &style,
+            None,
+            theme,
+        );
+        for (offset, _) in text.match_indices('_') {
+            assert!(
+                run_at(&markup_runs, offset).underline.is_none(),
+                "identifier underscore at byte {offset} was treated as Org underline"
+            );
+        }
+        assert_eq!(
+            run_at(&markup_runs, text.find("render_document").unwrap())
+                .font
+                .weight,
+            FontWeight::BOLD
+        );
+        assert_eq!(
+            run_at(&markup_runs, text.find("load_config").unwrap()).color,
+            rgb(theme.verbatim).into()
+        );
+
+        let underline_text = "_real underline_";
+        let underline_style = line_style(underline_text, &mut CodeContext::default());
+        let underline_runs = runs(
+            Path::new("a.org"),
+            underline_text,
+            base_run(underline_text.len()),
+            &underline_style,
+            None,
+            theme,
+        );
+        assert!(
+            run_at(&underline_runs, underline_text.find("real").unwrap())
+                .underline
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn org_tokens_inside_literal_spans_keep_the_literal_face() {
+        let text = "=SCHEDULED: [X] :tag:= outside [X]";
+        let style = line_style(text, &mut CodeContext::default());
+        let theme = current_theme();
+        let markup_runs = runs(
+            Path::new("a.org"),
+            text,
+            base_run(text.len()),
+            &style,
+            None,
+            theme,
+        );
+        assert_eq!(
+            run_at(&markup_runs, text.find("SCHEDULED:").unwrap()).color,
+            rgb(theme.verbatim).into()
+        );
+        assert_eq!(
+            run_at(&markup_runs, text.find("[X]").unwrap()).color,
+            rgb(theme.verbatim).into()
+        );
+        assert_eq!(
+            run_at(&markup_runs, text.rfind("[X]").unwrap()).color,
+            rgb(theme.done).into()
+        );
     }
 
     #[test]
