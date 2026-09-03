@@ -41,6 +41,7 @@ pub(crate) struct StatusLineSnapshot {
     pub(crate) language: Language,
     pub(crate) host: StatusHost,
     pub(crate) surface: crate::app::PaneSurface,
+    pub(crate) dirty: bool,
     pub(crate) reading_style: Option<PreviewStyleId>,
     pub(crate) outline: Option<Arc<str>>,
     pub(crate) position: Option<StatusPosition>,

@@ -2114,7 +2114,8 @@ fn lagging_reading_keeps_preview_status_even_when_the_pane_retains_an_editor(
             .document_status_snapshot(crate::app::PaneSide::Right, cx)
             .unwrap();
         assert!(!status.uses_editor_viewport());
-        assert_eq!(status.transient_text(), Some("Modified"));
+        assert!(status.dirty);
+        assert_eq!(status.transient_text(), None);
     });
 }
 

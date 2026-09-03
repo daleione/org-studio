@@ -164,6 +164,12 @@ fn main() {
             KeyBinding::new("cmd-2", ShowReading, None),
             KeyBinding::new("cmd-3", ShowSplit, None),
             KeyBinding::new("alt-z", ToggleSoftWrap, None),
+            KeyBinding::new("cmd-b", ToggleSidebar, None),
+            KeyBinding::new(
+                "cmd-alt-m",
+                ToggleMinimap,
+                Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
+            ),
             KeyBinding::new(
                 "cmd-=",
                 IncreaseContentFontSize,
@@ -270,13 +276,12 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::action("Split", ShowSplit),
             MenuItem::separator(),
             MenuItem::action("Toggle Soft Wrap", ToggleSoftWrap),
+            MenuItem::action("Toggle Sidebar", ToggleSidebar),
+            MenuItem::action("Toggle Minimap", ToggleMinimap),
             MenuItem::separator(),
             MenuItem::action("Increase Content Font Size", IncreaseContentFontSize),
             MenuItem::action("Decrease Content Font Size", DecreaseContentFontSize),
             MenuItem::action("Reset Content Font Size", ResetContentFontSize),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            MenuItem::action("Toggle Minimap", ToggleMinimap),
         ]),
         Menu::new("Language").items([
             MenuItem::action("English", UseEnglish),

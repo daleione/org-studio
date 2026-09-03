@@ -4,7 +4,7 @@ use gpui::Task;
 
 #[derive(Clone, Debug)]
 pub(crate) enum SaveStatus {
-    Saving(Arc<str>),
+    Saving,
     Error(Arc<str>),
 }
 

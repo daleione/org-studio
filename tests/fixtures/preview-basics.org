@@ -67,7 +67,7 @@ But that's just the surface!
 [[file:images/typst-demo.svg]]
 
 
-** 中文与 Unicode
+** 中文与 Unicodex
 
 中文段落、emoji 😀、组合字符 é 应当保持完整。
 

@@ -70,6 +70,50 @@ const PROGRESS_FULL_CHROME: f32 = 42.0;
 const PROGRESS_COMPACT_CHROME: f32 = 24.0;
 const READING_STYLE_CHROME: f32 = 24.0;
 
+// Status colors deliberately stay independent from document syntax colors. A status should
+// communicate state consistently even when the active theme uses red for its first heading.
+const STATUS_CLEAN: u32 = 0x2f7049;
+const STATUS_CLEAN_HOVER: u32 = 0x285f3e;
+const STATUS_CLEAN_FOREGROUND: u32 = 0xf4f6fa;
+const STATUS_DIRTY: u32 = 0xd5a24d;
+const STATUS_DIRTY_HOVER: u32 = 0xc49342;
+const STATUS_DIRTY_FOREGROUND: u32 = 0x3f2d16;
+const STATUS_WORKING_TEXT: u32 = 0x6f718f;
+const STATUS_SUCCESS_TEXT: u32 = 0x557b61;
+const STATUS_ERROR_TEXT: u32 = 0xa14f5d;
+const STATUS_PROGRESS: u32 = 0x5e7f84;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ModeColors {
+    background: u32,
+    hover: u32,
+    foreground: u32,
+}
+
+fn mode_colors(dirty: bool) -> ModeColors {
+    if dirty {
+        ModeColors {
+            background: STATUS_DIRTY,
+            hover: STATUS_DIRTY_HOVER,
+            foreground: STATUS_DIRTY_FOREGROUND,
+        }
+    } else {
+        ModeColors {
+            background: STATUS_CLEAN,
+            hover: STATUS_CLEAN_HOVER,
+            foreground: STATUS_CLEAN_FOREGROUND,
+        }
+    }
+}
+
+fn status_tone_color(tone: StatusTone) -> u32 {
+    match tone {
+        StatusTone::Working => STATUS_WORKING_TEXT,
+        StatusTone::Success => STATUS_SUCCESS_TEXT,
+        StatusTone::Error => STATUS_ERROR_TEXT,
+    }
+}
+
 impl StatusLineSnapshot {
     fn layout_key(&self, width: f32, settings: StatusLineSettings) -> StatusLayoutKey {
         StatusLayoutKey {
@@ -449,6 +493,7 @@ pub(crate) fn render_status_line(
 ) -> gpui::AnyElement {
     let theme = current_theme();
     let pane_id = snapshot.pane.0;
+    let mode_colors = mode_colors(snapshot.dirty);
     let mode = status_button(entity.clone(), pane_id, StatusSegment::Mode)
         .mx(px(4.0))
         .my(px(4.0))
@@ -460,10 +505,20 @@ pub(crate) fn render_status_line(
         }))
         .gap(px(6.0))
         .rounded(px(6.0))
-        .bg(rgb(theme.heading[0]))
-        .text_color(rgb(0xffffff))
+        .bg(rgb(mode_colors.background))
+        .text_color(rgb(mode_colors.foreground))
         .font_weight(gpui::FontWeight::SEMIBOLD)
-        .child(div().size(px(5.0)).rounded_full().bg(rgb(0xffffff)))
+        .hover(move |style| {
+            style
+                .bg(rgb(mode_colors.hover))
+                .text_color(rgb(mode_colors.foreground))
+        })
+        .child(
+            div()
+                .size(px(5.0))
+                .rounded_full()
+                .bg(rgb(mode_colors.foreground)),
+        )
         .when(layout.mode == Variant::Full, |button| {
             button.child(snapshot.mode_label())
         });
@@ -530,10 +585,8 @@ pub(crate) fn render_status_line(
     let center_color = snapshot
         .transient
         .as_ref()
-        .map_or(theme.foreground_dim, |message| match message.tone {
-            StatusTone::Working => theme.heading[0],
-            StatusTone::Success => theme.heading[1],
-            StatusTone::Error => 0xb23a63,
+        .map_or(theme.foreground_dim, |message| {
+            status_tone_color(message.tone)
         });
     let center = div()
         .min_w(px(12.0))
@@ -680,7 +733,7 @@ fn status_button(
         .border_l_1()
         .border_color(rgb(theme.border));
     let button = if segment == StatusSegment::Mode {
-        button.hover(|style| style.bg(rgb(theme.heading[0])).text_color(rgb(0xffffff)))
+        button
     } else {
         button.hover(|style| {
             style
@@ -702,7 +755,7 @@ fn status_button(
 fn progress_ring(progress: u8) -> impl gpui::IntoElement {
     let theme = current_theme();
     let background = rgb(theme.border);
-    let foreground = rgb(theme.heading[0]);
+    let foreground = rgb(STATUS_PROGRESS);
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
@@ -1049,6 +1102,7 @@ mod tests {
             language: Language::Chinese,
             host: StatusHost::Reading,
             surface: crate::app::PaneSurface::Reading,
+            dirty: false,
             reading_style: Some(crate::preview::PreviewStyleId::Base),
             outline: Some("性能优化 / Minimap".into()),
             position: Some(StatusPosition::ReadingSource {
@@ -1065,6 +1119,20 @@ mod tests {
             format: Some(DocumentFormat::Org),
             transient: None,
         }
+    }
+
+    #[test]
+    fn status_palette_reserves_red_for_actual_errors() {
+        let clean = mode_colors(false);
+        let dirty = mode_colors(true);
+
+        assert_eq!(clean.background, STATUS_CLEAN);
+        assert_eq!(dirty.background, STATUS_DIRTY);
+        assert_ne!(clean.background, dirty.background);
+        assert_ne!(clean.background, current_theme().heading[0]);
+        assert_ne!(dirty.background, current_theme().heading[0]);
+        assert_ne!(STATUS_PROGRESS, current_theme().heading[0]);
+        assert_eq!(status_tone_color(StatusTone::Error), STATUS_ERROR_TEXT);
     }
 
     #[test]

@@ -109,6 +109,7 @@ impl WorkspaceWindow {
             language: self.language,
             host: StatusHost::Editor,
             surface: crate::app::PaneSurface::Editor,
+            dirty: ready.session.read(cx).is_dirty(),
             reading_style: None,
             outline,
             position: Some(StatusPosition::EditorCaret {
@@ -170,6 +171,9 @@ impl WorkspaceWindow {
             language: self.language,
             host: StatusHost::Reading,
             surface: crate::app::PaneSurface::Reading,
+            dirty: self
+                .document_session()
+                .is_some_and(|session| session.read(cx).is_dirty()),
             reading_style: Some(self.reading_style),
             outline: current_outline(document, source_index),
             position: Some(StatusPosition::ReadingSource {
@@ -203,6 +207,7 @@ impl WorkspaceWindow {
             language: self.language,
             host: StatusHost::Dired,
             surface: crate::app::PaneSurface::Editor,
+            dirty: false,
             reading_style: None,
             outline: Some(directory.into()),
             position: Some(StatusPosition::DiredSelection { selected, total }),
@@ -232,12 +237,6 @@ impl WorkspaceWindow {
         reading_pane: Option<crate::app::PaneSide>,
         cx: &gpui::App,
     ) -> Option<StatusMessage> {
-        if let Some(SaveStatus::Saving(message)) = &self.save.status {
-            return Some(StatusMessage {
-                text: message.clone(),
-                tone: StatusTone::Working,
-            });
-        }
         let session = self.document_session().map(|session| session.read(cx));
         if let Some(session) = session {
             match session.sync_state() {
@@ -295,12 +294,7 @@ impl WorkspaceWindow {
                 tone: StatusTone::Error,
             });
         }
-        session
-            .filter(|session| session.is_dirty())
-            .map(|_| StatusMessage {
-                text: "Modified".into(),
-                tone: StatusTone::Working,
-            })
+        None
     }
 }
 

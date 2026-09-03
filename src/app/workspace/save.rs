@@ -131,10 +131,7 @@ impl WorkspaceWindow {
             }
         })?;
         let revision = request.revision();
-        let target_path = request.target_path().to_path_buf();
-        self.save.status = Some(SaveStatus::Saving(
-            format!("Saving {}…", target_path.display()).into(),
-        ));
+        self.save.status = Some(SaveStatus::Saving);
         self.save.interaction = SaveInteraction::Saving(transition);
         self.set_document_notice(None);
         let background = cx
