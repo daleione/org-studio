@@ -3,6 +3,7 @@ use gpui::{Context, Window};
 use crate::{
     app::{PaneSurface, WorkspaceWindow, echo_area::EchoMessage},
     document::{DocumentCommand, EditOrigin, EditTransaction},
+    editor::SourceRunPhase,
 };
 
 impl WorkspaceWindow {
@@ -28,16 +29,31 @@ impl WorkspaceWindow {
             let session = session.read(cx);
             (session.snapshot(), session.path().to_path_buf())
         };
+        self.babel_task = None;
+        if let Some(previous_editor) = self.babel_editor.take() {
+            previous_editor.update(cx, |editor, cx| {
+                editor.clear_source_run_feedback();
+                cx.notify();
+            });
+        }
         self.babel_request = self.babel_request.wrapping_add(1);
         let request =
             match crate::babel::prepare_source_block_execution(&snapshot, &path, selection) {
                 Ok(request) => request,
                 Err(message) => {
+                    editor.update(cx, |editor, cx| {
+                        editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
+                    });
                     self.show_echo_message(EchoMessage::error(message), cx);
                     return;
                 }
             };
 
+        let source_block_start = request.source_block_start;
+        editor.update(cx, |editor, cx| {
+            editor.show_source_run_feedback(source_block_start, SourceRunPhase::Running, cx)
+        });
+        self.babel_editor = Some(editor.clone());
         let request_id = self.babel_request;
         self.set_echo_message(Some(EchoMessage::working(
             "Executing PlantUML source block…",
@@ -52,7 +68,8 @@ impl WorkspaceWindow {
                     return;
                 }
                 this.babel_task = None;
-                this.apply_babel_result(session, result, cx);
+                this.babel_editor = None;
+                this.apply_babel_result(session, editor, result, cx);
             });
         }));
         cx.notify();
@@ -61,12 +78,16 @@ impl WorkspaceWindow {
     fn apply_babel_result(
         &mut self,
         session: gpui::Entity<crate::document::DocumentSession>,
+        editor: gpui::Entity<crate::editor::SemanticEditor>,
         result: Result<crate::babel::PreparedBabelOutput, String>,
         cx: &mut Context<Self>,
     ) {
         let mut output = match result {
             Ok(output) => output,
             Err(message) => {
+                editor.update(cx, |editor, cx| {
+                    editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
+                });
                 self.show_echo_message(
                     EchoMessage::error(format!("PlantUML failed: {message}")),
                     cx,
@@ -80,6 +101,9 @@ impl WorkspaceWindow {
                 && current == &session
         });
         if !current {
+            editor.update(cx, |editor, cx| {
+                editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
+            });
             self.show_echo_message(
                 EchoMessage::warning("PlantUML result was discarded because the source changed"),
                 cx,
@@ -89,10 +113,14 @@ impl WorkspaceWindow {
         output = match output.publish() {
             Ok(output) => output,
             Err(message) => {
+                editor.update(cx, |editor, cx| {
+                    editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
+                });
                 self.show_echo_message(EchoMessage::error(message), cx);
                 return;
             }
         };
+        let source_block_start = output.source_block_start;
         let target = output.target.to_string_lossy().into_owned();
         let result_link = output.result_link.clone();
         let warning = output.warnings.first().cloned();
@@ -111,6 +139,9 @@ impl WorkspaceWindow {
                 )
             });
             if result.is_err() {
+                editor.update(cx, |editor, cx| {
+                    editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
+                });
                 self.show_echo_message(
                     EchoMessage::warning(
                         "The image was written, but #+RESULTS could not be updated",
@@ -125,6 +156,9 @@ impl WorkspaceWindow {
             || EchoMessage::success(format!("Generated {result_link} ({target})")),
             |warning| EchoMessage::warning(format!("Generated {result_link}; warning: {warning}")),
         );
+        editor.update(cx, |editor, cx| {
+            editor.finish_source_run_feedback_at(source_block_start, SourceRunPhase::Success, cx)
+        });
         self.show_echo_message(message, cx);
     }
 }

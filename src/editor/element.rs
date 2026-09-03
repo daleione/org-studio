@@ -3,13 +3,14 @@ use std::time::Instant;
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
-    App, BorderStyle, Bounds, ContentMask, Corners, Edges, Element, ElementId, ElementInputHandler,
-    GlobalElementId, LayoutId, PaintQuad, Pixels, RenderImage, ShapedLine, Style, TextAlign,
-    TextRun, Window, WrappedLine, fill, outline, point, px, quad, relative, rgba, size,
+    App, BorderStyle, Bounds, ContentMask, Corners, CursorStyle, Edges, Element, ElementId,
+    ElementInputHandler, GlobalElementId, Hitbox, HitboxBehavior, LayoutId, PaintQuad, Pixels,
+    RenderImage, ShapedLine, Style, TextAlign, TextRun, Window, WrappedLine, fill, outline, point,
+    px, quad, relative, rgba, size,
 };
 
 use crate::{
-    document::{ByteRange, LineIndex, TextSnapshot},
+    document::{ByteOffset, ByteRange, LineIndex, TextSnapshot},
     theme::current_theme,
 };
 
@@ -23,6 +24,13 @@ const BLOCK_LEFT_INSET: f32 = 8.0;
 const BLOCK_RIGHT_INSET: f32 = 16.0;
 const BLOCK_TEXT_INSET: f32 = 16.0;
 const BLOCK_TEXT_RIGHT_PADDING: f32 = 8.0;
+const SOURCE_GUTTER_INSET: f32 = 1.0;
+const SOURCE_GUTTER_WIDTH: f32 = 24.0;
+const SOURCE_TEXT_INSET: f32 = 42.0;
+const SOURCE_LINE_NUMBER_FONT_SCALE: f32 = 0.70;
+const SOURCE_RUN_BUTTON_SIZE: f32 = 20.0;
+const SOURCE_RUN_BUTTON_HIT_SLOP: f32 = 4.0;
+const SOURCE_RUN_ICON_FONT_SCALE: f32 = 0.82;
 const BLOCK_VERTICAL_INSET: f32 = 2.0;
 const BLOCK_RADIUS: f32 = 7.0;
 
@@ -49,6 +57,7 @@ pub struct PrepaintState {
     started_at: Instant,
     rows: Vec<PaintRow>,
     block_backgrounds: Vec<PaintQuad>,
+    source_run_buttons: Vec<SourceRunButtonPaint>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     gutter: PaintQuad,
@@ -77,6 +86,7 @@ struct MinimapRasterRequest {
 struct PaintRow {
     hit: HitRow,
     gutter_layout: ShapedLine,
+    source_line_number_layout: Option<ShapedLine>,
     shape_key: ShapeKey,
     visual_rows: usize,
     metrics: syntax::BlockMetrics,
@@ -86,6 +96,15 @@ struct PaintRow {
     folded: bool,
     background: Option<PaintQuad>,
     animation_clip_y: Option<(Pixels, Pixels)>,
+}
+
+struct SourceRunButtonPaint {
+    source_offset: ByteOffset,
+    bounds: Bounds<Pixels>,
+    interaction_bounds: Bounds<Pixels>,
+    hitbox: Hitbox,
+    accent: u32,
+    icon: ShapedLine,
 }
 
 fn animated_paint_lines(
@@ -384,6 +403,32 @@ impl Element for EditorElement {
                 window
                     .text_system()
                     .shape_line(number, font_size, &[gutter_run], None);
+            let source_line_number_layout = line_style
+                .block
+                .as_ref()
+                .filter(|block| is_source_block_kind(&block.kind))
+                .and_then(|block| {
+                    block
+                        .body_line
+                        .map(|body_line| (body_line, editor_block_accent(&block.kind, theme)))
+                })
+                .map(|(body_line, accent)| {
+                    let number: gpui::SharedString = body_line.to_string().into();
+                    let run = TextRun {
+                        len: number.len(),
+                        font: style.font(),
+                        color: rgba((accent << 8) | 0xd0).into(),
+                        background_color: None,
+                        underline: None,
+                        strikethrough: None,
+                    };
+                    window.text_system().shape_line(
+                        number,
+                        px(f32::from(font_size) * SOURCE_LINE_NUMBER_FONT_SCALE),
+                        &[run],
+                        None,
+                    )
+                });
             let total_height =
                 metrics.before + visual_rows as f32 * metrics.line_height + metrics.after;
             // A fold transition may paint a sparse sample, so those rows need absolute animated
@@ -464,6 +509,7 @@ impl Element for EditorElement {
             rows.push(PaintRow {
                 hit,
                 gutter_layout,
+                source_line_number_layout,
                 shape_key,
                 visual_rows,
                 metrics,
@@ -507,22 +553,95 @@ impl Element for EditorElement {
             window.scale_factor(),
             theme,
         );
-        if editor.fold_animation.is_none()
-            && let Some(request) = minimap_raster_request
-        {
+        let schedule_minimap = editor.fold_animation.is_none();
+        let source_run_feedback = editor.source_run_feedback;
+        if schedule_minimap && let Some(request) = minimap_raster_request {
             schedule_minimap_raster(self.editor.clone(), request, cx);
         }
-        let block_backgrounds = editor_block_backgrounds(
-            &rows,
-            bounds.left() + px(gutter_width),
-            bounds.right() - px(minimap_width),
-            theme,
-        );
+        let text_left = bounds.left() + px(gutter_width);
+        let text_right = bounds.right() - px(minimap_width);
+        let mut block_backgrounds = editor_block_backgrounds(&rows, text_left, text_right, theme);
+        block_backgrounds.extend(editor_source_gutter_backgrounds(
+            &rows, text_left, text_right, theme,
+        ));
+        let source_run_buttons = rows
+            .iter()
+            .filter(|row| {
+                row.block.as_ref().is_some_and(|block| {
+                    block.kind == syntax::EditorBlockKind::Source
+                        && block.edge == syntax::EditorBlockEdge::Open
+                })
+            })
+            .map(|row| {
+                let button_left = text_left
+                    + px(BLOCK_LEFT_INSET
+                        + SOURCE_GUTTER_INSET
+                        + (SOURCE_GUTTER_WIDTH - SOURCE_RUN_BUTTON_SIZE) / 2.0);
+                let row_height = f32::from(row.hit.visible_bottom - row.hit.visible_top);
+                let button_top = row.hit.visible_top
+                    + px(((row_height - SOURCE_RUN_BUTTON_SIZE) / 2.0).max(0.0));
+                let bounds = Bounds::new(
+                    point(button_left, button_top),
+                    size(px(SOURCE_RUN_BUTTON_SIZE), px(SOURCE_RUN_BUTTON_SIZE)),
+                );
+                let interaction_bounds = Bounds::new(
+                    point(
+                        button_left - px(SOURCE_RUN_BUTTON_HIT_SLOP),
+                        button_top - px(SOURCE_RUN_BUTTON_HIT_SLOP),
+                    ),
+                    size(
+                        px(SOURCE_RUN_BUTTON_SIZE + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
+                        px(SOURCE_RUN_BUTTON_SIZE + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
+                    ),
+                );
+                let feedback = source_run_feedback
+                    .filter(|feedback| feedback.source_offset == row.hit.range.start);
+                let (icon_text, accent) = match feedback.map(|feedback| feedback.phase) {
+                    Some(super::SourceRunPhase::Running) => {
+                        window.request_animation_frame();
+                        let frames = ["◐", "◓", "◑", "◒"];
+                        let frame = feedback
+                            .map(|feedback| {
+                                (feedback.started_at.elapsed().as_millis() / 90) as usize
+                                    % frames.len()
+                            })
+                            .unwrap_or(0);
+                        (frames[frame], theme.meta)
+                    }
+                    Some(super::SourceRunPhase::Success) => ("✓", theme.heading[2]),
+                    Some(super::SourceRunPhase::Failure) => ("!", 0xb23a63),
+                    None => ("▶", theme.meta),
+                };
+                let icon: gpui::SharedString = icon_text.into();
+                let run = TextRun {
+                    len: icon.len(),
+                    font: style.font(),
+                    color: rgba((accent << 8) | 0xd0).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                };
+                SourceRunButtonPaint {
+                    source_offset: row.hit.range.start,
+                    bounds,
+                    interaction_bounds,
+                    hitbox: window.insert_hitbox(interaction_bounds, HitboxBehavior::Normal),
+                    accent,
+                    icon: window.text_system().shape_line(
+                        icon,
+                        px(f32::from(font_size) * SOURCE_RUN_ICON_FONT_SCALE),
+                        &[run],
+                        None,
+                    ),
+                }
+            })
+            .collect();
         PrepaintState {
             #[cfg(feature = "benchmarks")]
             started_at,
             rows,
             block_backgrounds,
+            source_run_buttons,
             selection: selection_quads,
             caret,
             gutter: fill(
@@ -557,6 +676,14 @@ impl Element for EditorElement {
             .iter()
             .map(|row| row.hit.clone())
             .collect::<Arc<[HitRow]>>();
+        let source_run_button_hits = state
+            .source_run_buttons
+            .iter()
+            .map(|button| super::SourceRunButtonHit {
+                bounds: button.interaction_bounds,
+                source_offset: button.source_offset,
+            })
+            .collect::<Arc<[_]>>();
         let shaped = state
             .rows
             .iter()
@@ -633,7 +760,72 @@ impl Element for EditorElement {
                     for selection in state.selection.drain(..) {
                         window.paint_quad(selection);
                     }
+                    for button in &state.source_run_buttons {
+                        let hovered = button.hitbox.is_hovered(window);
+                        if hovered {
+                            window.set_cursor_style(CursorStyle::PointingHand, &button.hitbox);
+                            let radius = px(5.0);
+                            window.paint_quad(quad(
+                                button.bounds,
+                                Corners {
+                                    top_left: radius,
+                                    top_right: radius,
+                                    bottom_right: radius,
+                                    bottom_left: radius,
+                                },
+                                rgba((button.accent << 8) | 0x1f),
+                                Edges::default(),
+                                rgba(0),
+                                BorderStyle::default(),
+                            ));
+                        }
+                        let icon_x = button.bounds.left()
+                            + px(
+                                ((SOURCE_RUN_BUTTON_SIZE - f32::from(button.icon.width())) / 2.0)
+                                    .max(0.0),
+                            );
+                        let _ = button.icon.paint(
+                            point(icon_x, button.bounds.top()),
+                            button.bounds.size.height,
+                            TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    }
                     for row in &state.rows {
+                        if let Some(number_layout) = &row.source_line_number_layout {
+                            let number_x = text_left
+                                + px(BLOCK_LEFT_INSET + SOURCE_GUTTER_INSET)
+                                + px(((SOURCE_GUTTER_WIDTH - f32::from(number_layout.width()))
+                                    / 2.0)
+                                    .max(0.0));
+                            let mut paint_number = |window: &mut Window| {
+                                let _ = number_layout.paint(
+                                    point(number_x, row.hit.origin_y),
+                                    row.hit.line_height,
+                                    TextAlign::Left,
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            };
+                            if let Some((top, bottom)) = row.animation_clip_y {
+                                if bottom > top {
+                                    window.with_content_mask(
+                                        Some(ContentMask {
+                                            bounds: Bounds::from_corners(
+                                                point(text_bounds.left(), top),
+                                                point(text_bounds.right(), bottom),
+                                            ),
+                                        }),
+                                        paint_number,
+                                    );
+                                }
+                            } else {
+                                paint_number(window);
+                            }
+                        }
                         let mut paint = |window: &mut Window| {
                             let _ = row.hit.layout.paint(
                                 point(row.hit.text_origin_x, row.hit.origin_y),
@@ -683,6 +875,7 @@ impl Element for EditorElement {
                 size(px(editor.minimap.width), bounds.size.height),
             ));
             editor.hit_rows = hits;
+            editor.source_run_buttons = source_run_button_hits;
             if editor.display_map.soft_wrap() {
                 editor.scroll_x = 0.0;
             } else {
@@ -1101,7 +1294,34 @@ struct EditorBlockPaintRow {
 }
 
 fn editor_block_text_inset(block: Option<&syntax::EditorBlockDecoration>) -> f32 {
-    block.map_or(0.0, |_| BLOCK_TEXT_INSET)
+    block.map_or(0.0, |block| {
+        if is_source_block_kind(&block.kind) {
+            SOURCE_TEXT_INSET
+        } else {
+            BLOCK_TEXT_INSET
+        }
+    })
+}
+
+fn is_source_block_kind(kind: &syntax::EditorBlockKind) -> bool {
+    matches!(
+        kind,
+        syntax::EditorBlockKind::Source | syntax::EditorBlockKind::MarkdownFence
+    )
+}
+
+fn editor_block_accent(kind: &syntax::EditorBlockKind, theme: &crate::theme::Theme) -> u32 {
+    match kind {
+        syntax::EditorBlockKind::Source => theme.meta,
+        syntax::EditorBlockKind::Example => theme.attribute,
+        syntax::EditorBlockKind::Quote => theme.string,
+        syntax::EditorBlockKind::Verse => theme.function,
+        syntax::EditorBlockKind::Center => theme.heading[2],
+        syntax::EditorBlockKind::Comment => theme.comment,
+        syntax::EditorBlockKind::Export => theme.type_name,
+        syntax::EditorBlockKind::Special(_) => theme.foreground_dim,
+        syntax::EditorBlockKind::MarkdownFence => theme.meta,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1193,17 +1413,7 @@ fn editor_block_backgrounds(
         if bottom <= top {
             return None;
         }
-        let accent = match &segment.kind {
-            syntax::EditorBlockKind::Source => theme.meta,
-            syntax::EditorBlockKind::Example => theme.attribute,
-            syntax::EditorBlockKind::Quote => theme.string,
-            syntax::EditorBlockKind::Verse => theme.function,
-            syntax::EditorBlockKind::Center => theme.heading[2],
-            syntax::EditorBlockKind::Comment => theme.comment,
-            syntax::EditorBlockKind::Export => theme.type_name,
-            syntax::EditorBlockKind::Special(_) => theme.foreground_dim,
-            syntax::EditorBlockKind::MarkdownFence => theme.meta,
-        };
+        let accent = editor_block_accent(&segment.kind, theme);
         let radius = px(BLOCK_RADIUS);
         let zero = px(0.0);
         let border = px(1.0);
@@ -1227,6 +1437,68 @@ fn editor_block_backgrounds(
             rgba((accent << 8) | fill_alpha),
             border_widths,
             rgba((accent << 8) | border_alpha),
+            BorderStyle::default(),
+        ))
+    })
+    .collect()
+}
+
+fn editor_source_gutter_backgrounds(
+    rows: &[PaintRow],
+    text_left: Pixels,
+    text_right: Pixels,
+    theme: &crate::theme::Theme,
+) -> Vec<PaintQuad> {
+    let left = text_left + px(BLOCK_LEFT_INSET + SOURCE_GUTTER_INSET);
+    let right = left + px(SOURCE_GUTTER_WIDTH);
+    if right >= text_right - px(BLOCK_RIGHT_INSET) {
+        return Vec::new();
+    }
+    editor_block_segments(rows.iter().map(|row| EditorBlockPaintRow {
+        block: row.block.clone(),
+        top: f32::from(row.hit.visible_top),
+        bottom: f32::from(row.hit.visible_bottom),
+        active: row.active,
+        folded: row.folded,
+    }))
+    .into_iter()
+    .filter(|segment| is_source_block_kind(&segment.kind))
+    .filter_map(|segment| {
+        let top = segment.top
+            + if segment.open {
+                BLOCK_VERTICAL_INSET + SOURCE_GUTTER_INSET
+            } else {
+                0.0
+            };
+        let bottom = segment.bottom
+            - if segment.close {
+                BLOCK_VERTICAL_INSET + SOURCE_GUTTER_INSET
+            } else {
+                0.0
+            };
+        if bottom <= top {
+            return None;
+        }
+        let accent = editor_block_accent(&segment.kind, theme);
+        let radius = px((BLOCK_RADIUS - SOURCE_GUTTER_INSET).max(0.0));
+        let zero = px(0.0);
+        let corners = Corners {
+            top_left: if segment.open { radius } else { zero },
+            top_right: zero,
+            bottom_right: zero,
+            bottom_left: if segment.close { radius } else { zero },
+        };
+        Some(quad(
+            Bounds::from_corners(point(left, px(top)), point(right, px(bottom))),
+            corners,
+            rgba((accent << 8) | 0x06),
+            Edges {
+                top: zero,
+                right: px(1.0),
+                bottom: zero,
+                left: zero,
+            },
+            rgba((accent << 8) | 0x24),
             BorderStyle::default(),
         ))
     })
@@ -1315,6 +1587,7 @@ mod tests {
             block: Some(EditorBlockDecoration {
                 kind: EditorBlockKind::Source,
                 edge,
+                body_line: (edge == EditorBlockEdge::Body).then_some(1),
             }),
             top,
             bottom: top + 28.0,
@@ -1356,13 +1629,14 @@ mod tests {
         let decoration = |kind| EditorBlockDecoration {
             kind,
             edge: EditorBlockEdge::Body,
+            body_line: Some(1),
         };
         let source = decoration(EditorBlockKind::Source);
         let markdown = decoration(EditorBlockKind::MarkdownFence);
         let quote = decoration(EditorBlockKind::Quote);
 
-        assert_eq!(editor_block_text_inset(Some(&source)), 16.0);
-        assert_eq!(editor_block_text_inset(Some(&markdown)), 16.0);
+        assert_eq!(editor_block_text_inset(Some(&source)), 42.0);
+        assert_eq!(editor_block_text_inset(Some(&markdown)), 42.0);
         assert_eq!(editor_block_text_inset(Some(&quote)), 16.0);
         assert_eq!(editor_block_text_inset(None), 0.0);
     }

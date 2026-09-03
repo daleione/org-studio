@@ -65,7 +65,8 @@ actions!(
         Redo,
         Copy,
         Cut,
-        Paste
+        Paste,
+        RunSourceBlock
     ]
 );
 
@@ -118,6 +119,38 @@ pub(super) struct HitRow {
     pub(super) line_height: Pixels,
     pub(super) display: layout_map::DisplayLineText,
     pub(super) layout: Arc<WrappedLine>,
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct SourceRunButtonHit {
+    pub(super) bounds: Bounds<Pixels>,
+    pub(super) source_offset: ByteOffset,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceRunPhase {
+    Running,
+    Success,
+    Failure,
+}
+
+impl SourceRunPhase {
+    fn dismiss_after(self) -> Option<Duration> {
+        match self {
+            Self::Running => None,
+            Self::Success => Some(Duration::from_millis(1_500)),
+            Self::Failure => Some(Duration::from_millis(2_500)),
+        }
+    }
+}
+
+const SOURCE_RUN_MIN_RUNNING_DURATION: Duration = Duration::from_millis(450);
+
+#[derive(Clone, Copy)]
+struct SourceRunFeedback {
+    source_offset: ByteOffset,
+    phase: SourceRunPhase,
+    started_at: Instant,
 }
 
 #[derive(Clone)]
@@ -266,6 +299,11 @@ pub struct SemanticEditor {
     vertical_goal_x: Option<f32>,
     viewport: Option<Bounds<Pixels>>,
     hit_rows: Arc<[HitRow]>,
+    source_run_buttons: Arc<[SourceRunButtonHit]>,
+    source_run_button_hovered: bool,
+    source_run_feedback: Option<SourceRunFeedback>,
+    source_run_feedback_generation: u64,
+    source_run_feedback_task: Option<Task<()>>,
     pending_reveal_caret: bool,
     is_selecting: bool,
     drag_position: Option<Point<Pixels>>,
@@ -513,6 +551,9 @@ impl SemanticEditor {
                     });
                 this.shape_cache.clear();
                 this.hit_rows = Arc::from([]);
+                this.source_run_buttons = Arc::from([]);
+                this.source_run_button_hovered = false;
+                this.map_source_run_feedback(delta);
                 this.vertical_goal_x = None;
             } else if matches!(event, DocumentEvent::Reloaded { .. }) {
                 this.display_map.invalidate_layout();
@@ -524,6 +565,9 @@ impl SemanticEditor {
                 this.fold_animation_revision = this.fold_animation_revision.wrapping_add(1);
                 this.display_map.set_hidden_ranges(Vec::new());
                 this.shape_cache.clear();
+                this.source_run_buttons = Arc::from([]);
+                this.source_run_button_hovered = false;
+                this.clear_source_run_feedback();
                 this.minimap.invalidate_raster();
             }
             if matches!(event, DocumentEvent::Reloaded { .. }) {
@@ -536,6 +580,9 @@ impl SemanticEditor {
                 this.composition = None;
                 this.shape_cache.clear();
                 this.hit_rows = Arc::from([]);
+                this.source_run_buttons = Arc::from([]);
+                this.source_run_button_hovered = false;
+                this.clear_source_run_feedback();
                 this.pending_reveal_caret = false;
                 this.scroll_y = 0.0;
                 this.minimap.note_viewport_changed();
@@ -577,6 +624,11 @@ impl SemanticEditor {
             vertical_goal_x: None,
             viewport: None,
             hit_rows: Arc::from([]),
+            source_run_buttons: Arc::from([]),
+            source_run_button_hovered: false,
+            source_run_feedback: None,
+            source_run_feedback_generation: 0,
+            source_run_feedback_task: None,
             pending_reveal_caret: false,
             is_selecting: false,
             drag_position: None,
@@ -657,6 +709,8 @@ impl SemanticEditor {
         };
         self.shape_cache.clear();
         self.hit_rows = Arc::from([]);
+        self.source_run_buttons = Arc::from([]);
+        self.source_run_button_hovered = false;
         self.vertical_goal_x = None;
         self.minimap.note_viewport_changed();
         cx.notify();
@@ -711,6 +765,109 @@ impl SemanticEditor {
         self.sync_selection_utf16(&snapshot);
         self.reveal_caret(&snapshot);
         cx.notify();
+    }
+
+    pub(crate) fn clear_source_run_feedback(&mut self) {
+        self.source_run_feedback_generation = self.source_run_feedback_generation.wrapping_add(1);
+        self.source_run_feedback_task = None;
+        self.source_run_feedback = None;
+    }
+
+    fn map_source_run_feedback(&mut self, delta: &crate::document::RevisionDelta) {
+        let Some(mut feedback) = self.source_run_feedback else {
+            return;
+        };
+        let position = RevisionRange::new(
+            delta.before,
+            ByteRange::new(feedback.source_offset.0, feedback.source_offset.0),
+        );
+        match delta.map_range(position) {
+            Ok(mapped) => {
+                feedback.source_offset = mapped.range.start;
+                self.source_run_feedback = Some(feedback);
+            }
+            Err(_) => self.clear_source_run_feedback(),
+        }
+    }
+
+    pub(crate) fn show_source_run_feedback(
+        &mut self,
+        source_offset: ByteOffset,
+        phase: SourceRunPhase,
+        cx: &mut Context<Self>,
+    ) {
+        self.clear_source_run_feedback();
+        self.source_run_feedback = Some(SourceRunFeedback {
+            source_offset,
+            phase,
+            started_at: Instant::now(),
+        });
+        let duration = phase.dismiss_after();
+        if let Some(duration) = duration {
+            let generation = self.source_run_feedback_generation;
+            let delay = cx.background_executor().timer(duration);
+            self.source_run_feedback_task = Some(cx.spawn(async move |this, cx| {
+                delay.await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.source_run_feedback_generation != generation {
+                        return;
+                    }
+                    this.clear_source_run_feedback();
+                    cx.notify();
+                });
+            }));
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn finish_source_run_feedback(
+        &mut self,
+        phase: SourceRunPhase,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(feedback) = self.source_run_feedback else {
+            return;
+        };
+        self.finish_source_run_feedback_at(feedback.source_offset, phase, cx);
+    }
+
+    pub(crate) fn finish_source_run_feedback_at(
+        &mut self,
+        source_offset: ByteOffset,
+        phase: SourceRunPhase,
+        cx: &mut Context<Self>,
+    ) {
+        let transition_delay = self
+            .source_run_feedback
+            .filter(|feedback| {
+                feedback.source_offset == source_offset && feedback.phase == SourceRunPhase::Running
+            })
+            .map(|feedback| {
+                SOURCE_RUN_MIN_RUNNING_DURATION.saturating_sub(feedback.started_at.elapsed())
+            })
+            .unwrap_or_default();
+        if transition_delay.is_zero() {
+            self.show_source_run_feedback(source_offset, phase, cx);
+            return;
+        }
+
+        self.source_run_feedback_generation = self.source_run_feedback_generation.wrapping_add(1);
+        self.source_run_feedback_task = None;
+        let generation = self.source_run_feedback_generation;
+        let delay = cx.background_executor().timer(transition_delay);
+        self.source_run_feedback_task = Some(cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                let still_running = this.source_run_feedback.is_some_and(|feedback| {
+                    feedback.source_offset == source_offset
+                        && feedback.phase == SourceRunPhase::Running
+                });
+                if this.source_run_feedback_generation != generation || !still_running {
+                    return;
+                }
+                this.show_source_run_feedback(source_offset, phase, cx);
+            });
+        }));
     }
 
     fn sync_selection_revision(&mut self, cx: &App) {
@@ -830,6 +987,20 @@ fn word_boundary(snapshot: &DocumentSnapshot, offset: ByteOffset, forward: bool)
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    #[test]
+    fn source_run_result_feedback_is_transient() {
+        assert_eq!(SOURCE_RUN_MIN_RUNNING_DURATION, Duration::from_millis(450));
+        assert_eq!(SourceRunPhase::Running.dismiss_after(), None);
+        assert_eq!(
+            SourceRunPhase::Success.dismiss_after(),
+            Some(Duration::from_millis(1_500))
+        );
+        assert_eq!(
+            SourceRunPhase::Failure.dismiss_after(),
+            Some(Duration::from_millis(2_500))
+        );
+    }
 
     #[test]
     fn local_fold_animation_eases_between_expanded_and_collapsed_scales() {

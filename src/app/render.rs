@@ -168,6 +168,11 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ShowReading, _, cx| this.show_reading(cx)))
             .on_action(cx.listener(|this, _: &ShowSplit, _, cx| this.show_split(cx)))
             .on_action(cx.listener(|this, _: &ToggleSoftWrap, _, cx| this.toggle_soft_wrap(cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::editor::RunSourceBlock, window, cx| {
+                    this.execute_source_block(window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &IncreaseContentFontSize, _, cx| {
                 this.increase_content_font_size(cx)
             }))

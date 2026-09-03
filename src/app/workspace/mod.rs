@@ -100,6 +100,7 @@ impl WorkspaceWindow {
             },
             load_task: None,
             babel_task: None,
+            babel_editor: None,
             babel_request: 0,
             derived: crate::app::DerivedHost::default(),
             file_watch_task: None,

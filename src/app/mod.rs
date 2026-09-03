@@ -264,6 +264,7 @@ pub struct WorkspaceWindow {
     pub(crate) pending_surface_anchors: PanePair<Option<SurfaceAnchor>>,
     pub(crate) load_task: Option<Task<()>>,
     pub(crate) babel_task: Option<Task<()>>,
+    pub(crate) babel_editor: Option<gpui::Entity<crate::editor::SemanticEditor>>,
     pub(crate) babel_request: u64,
     pub(crate) derived: DerivedHost,
     pub(crate) file_watch_task: Option<Task<()>>,

@@ -835,6 +835,17 @@ impl SemanticEditor {
         window.focus(&self.focus_handle, cx);
         self.finish_composition(cx);
         self.vertical_goal_x = None;
+        if let Some(source_offset) = self
+            .source_run_buttons
+            .iter()
+            .find(|button| button.bounds.contains(&event.position))
+            .map(|button| button.source_offset)
+        {
+            self.set_selection(Selection::caret(source_offset), cx);
+            self.show_source_run_feedback(source_offset, super::SourceRunPhase::Running, cx);
+            window.dispatch_action(Box::new(super::RunSourceBlock), cx);
+            return;
+        }
         if let Some(bounds) = self.minimap.bounds {
             let x = f32::from(event.position.x);
             if (x - f32::from(bounds.left())).abs() <= super::minimap::RESIZE_HANDLE {
@@ -903,6 +914,14 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let source_run_button_hovered = self
+            .source_run_buttons
+            .iter()
+            .any(|button| button.bounds.contains(&event.position));
+        if source_run_button_hovered != self.source_run_button_hovered {
+            self.source_run_button_hovered = source_run_button_hovered;
+            cx.notify();
+        }
         if let Some((start_x, start_width)) = self.minimap.resizing {
             self.minimap.width = (start_width + start_x - f32::from(event.position.x))
                 .clamp(super::minimap::MIN_WIDTH, super::minimap::MAX_WIDTH);

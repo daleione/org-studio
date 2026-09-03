@@ -174,6 +174,7 @@ pub(super) enum EditorBlockEdge {
 pub(super) struct EditorBlockDecoration {
     pub(super) kind: EditorBlockKind,
     pub(super) edge: EditorBlockEdge,
+    pub(super) body_line: Option<u64>,
 }
 
 impl EditorStyleId {
@@ -262,6 +263,7 @@ impl EditorStyleSnapshot {
                 let text = classification_text(snapshot, source_range);
                 let todo = heading_todo_span(language, &text, &code);
                 let block_before = code.block_kind.clone();
+                let block_body_line_before = code.block_body_line;
                 let id = classify_line(language, &text, &mut code);
                 Some(EditorLineStyle {
                     source_range,
@@ -269,7 +271,13 @@ impl EditorStyleSnapshot {
                     code_language: (id == EditorStyleId::Code)
                         .then(|| code.code_language.clone())
                         .flatten(),
-                    block: block_decoration(id, block_before, code.block_kind.clone()),
+                    block: block_decoration(
+                        id,
+                        block_before,
+                        code.block_kind.clone(),
+                        block_body_line_before,
+                        code.block_body_line,
+                    ),
                     todo,
                     metrics: metrics_for(id),
                 })
@@ -298,6 +306,7 @@ impl SparseEditorStyleSnapshot {
                 let mut code = cache.context_at(snapshot, language, line);
                 let todo = heading_todo_span(language, &text, &code);
                 let block_before = code.block_kind.clone();
+                let block_body_line_before = code.block_body_line;
                 let id = classify_line(language, &text, &mut code);
                 Some((
                     line,
@@ -307,7 +316,13 @@ impl SparseEditorStyleSnapshot {
                         code_language: (id == EditorStyleId::Code)
                             .then(|| code.code_language.clone())
                             .flatten(),
-                        block: block_decoration(id, block_before, code.block_kind.clone()),
+                        block: block_decoration(
+                            id,
+                            block_before,
+                            code.block_kind.clone(),
+                            block_body_line_before,
+                            code.block_body_line,
+                        ),
                         todo,
                         metrics: metrics_for(id),
                     },
@@ -356,6 +371,7 @@ struct TodoSpan {
 struct CodeContext {
     in_block: bool,
     block_kind: Option<EditorBlockKind>,
+    block_body_line: u64,
     org_end_marker: Option<Arc<str>>,
     markdown_fence: Option<u8>,
     code_language: Option<Arc<str>>,
@@ -368,6 +384,7 @@ impl Default for CodeContext {
         Self {
             in_block: false,
             block_kind: None,
+            block_body_line: 0,
             org_end_marker: None,
             markdown_fence: None,
             code_language: None,
@@ -408,6 +425,7 @@ fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> Edit
         return EditorStyleId::CodeBoundary;
     }
     if code.in_block {
+        code.block_body_line = code.block_body_line.saturating_add(1);
         return EditorStyleId::Code;
     }
     if language == Language::Org {
@@ -459,6 +477,7 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
                 if text.trim().eq_ignore_ascii_case(end_marker) {
                     code.in_block = false;
                     code.block_kind = None;
+                    code.block_body_line = 0;
                     code.org_end_marker = None;
                     code.code_language = None;
                     return true;
@@ -479,6 +498,7 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
                 });
                 code.org_end_marker = Some(Arc::from(format!("#+end_{name}")));
                 code.code_language = language;
+                code.block_body_line = 0;
                 true
             } else {
                 starts_with_ascii_case_insensitive(text, "#+end_")
@@ -501,11 +521,13 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
                 }
                 code.in_block = false;
                 code.block_kind = None;
+                code.block_body_line = 0;
                 code.markdown_fence = None;
                 code.code_language = None;
             } else {
                 code.in_block = true;
                 code.block_kind = Some(EditorBlockKind::MarkdownFence);
+                code.block_body_line = 0;
                 code.markdown_fence = Some(marker);
                 code.code_language = markdown_fence_language(text, marker);
             }
@@ -550,22 +572,27 @@ fn block_decoration(
     style: EditorStyleId,
     before: Option<EditorBlockKind>,
     after: Option<EditorBlockKind>,
+    block_body_line_before: u64,
+    block_body_line: u64,
 ) -> Option<EditorBlockDecoration> {
     match style {
         EditorStyleId::CodeBoundary => match (before, after) {
             (None, Some(kind)) => Some(EditorBlockDecoration {
                 kind,
                 edge: EditorBlockEdge::Open,
+                body_line: None,
             }),
             (Some(kind), None) => Some(EditorBlockDecoration {
                 kind,
                 edge: EditorBlockEdge::Close,
+                body_line: Some(block_body_line_before.saturating_add(1)),
             }),
             _ => None,
         },
         EditorStyleId::Code => after.or(before).map(|kind| EditorBlockDecoration {
             kind,
             edge: EditorBlockEdge::Body,
+            body_line: Some(block_body_line),
         }),
         _ => None,
     }
@@ -575,6 +602,9 @@ fn update_code_context(language: Language, text: &str, code: &mut CodeContext) {
     let trimmed = text.trim_start();
     let was_in_block = code.in_block;
     let boundary = code_boundary(language, trimmed, code);
+    if !boundary && code.in_block {
+        code.block_body_line = code.block_body_line.saturating_add(1);
+    }
     if language == Language::Org && !was_in_block && !boundary && !code.in_block {
         update_org_todo_faces(trimmed, code);
     }
@@ -1218,12 +1248,19 @@ mod tests {
     fn line_style(text: &str, context: &mut CodeContext) -> EditorLineStyle {
         let todo = heading_todo_span(Language::Org, text, context);
         let block_before = context.block_kind.clone();
+        let block_body_line_before = context.block_body_line;
         let id = classify_line(Language::Org, text, context);
         EditorLineStyle {
             source_range: ByteRange::new(0, text.len() as u64),
             id,
             code_language: None,
-            block: block_decoration(id, block_before, context.block_kind.clone()),
+            block: block_decoration(
+                id,
+                block_before,
+                context.block_kind.clone(),
+                block_body_line_before,
+                context.block_body_line,
+            ),
             todo,
             metrics: metrics_for(id),
         }
@@ -1467,21 +1504,45 @@ mod tests {
             Some(EditorBlockDecoration {
                 kind: EditorBlockKind::Source,
                 edge: EditorBlockEdge::Open,
+                body_line: None,
             })
         );
         assert_eq!(styles.lines[1].id, EditorStyleId::Code);
         assert_eq!(styles.lines[1].code_language.as_deref(), Some("rust"));
+        assert_eq!(styles.lines[1].block.as_ref().unwrap().body_line, Some(1));
         assert_eq!(styles.lines[2].id, EditorStyleId::CodeBoundary);
         assert_eq!(
             styles.lines[2].block,
             Some(EditorBlockDecoration {
                 kind: EditorBlockKind::Source,
                 edge: EditorBlockEdge::Close,
+                body_line: Some(2),
             })
         );
         assert_eq!(styles.lines[3].id, EditorStyleId::Plain);
         let body_only = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 1..2, &cache);
         assert_eq!(body_only.lines[0].id, EditorStyleId::Code);
+        assert_eq!(
+            body_only.lines[0].block.as_ref().unwrap().body_line,
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn source_body_line_numbers_are_stable_when_the_viewport_starts_inside_the_block() {
+        let snapshot = DocumentSnapshot::from_utf8(
+            b"#+begin_src plantuml\n@startuml\nAlice -> Bob\n@enduml\n#+end_src\n".to_vec(),
+        )
+        .unwrap();
+        let cache = EditorSyntaxCache::default();
+        let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..5, &cache);
+        assert_eq!(styles.lines[1].block.as_ref().unwrap().body_line, Some(1));
+        assert_eq!(styles.lines[2].block.as_ref().unwrap().body_line, Some(2));
+        assert_eq!(styles.lines[3].block.as_ref().unwrap().body_line, Some(3));
+        assert_eq!(styles.lines[4].block.as_ref().unwrap().body_line, Some(4));
+
+        let middle = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 2..3, &cache);
+        assert_eq!(middle.lines[0].block.as_ref().unwrap().body_line, Some(2));
     }
 
     #[test]
