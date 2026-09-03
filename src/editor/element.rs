@@ -33,6 +33,8 @@ const SOURCE_RUN_BUTTON_HIT_SLOP: f32 = 4.0;
 const SOURCE_RUN_ICON_FONT_SCALE: f32 = 0.82;
 const BLOCK_VERTICAL_INSET: f32 = 2.0;
 const BLOCK_RADIUS: f32 = 7.0;
+const INLINE_IMAGE_VERTICAL_PADDING: f32 = 6.0;
+const INLINE_IMAGE_MAX_WIDTH: f32 = 640.0;
 
 pub struct EditorElement {
     editor: gpui::Entity<SemanticEditor>,
@@ -61,6 +63,7 @@ pub struct PrepaintState {
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     gutter: PaintQuad,
+    content_left: Pixels,
     minimap: MinimapPaint,
 }
 
@@ -96,6 +99,12 @@ struct PaintRow {
     folded: bool,
     background: Option<PaintQuad>,
     animation_clip_y: Option<(Pixels, Pixels)>,
+    inline_image: Option<InlineImagePaint>,
+}
+
+struct InlineImagePaint {
+    image: Arc<RenderImage>,
+    bounds: Bounds<Pixels>,
 }
 
 struct SourceRunButtonPaint {
@@ -249,6 +258,31 @@ impl Element for EditorElement {
             let layout_reconfigured = editor
                 .display_map
                 .configure(snapshot.len_lines(), wrap_width);
+            if layout_reconfigured {
+                let inline_image_lines = editor
+                    .inline_image_line_dimensions
+                    .borrow()
+                    .iter()
+                    .map(|(&line, &(line_start, width, height))| (line, line_start, width, height))
+                    .collect::<Vec<_>>();
+                for (line, line_start, width, height) in inline_image_lines {
+                    if !editor.previews_inline_image_at(ByteOffset(line_start)) {
+                        continue;
+                    }
+                    let (_, height) = crate::preview::fitted_image_size(
+                        width,
+                        height,
+                        wrap_width.min(INLINE_IMAGE_MAX_WIDTH),
+                    );
+                    editor.display_map.update_line_layout(
+                        line,
+                        1,
+                        height,
+                        INLINE_IMAGE_VERTICAL_PADDING,
+                        INLINE_IMAGE_VERTICAL_PADDING,
+                    );
+                }
+            }
             let anchored = if layout_reconfigured {
                 editor.minimap.invalidate_raster();
                 editor.animated_line_start_y(anchor_line)
@@ -263,6 +297,93 @@ impl Element for EditorElement {
                 editor.animated_document_height(),
             );
         });
+        let inline_image_candidates = {
+            let editor = self.editor.read(cx);
+            let document_path = editor.session.read(cx).path().to_path_buf();
+            if crate::document::DocumentFormat::from_path(&document_path)
+                == crate::document::DocumentFormat::Org
+            {
+                let visible_lines = editor.animated_visible_line_range(
+                    &snapshot,
+                    editor.scroll_y,
+                    f32::from(bounds.size.height),
+                );
+                visible_lines
+                    .filter(|line| !editor.display_map.is_hidden(*line))
+                    .filter_map(|line| {
+                        let range = snapshot.line_content_range(LineIndex(line)).ok()?;
+                        if !editor.previews_inline_image_at(range.start) {
+                            return None;
+                        }
+                        let text = snapshot.copy_range(range);
+                        let target = crate::org_syntax::standalone_image_path(&text)?;
+                        let path = crate::preview::resolve_image_path(&document_path, target);
+                        let cached = editor.cached_inline_image_render(&path);
+                        if let Some((_, dimensions)) = &cached {
+                            editor
+                                .inline_image_line_dimensions
+                                .borrow_mut()
+                                .insert(line, (range.start.0, dimensions.0, dimensions.1));
+                        }
+                        Some((line, range.start.0, path, cached))
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            }
+        };
+        let inline_images = inline_image_candidates
+            .into_iter()
+            .filter_map(|(line, line_start, path, cached)| {
+                let previous_dimensions = cached.as_ref().map(|(_, dimensions)| *dimensions);
+                let path: Arc<std::path::Path> = path.into();
+                let resource: gpui::Resource = path.clone().into();
+                let loaded = window.use_asset::<gpui::ImgResourceLoader>(&resource, cx);
+                let (image, dimensions) = match loaded {
+                    Some(Ok(image)) => self
+                        .editor
+                        .read(cx)
+                        .accept_inline_image_render(path.as_ref(), image),
+                    Some(Err(_)) => {
+                        let changed = self.editor.read(cx).fail_inline_image_render(path.as_ref());
+                        if changed {
+                            self.editor.update(cx, |editor, cx| {
+                                editor
+                                    .inline_image_line_dimensions
+                                    .borrow_mut()
+                                    .remove(&line);
+                                editor.display_map.invalidate_line_layout(line);
+                                cx.notify();
+                            });
+                        }
+                        return None;
+                    }
+                    None => cached?,
+                };
+                if previous_dimensions != Some(dimensions) {
+                    self.editor.update(cx, |editor, cx| {
+                        editor
+                            .inline_image_line_dimensions
+                            .borrow_mut()
+                            .insert(line, (line_start, dimensions.0, dimensions.1));
+                        editor.display_map.invalidate_line_layout(line);
+                        cx.notify();
+                    });
+                } else {
+                    self.editor
+                        .read(cx)
+                        .inline_image_line_dimensions
+                        .borrow_mut()
+                        .insert(line, (line_start, dimensions.0, dimensions.1));
+                }
+                let (width, height) = crate::preview::fitted_image_size(
+                    dimensions.0,
+                    dimensions.1,
+                    wrap_width.min(INLINE_IMAGE_MAX_WIDTH),
+                );
+                Some((line, (image, width, height, path)))
+            })
+            .collect::<std::collections::HashMap<_, _>>();
         let editor = self.editor.read(cx);
         let selection = editor.selection;
         let marked = editor.marked.as_ref().map(|range| range.bytes);
@@ -339,10 +460,18 @@ impl Element for EditorElement {
             } else {
                 wrap_width
             };
-            let metrics = line_style
+            let mut metrics = line_style
                 .metrics
                 .scaled(editor.content_font_size().scale());
             let display_text = folded_display_text(display.text.clone(), folded);
+            let inline_image_source = (!folded)
+                .then(|| inline_images.get(&line_number).cloned())
+                .flatten();
+            if let Some((_, _, height, _)) = &inline_image_source {
+                metrics.before = INLINE_IMAGE_VERTICAL_PADDING;
+                metrics.line_height = *height;
+                metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
+            }
             let text: gpui::SharedString = display_text.into();
             let base_run = TextRun {
                 len: text.len(),
@@ -389,7 +518,11 @@ impl Element for EditorElement {
                         .map(Arc::new)
                         .unwrap_or_else(|| Arc::new(WrappedLine::default()))
                 });
-            let visual_rows = layout.wrap_boundaries().len() + 1;
+            let visual_rows = if inline_image_source.is_some() {
+                1
+            } else {
+                layout.wrap_boundaries().len() + 1
+            };
             let number: gpui::SharedString = (line_number + 1).to_string().into();
             let gutter_run = TextRun {
                 len: number.len(),
@@ -445,6 +578,13 @@ impl Element for EditorElement {
             let animated_height = total_height * line_animation_scale;
             let animation_clip_y = (line_animation_scale < 0.999)
                 .then_some((block_top, block_top + px(animated_height)));
+            let inline_image = inline_image_source.map(|(image, width, height, _)| {
+                let bounds = Bounds::new(
+                    point(row_text_origin_x, origin_y),
+                    size(px(width), px(height)),
+                );
+                InlineImagePaint { image, bounds }
+            });
             let hit = HitRow {
                 range: source_line.visible_range,
                 line,
@@ -455,12 +595,16 @@ impl Element for EditorElement {
                 line_height: px(metrics.line_height),
                 display,
                 layout,
+                inline_image_preview: inline_image.is_some(),
             };
 
             let selected = selection.range();
             let selected_start = selected.start.0.max(full_range.start.0);
             let selected_end = selected.end.0.min(full_range.end.0);
-            if selected_start < selected_end && line_animation_scale >= 0.999 {
+            if inline_image.is_none()
+                && selected_start < selected_end
+                && line_animation_scale >= 0.999
+            {
                 let source_local_start = selected_start
                     .saturating_sub(content_range.start.0)
                     .min(hit.layout.len() as u64) as usize;
@@ -479,7 +623,27 @@ impl Element for EditorElement {
                 );
             }
 
-            if anchor.is_some()
+            if let Some(image) = inline_image.as_ref()
+                && anchor.is_some()
+                && selection.is_empty()
+                && selection.head() >= content_range.start
+                && selection.head() <= content_range.end
+                && line_animation_scale >= 0.999
+            {
+                let caret_x = if selection.head() <= content_range.start {
+                    image.bounds.left() - px(2.0)
+                } else {
+                    image.bounds.right() + px(1.0)
+                };
+                caret = Some(fill(
+                    Bounds::new(
+                        point(caret_x, image.bounds.top() + px(1.0)),
+                        size(px(1.5), (image.bounds.size.height - px(2.0)).max(px(1.0))),
+                    ),
+                    gpui::rgb(theme.foreground),
+                ));
+            } else if inline_image.is_none()
+                && anchor.is_some()
                 && selection.is_empty()
                 && selection.head() >= content_range.start
                 && selection.head() <= content_range.end
@@ -527,6 +691,7 @@ impl Element for EditorElement {
                     theme,
                 ),
                 animation_clip_y,
+                inline_image,
             });
             if !fold_animation_active {
                 next_y += total_height;
@@ -555,14 +720,33 @@ impl Element for EditorElement {
         );
         let schedule_minimap = editor.fold_animation.is_none();
         let source_run_feedback = editor.source_run_feedback;
+        let horizontal_scroll = editor.scroll_x;
         if schedule_minimap && let Some(request) = minimap_raster_request {
             schedule_minimap_raster(self.editor.clone(), request, cx);
         }
-        let text_left = bounds.left() + px(gutter_width);
-        let text_right = bounds.right() - px(minimap_width);
-        let mut block_backgrounds = editor_block_backgrounds(&rows, text_left, text_right, theme);
+        let viewport_text_left = bounds.left() + px(gutter_width);
+        let viewport_text_right = bounds.right() - px(minimap_width);
+        let (block_left, block_minimum_right) = editor_block_horizontal_bounds(
+            viewport_text_left,
+            viewport_text_right,
+            horizontal_scroll,
+        );
+        let block_content_right = rows
+            .iter()
+            .filter(|row| row.block.is_some())
+            .map(|row| {
+                row.hit.text_origin_x
+                    + row.hit.layout.width()
+                    + px(BLOCK_TEXT_RIGHT_PADDING + BLOCK_RIGHT_INSET)
+            })
+            .fold(block_minimum_right, |right, candidate| right.max(candidate));
+        let mut block_backgrounds =
+            editor_block_backgrounds(&rows, block_left, block_content_right, theme);
         block_backgrounds.extend(editor_source_gutter_backgrounds(
-            &rows, text_left, text_right, theme,
+            &rows,
+            block_left,
+            block_content_right,
+            theme,
         ));
         let source_run_buttons = rows
             .iter()
@@ -572,8 +756,8 @@ impl Element for EditorElement {
                         && block.edge == syntax::EditorBlockEdge::Open
                 })
             })
-            .map(|row| {
-                let button_left = text_left
+            .filter_map(|row| {
+                let button_left = block_left
                     + px(BLOCK_LEFT_INSET
                         + SOURCE_GUTTER_INSET
                         + (SOURCE_GUTTER_WIDTH - SOURCE_RUN_BUTTON_SIZE) / 2.0);
@@ -593,6 +777,15 @@ impl Element for EditorElement {
                         px(SOURCE_RUN_BUTTON_SIZE + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
                         px(SOURCE_RUN_BUTTON_SIZE + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
                     ),
+                );
+                let interaction_left = interaction_bounds.left().max(viewport_text_left);
+                let interaction_right = interaction_bounds.right().min(viewport_text_right);
+                if interaction_right <= interaction_left {
+                    return None;
+                }
+                let interaction_bounds = Bounds::from_corners(
+                    point(interaction_left, interaction_bounds.top()),
+                    point(interaction_right, interaction_bounds.bottom()),
                 );
                 let feedback = source_run_feedback
                     .filter(|feedback| feedback.source_offset == row.hit.range.start);
@@ -621,7 +814,7 @@ impl Element for EditorElement {
                     underline: None,
                     strikethrough: None,
                 };
-                SourceRunButtonPaint {
+                Some(SourceRunButtonPaint {
                     source_offset: row.hit.range.start,
                     bounds,
                     interaction_bounds,
@@ -633,7 +826,7 @@ impl Element for EditorElement {
                         &[run],
                         None,
                     ),
-                }
+                })
             })
             .collect();
         PrepaintState {
@@ -644,6 +837,7 @@ impl Element for EditorElement {
             source_run_buttons,
             selection: selection_quads,
             caret,
+            content_left: block_left,
             gutter: fill(
                 Bounds::new(
                     bounds.origin,
@@ -795,7 +989,7 @@ impl Element for EditorElement {
                     }
                     for row in &state.rows {
                         if let Some(number_layout) = &row.source_line_number_layout {
-                            let number_x = text_left
+                            let number_x = state.content_left
                                 + px(BLOCK_LEFT_INSET + SOURCE_GUTTER_INSET)
                                 + px(((SOURCE_GUTTER_WIDTH - f32::from(number_layout.width()))
                                     / 2.0)
@@ -827,14 +1021,31 @@ impl Element for EditorElement {
                             }
                         }
                         let mut paint = |window: &mut Window| {
-                            let _ = row.hit.layout.paint(
-                                point(row.hit.text_origin_x, row.hit.origin_y),
-                                row.hit.line_height,
-                                TextAlign::Left,
-                                None,
-                                window,
-                                cx,
-                            );
+                            if let Some(preview) = &row.inline_image {
+                                let radius = px(4.0);
+                                let _ = window.paint_image(
+                                    preview.bounds,
+                                    preview.bounds,
+                                    Corners {
+                                        top_left: radius,
+                                        top_right: radius,
+                                        bottom_right: radius,
+                                        bottom_left: radius,
+                                    },
+                                    preview.image.clone(),
+                                    0,
+                                    false,
+                                );
+                            } else {
+                                let _ = row.hit.layout.paint(
+                                    point(row.hit.text_origin_x, row.hit.origin_y),
+                                    row.hit.line_height,
+                                    TextAlign::Left,
+                                    None,
+                                    window,
+                                    cx,
+                                );
+                            }
                         };
                         if let Some((top, bottom)) = row.animation_clip_y {
                             if bottom > top {
@@ -1378,6 +1589,15 @@ fn editor_block_segments(
     segments
 }
 
+fn editor_block_horizontal_bounds(
+    viewport_left: Pixels,
+    viewport_right: Pixels,
+    scroll_x: f32,
+) -> (Pixels, Pixels) {
+    let offset = px(scroll_x);
+    (viewport_left - offset, viewport_right - offset)
+}
+
 fn editor_block_backgrounds(
     rows: &[PaintRow],
     text_left: Pixels,
@@ -1574,13 +1794,15 @@ fn push_selection_quads(
 #[cfg(test)]
 mod tests {
     use super::{
-        EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES, animated_paint_lines, editor_block_segments,
-        editor_block_text_inset, folded_display_text, scroll_is_at_end, stabilized_scroll_y,
+        EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES, animated_paint_lines,
+        editor_block_horizontal_bounds, editor_block_segments, editor_block_text_inset,
+        folded_display_text, scroll_is_at_end, stabilized_scroll_y,
     };
     use crate::editor::{
         layout_map::EditorLayoutMap,
         syntax::{EditorBlockDecoration, EditorBlockEdge, EditorBlockKind},
     };
+    use gpui::px;
 
     fn block_row(edge: EditorBlockEdge, top: f32) -> EditorBlockPaintRow {
         EditorBlockPaintRow {
@@ -1606,6 +1828,13 @@ mod tests {
             folded_display_text("* Heading".to_owned(), false),
             "* Heading"
         );
+    }
+
+    #[test]
+    fn block_chrome_scrolls_horizontally_with_its_source_text() {
+        let (left, right) = editor_block_horizontal_bounds(px(100.0), px(700.0), 180.0);
+        assert_eq!(left, px(-80.0));
+        assert_eq!(right, px(520.0));
     }
 
     #[test]

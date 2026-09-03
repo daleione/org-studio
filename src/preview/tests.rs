@@ -1,7 +1,8 @@
 use super::{
     EXECUTE_SOURCE_BLOCK_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility,
-    MAX_EAGER_LAYOUT_ROWS, REDO_DOCUMENT_COMMAND, UNDO_DOCUMENT_COMMAND, accept_generation,
-    dired_command_items, preview_input, should_eagerly_measure_rows,
+    MAX_EAGER_LAYOUT_ROWS, REDO_DOCUMENT_COMMAND, TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND,
+    UNDO_DOCUMENT_COMMAND, accept_generation, dired_command_items, preview_input,
+    should_eagerly_measure_rows,
 };
 
 use crate::{
@@ -13,7 +14,7 @@ use crate::{
     input::EmacsOutcome,
     keymap::KeyStroke,
 };
-use gpui::AppContext;
+use gpui::{AppContext, Focusable};
 
 fn reading_semantic_golden(document: &super::PreviewSnapshot) -> String {
     use super::{
@@ -470,6 +471,35 @@ fn opening_split_from_single_reading_reuses_the_current_snapshot(cx: &mut gpui::
             .document()
             .clone();
         assert!(std::sync::Arc::ptr_eq(&left, &right));
+    });
+}
+
+#[gpui::test]
+fn source_action_uses_the_focused_editor_instead_of_the_previous_active_pane(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(true));
+    cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document("source-origin.org", "* Heading\n")),
+                cx,
+            ));
+            workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+            workspace.document_workspace.active_pane = crate::app::PaneSide::Left;
+        });
+        let right = workspace
+            .read(cx)
+            .editor(crate::app::PaneSide::Right)
+            .unwrap();
+        window.focus(&right.read(cx).focus_handle(cx), cx);
+        let (pane, editor) = workspace
+            .read(cx)
+            .source_editor_for_action(window, cx)
+            .unwrap();
+        assert_eq!(pane, crate::app::PaneSide::Right);
+        assert_eq!(editor.entity_id(), right.entity_id());
     });
 }
 
@@ -1229,6 +1259,71 @@ fn a_path_change_invalidates_and_rebuilds_the_shared_reading_snapshot(
 }
 
 #[gpui::test]
+fn a_resource_change_refreshes_every_editor_and_rebuilds_reading_at_the_same_revision(
+    cx: &mut gpui::TestAppContext,
+) {
+    let root = std::env::temp_dir().join(format!(
+        "org-studio-reading-resource-change-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let document_path = root.join("notes.org");
+    let image_path = root.join("result.svg");
+    std::fs::write(&document_path, "#+RESULTS:\n[[file:result.svg]]\n").unwrap();
+    std::fs::write(
+        &image_path,
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80"></svg>"#,
+    )
+    .unwrap();
+    let loaded = super::load_document(document_path).unwrap();
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(true));
+    let (session, before) = cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(0, Ok(loaded), cx));
+            workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+            workspace.toggle_pane_surface(crate::app::PaneSide::Right, cx);
+            (
+                workspace.document_session().unwrap().clone(),
+                workspace.derived.latest.as_ref().unwrap().clone(),
+            )
+        })
+    });
+    cx.run_until_parked();
+
+    cx.update(|_, cx| {
+        session.update(cx, |session, cx| {
+            session.resource_changed(image_path.clone(), cx)
+        })
+    });
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let ready = workspace.state.ready().unwrap();
+        for editor in [&ready.editors.left, &ready.editors.right]
+            .into_iter()
+            .flatten()
+        {
+            assert_eq!(editor.read(cx).inline_image_resource_generation(), 1);
+        }
+    });
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(25));
+    cx.run_until_parked();
+
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let latest = workspace.derived.latest.as_ref().unwrap();
+        assert_eq!(latest.revision, before.revision);
+        assert!(!std::sync::Arc::ptr_eq(latest, &before));
+        let panel = workspace
+            .reading_panel_for(crate::app::PaneSide::Right)
+            .unwrap();
+        assert!(std::sync::Arc::ptr_eq(panel.read(cx).document(), latest));
+    });
+    std::fs::remove_file(image_path).unwrap();
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
 fn minimap_width_changes_reach_every_materialized_editor(cx: &mut gpui::TestAppContext) {
     let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {
@@ -1800,6 +1895,24 @@ fn control_c_control_c_dispatches_org_babel_execution() {
         keyboard.route(KeyStroke::new("c", true, false, false, false), context),
         EmacsOutcome::Command {
             command: commands.key(EXECUTE_SOURCE_BLOCK_COMMAND).unwrap(),
+            prefix: crate::command::PrefixArgument::None,
+        }
+    );
+}
+
+#[test]
+fn org_inline_image_preview_uses_the_official_key_sequence() {
+    let (commands, mut keyboard, context) = super::document_input();
+    for key in ["c", "x"] {
+        assert_eq!(
+            keyboard.route(KeyStroke::new(key, true, false, false, false), context),
+            EmacsOutcome::Pending
+        );
+    }
+    assert_eq!(
+        keyboard.route(KeyStroke::new("v", true, false, false, false), context),
+        EmacsOutcome::Command {
+            command: commands.key(TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND).unwrap(),
             prefix: crate::command::PrefixArgument::None,
         }
     );

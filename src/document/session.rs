@@ -57,6 +57,10 @@ pub enum DocumentEvent {
         document_id: DocumentId,
         path: PathBuf,
     },
+    ResourceChanged {
+        document_id: DocumentId,
+        path: PathBuf,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -201,6 +205,13 @@ struct SessionFileState {
 impl EventEmitter<DocumentEvent> for DocumentSession {}
 
 impl DocumentSession {
+    pub(crate) fn resource_changed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        cx.emit(DocumentEvent::ResourceChanged {
+            document_id: self.id(),
+            path,
+        });
+    }
+
     pub fn from_utf8(path: PathBuf, bytes: Vec<u8>) -> Result<Self, EditError> {
         let stamp =
             FileStamp::from_loaded(&path, &bytes).unwrap_or_else(|_| FileStamp::detached(&bytes));

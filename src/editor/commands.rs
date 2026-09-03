@@ -132,12 +132,32 @@ impl SemanticEditor {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         let snapshot = self.snapshot(cx);
+        let inline_image_edge = self.selection.is_empty().then(|| {
+            self.hit_rows
+                .iter()
+                .find(|row| {
+                    row.inline_image_preview
+                        && self.selection.head() >= row.range.start
+                        && self.selection.head() <= row.range.end
+                })
+                .and_then(|row| {
+                    if forward && self.selection.head() < row.range.end {
+                        Some(row.range.end)
+                    } else if !forward && self.selection.head() > row.range.start {
+                        Some(row.range.start)
+                    } else {
+                        None
+                    }
+                })
+        });
         let target = if !extend && !self.selection.is_empty() {
             if forward {
                 self.selection.range().end
             } else {
                 self.selection.range().start
             }
+        } else if let Some(target) = inline_image_edge.flatten() {
+            target
         } else if by_word {
             word_boundary(&snapshot, self.selection.head(), forward)
         } else if forward {
@@ -635,6 +655,35 @@ impl SemanticEditor {
         self.apply_line_cycle(super::org_commands::cycle_todo, cx);
     }
 
+    fn toggle_inline_image_previews(
+        &mut self,
+        _: &ToggleInlineImagePreviews,
+        _: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot(cx);
+        let image_line = snapshot
+            .line_index_at(self.selection.head())
+            .ok()
+            .and_then(|line| snapshot.line_content_range(line).ok())
+            .filter(|range| {
+                crate::org_syntax::standalone_image_path(&snapshot.copy_range(*range)).is_some()
+            });
+
+        if let Some(range) = image_line {
+            let visible = self.previews_inline_image_at(range.start);
+            self.inline_image_preview_overrides
+                .insert(range.start.0, !visible);
+        } else {
+            self.inline_image_previews = !self.inline_image_previews;
+            self.inline_image_preview_overrides.clear();
+        }
+        self.display_map.invalidate_layout();
+        self.hit_rows = Arc::from([]);
+        self.minimap.invalidate_raster();
+        cx.notify();
+    }
+
     fn toggle_checkbox(&mut self, _: &ToggleCheckbox, _: &mut Window, cx: &mut Context<Self>) {
         let snapshot = self.snapshot(cx);
         if self
@@ -841,9 +890,8 @@ impl SemanticEditor {
             .find(|button| button.bounds.contains(&event.position))
             .map(|button| button.source_offset)
         {
-            self.set_selection(Selection::caret(source_offset), cx);
             self.show_source_run_feedback(source_offset, super::SourceRunPhase::Running, cx);
-            window.dispatch_action(Box::new(super::RunSourceBlock), cx);
+            window.dispatch_action(Box::new(super::RunSourceBlockAt { source_offset }), cx);
             return;
         }
         if let Some(bounds) = self.minimap.bounds {
@@ -1139,6 +1187,13 @@ impl SemanticEditor {
                     })
                     .unwrap_or(first)
             });
+        if row.inline_image_preview {
+            return if position.x < row.text_origin_x + px(8.0) {
+                row.range.start
+            } else {
+                row.range.end
+            };
+        }
         let display = row
             .layout
             .closest_index_for_position(
@@ -1409,6 +1464,7 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(Self::align_table))
             .on_action(cx.listener(Self::toggle_todo))
             .on_action(cx.listener(Self::toggle_checkbox))
+            .on_action(cx.listener(Self::toggle_inline_image_previews))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .on_action(cx.listener(Self::copy))
@@ -1478,6 +1534,55 @@ mod horizontal_scroll_tests {
         let scroll = fold_anchor_scroll_y(900.0, 22.0, 190.0, 200.0, 930.0);
         assert_eq!(scroll, 722.0);
         assert_eq!(900.0 - scroll, 178.0);
+    }
+
+    #[gpui::test]
+    fn inline_image_preview_toggle_preserves_the_org_link_source(cx: &mut gpui::TestAppContext) {
+        let source = "#+RESULTS:\n[[file:images/result.svg]]\n";
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                source.as_bytes().to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+
+        window
+            .update(cx, |editor, window, cx| {
+                let link_start = ByteOffset("#+RESULTS:\n".len() as u64);
+                editor.set_selection(Selection::caret(link_start), cx);
+                editor.toggle_inline_image_previews(&ToggleInlineImagePreviews, window, cx);
+                assert_eq!(
+                    editor.inline_image_preview_overrides.get(&link_start.0),
+                    Some(&false)
+                );
+                assert_eq!(
+                    editor
+                        .snapshot(cx)
+                        .copy_range(ByteRange::new(0, source.len() as u64)),
+                    source
+                );
+
+                editor.toggle_inline_image_previews(&ToggleInlineImagePreviews, window, cx);
+                assert_eq!(
+                    editor.inline_image_preview_overrides.get(&link_start.0),
+                    Some(&true)
+                );
+
+                editor.set_selection(Selection::caret(ByteOffset(0)), cx);
+                editor.toggle_inline_image_previews(&ToggleInlineImagePreviews, window, cx);
+                assert!(!editor.inline_image_previews);
+                editor.set_selection(Selection::caret(link_start), cx);
+                editor.toggle_inline_image_previews(&ToggleInlineImagePreviews, window, cx);
+                assert_eq!(
+                    editor.inline_image_preview_overrides.get(&link_start.0),
+                    Some(&true)
+                );
+            })
+            .unwrap();
     }
 
     #[gpui::test]

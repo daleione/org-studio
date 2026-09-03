@@ -108,6 +108,7 @@ const SHOW_READING_COMMAND: &str = "org-studio.workspace.show-reading";
 const SHOW_SPLIT_COMMAND: &str = "org-studio.workspace.show-split";
 const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
 const EXECUTE_SOURCE_BLOCK_COMMAND: &str = "org-studio.babel.execute-source-block";
+const TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND: &str = "org-studio.org.toggle-inline-image-previews";
 pub(crate) const INCREASE_CONTENT_FONT_SIZE_COMMAND: &str =
     "org-studio.view.increase-content-font-size";
 pub(crate) const DECREASE_CONTENT_FONT_SIZE_COMMAND: &str =

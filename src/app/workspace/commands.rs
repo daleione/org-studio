@@ -110,6 +110,9 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ExecuteSourceBlock) => {
                 self.execute_source_block(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::ToggleInlineImagePreviews) => {
+                window.dispatch_action(Box::new(crate::editor::ToggleInlineImagePreviews), cx);
+            }
             CommandImplementation::Builtin(BuiltinCommand::UndoDocument) => {
                 if let Some(session) = self.document_session().cloned() {
                     let _ = session.update(cx, |session, cx| session.undo(cx));

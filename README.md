@@ -33,3 +33,17 @@ Alice -> Bob: Login
 @enduml
 #+end_src
 ```
+
+## Typst source blocks
+
+Org `typst` source blocks use the same Babel workflow. Set a `.svg`, `.png`, or `.pdf`
+`:file`, then press the block run button or `C-c C-c`. Compilation uses Org Studio's
+embedded Typst runtime, system fonts, and the Org document directory as its sandboxed
+resource root.
+
+```org
+#+begin_src typst :file images/card.svg
+#set page(width: 320pt, height: 180pt, margin: 20pt)
+#rect(fill: luma(240), radius: 8pt, inset: 16pt)[Org Studio]
+#+end_src
+```

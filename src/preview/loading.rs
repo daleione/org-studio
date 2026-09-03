@@ -48,7 +48,7 @@ pub(crate) fn build_image_sizes(
             let BlockKind::Image { path } = &block.kind else {
                 return None;
             };
-            image::image_dimensions(resolve_image_path(document_path, path))
+            image_dimensions(&resolve_image_path(document_path, path))
                 .ok()
                 .filter(|&(width, height)| width > 0 && height > 0)
                 .map(|size| (block_id as BlockId, size))
@@ -67,12 +67,81 @@ pub(crate) fn build_markdown_image_sizes(
             let markdown::MarkdownKind::Image { path } = &block.kind else {
                 return None;
             };
-            image::image_dimensions(resolve_image_path(document_path, path))
+            image_dimensions(&resolve_image_path(document_path, path))
                 .ok()
                 .filter(|&(width, height)| width > 0 && height > 0)
                 .map(|size| (block_id as BlockId, size))
         })
         .collect()
+}
+
+pub(crate) fn image_dimensions(path: &Path) -> Result<(u32, u32), String> {
+    let is_svg = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"));
+    if is_svg {
+        let bytes = std::fs::read(path).map_err(|error| error.to_string())?;
+        svg_dimensions(&bytes).ok_or_else(|| "SVG has no usable dimensions".to_owned())
+    } else {
+        image::image_dimensions(path).map_err(|error| error.to_string())
+    }
+}
+
+fn svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let source = std::str::from_utf8(bytes).ok()?;
+    let document = roxmltree::Document::parse(source).ok()?;
+    let svg = document.root_element();
+    if !svg.tag_name().name().eq_ignore_ascii_case("svg") {
+        return None;
+    }
+    if let Some(view_box) = svg
+        .attribute("viewBox")
+        .or_else(|| svg.attribute("viewbox"))
+    {
+        let values = view_box
+            .split(|character: char| character.is_ascii_whitespace() || character == ',')
+            .filter(|value| !value.is_empty())
+            .map(str::parse::<f64>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        if values.len() == 4 {
+            return positive_dimensions(values[2].abs(), values[3].abs());
+        }
+    }
+    positive_dimensions(
+        svg_length(svg.attribute("width")?)?,
+        svg_length(svg.attribute("height")?)?,
+    )
+}
+
+fn svg_length(value: &str) -> Option<f64> {
+    let value = value.trim();
+    let split = value
+        .find(|character: char| !matches!(character, '0'..='9' | '.' | '+' | '-' | 'e' | 'E'))
+        .unwrap_or(value.len());
+    let number = value[..split].parse::<f64>().ok()?;
+    let scale = match value[split..].trim().to_ascii_lowercase().as_str() {
+        "" | "px" => 1.0,
+        "pt" => 96.0 / 72.0,
+        "pc" => 16.0,
+        "in" => 96.0,
+        "cm" => 96.0 / 2.54,
+        "mm" => 96.0 / 25.4,
+        "q" => 96.0 / 101.6,
+        _ => return None,
+    };
+    Some(number * scale)
+}
+
+fn positive_dimensions(width: f64, height: f64) -> Option<(u32, u32)> {
+    if !width.is_finite() || !height.is_finite() || width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    Some((
+        width.round().clamp(1.0, f64::from(u32::MAX)) as u32,
+        height.round().clamp(1.0, f64::from(u32::MAX)) as u32,
+    ))
 }
 
 pub(crate) fn fitted_image_size(
@@ -900,6 +969,19 @@ fn build_outline_paths(
 mod tests {
     use super::*;
     use crate::document::{ByteRange, DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit};
+
+    #[test]
+    fn svg_dimensions_prefer_the_view_box_and_preserve_its_aspect_ratio() {
+        let svg = br#"<svg viewBox="0 0 573.307 105.18" width="573.307pt" height="105.18pt" xmlns="http://www.w3.org/2000/svg"></svg>"#;
+        assert_eq!(svg_dimensions(svg), Some((573, 105)));
+        assert_eq!(fitted_image_size(573, 105, 960.0), (573.0, 105.0));
+    }
+
+    #[test]
+    fn svg_dimensions_convert_absolute_lengths_without_a_view_box() {
+        let svg = br#"<svg width="24pt" height="12pt" xmlns="http://www.w3.org/2000/svg"></svg>"#;
+        assert_eq!(svg_dimensions(svg), Some((32, 16)));
+    }
 
     #[test]
     fn markdown_outline_lookup_has_no_scrollback_limit() {

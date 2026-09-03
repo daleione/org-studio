@@ -16,6 +16,7 @@ notify = "8"
 profiling = { version = "1", features = ["profile-with-tracing"] }
 pulldown-cmark = "0.13"
 ropey = "1.6.1"
+roxmltree = "0.21"
 rustix = { version = "1.1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

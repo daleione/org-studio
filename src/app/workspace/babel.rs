@@ -1,4 +1,4 @@
-use gpui::{Context, Window};
+use gpui::{Context, Focusable, Window};
 
 use crate::{
     app::{PaneSurface, WorkspaceWindow, echo_area::EchoMessage},
@@ -21,10 +21,57 @@ impl WorkspaceWindow {
         let Some(editor) = self.editor(self.document_workspace.active_pane) else {
             return;
         };
+        let selection = editor.read(cx).selection();
+        self.execute_source_block_for(editor, selection, window, cx);
+    }
+
+    pub(crate) fn execute_source_block_at(
+        &mut self,
+        source_offset: crate::document::ByteOffset,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let origin = self.source_editor_for_action(window, cx);
+        let Some((pane, editor)) = origin else {
+            self.show_echo_message(
+                EchoMessage::error("The source editor is no longer focused"),
+                cx,
+            );
+            return;
+        };
+        self.document_workspace.active_pane = pane;
+        self.execute_source_block_for(
+            editor,
+            crate::document::Selection::caret(source_offset),
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn source_editor_for_action(
+        &self,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> Option<(
+        crate::app::PaneSide,
+        gpui::Entity<crate::editor::SemanticEditor>,
+    )> {
+        [crate::app::PaneSide::Left, crate::app::PaneSide::Right]
+            .into_iter()
+            .filter_map(|pane| self.editor(pane).map(|editor| (pane, editor)))
+            .find(|(_, editor)| editor.read(cx).focus_handle(cx).is_focused(window))
+    }
+
+    fn execute_source_block_for(
+        &mut self,
+        editor: gpui::Entity<crate::editor::SemanticEditor>,
+        selection: crate::document::Selection,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session) = self.document_session().cloned() else {
             return;
         };
-        let selection = editor.read(cx).selection();
         let (snapshot, path) = {
             let session = session.read(cx);
             (session.snapshot(), session.path().to_path_buf())
@@ -55,9 +102,10 @@ impl WorkspaceWindow {
         });
         self.babel_editor = Some(editor.clone());
         let request_id = self.babel_request;
-        self.set_echo_message(Some(EchoMessage::working(
-            "Executing PlantUML source block…",
-        )));
+        let language_name = request.language_name();
+        self.set_echo_message(Some(EchoMessage::working(format!(
+            "Executing {language_name} source block…"
+        ))));
         let background = cx
             .background_executor()
             .spawn(async move { crate::babel::execute_source_block(request) });
@@ -69,7 +117,7 @@ impl WorkspaceWindow {
                 }
                 this.babel_task = None;
                 this.babel_editor = None;
-                this.apply_babel_result(session, editor, result, cx);
+                this.apply_babel_result(session, editor, language_name, result, cx);
             });
         }));
         cx.notify();
@@ -79,6 +127,7 @@ impl WorkspaceWindow {
         &mut self,
         session: gpui::Entity<crate::document::DocumentSession>,
         editor: gpui::Entity<crate::editor::SemanticEditor>,
+        language_name: &'static str,
         result: Result<crate::babel::PreparedBabelOutput, String>,
         cx: &mut Context<Self>,
     ) {
@@ -89,7 +138,7 @@ impl WorkspaceWindow {
                     editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
                 });
                 self.show_echo_message(
-                    EchoMessage::error(format!("PlantUML failed: {message}")),
+                    EchoMessage::error(format!("{language_name} failed: {message}")),
                     cx,
                 );
                 return;
@@ -105,7 +154,9 @@ impl WorkspaceWindow {
                 editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
             });
             self.show_echo_message(
-                EchoMessage::warning("PlantUML result was discarded because the source changed"),
+                EchoMessage::warning(format!(
+                    "{language_name} result was discarded because the source changed"
+                )),
                 cx,
             );
             return;
@@ -120,10 +171,14 @@ impl WorkspaceWindow {
                 return;
             }
         };
+        debug_assert_eq!(output.language_name, language_name);
         let source_block_start = output.source_block_start;
         let target = output.target.to_string_lossy().into_owned();
         let result_link = output.result_link.clone();
         let warning = output.warnings.first().cloned();
+        session.update(cx, |session, cx| {
+            session.resource_changed(output.target.clone(), cx)
+        });
         if let Some(edit) = output.result_edit.take() {
             let selection = output.selection;
             let revision = output.revision;
@@ -143,15 +198,14 @@ impl WorkspaceWindow {
                     editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
                 });
                 self.show_echo_message(
-                    EchoMessage::warning(
-                        "The image was written, but #+RESULTS could not be updated",
-                    ),
+                    EchoMessage::warning(format!(
+                        "The {language_name} output was written, but #+RESULTS could not be updated"
+                    )),
                     cx,
                 );
                 return;
             }
         }
-
         let message = warning.map_or_else(
             || EchoMessage::success(format!("Generated {result_link} ({target})")),
             |warning| EchoMessage::warning(format!("Generated {result_link}; warning: {warning}")),

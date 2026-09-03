@@ -24,8 +24,9 @@ use super::{
     QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
     RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND,
     SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND,
-    SHOW_HOME_COMMAND, SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND, TOGGLE_MINIMAP_COMMAND,
-    TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
+    SHOW_HOME_COMMAND, SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND,
+    TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
 };
 
 #[cfg(test)]
@@ -107,6 +108,23 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in Babel command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND.into(),
+            aliases: &["org-link-preview", "org-toggle-inline-images"],
+            title: "Toggle Inline Image Preview",
+            description: "Toggle the Org image-link preview at point",
+            command: BuiltinCommand::ToggleInlineImagePreviews,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::StateOnly,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::None,
+            required_capabilities: CapabilitySet::empty(),
+            redaction: RedactionPolicy::None,
+        })
+        .expect("valid inline image preview command");
     for (name, title, command) in [
         (UNDO_DOCUMENT_COMMAND, "Undo", BuiltinCommand::UndoDocument),
         (REDO_DOCUMENT_COMMAND, "Redo", BuiltinCommand::RedoDocument),
@@ -577,6 +595,10 @@ pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec {
             keys: "C-c C-c",
             behavior: BindingBehavior::Command(EXECUTE_SOURCE_BLOCK_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-c C-x C-v",
+            behavior: BindingBehavior::Command(TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND),
         },
         BindingSpec {
             keys: "C-x C-f",

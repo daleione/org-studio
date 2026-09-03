@@ -281,6 +281,29 @@ impl EditorLayoutMap {
         self.rebuild_fenwick();
     }
 
+    /// Drops a single line's measured height without disturbing measurements on nearby lines.
+    /// This is used when an editor-only decoration, such as an inline image preview, stops
+    /// matching after a same-line text edit.
+    pub(super) fn invalidate_line_layout(&mut self, line: u64) -> bool {
+        if line >= self.line_count {
+            return false;
+        }
+        let chunk = line / CHUNK_LINES;
+        let local = (line % CHUNK_LINES) as usize;
+        let Some(heights) = self.measured_heights.get_mut(&chunk) else {
+            return false;
+        };
+        if heights[local] == 0 {
+            return false;
+        }
+        heights[local] = 0;
+        if heights.iter().all(|height| *height == 0) {
+            self.measured_heights.remove(&chunk);
+        }
+        self.rebuild_fenwick();
+        true
+    }
+
     /// Applies a physical-line splice while retaining measurements whose source lines survive.
     /// The first replaced line keeps its old estimate until the next visible layout pass; rows
     /// after the splice move with their source lines instead of briefly falling back to defaults.
@@ -560,6 +583,25 @@ mod tests {
 
         map.configure(1_001, 640.0);
         assert_eq!(map.line_start_y(11), 10.0 * 22.0 + 132.0);
+    }
+
+    #[test]
+    fn invalidating_one_line_restores_its_baseline_without_touching_neighbors() {
+        let mut map = EditorLayoutMap::default();
+        map.configure(1_000, 640.0);
+        map.update_line_layout(66, 1, 240.0, 8.0, 8.0);
+        map.update_line_layout(800, 5, 22.0, 0.0, 0.0);
+        let before = map.total_height();
+
+        assert!(map.invalidate_line_layout(66));
+
+        assert_eq!(map.line_height_px(66), super::super::LINE_HEIGHT);
+        assert_eq!(map.line_height_px(800), 110.0);
+        assert_eq!(
+            map.total_height(),
+            before - (256.0 - super::super::LINE_HEIGHT)
+        );
+        assert!(!map.invalidate_line_layout(66));
     }
 
     #[test]

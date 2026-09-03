@@ -58,6 +58,7 @@ pub enum BuiltinCommand {
     SaveDocument,
     SaveDocumentAs,
     ExecuteSourceBlock,
+    ToggleInlineImagePreviews,
     UndoDocument,
     RedoDocument,
     ExportDocument,

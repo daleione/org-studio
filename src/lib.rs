@@ -19,3 +19,4 @@ pub mod recent_documents;
 pub mod settings;
 pub mod theme;
 pub mod typography;
+pub mod typst_runtime;

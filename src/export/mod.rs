@@ -11,12 +11,11 @@ mod model;
 mod org;
 mod output;
 mod template;
-mod typst;
 
+pub use crate::typst_runtime::{CompileOutput, TypstEngine, shared_engine};
 pub use diagnostic::{ExportDiagnostic, ExportSeverity};
 pub use model::{ExportDocument, ExportMeta};
 pub use template::{ExportTemplate, export_templates};
-pub use typst::{CompileOutput, TypstEngine};
 
 use std::{
     collections::BTreeMap,
@@ -36,6 +35,16 @@ pub enum ExportFormat {
     Pdf,
     Png,
     Svg,
+}
+
+impl From<ExportFormat> for crate::typst_runtime::OutputFormat {
+    fn from(format: ExportFormat) -> Self {
+        match format {
+            ExportFormat::Pdf => Self::Pdf,
+            ExportFormat::Png => Self::Png,
+            ExportFormat::Svg => Self::Svg,
+        }
+    }
 }
 
 impl ExportFormat {
@@ -170,15 +179,17 @@ pub fn export_snapshot(
         .ok_or_else(|| ExportError::UnknownTemplate(options.template_id.clone()))?;
     let emitted = emit::emit(&document, template, options, &mut diagnostics);
     let inputs = template_inputs(options);
-    let output = engine.compile_with_inputs(
-        emitted,
-        options.format,
-        options.per_page,
-        options.png_ppi,
-        document_path.parent(),
-        &inputs,
-    )?;
-    diagnostics.extend(output.diagnostics);
+    let output = engine
+        .compile_with_inputs(
+            emitted,
+            options.format.into(),
+            options.per_page,
+            options.png_ppi,
+            document_path.parent(),
+            &inputs,
+        )
+        .map_err(typst_error)?;
+    diagnostics.extend(output.diagnostics.into_iter().map(typst_diagnostic));
     Ok(ExportArtifacts {
         files: output.pages,
         diagnostics,
@@ -304,35 +315,27 @@ pub fn write_artifacts(
     output::write(destination, format, artifacts)
 }
 
-pub fn shared_engine() -> &'static TypstEngine {
-    static ENGINE: std::sync::OnceLock<TypstEngine> = std::sync::OnceLock::new();
-    ENGINE.get_or_init(|| TypstEngine::new(&platform_font_data()))
+fn typst_diagnostic(diagnostic: crate::typst_runtime::CompileDiagnostic) -> ExportDiagnostic {
+    ExportDiagnostic {
+        severity: match diagnostic.severity {
+            crate::typst_runtime::DiagnosticSeverity::Warning => ExportSeverity::Warning,
+            crate::typst_runtime::DiagnosticSeverity::Error => ExportSeverity::Error,
+        },
+        code: match diagnostic.severity {
+            crate::typst_runtime::DiagnosticSeverity::Warning => "typst-warning",
+            crate::typst_runtime::DiagnosticSeverity::Error => "typst-error",
+        },
+        message: diagnostic.message,
+        source: diagnostic.source,
+    }
 }
 
-fn platform_font_data() -> Vec<Vec<u8>> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::collections::BTreeSet;
-
-        let mut database = fontdb::Database::new();
-        database.load_system_fonts();
-        let paths = database
-            .faces()
-            .filter_map(|face| match &face.source {
-                fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
-                    Some(path.clone())
-                }
-                fontdb::Source::Binary(_) => None,
-            })
-            .collect::<BTreeSet<_>>();
-        paths
-            .into_iter()
-            .filter_map(|path| std::fs::read(path).ok())
-            .collect()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Vec::new()
+fn typst_error(error: crate::typst_runtime::CompileError) -> ExportError {
+    match error {
+        crate::typst_runtime::CompileError::Compile(diagnostics) => {
+            ExportError::Compile(diagnostics.into_iter().map(typst_diagnostic).collect())
+        }
+        crate::typst_runtime::CompileError::Render(message) => ExportError::Render(message),
     }
 }
 
@@ -373,9 +376,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn macos_system_font_search_loads_installed_families() {
-        let data = platform_font_data();
-        assert!(!data.is_empty());
-        let families = TypstEngine::new(&data).font_families();
+        let families = shared_engine().font_families();
         assert!(families.iter().any(|family| family == "Menlo"));
         assert!(families.iter().any(|family| family.contains("Hiragino")));
     }
@@ -393,13 +394,34 @@ mod tests {
             let mut inputs = BTreeMap::new();
             inputs.insert("paged".into(), "true".into());
             for format in [ExportFormat::Pdf, ExportFormat::Png, ExportFormat::Svg] {
-                if let Err(error) =
-                    engine.compile_with_inputs(source.clone(), format, false, 72.0, None, &inputs)
-                {
+                if let Err(error) = engine.compile_with_inputs(
+                    source.clone(),
+                    format.into(),
+                    false,
+                    72.0,
+                    None,
+                    &inputs,
+                ) {
                     failures.push(format!("{} {format:?}: {error}", template.id));
                 }
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn inline_code_survives_theme_transformation() {
+        let (document, _) = markdown::parse("- `overlays-at`, `overlays-in`;\n");
+        let document = document.unwrap();
+        let options = ExportOptions::default();
+        let template = export_templates().first().unwrap();
+        let mut diagnostics = Vec::new();
+        let source = emit::emit(&document, template, &options, &mut diagnostics);
+        assert!(source.contains("overlays-at"), "generated Typst: {source}");
+        assert!(source.contains("overlays-in"), "generated Typst: {source}");
+        let inputs = template_inputs(&options);
+        TypstEngine::default()
+            .compile_with_inputs(source, options.format.into(), false, 144.0, None, &inputs)
+            .unwrap();
     }
 }

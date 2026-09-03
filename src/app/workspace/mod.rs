@@ -304,7 +304,8 @@ impl WorkspaceWindow {
         for &pane in &panes {
             if let Some(panel) = ready.readers.get(pane).clone() {
                 let current = panel.read(cx).document().clone();
-                if current.document_id != document.document_id
+                if !Arc::ptr_eq(&current, &document)
+                    || current.document_id != document.document_id
                     || current.revision != document.revision
                     || current.path != document.path
                 {

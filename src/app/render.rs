@@ -173,6 +173,11 @@ impl Render for WorkspaceWindow {
                     this.execute_source_block(window, cx)
                 }),
             )
+            .on_action(cx.listener(
+                |this, action: &crate::editor::RunSourceBlockAt, window, cx| {
+                    this.execute_source_block_at(action.source_offset, window, cx)
+                },
+            ))
             .on_action(cx.listener(|this, _: &IncreaseContentFontSize, _, cx| {
                 this.increase_content_font_size(cx)
             }))
@@ -303,6 +308,10 @@ impl WorkspaceWindow {
                         }
                         crate::document::DocumentEvent::PathChanged { .. } => {
                             this.schedule_derived_update(cx);
+                        }
+                        crate::document::DocumentEvent::ResourceChanged { path, .. } => {
+                            gpui::ImageSource::from(path.clone()).remove_asset(cx);
+                            this.schedule_derived_resource_update(cx);
                         }
                         crate::document::DocumentEvent::Saved { .. }
                         | crate::document::DocumentEvent::DiskChanged { .. } => {}

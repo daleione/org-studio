@@ -5,7 +5,8 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 5;
+const SETTINGS_VERSION: u32 = 6;
+const SOFT_WRAP_DEFAULT_VERSION: u32 = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkspaceSettings {
@@ -183,9 +184,17 @@ impl WorkspaceSettings {
                 _ => {}
             }
         }
-        (version == Some(SETTINGS_VERSION)).then_some(Self {
+        let version = version?;
+        if !(5..=SETTINGS_VERSION).contains(&version) {
+            return None;
+        }
+        Some(Self {
             split_ratio: split_ratio.unwrap_or(5_000),
-            soft_wrap: soft_wrap.unwrap_or(true),
+            soft_wrap: if version < SOFT_WRAP_DEFAULT_VERSION {
+                true
+            } else {
+                soft_wrap.unwrap_or(true)
+            },
             language: language.unwrap_or_else(Language::system),
             minimap_enabled: minimap_enabled.unwrap_or(true),
             minimap_thumb_visibility: minimap_thumb_visibility
@@ -341,51 +350,69 @@ mod tests {
     #[test]
     fn missing_field_uses_product_default() {
         assert_eq!(
-            WorkspaceSettings::parse("version=5\n"),
+            WorkspaceSettings::parse("version=6\n"),
             Some(WorkspaceSettings::default())
         );
         assert_eq!(
             WorkspaceSettings::parse(
-                "version=5\nminimap_width=auto\nminimap_thumb_visibility=always\n"
+                "version=6\nminimap_width=auto\nminimap_thumb_visibility=always\n"
             )
             .expect("auto width settings"),
             WorkspaceSettings::default()
         );
         assert_eq!(
-            WorkspaceSettings::parse("version=5\nminimap_width=480\n")
+            WorkspaceSettings::parse("version=6\nminimap_width=480\n")
                 .expect("manual width settings")
                 .minimap_width,
             Some(480)
         );
         assert_eq!(
-            WorkspaceSettings::parse("version=5\nminimap_width=999\n")
+            WorkspaceSettings::parse("version=6\nminimap_width=999\n")
                 .expect("invalid width falls back")
                 .minimap_width,
             None
         );
         assert_eq!(
-            WorkspaceSettings::parse("version=5\nsidebar_width=320\n")
+            WorkspaceSettings::parse("version=6\nsidebar_width=320\n")
                 .expect("manual sidebar width settings")
                 .sidebar_width,
             320
         );
         assert_eq!(
-            WorkspaceSettings::parse("version=5\nsidebar_width=999\n")
+            WorkspaceSettings::parse("version=6\nsidebar_width=999\n")
                 .expect("invalid sidebar width falls back")
                 .sidebar_width,
             240
         );
         assert_eq!(
-            WorkspaceSettings::parse("version=5\nreading_style=warm-clay\n")
+            WorkspaceSettings::parse("version=6\nreading_style=warm-clay\n")
                 .expect("known reading style")
                 .reading_style,
             crate::preview::PreviewStyleId::WarmClay
         );
         assert_eq!(
-            WorkspaceSettings::parse("version=5\nreading_style=old-preview\n")
+            WorkspaceSettings::parse("version=6\nreading_style=old-preview\n")
                 .expect("unknown reading style falls back")
                 .reading_style,
             crate::preview::PreviewStyleId::Base
+        );
+    }
+
+    #[test]
+    fn version_five_migrates_to_the_new_soft_wrap_default_without_resetting_other_settings() {
+        let settings = WorkspaceSettings::parse(
+            "version=5\nsplit_ratio=6200\nsoft_wrap=false\nlanguage=en\nminimap_enabled=false\nsidebar_width=312\nreading_style=warm-clay\n",
+        )
+        .expect("version five settings remain readable");
+
+        assert!(settings.soft_wrap);
+        assert_eq!(settings.split_ratio, 6_200);
+        assert_eq!(settings.language, Language::English);
+        assert!(!settings.minimap_enabled);
+        assert_eq!(settings.sidebar_width, 312);
+        assert_eq!(
+            settings.reading_style,
+            crate::preview::PreviewStyleId::WarmClay
         );
     }
 }

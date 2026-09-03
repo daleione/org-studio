@@ -1,3 +1,5 @@
+//! Sandboxed Typst world shared by export and executable source blocks.
+
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},

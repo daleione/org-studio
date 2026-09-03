@@ -11,6 +11,7 @@ pub(crate) struct DerivedRequest {
     snapshot: crate::document::DocumentSnapshot,
     deltas: Vec<crate::document::RevisionDelta>,
     previous: Option<Arc<PreviewSnapshot>>,
+    force: bool,
 }
 
 impl WorkspaceWindow {
@@ -37,12 +38,25 @@ impl WorkspaceWindow {
     /// Rebuilds a coherent preview snapshot off the UI thread. Publication is revision-gated, so
     /// an older parse can never replace a newer source revision.
     pub(crate) fn schedule_derived_update(&mut self, cx: &mut Context<Self>) {
-        self.schedule_derived_update_with_delta(None, cx);
+        self.schedule_derived_update_inner(None, false, cx);
+    }
+
+    pub(crate) fn schedule_derived_resource_update(&mut self, cx: &mut Context<Self>) {
+        self.schedule_derived_update_inner(None, true, cx);
     }
 
     pub(crate) fn schedule_derived_update_with_delta(
         &mut self,
         delta: Option<crate::document::RevisionDelta>,
+        cx: &mut Context<Self>,
+    ) {
+        self.schedule_derived_update_inner(delta, false, cx);
+    }
+
+    fn schedule_derived_update_inner(
+        &mut self,
+        delta: Option<crate::document::RevisionDelta>,
+        force: bool,
         cx: &mut Context<Self>,
     ) {
         if !self.document_workspace.needs_reading() {
@@ -54,7 +68,7 @@ impl WorkspaceWindow {
         let snapshot = session.read(cx).snapshot();
         let path = session.read(cx).path().to_path_buf();
         self.reconcile_visible_reading_panes(cx);
-        if self.visible_reading_panes_are_current(cx) {
+        if !force && self.visible_reading_panes_are_current(cx) {
             return;
         }
         if self.derived.sender.is_none() {
@@ -77,6 +91,7 @@ impl WorkspaceWindow {
                     };
                     let request_document_id = request.snapshot.document_id();
                     let request_revision = request.snapshot.revision();
+                    let force = request.force;
                     let previous = request.previous.filter(|base| {
                         base.document_id == request_document_id
                             && base.path == request.path
@@ -85,18 +100,22 @@ impl WorkspaceWindow {
                                 .first()
                                 .is_none_or(|delta| delta.before == base.revision)
                     });
-                    let base = local_base
-                        .as_ref()
-                        .filter(|base| {
-                            base.document_id == request_document_id
-                                && base.path == request.path
-                                && request
-                                    .deltas
-                                    .first()
-                                    .is_some_and(|delta| delta.before == base.revision)
+                    let base = (!force)
+                        .then(|| {
+                            local_base
+                                .as_ref()
+                                .filter(|base| {
+                                    base.document_id == request_document_id
+                                        && base.path == request.path
+                                        && request
+                                            .deltas
+                                            .first()
+                                            .is_some_and(|delta| delta.before == base.revision)
+                                })
+                                .cloned()
+                                .or(previous)
                         })
-                        .cloned()
-                        .or(previous);
+                        .flatten();
                     let request_path = request.path.clone();
                     let preview = executor
                         .spawn(async move {
@@ -124,7 +143,7 @@ impl WorkspaceWindow {
                                 return false;
                             }
                             this.reconcile_visible_reading_panes(cx);
-                            if this.visible_reading_panes_are_current(cx) {
+                            if !force && this.visible_reading_panes_are_current(cx) {
                                 return false;
                             }
                             this.derived.latest = Some(document.clone());
@@ -139,17 +158,19 @@ impl WorkspaceWindow {
         }
         if let Some(sender) = &self.derived.sender {
             let previous = self.derived.latest.clone();
-            let request = DerivedRequest {
+            let mut request = DerivedRequest {
                 path,
                 snapshot,
                 deltas: delta.into_iter().collect(),
                 previous,
+                force,
             };
             let mut pending = self
                 .derived
                 .pending
                 .lock()
                 .expect("derived request slot poisoned");
+            request.force |= pending.as_ref().is_some_and(|queued| queued.force);
             if let Some(queued) = pending.as_mut()
                 && queued
                     .deltas
@@ -160,6 +181,7 @@ impl WorkspaceWindow {
                 queued.deltas.extend(request.deltas);
                 queued.path = request.path;
                 queued.snapshot = request.snapshot;
+                queued.force |= request.force;
             } else {
                 *pending = Some(request);
             }

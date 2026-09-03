@@ -8,16 +8,18 @@ mod org_commands;
 mod syntax;
 
 use std::{
+    cell::RefCell,
     collections::{HashMap, HashSet},
     ops::Range,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use gpui::{
     App, Bounds, ClipboardItem, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyBinding,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, SharedString,
-    Subscription, Task, Window, WrappedLine, actions, div, prelude::*, px, rgb,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, Render, RenderImage,
+    SharedString, Subscription, Task, Window, WrappedLine, actions, div, prelude::*, px, rgb,
 };
 use layout_map::EditorLayoutMap;
 use unicode_segmentation::UnicodeSegmentation;
@@ -66,9 +68,16 @@ actions!(
         Copy,
         Cut,
         Paste,
-        RunSourceBlock
+        RunSourceBlock,
+        ToggleInlineImagePreviews
     ]
 );
+
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = semantic_editor, no_json)]
+pub struct RunSourceBlockAt {
+    pub(crate) source_offset: ByteOffset,
+}
 
 const LINE_HEIGHT: f32 = 22.0;
 const EDITOR_FONT_FAMILY: &str = "JetBrains Mono";
@@ -105,6 +114,11 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, Some("SemanticEditor")),
         KeyBinding::new("cmd-x", Cut, Some("SemanticEditor")),
         KeyBinding::new("cmd-v", Paste, Some("SemanticEditor")),
+        KeyBinding::new(
+            "ctrl-c ctrl-x ctrl-v",
+            ToggleInlineImagePreviews,
+            Some("SemanticEditor"),
+        ),
     ]);
 }
 
@@ -119,6 +133,7 @@ pub(super) struct HitRow {
     pub(super) line_height: Pixels,
     pub(super) display: layout_map::DisplayLineText,
     pub(super) layout: Arc<WrappedLine>,
+    pub(super) inline_image_preview: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -151,6 +166,86 @@ struct SourceRunFeedback {
     source_offset: ByteOffset,
     phase: SourceRunPhase,
     started_at: Instant,
+}
+
+#[derive(Clone)]
+struct InlineImageCacheEntry {
+    image: Arc<RenderImage>,
+    dimensions: (u32, u32),
+    last_used: u64,
+}
+
+#[derive(Default)]
+struct InlineImageCache {
+    entries: HashMap<PathBuf, InlineImageCacheEntry>,
+    refreshing: HashSet<PathBuf>,
+    clock: u64,
+    resource_generation: u64,
+}
+
+impl InlineImageCache {
+    const MAX_ENTRIES: usize = 64;
+
+    fn get(&mut self, path: &Path) -> Option<(Arc<RenderImage>, (u32, u32))> {
+        self.clock = self.clock.wrapping_add(1);
+        let entry = self.entries.get_mut(path)?;
+        entry.last_used = self.clock;
+        Some((entry.image.clone(), entry.dimensions))
+    }
+
+    fn refresh(&mut self, path: &Path) {
+        self.resource_generation = self.resource_generation.wrapping_add(1);
+        if self.entries.contains_key(path) {
+            self.refreshing.insert(path.to_path_buf());
+        }
+    }
+
+    fn accept(&mut self, path: &Path, image: Arc<RenderImage>) -> (Arc<RenderImage>, (u32, u32)) {
+        self.clock = self.clock.wrapping_add(1);
+        self.refreshing.remove(path);
+        let size = image.size(0);
+        let mut dimensions = (u32::from(size.width).max(1), u32::from(size.height).max(1));
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+        {
+            dimensions.0 = (dimensions.0 as f32 / gpui::SMOOTH_SVG_SCALE_FACTOR).round() as u32;
+            dimensions.1 = (dimensions.1 as f32 / gpui::SMOOTH_SVG_SCALE_FACTOR).round() as u32;
+        }
+        self.entries.insert(
+            path.to_path_buf(),
+            InlineImageCacheEntry {
+                image: image.clone(),
+                dimensions,
+                last_used: self.clock,
+            },
+        );
+        while self.entries.len() > Self::MAX_ENTRIES {
+            let Some(oldest) = self
+                .entries
+                .iter()
+                .filter(|(cached_path, _)| cached_path.as_path() != path)
+                .min_by_key(|(_, entry)| entry.last_used)
+                .map(|(path, _)| path.clone())
+            else {
+                break;
+            };
+            self.entries.remove(&oldest);
+        }
+        (image, dimensions)
+    }
+
+    fn fail(&mut self, path: &Path) -> bool {
+        let was_refreshing = self.refreshing.remove(path);
+        let had_cached_image = self.entries.remove(path).is_some();
+        was_refreshing || had_cached_image
+    }
+
+    fn clear(&mut self) {
+        self.entries.clear();
+        self.refreshing.clear();
+    }
 }
 
 #[derive(Clone)]
@@ -304,6 +399,10 @@ pub struct SemanticEditor {
     source_run_feedback: Option<SourceRunFeedback>,
     source_run_feedback_generation: u64,
     source_run_feedback_task: Option<Task<()>>,
+    inline_image_previews: bool,
+    inline_image_preview_overrides: HashMap<u64, bool>,
+    inline_image_cache: RefCell<InlineImageCache>,
+    inline_image_line_dimensions: RefCell<HashMap<u64, (u64, u32, u32)>>,
     pending_reveal_caret: bool,
     is_selecting: bool,
     drag_position: Option<Point<Pixels>>,
@@ -442,6 +541,19 @@ impl SemanticEditor {
     ) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
             if let DocumentEvent::Edited { delta, .. } = event {
+                this.inline_image_preview_overrides =
+                    std::mem::take(&mut this.inline_image_preview_overrides)
+                        .into_iter()
+                        .filter_map(|(offset, visible)| {
+                            delta
+                                .map_range(RevisionRange::new(
+                                    delta.before,
+                                    ByteRange::new(offset, offset),
+                                ))
+                                .ok()
+                                .map(|range| (range.range.start.0, visible))
+                        })
+                        .collect();
                 if this.selection_revision == delta.before {
                     let range = RevisionRange::new(delta.before, this.selection.range());
                     this.selection = delta.map_range(range).map_or_else(
@@ -490,6 +602,28 @@ impl SemanticEditor {
                     .map(|line| line.0)
                     .min()
                     .unwrap_or(0);
+                let last_line = delta
+                    .edits
+                    .iter()
+                    .filter_map(|edit| {
+                        let new_end = edit.old.start.0.saturating_add(edit.new_len);
+                        snapshot
+                            .line_index_at(ByteOffset(new_end.min(snapshot.len_bytes())))
+                            .ok()
+                    })
+                    .map(|line| line.0)
+                    .max()
+                    .unwrap_or(first_line);
+                let edited_inline_image_lines = this
+                    .inline_image_line_dimensions
+                    .borrow()
+                    .keys()
+                    .copied()
+                    .filter(|line| (first_line..=last_line).contains(line))
+                    .collect::<Vec<_>>();
+                for line in edited_inline_image_lines {
+                    this.display_map.invalidate_line_layout(line);
+                }
                 this.syntax_cache.invalidate_from(
                     snapshot.document_id(),
                     snapshot.revision(),
@@ -497,11 +631,6 @@ impl SemanticEditor {
                 );
                 let wrap_width = this.display_map.wrap_width();
                 if previous_line_count != snapshot.len_lines() && delta.edits.len() == 1 {
-                    let edit = delta.edits[0];
-                    let new_end = edit.old.start.0.saturating_add(edit.new_len);
-                    let last_line = snapshot
-                        .line_index_at(ByteOffset(new_end.min(snapshot.len_bytes())))
-                        .map_or(first_line, |line| line.0);
                     let new_count = last_line.saturating_sub(first_line).saturating_add(1);
                     let added_lines = snapshot.len_lines().saturating_sub(previous_line_count);
                     let removed_lines = previous_line_count.saturating_sub(snapshot.len_lines());
@@ -553,8 +682,11 @@ impl SemanticEditor {
                 this.hit_rows = Arc::from([]);
                 this.source_run_buttons = Arc::from([]);
                 this.source_run_button_hovered = false;
+                this.inline_image_line_dimensions.borrow_mut().clear();
                 this.map_source_run_feedback(delta);
                 this.vertical_goal_x = None;
+            } else if let DocumentEvent::ResourceChanged { path, .. } = event {
+                this.refresh_inline_image(path, cx);
             } else if matches!(event, DocumentEvent::Reloaded { .. }) {
                 this.display_map.invalidate_layout();
             } else if matches!(event, DocumentEvent::PathChanged { .. }) {
@@ -567,6 +699,9 @@ impl SemanticEditor {
                 this.shape_cache.clear();
                 this.source_run_buttons = Arc::from([]);
                 this.source_run_button_hovered = false;
+                this.inline_image_preview_overrides.clear();
+                this.inline_image_line_dimensions.borrow_mut().clear();
+                this.inline_image_cache.borrow_mut().clear();
                 this.clear_source_run_feedback();
                 this.minimap.invalidate_raster();
             }
@@ -582,6 +717,9 @@ impl SemanticEditor {
                 this.hit_rows = Arc::from([]);
                 this.source_run_buttons = Arc::from([]);
                 this.source_run_button_hovered = false;
+                this.inline_image_preview_overrides.clear();
+                this.inline_image_line_dimensions.borrow_mut().clear();
+                this.inline_image_cache.borrow_mut().clear();
                 this.clear_source_run_feedback();
                 this.pending_reveal_caret = false;
                 this.scroll_y = 0.0;
@@ -629,6 +767,10 @@ impl SemanticEditor {
             source_run_feedback: None,
             source_run_feedback_generation: 0,
             source_run_feedback_task: None,
+            inline_image_previews: true,
+            inline_image_preview_overrides: HashMap::new(),
+            inline_image_cache: RefCell::new(InlineImageCache::default()),
+            inline_image_line_dimensions: RefCell::new(HashMap::new()),
             pending_reveal_caret: false,
             is_selecting: false,
             drag_position: None,
@@ -878,9 +1020,42 @@ impl SemanticEditor {
         self.session.read(cx).snapshot()
     }
 
+    fn previews_inline_image_at(&self, line_start: ByteOffset) -> bool {
+        self.inline_image_preview_overrides
+            .get(&line_start.0)
+            .copied()
+            .unwrap_or(self.inline_image_previews)
+    }
+
+    pub(crate) fn refresh_inline_image(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.inline_image_cache.borrow_mut().refresh(path);
+        cx.notify();
+    }
+
+    fn cached_inline_image_render(&self, path: &Path) -> Option<(Arc<RenderImage>, (u32, u32))> {
+        self.inline_image_cache.borrow_mut().get(path)
+    }
+
+    fn accept_inline_image_render(
+        &self,
+        path: &Path,
+        image: Arc<RenderImage>,
+    ) -> (Arc<RenderImage>, (u32, u32)) {
+        self.inline_image_cache.borrow_mut().accept(path, image)
+    }
+
+    fn fail_inline_image_render(&self, path: &Path) -> bool {
+        self.inline_image_cache.borrow_mut().fail(path)
+    }
+
     #[cfg(test)]
     pub(crate) fn has_active_composition(&self) -> bool {
         self.composition.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn inline_image_resource_generation(&self) -> u64 {
+        self.inline_image_cache.borrow().resource_generation
     }
 
     pub(crate) fn status(&self, cx: &App) -> SemanticEditorStatus {
@@ -986,7 +1161,49 @@ fn word_boundary(snapshot: &DocumentSnapshot, offset: ByteOffset, forward: bool)
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{Frame, RgbaImage};
+    use smallvec::SmallVec;
     use std::path::PathBuf;
+
+    fn render_image(width: u32, height: u32) -> Arc<RenderImage> {
+        Arc::new(RenderImage::new(SmallVec::from_elem(
+            Frame::new(RgbaImage::new(width, height)),
+            1,
+        )))
+    }
+
+    #[test]
+    fn inline_image_cache_is_bounded_and_failed_refresh_drops_stale_content() {
+        let mut cache = InlineImageCache::default();
+        for index in 0..InlineImageCache::MAX_ENTRIES + 8 {
+            cache.accept(
+                Path::new(&format!("image-{index}.png")),
+                render_image(10, 10),
+            );
+        }
+        assert_eq!(cache.entries.len(), InlineImageCache::MAX_ENTRIES);
+
+        let path = Path::new("image-current.png");
+        cache.accept(path, render_image(20, 10));
+        cache.refresh(path);
+        assert!(cache.fail(path));
+        assert!(!cache.fail(path));
+        assert!(!cache.refreshing.contains(path));
+        assert!(cache.get(path).is_none());
+    }
+
+    #[test]
+    fn inline_svg_cache_uses_logical_instead_of_supersampled_dimensions() {
+        let mut cache = InlineImageCache::default();
+        let (_, dimensions) = cache.accept(
+            Path::new("diagram.svg"),
+            render_image(
+                (120.0 * gpui::SMOOTH_SVG_SCALE_FACTOR) as u32,
+                (80.0 * gpui::SMOOTH_SVG_SCALE_FACTOR) as u32,
+            ),
+        );
+        assert_eq!(dimensions, (120, 80));
+    }
 
     #[test]
     fn source_run_result_feedback_is_transient() {
@@ -1258,6 +1475,93 @@ mod tests {
             let editor = editor.read(cx);
             assert_eq!(editor.display_map.line_height_px(500), 76.0);
             assert_eq!(editor.display_map.line_height_px(800), 110.0);
+        });
+    }
+
+    #[gpui::test]
+    fn refreshing_an_inline_image_keeps_the_previous_geometry_until_replacement(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                PathBuf::from("inline-image.org"),
+                b"before\n[[file:result.svg]]\nafter\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+
+        editor.update(cx, |editor, cx| {
+            let snapshot = session.read(cx).snapshot();
+            let link = snapshot.line_content_range(LineIndex(1)).unwrap();
+            editor.display_map.configure(snapshot.len_lines(), 320.0);
+            editor.display_map.update_line_layout(1, 1, 180.0, 6.0, 6.0);
+            editor
+                .inline_image_line_dimensions
+                .borrow_mut()
+                .insert(1, (link.start.0, 320, 180));
+
+            editor.refresh_inline_image(Path::new("result.svg"), cx);
+
+            assert_eq!(editor.display_map.line_height_px(1), 192.0);
+            assert_eq!(
+                editor.inline_image_line_dimensions.borrow().get(&1),
+                Some(&(link.start.0, 320, 180))
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn breaking_an_inline_image_link_immediately_removes_its_cached_height(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let source = (0..80)
+            .map(|line| {
+                if line == 66 {
+                    "[[file:images/typst-demo.svg]]\n".to_owned()
+                } else {
+                    format!("line {line}\n")
+                }
+            })
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("inline-image.org"), source.into_bytes())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+
+        editor.update(cx, |editor, cx| {
+            editor.viewport = Some(Bounds {
+                origin: gpui::point(px(0.0), px(0.0)),
+                size: gpui::size(px(800.0), px(500.0)),
+            });
+            let snapshot = session.read(cx).snapshot();
+            let link = snapshot.line_content_range(LineIndex(66)).unwrap();
+            editor.display_map.configure(snapshot.len_lines(), 640.0);
+            editor
+                .display_map
+                .update_line_layout(66, 1, 300.0, 8.0, 8.0);
+            editor
+                .inline_image_line_dimensions
+                .borrow_mut()
+                .insert(66, (link.start.0, 1200, 800));
+            editor.set_selection(Selection::new(ByteOffset(link.end.0 - 1), link.end), cx);
+            editor.scroll_y = editor.display_map.line_start_y(65);
+            editor.replace_selection("", EditOrigin::DeleteBackward, cx);
+        });
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.display_map.line_height_px(66), LINE_HEIGHT);
+            let viewport_height = editor
+                .viewport
+                .map_or(0.0, |viewport| f32::from(viewport.size.height));
+            let max_scroll = (editor.display_map.total_height() - viewport_height).max(0.0);
+            assert!(
+                (editor.scroll_y - max_scroll).abs() < 0.01,
+                "scroll {} must follow shortened document end {max_scroll} for viewport {viewport_height}",
+                editor.scroll_y,
+            );
         });
     }
 

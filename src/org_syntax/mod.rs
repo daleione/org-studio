@@ -611,7 +611,7 @@ fn classify_line(line: &str) -> BlockKind {
     }
 }
 
-fn standalone_image_path(line: &str) -> Option<&str> {
+pub(crate) fn standalone_image_path(line: &str) -> Option<&str> {
     let target = line.strip_prefix("[[file:")?.strip_suffix("]]")?;
     if target.contains("][") || target.is_empty() {
         return None;

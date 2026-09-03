@@ -165,7 +165,10 @@ fn render(source: &str) -> DiagramProjection {
         return projection;
     }
 
-    let projection = match typstuml::render::render_source(source, typstuml::render::Format::Svg) {
+    let rendered = crate::typst_runtime::run_with_cache_cleanup(|| {
+        typstuml::render::render_source(source, typstuml::render::Format::Svg)
+    });
+    let projection = match rendered {
         Ok(rendered) => {
             let dimensions = rendered_dimensions(rendered.size, &rendered.page_sizes);
             DiagramProjection::Ready {
