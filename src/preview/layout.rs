@@ -230,6 +230,7 @@ impl LayoutSnapshot {
         self.chunks[chunk].measures[row - self.row_prefix[chunk]]
     }
 
+    #[cfg(test)]
     pub(crate) fn locate_display(&self, display_line: usize) -> (usize, usize) {
         if self.rows == 0 {
             return (0, 0);

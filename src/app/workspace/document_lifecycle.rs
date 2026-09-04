@@ -478,6 +478,9 @@ impl WorkspaceWindow {
         let previous = self.state.take_ready();
         self.state = match result {
             Ok(loaded) => {
+                // Soft wrap is deliberately document-local. A transient M-z
+                // choice must never leak into the next opened document.
+                self.soft_wrap = true;
                 let (session, preview) = match loaded.into() {
                     WorkspaceLoadedDocument::Source(session) => (session, None),
                     WorkspaceLoadedDocument::Preview(loaded) => {
@@ -513,10 +516,16 @@ impl WorkspaceWindow {
                 );
                 self.home_error = None;
                 let session = cx.new(|_| session);
+                let editor_syntax = Arc::new(crate::editor::EditorSyntaxService::default());
                 self.editor_minimap_width_subscriptions.clear();
-                let minimap_visible = self.minimap_visible
-                    || (cfg!(feature = "benchmarks")
-                        && std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_BENCH").is_some());
+                let minimap_visible = if cfg!(feature = "benchmarks") {
+                    std::env::var("ORG_STUDIO_EDITOR_MINIMAP_BENCH")
+                        .ok()
+                        .map(|value| !matches!(value.as_str(), "0" | "false" | "off"))
+                        .unwrap_or(self.minimap_visible)
+                } else {
+                    self.minimap_visible
+                };
                 let document_workspace = self.document_workspace;
                 let soft_wrap = self.soft_wrap;
                 let minimap_width = self.minimap_width;
@@ -526,12 +535,15 @@ impl WorkspaceWindow {
                         .shows(pane, crate::app::PaneSurface::Editor)
                         .then(|| {
                             let session = session.clone();
+                            let editor_syntax = editor_syntax.clone();
                             cx.new(|cx| {
-                                let mut editor = crate::editor::SemanticEditor::new_with_autofocus(
-                                    session,
-                                    document_workspace.active_pane == pane,
-                                    cx,
-                                );
+                                let mut editor =
+                                    crate::editor::SemanticEditor::new_with_syntax_service(
+                                        session,
+                                        document_workspace.active_pane == pane,
+                                        editor_syntax,
+                                        cx,
+                                    );
                                 editor.set_content_font_size(*content_font_sizes.get(pane), cx);
                                 editor.set_soft_wrap(soft_wrap, cx);
                                 editor.set_minimap(minimap_visible, minimap_width, cx);
@@ -585,6 +597,7 @@ impl WorkspaceWindow {
                 WorkspaceLoadState::Ready {
                     document: ReadyDocument {
                         session,
+                        editor_syntax,
                         editors: PanePair {
                             left: left_editor,
                             right: right_editor,
@@ -758,6 +771,37 @@ impl WorkspaceWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn opening_a_document_always_restores_soft_wrap(cx: &mut gpui::TestAppContext) {
+        let path = std::env::temp_dir().join(format!(
+            "org-studio-soft-wrap-default-{}-{}.org",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"* Wrapped by default\nbody\n").unwrap();
+        let loaded = load_workspace_document(path.clone(), false).unwrap();
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.soft_wrap = false;
+            workspace.generation = 1;
+            assert!(workspace.apply_load_result(1, Ok(loaded), cx));
+            assert!(workspace.soft_wrap);
+            assert!(
+                workspace
+                    .editor(crate::app::PaneSide::Left)
+                    .unwrap()
+                    .read(cx)
+                    .soft_wrap()
+            );
+        });
+
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[gpui::test]
     fn failed_open_keeps_the_active_document_title_and_watch_target(cx: &mut gpui::TestAppContext) {

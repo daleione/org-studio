@@ -1,5 +1,5 @@
 #[cfg(feature = "benchmarks")]
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
@@ -71,17 +71,41 @@ struct MinimapPaint {
     bounds: Bounds<Pixels>,
     background: Option<PaintQuad>,
     image: Option<(Arc<RenderImage>, Bounds<Pixels>)>,
+    media: Vec<MinimapImagePaint>,
     overlays: Vec<PaintQuad>,
+}
+
+struct MinimapImagePaint {
+    path: std::path::PathBuf,
+    row_y: f32,
+    row_height: f32,
+}
+
+#[derive(Clone, Copy)]
+struct MinimapMediaCandidate {
+    line: u64,
+    line_start: u64,
+    row_offset_units: f32,
+    row_height_units: f32,
 }
 
 struct MinimapRasterRequest {
     key: super::minimap::RasterKey,
-    rows: Vec<super::minimap::TextRow>,
+    path: std::path::PathBuf,
+    snapshot: crate::document::DocumentSnapshot,
+    source_lines: Vec<u64>,
+    raster_lines: Vec<Option<u64>>,
+    media_candidates: Vec<MinimapMediaCandidate>,
+    syntax_service: Arc<syntax::EditorSyntaxService>,
+    theme: crate::theme::Theme,
     content_top: f32,
     viewport_generation: u64,
     scale_factor: f32,
     density: crate::minimap::Density,
     line_height: f32,
+    visible_rows: usize,
+    repeated_rows: usize,
+    telemetry: Arc<super::minimap::EditorMinimapTelemetry>,
     epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
     expected_epoch: u64,
 }
@@ -93,7 +117,6 @@ struct PaintRow {
     shape_key: ShapeKey,
     visual_rows: usize,
     metrics: syntax::BlockMetrics,
-    animated_height: f32,
     block: Option<syntax::EditorBlockDecoration>,
     active: bool,
     folded: bool,
@@ -398,12 +421,18 @@ impl Element for EditorElement {
             .map(|animation| (animation.changed_ranges.clone(), animation.scale()))
             .unwrap_or_else(|| (Arc::from([]), 1.0));
         let paint_lines = animated_paint_lines(&editor.display_map, visible_lines, &fold_ranges);
-        let style_snapshot = syntax::SparseEditorStyleSnapshot::for_lines(
-            editor.session.read(cx).path(),
+        let editor_path = editor.session.read(cx).path().to_path_buf();
+        let style_query = syntax::SparseEditorStyleSnapshot::query_lines(
+            &editor_path,
             &snapshot,
             &paint_lines,
-            &editor.syntax_cache,
+            &editor.syntax_service,
         );
+        let syntax_build_request = style_query
+            .start_builder
+            .then(|| (editor.syntax_service.clone(), editor_path, snapshot.clone()));
+        let styles_pending = style_query.pending;
+        let style_snapshot = style_query.snapshot;
         debug_assert_eq!(style_snapshot.revision, snapshot.revision());
         let text_origin_x = bounds.left()
             + px(gutter_width
@@ -450,9 +479,14 @@ impl Element for EditorElement {
                 } else {
                     1.0
                 };
-            let line_style = style_snapshot
-                .line(line_number)
-                .expect("visible style snapshot covers every visible source line");
+            let fallback_style;
+            let line_style = if let Some(style) = style_snapshot.line(line_number) {
+                style
+            } else {
+                debug_assert!(styles_pending);
+                fallback_style = syntax::EditorLineStyle::pending_fallback(source_content_range);
+                &fallback_style
+            };
             let text_inset = editor_block_text_inset(line_style.block.as_ref());
             let row_text_origin_x = text_origin_x + px(text_inset);
             let row_wrap_width = if text_inset > 0.0 {
@@ -677,7 +711,6 @@ impl Element for EditorElement {
                 shape_key,
                 visual_rows,
                 metrics,
-                animated_height,
                 block: line_style.block.clone(),
                 active: anchor.is_some(),
                 folded,
@@ -698,13 +731,8 @@ impl Element for EditorElement {
             }
         }
 
-        let (_, fallback_top, fallback_bottom) =
+        let (_, visible_top, visible_bottom) =
             editor.minimap_source_viewport(f32::from(bounds.size.height));
-        let visible_top =
-            visible_position_in_paint_rows(editor, &rows, bounds.top()).unwrap_or(fallback_top);
-        let visible_bottom = visible_position_in_paint_rows(editor, &rows, bounds.bottom())
-            .unwrap_or(fallback_bottom)
-            .clamp(visible_top, editor.display_map.visible_line_count() as f32);
         let minimap_geometry = editor.minimap_viewport_geometry_for_source_range(
             minimap_bounds,
             visible_top,
@@ -712,7 +740,9 @@ impl Element for EditorElement {
         );
         let (minimap, minimap_raster_request) = build_minimap(
             editor,
+            editor.session.read(cx).path(),
             &snapshot,
+            styles_pending,
             minimap_bounds,
             minimap_geometry,
             window.scale_factor(),
@@ -721,6 +751,9 @@ impl Element for EditorElement {
         let schedule_minimap = editor.fold_animation.is_none();
         let source_run_feedback = editor.source_run_feedback;
         let horizontal_scroll = editor.scroll_x;
+        if let Some((service, path, syntax_snapshot)) = syntax_build_request {
+            schedule_syntax_builder(self.editor.clone(), service, path, syntax_snapshot, cx);
+        }
         if schedule_minimap && let Some(request) = minimap_raster_request {
             schedule_minimap_raster(self.editor.clone(), request, cx);
         }
@@ -890,11 +923,55 @@ impl Element for EditorElement {
                 window.paint_quad(background.clone());
             }
             if let Some((image, image_bounds)) = &state.minimap.image {
+                #[cfg(feature = "benchmarks")]
+                self.editor
+                    .read(cx)
+                    .minimap
+                    .telemetry
+                    .note_image_paint(*image_bounds, state.minimap.bounds);
                 let _ = window.paint_image(
                     *image_bounds,
                     *image_bounds,
                     Corners::default(),
                     image.clone(),
+                    0,
+                    false,
+                );
+            }
+            for media in &state.minimap.media {
+                let resource: gpui::Resource = media.path.clone().into();
+                let Some(Ok(image)) = window.use_asset::<gpui::ImgResourceLoader>(&resource, cx)
+                else {
+                    continue;
+                };
+                let natural = image.size(0);
+                let Some((x, y, width, height)) = editor_minimap_media_geometry(
+                    natural.width.0 as f32,
+                    natural.height.0 as f32,
+                    f32::from(state.minimap.bounds.size.width),
+                    media.row_y,
+                    media.row_height,
+                ) else {
+                    continue;
+                };
+                let image_bounds = Bounds::new(
+                    point(
+                        state.minimap.bounds.left() + px(x),
+                        state.minimap.bounds.top() + px(y),
+                    ),
+                    size(px(width), px(height)),
+                );
+                let visible_image_bounds = image_bounds.intersect(&state.minimap.bounds);
+                if f32::from(visible_image_bounds.size.width) <= 0.0
+                    || f32::from(visible_image_bounds.size.height) <= 0.0
+                {
+                    continue;
+                }
+                let _ = window.paint_image(
+                    image_bounds,
+                    image_bounds,
+                    Corners::default(),
+                    image,
                     0,
                     false,
                 );
@@ -1119,6 +1196,9 @@ impl Element for EditorElement {
                             metrics.after,
                         ) || changed
                     });
+            if layout_changed {
+                editor.minimap.invalidate_raster();
+            }
             let anchored = if layout_changed {
                 editor.animated_line_start_y(anchor_line)
                     + anchor_fraction * editor.animated_line_height_px(anchor_line)
@@ -1168,7 +1248,18 @@ impl Element for EditorElement {
         #[cfg(feature = "benchmarks")]
         match _benchmark.expect("benchmark builds always return a frame action") {
             FrameBenchmarkAction::Inactive => {}
-            FrameBenchmarkAction::Continue => window.request_animation_frame(),
+            FrameBenchmarkAction::Continue => {
+                let executor = cx.background_executor().clone();
+                window
+                    .spawn(cx, async move |cx| {
+                        executor.timer(Duration::from_millis(1)).await;
+                        let _ = cx.update(|window, _| {
+                            window.activate_window();
+                        });
+                        cx.refresh();
+                    })
+                    .detach();
+            }
             FrameBenchmarkAction::Complete => {
                 if std::env::var_os("ORG_STUDIO_EXIT_AFTER_EDITOR_BENCH").is_some() {
                     cx.quit();
@@ -1176,26 +1267,6 @@ impl Element for EditorElement {
             }
         }
     }
-}
-
-fn visible_position_in_paint_rows(
-    editor: &SemanticEditor,
-    rows: &[PaintRow],
-    y: Pixels,
-) -> Option<f32> {
-    let last = rows.last()?;
-    for row in rows {
-        let block_top = row.hit.origin_y - px(row.metrics.before);
-        let block_height = row.animated_height;
-        let block_bottom = block_top + px(block_height);
-        if y <= block_bottom || row.hit.line == last.hit.line {
-            let fraction = (f32::from(y - block_top) / block_height.max(1.0)).clamp(0.0, 1.0);
-            let source_y = editor.animated_line_start_y(row.hit.line.0)
-                + fraction * editor.animated_line_height_px(row.hit.line.0);
-            return Some(editor.animated_visible_position_at_y(source_y));
-        }
-    }
-    None
 }
 
 fn scroll_is_at_end(scroll_y: f32, viewport_height: f32, document_height: f32) -> bool {
@@ -1234,20 +1305,89 @@ fn shape_key(
     }
 }
 
+fn editor_minimap_image_path(
+    document_path: &std::path::Path,
+    text: &str,
+) -> Option<std::path::PathBuf> {
+    if crate::document::DocumentFormat::from_path(document_path)
+        != crate::document::DocumentFormat::Org
+    {
+        return None;
+    }
+    crate::org_syntax::standalone_image_path(text)
+        .map(|source| crate::preview::resolve_image_path(document_path, source))
+}
+
+fn editor_minimap_media_geometry(
+    natural_width: f32,
+    natural_height: f32,
+    minimap_width: f32,
+    row_y: f32,
+    row_height: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    if natural_width <= 0.0 || natural_height <= 0.0 || minimap_width <= 0.0 || row_height <= 0.0 {
+        return None;
+    }
+    const INSET: f32 = 5.0;
+    let available_width = (minimap_width - INSET * 2.0).max(1.0);
+    let scale = (available_width / natural_width)
+        // The row already uses Editor visual units (正文 pixels / base line
+        // height). Fitting to that row preserves the same uniform scale as
+        // text; an unrelated 48px cap made tall images too short.
+        .min(row_height / natural_height)
+        .min(1.0);
+    let width = natural_width * scale;
+    let height = natural_height * scale;
+    Some((
+        // Inline images start at the Editor text origin. Keep their minimap
+        // projection on the same left edge instead of centering narrow or tall
+        // media inside the track.
+        INSET,
+        row_y + (row_height - height) * 0.5,
+        width,
+        height,
+    ))
+}
+
+fn fill_editor_minimap_visual_rows(
+    raster_lines: &mut [Option<u64>],
+    line: u64,
+    row_offset_units: f32,
+    row_height_units: f32,
+) {
+    if row_height_units <= 0.0 || raster_lines.is_empty() {
+        return;
+    }
+    let first = row_offset_units.floor() as isize;
+    let end = (row_offset_units + row_height_units).ceil() as isize;
+    let first = first.clamp(0, raster_lines.len() as isize) as usize;
+    let end = end.clamp(first as isize, raster_lines.len() as isize) as usize;
+    // A source line may occupy several Editor visual rows because of soft wrap,
+    // block spacing, or inline media. Every occupied minimap unit needs content;
+    // assigning only the first slot leaves transparent holes and makes the next
+    // raster publish look like previously missing document text appeared late.
+    raster_lines[first..end].fill(Some(line));
+}
+
+#[allow(clippy::too_many_arguments)]
 fn build_minimap(
     editor: &SemanticEditor,
+    path: &std::path::Path,
     snapshot: &crate::document::DocumentSnapshot,
+    semantics_pending: bool,
     bounds: Bounds<Pixels>,
     geometry: super::minimap::ViewportGeometry,
     scale_factor: f32,
     theme: &crate::theme::Theme,
 ) -> (MinimapPaint, Option<MinimapRasterRequest>) {
+    editor.minimap.note_semantics_pending(semantics_pending);
     if !editor.minimap.visible || f32::from(bounds.size.width) <= 0.0 {
         return (
             MinimapPaint {
                 bounds,
                 background: None,
                 image: None,
+                media: Vec::new(),
                 overlays: Vec::new(),
             },
             None,
@@ -1260,7 +1400,8 @@ fn build_minimap(
     )];
     let density = crate::minimap::Density::for_width(f32::from(bounds.size.width));
     let line_height = editor.minimap.line_height(density);
-    let total_units = editor.display_map.visible_line_count().max(1) as f32;
+    let editor_line_height = editor.display_map.base_line_height().max(1.0);
+    let total_units = (editor.animated_document_height() / editor_line_height).max(1.0);
     let (first_unit, row_count) = super::minimap::raster_window(
         geometry.content_top,
         geometry.interaction_height,
@@ -1286,35 +1427,66 @@ fn build_minimap(
     let cached_matches = cached_raster
         .as_ref()
         .is_some_and(|cached| cached.key == key);
+    editor.minimap.note_cache_lookup(cached_matches);
     let mut raster_request = None;
-    if !cached_matches && editor.minimap.reserve_raster(key) {
-        let rows = (0..row_count)
-            .map(|offset| {
-                let line = editor
-                    .display_map
-                    .source_line_for_visible_ordinal(first_unit + offset as u64)
-                    .unwrap_or_else(|| snapshot.len_lines().saturating_sub(1));
-                let text = snapshot
-                    .line_content_range(LineIndex(line))
-                    .ok()
-                    .map(|range| bounded_minimap_text(snapshot, range, 1_024))
-                    .unwrap_or_default();
-                let kind = super::minimap::classify_line(&text);
-                super::minimap::TextRow {
-                    color: minimap_text_color(kind, theme),
-                    text,
-                    indent: 3.0,
-                }
-            })
-            .collect::<Vec<_>>();
+    if !semantics_pending && !cached_matches && editor.minimap.reserve_raster(key) {
+        let first_y = first_unit as f32 * editor_line_height;
+        let end_y = (first_unit as f32 + row_count as f32) * editor_line_height;
+        let first_line = editor.animated_line_at_y(first_y);
+        let last_line = editor
+            .animated_line_at_y(end_y.min(editor.animated_document_height()))
+            .saturating_add(1)
+            .min(snapshot.len_lines());
+        let source_lines = visible_source_lines(&editor.display_map, first_line..last_line);
+        let mut raster_lines = vec![None; row_count];
+        let mut media_candidates = Vec::with_capacity(source_lines.len());
+        for &line in &source_lines {
+            let start_units = editor.animated_line_start_y(line) / editor_line_height;
+            let height_units = editor.animated_line_height_px(line) / editor_line_height;
+            let row_offset_units = start_units - first_unit as f32;
+            fill_editor_minimap_visual_rows(
+                &mut raster_lines,
+                line,
+                row_offset_units,
+                height_units,
+            );
+            if let Ok(range) = snapshot.line_content_range(LineIndex(line))
+                && editor.previews_inline_image_at(range.start)
+            {
+                media_candidates.push(MinimapMediaCandidate {
+                    line,
+                    line_start: range.start.0,
+                    row_offset_units,
+                    row_height_units: height_units,
+                });
+            }
+        }
+        let visible_rows = (((geometry.interaction_height - density.edge_padding() * 2.0)
+            / line_height.max(1.0))
+        .ceil() as usize
+            + 1)
+        .min(raster_lines.len());
+        let repeated_rows = editor
+            .minimap
+            .telemetry
+            .note_request(snapshot.revision(), &source_lines);
         raster_request = Some(MinimapRasterRequest {
             key,
-            rows,
+            path: path.to_path_buf(),
+            snapshot: snapshot.clone(),
+            source_lines,
+            raster_lines,
+            media_candidates,
+            syntax_service: editor.syntax_service.clone(),
+            theme: *theme,
             content_top: geometry.content_top,
             viewport_generation: editor.minimap.viewport_generation(),
             scale_factor,
             density,
             line_height,
+            visible_rows,
+            repeated_rows,
+            telemetry: editor.minimap.telemetry.clone(),
             epoch: editor.minimap.raster_epoch.clone(),
             expected_epoch: editor
                 .minimap
@@ -1322,10 +1494,11 @@ fn build_minimap(
                 .load(std::sync::atomic::Ordering::Acquire),
         });
     }
-    let image = cached_raster.map(|cached| {
+    let mut media = Vec::new();
+    let image = cached_raster.as_ref().map(|cached| {
         let same_camera = cached.viewport_generation == editor.minimap.viewport_generation();
         let placement_content_top = super::minimap::raster_placement_content_top(
-            &cached,
+            cached,
             editor.minimap.viewport_generation(),
             geometry.content_top,
         );
@@ -1337,8 +1510,23 @@ fn build_minimap(
         let image_y = density.edge_padding()
             + (cached.key.first_unit as f32 - placement_content_top) * placement_line_height;
         let image_height = usize::from(cached.key.rows) as f32 * cached.line_height;
+        for source in cached.media.iter() {
+            let row_y = density.edge_padding()
+                + (cached.key.first_unit as f32 + source.row_offset_units - placement_content_top)
+                    * placement_line_height;
+            let row_height = source.row_height_units * placement_line_height;
+            // Keep bounded raster-window media in the paint frame even while it
+            // is just outside the visible track. `use_asset` can then start the
+            // load during prefetch instead of popping the image in after it has
+            // entered the viewport.
+            media.push(MinimapImagePaint {
+                path: source.path.clone(),
+                row_y,
+                row_height,
+            });
+        }
         (
-            cached.image,
+            cached.image.clone(),
             Bounds::new(
                 point(bounds.left(), bounds.top() + px(image_y)),
                 size(bounds.size.width, px(image_height)),
@@ -1353,9 +1541,11 @@ fn build_minimap(
             0.0,
             (geometry.interaction_height - geometry.thumb_height).max(0.0),
         );
+    let (visual_thumb_top, visual_thumb_height) =
+        crate::minimap::visual_thumb_geometry(thumb_top, geometry.thumb_height, density);
     let thumb_bounds = Bounds::new(
-        point(bounds.left(), bounds.top() + px(thumb_top)),
-        size(bounds.size.width, px(geometry.thumb_height)),
+        point(bounds.left(), bounds.top() + px(visual_thumb_top)),
+        size(bounds.size.width, px(visual_thumb_height)),
     );
     let (fill_alpha, border_alpha) =
         crate::minimap::thumb_alphas(editor.minimap.drag.is_some(), false, false);
@@ -1390,10 +1580,101 @@ fn build_minimap(
             bounds,
             background: Some(background),
             image,
+            media,
             overlays,
         },
         raster_request,
     )
+}
+
+fn schedule_syntax_builder(
+    editor: gpui::Entity<SemanticEditor>,
+    service: Arc<syntax::EditorSyntaxService>,
+    path: std::path::PathBuf,
+    snapshot: crate::document::DocumentSnapshot,
+    cx: &mut App,
+) {
+    let host_id = editor.read(cx).minimap.telemetry.host_id();
+    let background = cx.background_executor().spawn(async move {
+        let _build = tracing::info_span!("editor_semantic_checkpoint_build", host_id).entered();
+        service.build_focused(&path, &snapshot);
+    });
+    cx.spawn(async move |cx| {
+        background.await;
+        editor.update(cx, |_, cx| cx.notify());
+    })
+    .detach();
+}
+
+fn apply_editor_minimap_media_dimensions(
+    editor: &mut SemanticEditor,
+    media: &[super::minimap::RasterMedia],
+) -> bool {
+    let discovered = media
+        .iter()
+        .filter_map(|source| {
+            source
+                .dimensions
+                .map(|dimensions| (source.line, source.line_start, dimensions))
+        })
+        .collect::<Vec<_>>();
+    let changed_dimensions = {
+        let mut known = editor.inline_image_line_dimensions.borrow_mut();
+        discovered
+            .into_iter()
+            .filter(|(line, line_start, (width, height))| {
+                if known.get(line) == Some(&(*line_start, *width, *height)) {
+                    false
+                } else {
+                    known.insert(*line, (*line_start, *width, *height));
+                    true
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    if changed_dimensions.is_empty() {
+        return false;
+    }
+
+    let viewport_height = editor
+        .viewport
+        .map_or(0.0, |viewport| f32::from(viewport.size.height));
+    let was_at_end = scroll_is_at_end(
+        editor.scroll_y,
+        viewport_height,
+        editor.animated_document_height(),
+    );
+    let anchor_line = editor.animated_line_at_y(editor.scroll_y);
+    let anchor_start = editor.animated_line_start_y(anchor_line);
+    let anchor_fraction = ((editor.scroll_y - anchor_start)
+        / editor.animated_line_height_px(anchor_line).max(1.0))
+    .clamp(0.0, 1.0);
+    let wrap_width = editor.display_map.wrap_width().min(INLINE_IMAGE_MAX_WIDTH);
+    let mut layout_changed = false;
+    for (line, _, (width, height)) in changed_dimensions {
+        let (_, fitted_height) = crate::preview::fitted_image_size(width, height, wrap_width);
+        layout_changed |= editor.display_map.update_line_layout(
+            line,
+            1,
+            fitted_height,
+            INLINE_IMAGE_VERTICAL_PADDING,
+            INLINE_IMAGE_VERTICAL_PADDING,
+        );
+    }
+    if !layout_changed {
+        return false;
+    }
+
+    editor.minimap.invalidate_raster();
+    let anchored = editor.animated_line_start_y(anchor_line)
+        + anchor_fraction * editor.animated_line_height_px(anchor_line);
+    editor.scroll_y = stabilized_scroll_y(
+        was_at_end,
+        anchored,
+        viewport_height,
+        editor.animated_document_height(),
+    );
+    true
 }
 
 fn schedule_minimap_raster(
@@ -1405,28 +1686,159 @@ fn schedule_minimap_raster(
     let content_top = request.content_top;
     let viewport_generation = request.viewport_generation;
     let line_height = request.line_height;
+    let publish_telemetry = request.telemetry.clone();
     let background = cx.background_executor().spawn(async move {
-        super::minimap::rasterize_text_rows(
-            &request.rows,
+        let host_id = request.telemetry.host_id();
+        let prepare_started = std::time::Instant::now();
+        let _prepare = tracing::info_span!("editor_minimap_prepare", host_id).entered();
+        if request.epoch.load(std::sync::atomic::Ordering::Acquire) != request.expected_epoch {
+            return None;
+        }
+        let mut semantics = syntax::SparseEditorStyleSnapshot::query_lines(
+            &request.path,
+            &request.snapshot,
+            &request.source_lines,
+            &request.syntax_service,
+        );
+        if semantics.pending {
+            if !semantics.start_builder {
+                return None;
+            }
+            request
+                .syntax_service
+                .build_focused(&request.path, &request.snapshot);
+            semantics = syntax::SparseEditorStyleSnapshot::query_lines(
+                &request.path,
+                &request.snapshot,
+                &request.source_lines,
+                &request.syntax_service,
+            );
+            if semantics.pending {
+                return None;
+            }
+        }
+        debug_assert_eq!(semantics.snapshot.revision, request.snapshot.revision());
+        let mut rich_span_budget = super::minimap::RichSpanBudget::default();
+        let mut media = Vec::new();
+        let mut image_lines = std::collections::HashSet::new();
+        for candidate in &request.media_candidates {
+            let range = request
+                .snapshot
+                .line_content_range(LineIndex(candidate.line))
+                .ok();
+            let text = range
+                .map(|range| bounded_minimap_text(&request.snapshot, range, 1_024))
+                .unwrap_or_default();
+            if let Some(path) = editor_minimap_image_path(&request.path, &text) {
+                image_lines.insert(candidate.line);
+                let dimensions = crate::preview::image_dimensions(&path).ok();
+                media.push(super::minimap::RasterMedia {
+                    line: candidate.line,
+                    line_start: candidate.line_start,
+                    row_offset_units: candidate.row_offset_units,
+                    row_height_units: candidate.row_height_units,
+                    path,
+                    dimensions,
+                });
+            }
+        }
+        let rows = request
+            .raster_lines
+            .iter()
+            .map(|line| {
+                let Some(line) = *line else {
+                    return minimap_text_row(
+                        String::new(),
+                        None,
+                        Vec::new(),
+                        &mut rich_span_budget,
+                        &request.theme,
+                    );
+                };
+                let mut text = request
+                    .snapshot
+                    .line_content_range(LineIndex(line))
+                    .ok()
+                    .map(|range| bounded_minimap_text(&request.snapshot, range, 1_024))
+                    .unwrap_or_default();
+                if image_lines.contains(&line) {
+                    text.clear();
+                }
+                let line_style = semantics.snapshot.line(line);
+                let spans = line_style
+                    .map(|style| syntax::semantic_spans(&request.path, &text, style))
+                    .unwrap_or_default();
+                minimap_text_row(
+                    text,
+                    line_style,
+                    spans,
+                    &mut rich_span_budget,
+                    &request.theme,
+                )
+            })
+            .collect::<Vec<_>>();
+        if rich_span_budget.degraded_rows() > 0 {
+            tracing::info!(
+                minimap_rich_span_degraded_rows = rich_span_budget.degraded_rows(),
+                minimap_rich_span_degraded_rows_total = super::minimap::rich_span_degraded_rows(),
+                "editor minimap rich spans degraded to base style"
+            );
+        }
+        let degraded_rows = rich_span_budget.degraded_rows();
+        let prepare_elapsed = prepare_started.elapsed();
+        drop(_prepare);
+        let raster_started = std::time::Instant::now();
+        let _raster = tracing::info_span!("editor_minimap_raster", host_id).entered();
+        let rasterized = super::minimap::rasterize_text_rows(
+            &rows,
             usize::from(key.width),
             request.scale_factor,
             request.density,
             request.line_height,
             &request.epoch,
             request.expected_epoch,
-        )
+        );
+        let raster_elapsed = raster_started.elapsed();
+        if let Some(rasterized) = &rasterized {
+            request.telemetry.report_job(
+                rows.len(),
+                request.visible_rows,
+                request.repeated_rows,
+                degraded_rows,
+                prepare_elapsed,
+                raster_elapsed,
+                rasterized.rasterizer_lock_wait,
+            );
+        }
+        rasterized.map(|rasterized| (rasterized.image, Arc::<[_]>::from(media)))
     });
     cx.spawn(async move |cx| {
-        let Some(image) = background.await else {
-            return;
-        };
+        let raster = background.await;
         editor.update(cx, |editor, cx| {
+            let host_id = publish_telemetry.host_id();
+            let _publish = tracing::info_span!("editor_minimap_publish", host_id).entered();
             let mut in_flight = editor
                 .minimap
                 .raster_build
                 .lock()
                 .expect("editor minimap raster build poisoned");
             if *in_flight != Some(key) {
+                return;
+            }
+            let Some((image, media)) = raster else {
+                *in_flight = None;
+                return;
+            };
+            *in_flight = None;
+            drop(in_flight);
+
+            // The minimap scans a bounded window ahead of the Editor viewport.
+            // Resolve image dimensions there and commit the corresponding Editor
+            // row height before publishing the raster. The next raster is then
+            // built against final visual units, so reaching the image cannot make
+            // the whole minimap shift when the inline image is loaded later.
+            if apply_editor_minimap_media_dimensions(editor, &media) {
+                cx.notify();
                 return;
             }
             *editor
@@ -1436,11 +1848,12 @@ fn schedule_minimap_raster(
                 .expect("editor minimap raster poisoned") = Some(super::minimap::CachedRaster {
                 key,
                 image,
+                media,
                 content_top,
                 viewport_generation,
                 line_height,
             });
-            *in_flight = None;
+            publish_telemetry.note_publish();
             cx.notify();
         });
     })
@@ -1459,15 +1872,52 @@ fn bounded_minimap_text(
     snapshot.copy_range(ByteRange::new(range.start.0, end))
 }
 
-fn minimap_text_color(kind: super::minimap::LineKind, theme: &crate::theme::Theme) -> u32 {
+fn minimap_text_color(kind: syntax::EditorStyleId, theme: &crate::theme::Theme) -> u32 {
     match kind {
-        super::minimap::LineKind::Heading(level) => {
+        syntax::EditorStyleId::Heading(level) => {
             theme.heading[(level.saturating_sub(1) as usize).min(3)]
         }
-        super::minimap::LineKind::Code => theme.code_boundary,
-        super::minimap::LineKind::Quote => theme.quote,
-        super::minimap::LineKind::Property => theme.meta,
-        super::minimap::LineKind::Table | super::minimap::LineKind::Plain => theme.foreground,
+        syntax::EditorStyleId::CodeBoundary | syntax::EditorStyleId::Meta => theme.meta,
+        syntax::EditorStyleId::Code => theme.code_foreground,
+        syntax::EditorStyleId::Quote => theme.quote,
+        syntax::EditorStyleId::Property => theme.attribute,
+        syntax::EditorStyleId::Comment => theme.comment,
+        syntax::EditorStyleId::Table => theme.link,
+        syntax::EditorStyleId::List | syntax::EditorStyleId::Plain => theme.foreground,
+    }
+}
+
+fn minimap_text_row(
+    text: String,
+    line_style: Option<&syntax::EditorLineStyle>,
+    spans: Vec<syntax::EditorSemanticSpan>,
+    rich_span_budget: &mut super::minimap::RichSpanBudget,
+    theme: &crate::theme::Theme,
+) -> super::minimap::TextRow {
+    let block = line_style.and_then(|style| style.block.as_ref());
+    let rich_spans = rich_span_budget.adapt(&text, spans, theme);
+    super::minimap::TextRow {
+        color: line_style.map_or(theme.foreground, |style| {
+            minimap_text_color(style.id, theme)
+        }),
+        weight: if matches!(
+            line_style.map(|style| style.id),
+            Some(syntax::EditorStyleId::Heading(_))
+        ) {
+            super::minimap::TextWeight::Bold
+        } else {
+            super::minimap::TextWeight::Semibold
+        },
+        italic: matches!(
+            line_style.map(|style| style.id),
+            Some(syntax::EditorStyleId::Comment)
+        ),
+        spans: rich_spans,
+        text,
+        indent: if block.is_some() { 5.0 } else { 3.0 },
+        block_background: block.map(|_| theme.code_background),
+        block_accent: block.map(|block| editor_block_accent(&block.kind, theme)),
+        block_edge: block.map(|block| block.edge),
     }
 }
 
@@ -1795,14 +2245,23 @@ fn push_selection_quads(
 mod tests {
     use super::{
         EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES, animated_paint_lines,
-        editor_block_horizontal_bounds, editor_block_segments, editor_block_text_inset,
-        folded_display_text, scroll_is_at_end, stabilized_scroll_y,
+        apply_editor_minimap_media_dimensions, editor_block_horizontal_bounds,
+        editor_block_segments, editor_block_text_inset, editor_minimap_image_path,
+        editor_minimap_media_geometry, fill_editor_minimap_visual_rows, folded_display_text,
+        minimap_text_row, scroll_is_at_end, stabilized_scroll_y,
     };
+    use crate::document::{DocumentSession, DocumentSnapshot, TextSnapshot};
     use crate::editor::{
+        SemanticEditor,
         layout_map::EditorLayoutMap,
-        syntax::{EditorBlockDecoration, EditorBlockEdge, EditorBlockKind},
+        minimap::RasterMedia,
+        syntax::{
+            EditorBlockDecoration, EditorBlockEdge, EditorBlockKind, EditorStyleId,
+            EditorSyntaxService, SparseEditorStyleSnapshot, semantic_spans,
+        },
     };
-    use gpui::px;
+    use gpui::{AppContext, px};
+    use std::path::Path;
 
     fn block_row(edge: EditorBlockEdge, top: f32) -> EditorBlockPaintRow {
         EditorBlockPaintRow {
@@ -1819,6 +2278,64 @@ mod tests {
     }
 
     #[test]
+    fn minimap_rows_adapt_the_canonical_editor_semantics() {
+        let source = "plain\n* heading\n- list\n| table |\n> quote\n:KEY: value\n#+title: title\n# comment\n#+begin_src rust\nlet x = 1;\n#+end_src\n";
+        let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let lines = (0..11).collect::<Vec<_>>();
+        let styles = SparseEditorStyleSnapshot::for_lines(
+            Path::new("contract.org"),
+            &snapshot,
+            &lines,
+            &EditorSyntaxService::default(),
+        );
+        let theme = crate::theme::current_theme();
+        let expected = [
+            EditorStyleId::Plain,
+            EditorStyleId::Heading(1),
+            EditorStyleId::List,
+            EditorStyleId::Table,
+            EditorStyleId::Quote,
+            EditorStyleId::Property,
+            EditorStyleId::Meta,
+            EditorStyleId::Comment,
+            EditorStyleId::CodeBoundary,
+            EditorStyleId::Code,
+            EditorStyleId::CodeBoundary,
+        ];
+        let mut rich_span_budget = super::super::minimap::RichSpanBudget::default();
+
+        for (line, expected_style) in expected.into_iter().enumerate() {
+            let style = styles.line(line as u64).expect("canonical line semantics");
+            assert_eq!(style.id, expected_style);
+            let text = snapshot.copy_range(style.source_range);
+            let spans = semantic_spans(Path::new("contract.org"), &text, style);
+            let row = minimap_text_row(text, Some(style), spans, &mut rich_span_budget, theme);
+            assert_eq!(row.color, super::minimap_text_color(style.id, theme));
+            assert_eq!(row.block_edge, style.block.as_ref().map(|block| block.edge));
+            if line == 9 {
+                assert!(
+                    row.spans
+                        .iter()
+                        .any(|span| span.color == Some(theme.keyword))
+                );
+            }
+        }
+
+        for line in 8..=10 {
+            let style = styles.line(line).unwrap();
+            let row = minimap_text_row(
+                String::new(),
+                Some(style),
+                Vec::new(),
+                &mut rich_span_budget,
+                theme,
+            );
+            assert!(row.block_background.is_some());
+            assert!(row.block_accent.is_some());
+        }
+    }
+
+    #[test]
     fn folded_heading_display_adds_an_ellipsis_without_changing_source_text() {
         assert_eq!(
             folded_display_text("* Heading".to_owned(), true),
@@ -1828,6 +2345,107 @@ mod tests {
             folded_display_text("* Heading".to_owned(), false),
             "* Heading"
         );
+    }
+
+    #[test]
+    fn editor_minimap_resolves_org_image_rows_but_not_markdown_source() {
+        assert_eq!(
+            editor_minimap_image_path(
+                Path::new("/tmp/project/note.org"),
+                "[[file:images/diagram.png]]"
+            ),
+            Some(std::path::PathBuf::from("/tmp/project/images/diagram.png"))
+        );
+        assert_eq!(
+            editor_minimap_image_path(
+                Path::new("/tmp/project/note.md"),
+                "[[file:images/diagram.png]]"
+            ),
+            None
+        );
+        assert_eq!(
+            editor_minimap_image_path(Path::new("/tmp/project/note.org"), "ordinary text"),
+            None
+        );
+    }
+
+    #[test]
+    fn editor_minimap_thumbnail_is_bounded_and_preserves_aspect_ratio() {
+        assert_eq!(
+            editor_minimap_media_geometry(400.0, 200.0, 96.0, 12.0, 60.0),
+            Some((5.0, 20.5, 86.0, 43.0))
+        );
+        assert_eq!(
+            editor_minimap_media_geometry(20.0, 10.0, 96.0, 12.0, 60.0),
+            Some((5.0, 37.0, 20.0, 10.0))
+        );
+        assert_eq!(
+            editor_minimap_media_geometry(100.0, 400.0, 96.0, 0.0, 100.0),
+            Some((5.0, 0.0, 25.0, 100.0))
+        );
+        assert_eq!(
+            editor_minimap_media_geometry(0.0, 10.0, 96.0, 0.0, 60.0),
+            None
+        );
+    }
+
+    #[test]
+    fn wrapped_editor_rows_fill_their_complete_minimap_visual_span() {
+        let mut raster_lines = vec![None; 8];
+        fill_editor_minimap_visual_rows(&mut raster_lines, 12, 1.25, 3.5);
+        fill_editor_minimap_visual_rows(&mut raster_lines, 13, 4.75, 1.0);
+
+        assert_eq!(
+            raster_lines,
+            vec![
+                None,
+                Some(12),
+                Some(12),
+                Some(12),
+                Some(13),
+                Some(13),
+                None,
+                None
+            ]
+        );
+    }
+
+    #[gpui::test]
+    fn minimap_prefetch_commits_image_height_before_the_editor_reaches_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let source = "line\n".repeat(100);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("prefetched-image.org"),
+                source.into_bytes(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+
+        editor.update(cx, |editor, _| {
+            editor.display_map.configure(100, 800.0);
+            let initial_height = editor.display_map.total_height();
+            let media = [RasterMedia {
+                line: 50,
+                line_start: 250,
+                row_offset_units: 50.0,
+                row_height_units: 1.0,
+                path: std::path::PathBuf::from("image.svg"),
+                dimensions: Some((100, 400)),
+            }];
+
+            assert!(apply_editor_minimap_media_dimensions(editor, &media));
+            let resolved_height = editor.display_map.total_height();
+            assert!(resolved_height > initial_height + 300.0);
+            assert_eq!(
+                editor.inline_image_line_dimensions.borrow().get(&50),
+                Some(&(250, 100, 400))
+            );
+            assert!(!apply_editor_minimap_media_dimensions(editor, &media));
+            assert_eq!(editor.display_map.total_height(), resolved_height);
+        });
     }
 
     #[test]

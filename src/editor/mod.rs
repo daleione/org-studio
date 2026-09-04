@@ -7,6 +7,8 @@ mod minimap;
 mod org_commands;
 mod syntax;
 
+pub(crate) use syntax::EditorSyntaxService;
+
 use std::{
     cell::RefCell,
     collections::{HashMap, HashSet},
@@ -280,6 +282,7 @@ impl EditorFoldAnimation {
         if self.collapsing { 1.0 - eased } else { eased }
     }
 
+    #[cfg(test)]
     fn changed_line_count(&self) -> u64 {
         self.changed_ranges
             .iter()
@@ -322,6 +325,9 @@ struct EditorFrameBenchmark {
     warmup_remaining: usize,
     target_samples: usize,
     samples: Vec<Duration>,
+    random_seek: bool,
+    scroll_pixels: Option<f32>,
+    step: usize,
 }
 
 #[cfg(feature = "benchmarks")]
@@ -336,23 +342,33 @@ impl EditorFrameBenchmark {
             .ok()
             .and_then(|value| value.parse().ok())
             .unwrap_or(120);
+        let scroll_pixels = std::env::var("ORG_STUDIO_EDITOR_BENCH_SCROLL_PIXELS")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|pixels| pixels.is_finite() && *pixels > 0.0);
         Some(Self {
             warmup_remaining,
             target_samples,
             samples: Vec::with_capacity(target_samples),
+            random_seek: std::env::var_os("ORG_STUDIO_EDITOR_BENCH_RANDOM_SEEK").is_some(),
+            scroll_pixels,
+            step: 0,
         })
     }
 
     fn record(&mut self, elapsed: Duration) -> bool {
         if self.warmup_remaining > 0 {
             self.warmup_remaining -= 1;
+            if self.warmup_remaining == 0 {
+                crate::perf_tracing::reset_samples();
+            }
             return false;
         }
         self.samples.push(elapsed);
         self.samples.len() >= self.target_samples
     }
 
-    fn report(&self) {
+    fn report(&self, host_id: u64) {
         let mut samples = self.samples.clone();
         samples.sort_unstable();
         let percentile = |p: f64| {
@@ -360,7 +376,16 @@ impl EditorFrameBenchmark {
             samples[index].as_secs_f64() * 1_000.0
         };
         eprintln!(
-            "org_editor_frame_cpu samples={} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3}",
+            "org_editor_frame_cpu host_id={} mode={} scroll_pixels={:.3} samples={} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3}",
+            host_id,
+            if self.scroll_pixels.is_some() {
+                "scroll"
+            } else if self.random_seek {
+                "random_seek"
+            } else {
+                "typing"
+            },
+            self.scroll_pixels.unwrap_or(0.0),
             samples.len(),
             percentile(0.50),
             percentile(0.95),
@@ -386,7 +411,7 @@ pub struct SemanticEditor {
     fold_animation_revision: u64,
     command_feedback: Option<SharedString>,
     minimap: minimap::EditorMinimapHost,
-    syntax_cache: syntax::EditorSyntaxCache,
+    syntax_service: Arc<syntax::EditorSyntaxService>,
     layout_anchor: Option<RevisionRange>,
     shape_cache: HashMap<ShapeKey, Arc<WrappedLine>>,
     scroll_y: f32,
@@ -458,6 +483,7 @@ impl SemanticEditor {
         self.animated_line_start_y(self.display_map.line_count())
     }
 
+    #[cfg(test)]
     pub(super) fn animated_visible_line_count(&self) -> f32 {
         let base = self.display_map.visible_line_count() as f32;
         self.fold_animation.as_ref().map_or(base, |animation| {
@@ -499,37 +525,6 @@ impl SemanticEditor {
         first..last.max(first)
     }
 
-    pub(super) fn animated_visible_position_at_y(&self, y: f32) -> f32 {
-        if self.animated_visible_line_count() <= 0.0 {
-            return 0.0;
-        }
-        let line = self.animated_line_at_y(y);
-        let line_top = self.animated_line_start_y(line);
-        let line_height = self.animated_line_height_px(line).max(1.0);
-        let fraction = ((y - line_top) / line_height).clamp(0.0, 1.0);
-        let base = self.display_map.visible_ordinal_for_line(line) as f32;
-        let compressed_lines = self.fold_animation.as_ref().map_or(0.0, |animation| {
-            animation
-                .changed_ranges
-                .iter()
-                .map(|range| range.end.min(line).saturating_sub(range.start) as f32)
-                .sum::<f32>()
-                * (1.0 - animation.scale())
-        });
-        let line_scale = self.fold_animation.as_ref().map_or(1.0, |animation| {
-            if animation
-                .changed_ranges
-                .iter()
-                .any(|range| range.contains(&line))
-            {
-                animation.scale()
-            } else {
-                1.0
-            }
-        });
-        (base - compressed_lines + fraction * line_scale).max(0.0)
-    }
-
     pub fn new(session: Entity<DocumentSession>, cx: &mut Context<Self>) -> Self {
         Self::new_with_autofocus(session, true, cx)
     }
@@ -537,6 +532,20 @@ impl SemanticEditor {
     pub(crate) fn new_with_autofocus(
         session: Entity<DocumentSession>,
         autofocus: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new_with_syntax_service(
+            session,
+            autofocus,
+            Arc::new(syntax::EditorSyntaxService::default()),
+            cx,
+        )
+    }
+
+    pub(crate) fn new_with_syntax_service(
+        session: Entity<DocumentSession>,
+        autofocus: bool,
+        syntax_service: Arc<syntax::EditorSyntaxService>,
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
@@ -624,7 +633,7 @@ impl SemanticEditor {
                 for line in edited_inline_image_lines {
                     this.display_map.invalidate_line_layout(line);
                 }
-                this.syntax_cache.invalidate_from(
+                this.syntax_service.invalidate_from(
                     snapshot.document_id(),
                     snapshot.revision(),
                     first_line,
@@ -690,7 +699,7 @@ impl SemanticEditor {
             } else if matches!(event, DocumentEvent::Reloaded { .. }) {
                 this.display_map.invalidate_layout();
             } else if matches!(event, DocumentEvent::PathChanged { .. }) {
-                this.syntax_cache.reset();
+                this.syntax_service.reset();
                 this.folds = folding::EditorFoldState::default();
                 this.fold_markers = Arc::new(HashSet::new());
                 this.fold_animation = None;
@@ -706,7 +715,7 @@ impl SemanticEditor {
                 this.minimap.invalidate_raster();
             }
             if matches!(event, DocumentEvent::Reloaded { .. }) {
-                this.syntax_cache.reset();
+                this.syntax_service.reset();
                 let snapshot = this.snapshot(cx);
                 this.selection = this.selection.clamp(&snapshot);
                 this.selection_revision = snapshot.revision();
@@ -754,7 +763,7 @@ impl SemanticEditor {
             fold_animation_revision: 0,
             command_feedback: None,
             minimap: minimap::EditorMinimapHost::default(),
-            syntax_cache: syntax::EditorSyntaxCache::default(),
+            syntax_service,
             layout_anchor: None,
             shape_cache: HashMap::with_capacity(128),
             scroll_y: 0.0,
@@ -802,7 +811,6 @@ impl SemanticEditor {
                 self.scroll_x = 0.0;
             }
             self.shape_cache.clear();
-            self.minimap.invalidate_raster();
             cx.notify();
         }
     }
@@ -1095,15 +1103,37 @@ impl SemanticEditor {
         elapsed: Duration,
         cx: &mut Context<Self>,
     ) -> FrameBenchmarkAction {
+        let host_id = self.minimap.telemetry.host_id();
         let Some(benchmark) = self.frame_benchmark.as_mut() else {
             return FrameBenchmarkAction::Inactive;
         };
+        let random_seek = benchmark.random_seek;
+        let scroll_pixels = benchmark.scroll_pixels;
+        let step = benchmark.step;
+        let warmup_completes = benchmark.warmup_remaining == 1;
+        benchmark.step = benchmark.step.wrapping_add(1);
         if benchmark.record(elapsed) {
-            benchmark.report();
+            benchmark.report(host_id);
+            self.minimap.telemetry.report_summary();
+            crate::perf_tracing::report();
             self.frame_benchmark = None;
             return FrameBenchmarkAction::Complete;
         }
-        self.replace_selection("a", EditOrigin::Typing, cx);
+        if warmup_completes {
+            self.minimap.telemetry.reset_samples();
+        }
+        if let Some(scroll_pixels) = scroll_pixels {
+            self.scroll(0.0, -scroll_pixels, cx);
+        } else if random_seek {
+            let snapshot = self.snapshot(cx);
+            let line_count = snapshot.len_lines().max(1);
+            let line = (step as u64).wrapping_mul(104_729) % line_count;
+            if let Ok(range) = snapshot.line_content_range(LineIndex(line)) {
+                self.set_selection(Selection::caret(range.start), cx);
+            }
+        } else {
+            self.replace_selection("a", EditOrigin::Typing, cx);
+        }
         FrameBenchmarkAction::Continue
     }
 }
@@ -1906,7 +1936,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn minimap_geometry_uses_the_settled_visible_source_span(cx: &mut gpui::TestAppContext) {
+    fn minimap_geometry_uses_the_settled_visible_visual_span(cx: &mut gpui::TestAppContext) {
         cx.update(init);
         let wrapping_text = "wrapped source text ".repeat(20);
         let source = (0..1_000)
@@ -1944,6 +1974,52 @@ mod tests {
         }
         let final_height = cx.read(|cx| editor.read(cx).display_map.total_height());
         assert!(final_height > initial_height + 2_000.0);
+    }
+
+    #[gpui::test]
+    fn minimap_viewport_does_not_resize_while_scrolling_through_a_tall_image(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let source = "line\n".repeat(200);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("image-scroll.org"), source.into_bytes())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+
+        editor.update(cx, |editor, _| {
+            editor.viewport = Some(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(800.0), px(220.0)),
+            ));
+            let minimap_bounds = Bounds::new(
+                gpui::point(px(704.0), px(0.0)),
+                gpui::size(px(96.0), px(220.0)),
+            );
+            editor.minimap.bounds = Some(minimap_bounds);
+            editor
+                .display_map
+                .update_line_layout(50, 1, 440.0, 6.0, 6.0);
+
+            let image_top = editor.display_map.line_start_y(50);
+            let image_bottom = editor.display_map.line_start_y(51);
+            let mut thumb_heights = Vec::new();
+            for scroll_y in [image_top - 110.0, image_top + 80.0, image_bottom + 40.0] {
+                editor.scroll_y = scroll_y;
+                let (_, visible_top, visible_bottom) = editor.minimap_source_viewport(220.0);
+                assert!(((visible_bottom - visible_top) - 10.0).abs() < 0.001);
+                thumb_heights.push(
+                    editor
+                        .minimap_viewport_geometry(minimap_bounds)
+                        .thumb_height,
+                );
+            }
+            assert!(
+                thumb_heights
+                    .windows(2)
+                    .all(|pair| (pair[0] - pair[1]).abs() < 0.001)
+            );
+        });
     }
 
     #[gpui::test]
@@ -2082,5 +2158,77 @@ mod tests {
             cx.read(|cx| left.read(cx).selection()),
             Selection::caret(ByteOffset(0))
         );
+    }
+
+    #[gpui::test]
+    fn editor_panes_share_semantics_but_keep_minimap_state_local(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                PathBuf::from("shared-semantics.org"),
+                b"#+begin_quote\nbody\n#+end_quote\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let syntax = Arc::new(EditorSyntaxService::default());
+        let left = cx.new(|cx| {
+            SemanticEditor::new_with_syntax_service(session.clone(), false, syntax.clone(), cx)
+        });
+        let right = cx
+            .new(|cx| SemanticEditor::new_with_syntax_service(session, false, syntax.clone(), cx));
+
+        cx.read(|cx| {
+            assert!(Arc::ptr_eq(
+                &left.read(cx).syntax_service,
+                &right.read(cx).syntax_service
+            ));
+        });
+        left.update(cx, |editor, cx| editor.set_soft_wrap(false, cx));
+        cx.read(|cx| {
+            assert_eq!(left.read(cx).minimap.generation, 0);
+            assert!(right.read(cx).display_map.soft_wrap());
+        });
+    }
+
+    #[gpui::test]
+    fn selection_and_caret_do_not_invalidate_minimap_raster(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                PathBuf::from("selection-overlay.org"),
+                b"* Heading\nbody\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+
+        editor.update(cx, |editor, cx| {
+            let generation = editor.minimap.generation;
+            let raster_epoch = editor
+                .minimap
+                .raster_epoch
+                .load(std::sync::atomic::Ordering::Acquire);
+            let viewport_generation = editor.minimap.viewport_generation();
+
+            editor.set_selection(Selection::new(ByteOffset(2), ByteOffset(9)), cx);
+            assert_eq!(editor.minimap.generation, generation);
+            assert_eq!(
+                editor
+                    .minimap
+                    .raster_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+                raster_epoch
+            );
+            assert_eq!(editor.minimap.viewport_generation(), viewport_generation);
+
+            editor.set_selection(Selection::caret(ByteOffset(10)), cx);
+            assert_eq!(editor.minimap.generation, generation);
+            assert_eq!(
+                editor
+                    .minimap
+                    .raster_epoch
+                    .load(std::sync::atomic::Ordering::Acquire),
+                raster_epoch
+            );
+            assert_eq!(editor.minimap.viewport_generation(), viewport_generation);
+        });
     }
 }

@@ -24,6 +24,7 @@ pub(crate) struct MinimapState {
     pub(crate) retained_style_frame: Mutex<Vec<RasterTilePaint>>,
     pub(crate) retain_style_frame: AtomicBool,
     pub(crate) raster_epoch: AtomicU64,
+    pub(crate) raster_prefetch_signature: AtomicU64,
     pub(crate) perf: PerfState,
 }
 
@@ -51,6 +52,7 @@ impl MinimapState {
             retained_style_frame: Mutex::new(Vec::new()),
             retain_style_frame: AtomicBool::new(false),
             raster_epoch: AtomicU64::new(0),
+            raster_prefetch_signature: AtomicU64::new(0),
             perf: PerfState::new(),
         }
     }
@@ -77,6 +79,7 @@ impl MinimapState {
 
     pub(crate) fn invalidate_style(&self) {
         self.raster_epoch.fetch_add(1, Ordering::AcqRel);
+        self.raster_prefetch_signature.store(0, Ordering::Release);
         self.cancel_interaction();
         // Keep an in-progress line-index builder across layout-style switches. The projection
         // path parks it by key when the next style renders, then resumes it when the user switches
@@ -103,6 +106,7 @@ impl MinimapState {
         presentation_rows: &Arc<Vec<usize>>,
         layout: crate::preview::layout::LayoutKey,
         density: super::MinimapDensity,
+        minimap_width: u16,
     ) -> Option<super::MinimapLineIndex> {
         self.line_index
             .lock()
@@ -112,6 +116,7 @@ impl MinimapState {
                 Arc::ptr_eq(&cached.presentation_rows, presentation_rows)
                     && cached.index.layout == layout
                     && cached.index.density == density
+                    && cached.index.minimap_width == minimap_width
             })
             .map(|cached| cached.index.clone())
             .or_else(|| {
@@ -124,6 +129,7 @@ impl MinimapState {
                         Arc::ptr_eq(&cached.presentation_rows, presentation_rows)
                             && cached.index.layout == layout
                             && cached.index.density == density
+                            && cached.index.minimap_width == minimap_width
                     })
                     .map(|cached| cached.index.clone())
             })
@@ -192,6 +198,7 @@ impl MinimapState {
         zoom: f32,
         style: PreviewStyle,
     ) {
+        self.raster_prefetch_signature.store(0, Ordering::Release);
         *self
             .line_index_build
             .lock()
@@ -250,8 +257,14 @@ impl MinimapState {
             .enumerate()
             .map(|(offset, row)| {
                 let presentation_index = start + offset;
-                let measure =
-                    display_map.estimated_measure(*row, index.index.width as f32, zoom, style);
+                let measure = display_map.minimap_measure(
+                    *row,
+                    display_map.estimated_measure(*row, index.index.width as f32, zoom, style),
+                    f32::from(index.index.minimap_width),
+                    index.index.density,
+                    zoom,
+                    style,
+                );
                 (
                     presentation_index,
                     display_map.with_presentation_tail_padding(

@@ -186,6 +186,7 @@ pub(crate) enum WorkspaceLoadState {
 #[derive(Clone)]
 pub(crate) struct ReadyDocument {
     pub(crate) session: gpui::Entity<crate::document::DocumentSession>,
+    pub(crate) editor_syntax: Arc<crate::editor::EditorSyntaxService>,
     pub(crate) editors: PanePair<Option<gpui::Entity<crate::editor::SemanticEditor>>>,
     pub(crate) readers: PanePair<Option<gpui::Entity<crate::preview::ReadingPreviewPanel>>>,
 }

@@ -75,8 +75,8 @@ pub(super) use projection::{
 pub(super) use raster::RasterTileCache;
 pub(crate) use raster::prewarm_text_rasterizer;
 use raster::{
-    RasterRow, RasterTileKey, RasterTilePaint, RasterTileRequest, display_window_range,
-    folded_signature, rasterize_tile, tile_key,
+    RasterRow, RasterTableGeometry, RasterTileKey, RasterTilePaint, RasterTileRequest,
+    folded_signature, raster_tile_window, rasterize_tile, tile_key,
 };
 pub(super) use render::render;
 pub(super) use state::{

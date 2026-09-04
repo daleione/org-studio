@@ -1,7 +1,16 @@
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::Range,
+    sync::{Arc, Mutex},
+};
 
-use gpui::{AnyElement, Div, ScrollHandle, div, prelude::*, px, rgb};
+use gpui::{
+    AnyElement, Div, FontWeight, ScrollHandle, SharedString, TextRun, div, font, prelude::*, px,
+    rgb,
+};
 use smallvec::SmallVec;
+#[cfg(test)]
+use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
@@ -16,9 +25,13 @@ use super::{
     view::{ReadingInteraction, SelectableReadingText, reading_row_selection, styled_inline_runs},
 };
 
+#[cfg(test)]
 const CELL_WIDTH_PX: f32 = 8.45;
+#[cfg(test)]
 const PIPE_WIDTH_PX: f32 = 12.0;
+#[cfg(test)]
 const CELL_PADDING_PX: f32 = 18.0;
+#[cfg(test)]
 const CELL_CONTENT_INSET_PX: f32 = 4.0;
 const MAX_COLUMN_WIDTH: usize = 64;
 const PROJECTED_HORIZONTAL_INSET_PX: f32 = 4.0;
@@ -28,12 +41,20 @@ const TABLE_FRAME_WIDTH_PX: f32 = 2.0;
 #[derive(Clone, Debug)]
 pub(crate) struct TableRenderProjection {
     columns: Arc<[TableColumnSpec]>,
+    // One table group is shared by all of its rows. Keep the most recently
+    // resolved Reading layout here so the Reading view and Minimap consume
+    // the same immutable column geometry instead of resolving it twice.
+    resolved_layout: SharedReadingTableLayout,
 }
+
+type SharedReadingTableLayout =
+    Arc<Mutex<Option<(ReadingTableLayoutKey, Arc<ReadingTableLayout>)>>>;
 
 #[derive(Clone, Debug)]
 pub(crate) struct TableRowProjection {
     table: Arc<TableRenderProjection>,
     group_id: BlockId,
+    format: DocumentFormat,
     cells: Arc<[TableCell]>,
     separator: bool,
     header: bool,
@@ -45,6 +66,7 @@ impl TableRenderProjection {
         &self.columns
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve(&self) -> ResolvedTable {
         let mut cursor = PIPE_WIDTH_PX;
         let mut separators = Vec::with_capacity(self.columns.len() + 1);
@@ -81,9 +103,23 @@ impl TableRenderProjection {
         available_width: f32,
         zoom: f32,
         style: super::PreviewStyle,
-    ) -> ReadingTableLayout {
+    ) -> Arc<ReadingTableLayout> {
         let available_width = available_width.max(1.0);
         let zoom = zoom.max(0.01);
+        let key = ReadingTableLayoutKey {
+            available_width_bits: available_width.to_bits(),
+            zoom_bits: zoom.to_bits(),
+            style_layout_key: style.layout_key(),
+        };
+        let mut cached = self
+            .resolved_layout
+            .lock()
+            .expect("resolved table layout cache poisoned");
+        if let Some((cached_key, layout)) = cached.as_ref()
+            && *cached_key == key
+        {
+            return layout.clone();
+        }
         let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
         let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
         let preferred = self
@@ -103,11 +139,13 @@ impl TableRenderProjection {
         let preferred_width = preferred.iter().sum::<f32>();
 
         if minimum_width > available_width {
-            return ReadingTableLayout {
+            let layout = Arc::new(ReadingTableLayout {
                 column_widths: minimum.clone().into(),
                 content_width: minimum_width,
                 overflow: true,
-            };
+            });
+            *cached = Some((key, layout.clone()));
+            return layout;
         }
 
         let mut column_widths = minimum.clone();
@@ -129,11 +167,13 @@ impl TableRenderProjection {
                 *width += remaining * preferred / preferred_width.max(1.0);
             }
         }
-        ReadingTableLayout {
+        let layout = Arc::new(ReadingTableLayout {
             column_widths: column_widths.into(),
             content_width: available_width,
             overflow: false,
-        }
+        });
+        *cached = Some((key, layout.clone()));
+        layout
     }
 }
 
@@ -166,6 +206,19 @@ impl TableRowProjection {
         self.first
     }
 
+    pub(crate) fn resolved_reading_layout(
+        &self,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+    ) -> Arc<ReadingTableLayout> {
+        self.table.resolve_for_viewport(
+            (available_width - TABLE_FRAME_WIDTH_PX).max(1.0),
+            zoom,
+            style,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn resolve(&self) -> ResolvedTable {
         self.table.resolve()
@@ -181,22 +234,12 @@ impl TableRowProjection {
         if self.separator || self.cells.is_empty() {
             return 1;
         }
-        let layout = self.table.resolve_for_viewport(
-            (available_width - TABLE_FRAME_WIDTH_PX).max(1.0),
-            zoom,
-            style,
-        );
-        let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
-        let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
+        let content_columns = self.content_columns(available_width, zoom, style);
         self.columns()
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                let cell_width = layout.column_widths[index];
-                let content_chars = ((cell_width - cell_padding).max(character_width)
-                    / character_width)
-                    .floor()
-                    .max(1.0) as usize;
+                let content_chars = content_columns[index];
                 let display_width = self
                     .cells
                     .get(index)
@@ -207,6 +250,175 @@ impl TableRowProjection {
             .max()
             .unwrap_or(1)
     }
+
+    pub(crate) fn resolved_content_widths(
+        &self,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+    ) -> Vec<f32> {
+        let layout = self.resolved_reading_layout(available_width, zoom, style);
+        let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
+        layout
+            .column_widths
+            .iter()
+            .map(|width| (width - cell_padding).max(1.0))
+            .collect()
+    }
+
+    pub(crate) fn display_cell_texts(&self, source: &str) -> Vec<String> {
+        self.columns()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                self.cells
+                    .get(index)
+                    .map(|cell| parse_document_inline(self.format, cell.text(source)).text)
+                    .unwrap_or_default()
+            })
+            .collect()
+    }
+
+    pub(crate) fn shaped_display_cells(
+        &self,
+        source: &str,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+        text_system: &gpui::WindowTextSystem,
+    ) -> Vec<Vec<String>> {
+        if self.separator {
+            return Vec::new();
+        }
+        let widths = self.resolved_content_widths(available_width, zoom, style);
+        let font_size = (style.typography.body_size - 1.0).max(12.0) * zoom;
+        let mut table_font = font(style.typography.body_family);
+        table_font.weight = if self.header {
+            FontWeight::SEMIBOLD
+        } else {
+            FontWeight::NORMAL
+        };
+        self.display_cell_texts(source)
+            .into_iter()
+            .zip(widths)
+            .map(|(text, width)| {
+                if text.is_empty() {
+                    return vec![String::new()];
+                }
+                let shared: SharedString = text.clone().into();
+                let runs = [TextRun {
+                    len: shared.len(),
+                    font: table_font.clone(),
+                    color: gpui::rgb(style.palette.foreground).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }];
+                let mut starts = vec![0];
+                if let Ok(shaped) = text_system.shape_text(
+                    shared,
+                    px(font_size),
+                    &runs,
+                    Some(px(width.max(1.0))),
+                    None,
+                ) && let Some(line) = shaped.first()
+                {
+                    starts.extend(line.wrap_boundaries().iter().filter_map(|boundary| {
+                        line.runs()
+                            .get(boundary.run_ix)
+                            .and_then(|run| run.glyphs.get(boundary.glyph_ix))
+                            .map(|glyph| glyph.index)
+                    }));
+                }
+                starts.push(text.len());
+                starts.sort_unstable();
+                starts.dedup();
+                let lines = starts
+                    .windows(2)
+                    .filter_map(|pair| {
+                        let (start, end) = (pair[0], pair[1]);
+                        (start < end && text.is_char_boundary(start) && text.is_char_boundary(end))
+                            .then(|| text[start..end].to_owned())
+                    })
+                    .collect::<Vec<_>>();
+                if lines.is_empty() { vec![text] } else { lines }
+            })
+            .collect()
+    }
+
+    /// Retained for estimator contract tests; live Reading and Minimap geometry uses
+    /// `shaped_display_cells` so both consume the same glyph wrap boundaries.
+    #[cfg(test)]
+    pub(crate) fn wrapped_display_cells(
+        &self,
+        source: &str,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+    ) -> Vec<Vec<String>> {
+        if self.separator {
+            return Vec::new();
+        }
+        let content_columns = self.content_columns(available_width, zoom, style);
+        self.columns()
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let text = self
+                    .cells
+                    .get(index)
+                    .map(|cell| parse_document_inline(self.format, cell.text(source)).text)
+                    .unwrap_or_default();
+                wrap_display_text(&text, content_columns[index])
+            })
+            .collect()
+    }
+
+    fn content_columns(
+        &self,
+        available_width: f32,
+        zoom: f32,
+        style: super::PreviewStyle,
+    ) -> Vec<usize> {
+        let layout = self.table.resolve_for_viewport(
+            (available_width - TABLE_FRAME_WIDTH_PX).max(1.0),
+            zoom,
+            style,
+        );
+        let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
+        let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
+        layout
+            .column_widths
+            .iter()
+            .map(|cell_width| {
+                ((cell_width - cell_padding).max(character_width) / character_width)
+                    .floor()
+                    .max(1.0) as usize
+            })
+            .collect()
+    }
+}
+
+#[cfg(test)]
+fn wrap_display_text(text: &str, max_columns: usize) -> Vec<String> {
+    if text.is_empty() {
+        return vec![String::new()];
+    }
+    let max_columns = max_columns.max(1);
+    let mut lines = Vec::new();
+    let mut start = 0usize;
+    let mut width = 0usize;
+    for (offset, character) in text.char_indices() {
+        let character_width = UnicodeWidthChar::width(character).unwrap_or(0);
+        if width > 0 && width + character_width > max_columns {
+            lines.push(text[start..offset].to_owned());
+            start = offset;
+            width = 0;
+        }
+        width += character_width;
+    }
+    lines.push(text[start..].to_owned());
+    lines
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -244,6 +456,7 @@ impl TableColumnSpec {
         self.alignment
     }
 
+    #[cfg(test)]
     pub(crate) fn width_px(self) -> f32 {
         self.width_chars as f32 * CELL_WIDTH_PX + CELL_PADDING_PX
     }
@@ -263,8 +476,10 @@ pub(crate) fn test_table_projection() -> TableRowProjection {
                     alignment: Alignment::Right,
                 },
             ]),
+            resolved_layout: Arc::new(Mutex::new(None)),
         }),
         group_id: 0,
+        format: DocumentFormat::Org,
         cells: Arc::from([
             TableCell {
                 text_range: 1..6,
@@ -281,6 +496,7 @@ pub(crate) fn test_table_projection() -> TableRowProjection {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct ResolvedTableColumn {
     pub(crate) start_x: f32,
@@ -289,6 +505,7 @@ pub(crate) struct ResolvedTableColumn {
     pub(crate) content_end_x: f32,
 }
 
+#[cfg(test)]
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct ResolvedTable {
     pub(crate) width: f32,
@@ -296,8 +513,15 @@ pub(crate) struct ResolvedTable {
     pub(crate) separators: Arc<[f32]>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct ReadingTableLayoutKey {
+    available_width_bits: u32,
+    zoom_bits: u32,
+    style_layout_key: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
-struct ReadingTableLayout {
+pub(crate) struct ReadingTableLayout {
     column_widths: Arc<[f32]>,
     content_width: f32,
     overflow: bool,
@@ -315,33 +539,58 @@ pub(crate) struct ProjectedTableColumn {
 pub(crate) struct ProjectedTable {
     pub(crate) columns: SmallVec<[ProjectedTableColumn; 8]>,
     pub(crate) separators: SmallVec<[f32; 9]>,
+    reading_layout: Arc<ReadingTableLayout>,
 }
 
-/// Transforms canonical table geometry into a bounded target viewport.
+impl ProjectedTable {
+    #[cfg(test)]
+    pub(crate) fn shares_reading_layout(&self, layout: &Arc<ReadingTableLayout>) -> bool {
+        Arc::ptr_eq(&self.reading_layout, layout)
+    }
+}
+
+/// Transforms the same width-resolved table geometry used by Reading into a bounded target
+/// viewport. Non-overflow tables fill the Reading content width; overflow tables are normalized
+/// as one complete table instead of collapsing all offscreen columns at the Minimap edge.
 pub(crate) fn project_table(
     projection: &TableRenderProjection,
-    source_width: f32,
+    available_width: f32,
+    zoom: f32,
     target_width: f32,
+    style: super::PreviewStyle,
 ) -> ProjectedTable {
-    let resolved = projection.resolve();
+    let layout = projection.resolve_for_viewport(
+        (available_width - TABLE_FRAME_WIDTH_PX).max(1.0),
+        zoom,
+        style,
+    );
     let drawable = (target_width - PROJECTED_HORIZONTAL_INSET_PX * 2.0).max(1.0);
-    let scale = drawable / source_width.max(1.0);
-    let project_x = |x: f32| {
-        (PROJECTED_HORIZONTAL_INSET_PX + x * scale)
-            .min(target_width - PROJECTED_HORIZONTAL_INSET_PX)
-    };
+    let scale = drawable / layout.content_width.max(1.0);
+    let project_x = |x: f32| PROJECTED_HORIZONTAL_INSET_PX + x * scale;
+    let content_inset = style.spacing.table_cell_x * zoom;
+    let mut cursor = 0.0;
+    let mut separators = SmallVec::with_capacity(layout.column_widths.len() + 1);
+    separators.push(project_x(0.0));
+    let columns = layout
+        .column_widths
+        .iter()
+        .map(|width| {
+            let start_x = cursor;
+            let end_x = cursor + width;
+            cursor = end_x;
+            separators.push(project_x(end_x));
+            ProjectedTableColumn {
+                start_x: project_x(start_x),
+                end_x: project_x(end_x),
+                content_start_x: project_x((start_x + content_inset).min(end_x)),
+                content_end_x: project_x((end_x - content_inset).max(start_x)),
+            }
+        })
+        .collect();
     ProjectedTable {
-        columns: resolved
-            .columns
-            .iter()
-            .map(|column| ProjectedTableColumn {
-                start_x: project_x(column.start_x),
-                end_x: project_x(column.end_x),
-                content_start_x: project_x(column.content_start_x),
-                content_end_x: project_x(column.content_end_x),
-            })
-            .collect(),
-        separators: resolved.separators.iter().copied().map(project_x).collect(),
+        columns,
+        separators,
+        reading_layout: layout,
     }
 }
 
@@ -447,6 +696,7 @@ fn build_table_group(
                 alignment,
             })
             .collect::<Arc<[_]>>(),
+        resolved_layout: Arc::new(Mutex::new(None)),
     });
     let separator_index = parsed.iter().position(|(_, separator, _, _)| *separator);
     let group_id = rows.first().map_or(0, |(id, _)| *id);
@@ -456,6 +706,7 @@ fn build_table_group(
             TableRowProjection {
                 table: table.clone(),
                 group_id,
+                format,
                 cells: cells.into(),
                 separator,
                 header: separator_index.is_some_and(|separator| position < separator),

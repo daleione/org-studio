@@ -31,6 +31,7 @@ pub(crate) struct MinimapViewport {
 pub(crate) struct MinimapInteractionAnchor {
     pub(crate) layout: crate::preview::layout::LayoutKey,
     pub(crate) width: u16,
+    pub(crate) minimap_width: u16,
     pub(crate) rows_signature: u64,
     pub(crate) interaction_height: f32,
     pub(crate) content_top: f32,
@@ -40,11 +41,13 @@ impl MinimapInteractionAnchor {
     pub(crate) fn matches(self, index: &MinimapLineIndex, interaction_height: f32) -> bool {
         self.layout == index.layout
             && self.width == index.width
+            && self.minimap_width == index.minimap_width
             && self.rows_signature == index.rows_signature
             && (self.interaction_height - interaction_height).abs() < 0.5
     }
 }
 
+#[cfg(test)]
 pub(crate) fn minimap_projection_height(
     total_lines: usize,
     track_height: f32,
@@ -55,16 +58,41 @@ pub(crate) fn minimap_projection_height(
         .max(0.0)
 }
 
+fn minimap_projection_height_for_units(
+    total_units: f32,
+    track_height: f32,
+    density: MinimapDensity,
+) -> f32 {
+    (total_units.max(0.0) * density.line_height() + density.edge_padding() * 2.0)
+        .min(track_height)
+        .max(0.0)
+}
+
 pub(crate) fn minimap_visible_display_range(
     index: &MinimapLineIndex,
     scroll_pixels: f32,
     viewport_pixels: f32,
 ) -> (f32, f32) {
     let document_pixels = index.document_pixels();
-    let top = index.display_position_for_pixel(scroll_pixels);
+    let total = index.total_units();
+    if document_pixels <= f32::EPSILON || document_pixels <= viewport_pixels {
+        return (0.0, total);
+    }
+
+    let max_scroll_pixels = (document_pixels - viewport_pixels.max(0.0)).max(0.0);
+    let scroll_pixels = scroll_pixels.clamp(0.0, max_scroll_pixels);
+    // Project both Reading viewport edges from their authoritative document
+    // pixels. A global average kept the thumb height fixed, but made the lower
+    // edge inaccurate over variable-height media and tables. Media now uses the
+    // same line-unit scale as the Reading body, so exact edge projection remains
+    // visually stable without sacrificing correspondence.
+    let top = index
+        .display_position_for_pixel(scroll_pixels)
+        .clamp(0.0, total);
     let bottom = index
-        .display_position_for_pixel((scroll_pixels + viewport_pixels).clamp(0.0, document_pixels));
-    (top, bottom.max(top))
+        .display_position_for_pixel((scroll_pixels + viewport_pixels.max(0.0)).min(document_pixels))
+        .clamp(top, total);
+    (top, bottom)
 }
 
 pub(crate) fn minimap_thumb_height_for_scroll(
@@ -78,7 +106,7 @@ pub(crate) fn minimap_thumb_height_for_scroll(
         return interaction_height;
     }
     let (top, bottom) = minimap_visible_display_range(index, scroll_pixels, viewport_pixels);
-    ((bottom - top) * index.density.line_height())
+    ((bottom - top) * index.density.line_height() + index.density.edge_padding() * 2.0)
         .max(MIN_THUMB_PX)
         .min(interaction_height)
 }
@@ -120,21 +148,19 @@ pub(crate) fn minimap_viewport_for_list(
     list_state: &ListState,
     track_height: f32,
 ) -> MinimapViewport {
-    if index.total == 0 || track_height <= 0.0 {
+    if index.projection.rows == 0 || track_height <= 0.0 {
         return MinimapViewport::default();
     }
-    let interaction_height = minimap_projection_height(index.total, track_height, index.density);
+    let total = index.total_units();
+    let interaction_height =
+        minimap_projection_height_for_units(total, track_height, index.density);
     let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
-    let total = index.total as f32;
     let document_pixels = index.document_pixels();
     let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
     // `ListState` owns the real, incrementally measured row geometry. The minimap
     // projection can still contain estimates (and deliberately excludes some reading
-    // chrome such as the final content padding), so mapping the list offset back through
-    // that projection is not guaranteed to produce its exact endpoint. Once the real
-    // list says its final item is visible at the bottom, pin the projection to its own
-    // endpoint as well. This keeps the viewport truthful without coupling the two layout
-    // systems or making progressive measurements move the bottom stop.
+    // chrome such as the final content padding), so pin both coordinate spaces at the
+    // real list endpoint.
     let at_document_end = list_viewport_reaches_document_end(list_state);
     let scroll_pixels = if at_document_end {
         max_scroll_pixels
@@ -200,7 +226,7 @@ pub(crate) fn minimap_viewport_for_list_with_anchor(
                 interaction_height: viewport.interaction_height,
                 scroll_ratio: viewport.scroll_ratio,
             },
-            index.total as f32,
+            index.total_units(),
             editor_top,
             editor_bottom,
             index.density,
@@ -240,7 +266,7 @@ pub(crate) fn minimap_anchor_for_thumb_top(
         - index.density.edge_padding() * 2.0)
         / index.density.line_height())
     .max(1.0);
-    let max_content_top = (index.total as f32 - visible_minimap_lines).max(0.0);
+    let max_content_top = (index.total_units() - visible_minimap_lines).max(0.0);
     let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
     let document_pixels = index.document_pixels();
     let max_scroll_pixels = (document_pixels - viewport_pixels).max(0.0);
@@ -258,6 +284,7 @@ pub(crate) fn minimap_anchor_for_thumb_top(
     MinimapInteractionAnchor {
         layout: index.layout,
         width: index.width,
+        minimap_width: index.minimap_width,
         rows_signature: index.rows_signature,
         interaction_height: viewport.interaction_height,
         content_top: desired_content_top.clamp(minimum_content_top, maximum_content_top),
@@ -324,7 +351,7 @@ pub(crate) fn minimap_click_target_for_viewport(
 ) -> MinimapClickTarget {
     let clicked_display = (viewport.content_top
         + ((local_y - index.density.edge_padding()) / index.density.line_height()).max(0.0))
-    .clamp(0.0, index.total as f32);
+    .clamp(0.0, index.total_units());
     let clicked_offset = index.list_offset_for_display_position(clicked_display);
     let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
     let document_pixels = index.document_pixels();
@@ -380,11 +407,12 @@ pub(crate) fn scroll_ratio_after_wheel(
 
 pub(crate) fn scroll_list_to_ratio(index: &MinimapLineIndex, list_state: &ListState, ratio: f32) {
     let ratio = ratio.clamp(0.0, 1.0);
-    if ratio >= 1.0 - f32::EPSILON && list_state.item_count() > 0 {
-        list_state.scroll_to(ListOffset {
-            item_ix: list_state.item_count() - 1,
-            offset_in_item: px(0.0),
-        });
+    if ratio >= 1.0 - f32::EPSILON {
+        // Align the measured content bottom with the viewport bottom. Positioning the final
+        // item at the viewport top leaves a large scrollable blank tail whenever that item is
+        // shorter than the viewport (especially after image/diagram rows).
+        let max_offset = list_state.max_offset_for_scrollbar().y.max(px(0.0));
+        list_state.set_offset_from_scrollbar(gpui::point(px(0.0), -max_offset));
     } else {
         let viewport_pixels = f32::from(list_state.viewport_bounds().size.height).max(0.0);
         let document_pixels = index.document_pixels();

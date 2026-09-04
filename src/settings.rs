@@ -6,13 +6,11 @@ use std::{
 };
 
 const SETTINGS_VERSION: u32 = 6;
-const SOFT_WRAP_DEFAULT_VERSION: u32 = 6;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkspaceSettings {
     /// Preferred left-pane share in basis points when the workspace is split.
     pub split_ratio: u16,
-    pub soft_wrap: bool,
     pub language: Language,
     pub minimap_enabled: bool,
     pub minimap_thumb_visibility: MinimapThumbVisibility,
@@ -57,7 +55,6 @@ impl Default for WorkspaceSettings {
     fn default() -> Self {
         Self {
             split_ratio: 5_000,
-            soft_wrap: true,
             language: Language::system(),
             minimap_enabled: true,
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
@@ -71,10 +68,13 @@ impl Default for WorkspaceSettings {
 
 impl WorkspaceSettings {
     pub fn load() -> Self {
-        settings_path()
-            .and_then(|path| fs::read_to_string(path).ok())
-            .and_then(|source| Self::parse(&source))
-            .unwrap_or_default()
+        let Some(path) = settings_path() else {
+            return Self::default();
+        };
+        let Ok(source) = fs::read_to_string(path) else {
+            return Self::default();
+        };
+        Self::parse(&source).unwrap_or_default()
     }
 
     pub fn save(self) -> io::Result<()> {
@@ -116,7 +116,6 @@ impl WorkspaceSettings {
         let mut version = None;
         let mut minimap_enabled = None;
         let mut split_ratio = None;
-        let mut soft_wrap = None;
         let mut language = None;
         let mut minimap_thumb_visibility = None;
         let mut minimap_width = None;
@@ -147,7 +146,10 @@ impl WorkspaceSettings {
                         .ok()
                         .filter(|ratio| (1_000..=9_000).contains(ratio));
                 }
-                "soft_wrap" => soft_wrap = value.trim().parse::<bool>().ok(),
+                // Legacy field retained as an ignored input. Soft wrap is a
+                // document-local transient toggle and every newly opened
+                // document starts wrapped.
+                "soft_wrap" => {}
                 "minimap_enabled" => minimap_enabled = value.trim().parse::<bool>().ok(),
                 "minimap_thumb_visibility" => {
                     minimap_thumb_visibility = match value.trim() {
@@ -190,11 +192,6 @@ impl WorkspaceSettings {
         }
         Some(Self {
             split_ratio: split_ratio.unwrap_or(5_000),
-            soft_wrap: if version < SOFT_WRAP_DEFAULT_VERSION {
-                true
-            } else {
-                soft_wrap.unwrap_or(true)
-            },
             language: language.unwrap_or_else(Language::system),
             minimap_enabled: minimap_enabled.unwrap_or(true),
             minimap_thumb_visibility: minimap_thumb_visibility
@@ -214,9 +211,8 @@ impl WorkspaceSettings {
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nsplit_ratio={}\nsoft_wrap={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nreading_style={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
+            "version={SETTINGS_VERSION}\nsplit_ratio={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nreading_style={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
             self.split_ratio,
-            self.soft_wrap,
             match self.language {
                 Language::English => "en",
                 Language::Chinese => "zh-CN",
@@ -322,7 +318,6 @@ mod tests {
     fn settings_round_trip_and_reject_unknown_versions() {
         let settings = WorkspaceSettings {
             split_ratio: 5_360,
-            soft_wrap: false,
             language: Language::English,
             minimap_enabled: false,
             minimap_thumb_visibility: MinimapThumbVisibility::Hover,
@@ -399,13 +394,12 @@ mod tests {
     }
 
     #[test]
-    fn version_five_migrates_to_the_new_soft_wrap_default_without_resetting_other_settings() {
+    fn legacy_soft_wrap_is_ignored_without_resetting_other_settings() {
         let settings = WorkspaceSettings::parse(
             "version=5\nsplit_ratio=6200\nsoft_wrap=false\nlanguage=en\nminimap_enabled=false\nsidebar_width=312\nreading_style=warm-clay\n",
         )
         .expect("version five settings remain readable");
 
-        assert!(settings.soft_wrap);
         assert_eq!(settings.split_ratio, 6_200);
         assert_eq!(settings.language, Language::English);
         assert!(!settings.minimap_enabled);
@@ -413,6 +407,10 @@ mod tests {
         assert_eq!(
             settings.reading_style,
             crate::preview::PreviewStyleId::WarmClay
+        );
+        assert!(
+            !settings.serialize().contains("soft_wrap="),
+            "an unrelated settings save must remove the legacy global soft-wrap value"
         );
     }
 }

@@ -503,7 +503,6 @@ impl WorkspaceWindow {
                 editor.update(cx, |editor, cx| editor.set_soft_wrap(self.soft_wrap, cx));
             }
         }
-        self.save_preview_settings();
         cx.notify();
     }
 

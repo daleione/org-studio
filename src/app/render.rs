@@ -80,9 +80,11 @@ impl Render for WorkspaceWindow {
             cx.on_next_frame(window, move |this, window, cx| {
                 let elapsed = opened_at.elapsed();
                 eprintln!(
-                    "org_preview_first_readable_frame generation={} elapsed_ms={:.3}",
+                    "org_preview_first_readable_frame generation={} elapsed_ms={:.3} display_id={:?} display_bounds={:?}",
                     generation,
-                    elapsed.as_secs_f64() * 1000.0
+                    elapsed.as_secs_f64() * 1000.0,
+                    window.display(cx).map(|display| display.id()),
+                    window.display(cx).map(|display| display.bounds()),
                 );
                 // The list viewport is only known after the first layout pass. Render once
                 // more so pane-local status (notably bottom-edge progress) uses real bounds.

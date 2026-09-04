@@ -1,7 +1,7 @@
 use super::*;
 use super::{raster::*, viewport::*};
 use crate::preview::display_map::*;
-use crate::preview::projection::VisualRowId;
+use crate::preview::projection::{VisualRowId, VisualRowKind};
 use crate::preview::table::test_table_projection;
 use crate::{document::Revision, preview::layout::LayoutKey};
 use unicode_segmentation::UnicodeSegmentation;
@@ -26,6 +26,11 @@ fn test_line_index(
         })
         .collect();
     let projection = Arc::new(ProjectionSnapshot::new(measures));
+    let reading_line_height = if projection.total_display_lines() == 0 {
+        1.0
+    } else {
+        (projection.total_pixels() / projection.total_display_lines() as f32).max(1.0)
+    };
     MinimapLineIndex {
         layout: LayoutKey {
             document_revision: Revision::INITIAL,
@@ -34,8 +39,10 @@ fn test_line_index(
             fold_revision: 0,
         },
         width,
+        minimap_width: width,
         rows_signature,
         density,
+        reading_line_height,
         total: projection.total_display_lines(),
         projection,
     }
@@ -81,20 +88,91 @@ fn minimap_width_matches_render_constraints() {
 }
 
 #[test]
-fn table_minimap_geometry_is_a_projection_of_preview_columns() {
-    let projection = test_table_projection();
-    let resolved = projection.resolve();
-    let table = crate::preview::table::project_table(projection.table(), 400.0, 100.0);
-    assert_eq!(table.columns.len(), resolved.columns.len());
-    for (minimap, preview) in table.columns.iter().zip(resolved.columns.iter()) {
-        assert!((minimap.start_x - (4.0 + preview.start_x * 92.0 / 400.0)).abs() < 0.001);
-        assert!((minimap.end_x - (4.0 + preview.end_x * 92.0 / 400.0)).abs() < 0.001);
-        assert!(
-            (minimap.content_start_x - (4.0 + preview.content_start_x * 92.0 / 400.0)).abs()
-                < 0.001
+fn image_rows_use_reading_line_units_instead_of_refilling_the_minimap_width() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/preview-basics.org");
+    let buffer = DocumentBuffer::from_utf8(std::fs::read(&path).unwrap()).unwrap();
+    let document = derive_preview(path, buffer.snapshot());
+    let model = document.display_map.as_deref().unwrap();
+    let presentation = Arc::new((0..document.projection.rows.len()).collect::<Vec<_>>());
+    let image_row = document
+        .projection
+        .rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row.kind,
+                VisualRowKind::Image {
+                    dimensions: Some(_)
+                }
+            )
+        })
+        .expect("fixture contains a measured image");
+    let density = MinimapDensity::Compact;
+    let style = base_style();
+    let index_for_width = |minimap_width| {
+        let key = MinimapLineIndexKey::new(
+            &presentation,
+            800.0,
+            minimap_width,
+            density,
+            document.revision,
+            0,
+            1.0,
+            style,
         );
-    }
-    assert_eq!(table.separators.len(), resolved.separators.len());
+        model.estimated_minimap_line_index(
+            &presentation,
+            key.width,
+            1,
+            800.0,
+            minimap_width,
+            density,
+            key.layout,
+            1.0,
+            style,
+        )
+    };
+    let compact = index_for_width(96.0);
+    let wide = index_for_width(180.0);
+    let compact_lines = compact.projection.measure(image_row).display_lines;
+    let wide_lines = wide.projection.measure(image_row).display_lines;
+
+    assert!(
+        compact_lines > 1,
+        "an image must not collapse to a color stripe"
+    );
+    assert_eq!(wide_lines, compact_lines);
+    assert_eq!(compact.minimap_width, 96);
+    assert_eq!(wide.minimap_width, 180);
+
+    let scene = super::scene::resolve_visual_row(model, image_row, 96.0, density.font_px(), style);
+    assert!(
+        scene.primitives.is_empty(),
+        "the live media overlay must not have a second raster placeholder"
+    );
+}
+
+#[test]
+fn table_geometry_is_shared_and_stable_across_tiles() {
+    let projection = test_table_projection();
+    let reading_layout = projection.resolved_reading_layout(400.0, 1.0, base_style());
+    let table =
+        crate::preview::table::project_table(projection.table(), 400.0, 1.0, 100.0, base_style());
+    assert!(table.shares_reading_layout(&reading_layout));
+    assert_eq!(table.columns.len(), projection.columns().len());
+    assert!((table.columns[0].start_x - 4.0).abs() < 0.001);
+    assert!((table.columns.last().unwrap().end_x - 96.0).abs() < 0.001);
+    assert_eq!(table.separators.len(), projection.columns().len() + 1);
+    assert!(
+        table
+            .columns
+            .iter()
+            .all(|column| column.content_end_x > column.content_start_x)
+    );
     let source = "|apple|42|";
     assert!(
         projection
@@ -102,6 +180,70 @@ fn table_minimap_geometry_is_a_projection_of_preview_columns() {
             .iter()
             .all(|cell| !cell.text(source).contains('|'))
     );
+}
+
+#[test]
+fn ordered_list_markers_are_part_of_the_minimap_scene() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let buffer = DocumentBuffer::from_utf8(b"1. first\n2. second\n3. third\n".to_vec()).unwrap();
+    let document = derive_preview(
+        std::path::PathBuf::from("ordered-list.org"),
+        buffer.snapshot(),
+    );
+    let model = document.display_map.as_deref().unwrap();
+    let labels = document
+        .projection
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| matches!(row.kind, VisualRowKind::List(_)))
+        .map(|(row, _)| {
+            let scene = super::scene::resolve_visual_row(model, row, 120.0, 3.0, base_style());
+            let marker = scene
+                .list_marker
+                .expect("Reading list marker must be frozen into the Minimap scene");
+            assert!(scene.indent > marker.x + marker.width);
+            marker.label.to_string()
+        })
+        .collect::<Vec<_>>();
+
+    assert_eq!(labels, ["1.", "2.", "3."]);
+}
+
+#[test]
+fn wrapped_table_rows_fill_their_minimap_height_instead_of_leaving_transparent_lines() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let long_cell = "这是一段会在阅读表格单元格中换行的长文本".repeat(8);
+    let source = format!("| 类型 | 内容 |\n|------+------|\n| CJK | {long_cell} |\n");
+    let buffer = DocumentBuffer::from_utf8(source.into_bytes()).unwrap();
+    let document = derive_preview(std::path::PathBuf::from("table.org"), buffer.snapshot());
+    let model = document.display_map.as_deref().unwrap();
+    let (row, table) = document
+        .projection
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(row, visual)| match &visual.kind {
+            VisualRowKind::Table(table) if !table.is_separator() && !table.is_header() => {
+                Some((row, table))
+            }
+            _ => None,
+        })
+        .next()
+        .expect("fixture contains a body table row");
+    let runs = model.runs(row);
+    let style = base_style();
+    let expected = table.estimated_line_count(&runs.text, 220.0, 1.0, style);
+    let wrapped = table.wrapped_display_cells(&runs.text, 220.0, 1.0, style);
+    let painted = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+
+    assert!(expected > 1, "fixture must exercise a multi-line table row");
+    assert_eq!(painted, expected);
+    assert!(wrapped.iter().flatten().any(|line| !line.is_empty()));
 }
 
 #[test]
@@ -232,7 +374,9 @@ fn projection_scheduler_prioritizes_the_current_view_before_sequential_work() {
         key: MinimapLineIndexKey {
             presentation_identity: 1,
             width: 800,
+            minimap_width: 160,
             density: MinimapDensity::Compact,
+            reading_line_height_bits: 24.0_f32.to_bits(),
             layout: LayoutKey {
                 document_revision: Revision::INITIAL,
                 content_width_px: 800,
@@ -292,6 +436,7 @@ fn fold_projection_reuses_exact_minimap_measurements() {
     let key = MinimapLineIndexKey::new(
         &expanded_rows,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         document.revision,
         1,
@@ -304,6 +449,7 @@ fn fold_projection_reuses_exact_minimap_measurements() {
         key,
         expanded_rows,
         800.0,
+        160.0,
         &previous_rows,
         &previous_projection,
         1.0,
@@ -332,7 +478,7 @@ fn larger_density_expands_the_projection_and_visible_thumb_span() {
     );
     assert_eq!(
         minimap_thumb_height_for_scroll(&index, 0.0, 50.0, 1_000.0),
-        130.0
+        138.0
     );
     index.density = MinimapDensity::Large;
     assert_eq!(
@@ -341,7 +487,7 @@ fn larger_density_expands_the_projection_and_visible_thumb_span() {
     );
     assert_eq!(
         minimap_thumb_height_for_scroll(&index, 0.0, 50.0, 1_000.0),
-        230.0
+        242.0
     );
 }
 
@@ -443,6 +589,15 @@ fn display_window_expands_wraps_and_bottom_aligns() {
             .saturating_sub(window.skip_display_lines);
         assert_eq!(anchor_local_line, offset);
     }
+}
+
+#[test]
+fn raster_window_prefetches_one_tile_before_and_after_visible_rows() {
+    assert_eq!(raster_tile_window(671, 0..256, 1), 0..384);
+    assert_eq!(raster_tile_window(671, 256..384, 1), 128..512);
+    assert_eq!(raster_tile_window(671, 600..671, 1), 384..671);
+    assert_eq!(raster_tile_window(671, 256..384, 0), 256..384);
+    assert_eq!(raster_tile_window(0, 0..0, 1), 0..0);
 }
 
 #[test]
@@ -642,6 +797,7 @@ fn recent_style_line_indices_are_reused_without_rebuilding_the_document() {
         let key = MinimapLineIndexKey::new(
             &presentation,
             800.0,
+            160.0,
             density,
             document.revision,
             0,
@@ -653,6 +809,7 @@ fn recent_style_line_indices_are_reused_without_rebuilding_the_document() {
             key.width,
             1,
             800.0,
+            160.0,
             density,
             key.layout,
             1.0,
@@ -676,12 +833,12 @@ fn recent_style_line_indices_are_reused_without_rebuilding_the_document() {
 
     assert!(
         state
-            .cached_line_index(&presentation, base_layout, density)
+            .cached_line_index(&presentation, base_layout, density, 160)
             .is_some()
     );
     assert!(
         state
-            .cached_line_index(&presentation, warm_layout, density)
+            .cached_line_index(&presentation, warm_layout, density, 160)
             .is_some()
     );
 }
@@ -703,6 +860,7 @@ fn in_progress_line_index_builder_resumes_after_switching_styles() {
     let key = MinimapLineIndexKey::new(
         &presentation,
         800.0,
+        160.0,
         density,
         document.revision,
         0,
@@ -710,7 +868,7 @@ fn in_progress_line_index_builder_resumes_after_switching_styles() {
         style,
     );
     let mut builder =
-        MinimapLineIndexBuilder::new(model, key, presentation, 800.0, density, 1.0, style);
+        MinimapLineIndexBuilder::new(model, key, presentation, 800.0, 160.0, density, 1.0, style);
     assert_eq!(
         builder.exact_bits.len(),
         document.projection.rows.len().div_ceil(64)
@@ -771,6 +929,68 @@ fn raster_tile_cache_and_in_flight_sets_are_bounded_by_design() {
     assert!(cache.reserve(&[first, second]));
     assert_eq!(cache.in_flight.len(), 2);
     assert!(!cache.reserve(&[second]));
+}
+
+#[test]
+fn raster_fallback_never_stretches_a_different_width_or_density() {
+    let old = tile_key(
+        &[0],
+        0,
+        96,
+        0,
+        1,
+        2.0,
+        MinimapDensity::Compact,
+        base_style(),
+    );
+    let wider = tile_key(
+        &[0],
+        0,
+        160,
+        0,
+        2,
+        2.0,
+        MinimapDensity::Compact,
+        base_style(),
+    );
+    let denser = tile_key(
+        &[0],
+        0,
+        96,
+        0,
+        2,
+        2.0,
+        MinimapDensity::Comfortable,
+        base_style(),
+    );
+    let rewrapped = tile_key(
+        &[0],
+        0,
+        96,
+        0,
+        3,
+        2.0,
+        MinimapDensity::Compact,
+        base_style(),
+    );
+    let pixels = RgbaImage::new(1, 1);
+    let image = Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(pixels), 1)));
+    let mut cache = RasterTileCache {
+        entries: HashMap::from([(old, image)]),
+        order: VecDeque::from([old]),
+        in_flight: HashSet::new(),
+    };
+
+    let (fallback, missing) = cache.image_or_fallback(wider);
+    assert!(fallback.is_none() && missing);
+    let (fallback, missing) = cache.image_or_fallback(denser);
+    assert!(fallback.is_none() && missing);
+    let (fallback, missing) = cache.image_or_fallback(rewrapped);
+    assert!(
+        fallback.is_none() && missing,
+        "a tile with different row geometry must not be stretched while its replacement loads"
+    );
+    assert!(cache.reserve(&[wider]));
 }
 
 #[test]
@@ -856,6 +1076,11 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
     assert_eq!(scroll_ratio_after_wheel(&index, &state, -200.0), 1.0);
 
     scroll_list_to_ratio(&index, &state, 1.0);
+    assert_eq!(
+        -f32::from(state.scroll_px_offset_for_scrollbar().y),
+        f32::from(state.max_offset_for_scrollbar().y),
+        "the Minimap endpoint must use the measured list bottom instead of top-aligning the final row"
+    );
     let bottom = minimap_viewport_for_list(&index, &state, 500.0);
     assert_eq!(bottom.scroll_ratio, 1.0);
     assert!((bottom.thumb.top + bottom.thumb.height - 500.0).abs() < 0.001);
@@ -867,22 +1092,17 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
     let clicked_offset = index.list_offset_for_display_position(content_target.clicked_display);
     let clicked_pixel = index.pixel_for_list_offset(clicked_offset);
     state.scroll_to(content_target.offset);
-    let anchor = MinimapInteractionAnchor {
-        layout: index.layout,
-        width: index.width,
-        rows_signature: index.rows_signature,
-        interaction_height: before_content_click.interaction_height,
-        content_top: before_content_click.content_top,
-    };
+    let anchor = minimap_anchor_for_thumb_top(&index, &state, 500.0, content_target.thumb_top);
     let after_content_click =
         minimap_viewport_for_list_with_anchor(&index, &state, 500.0, Some(anchor));
-    assert_eq!(
-        after_content_click.content_top, before_content_click.content_top,
-        "the content under a small-window click must not be replaced"
+    assert!(
+        (after_content_click.content_top - before_content_click.content_top).abs() < 1.0,
+        "centering a fixed-height thumb may move the camera by at most one projection unit"
     );
     assert!(
         (after_content_click.thumb.top + after_content_click.thumb.height * 0.5 - 250.0).abs()
-            < 0.001
+            < 0.001,
+        "after={after_content_click:?} target={content_target:?}"
     );
     assert!(
         (index.pixel_for_list_offset(content_target.offset) + 50.0 - clicked_pixel).abs() < 0.001,
@@ -962,6 +1182,7 @@ fn real_list_state_uses_exact_variable_row_heights_and_resize(cx: &mut gpui::Tes
     let stale_anchor = MinimapInteractionAnchor {
         layout: estimated_at_bottom.layout,
         width: estimated_at_bottom.width,
+        minimap_width: estimated_at_bottom.minimap_width,
         rows_signature: estimated_at_bottom.rows_signature,
         interaction_height: 500.0,
         content_top: 0.0,
@@ -1393,24 +1614,51 @@ fn window_drag_listener_survives_leaving_the_minimap_hitbox(cx: &mut gpui::TestA
 }
 
 #[test]
-fn thumb_height_uses_the_exact_visible_display_span() {
+fn mixed_text_table_media_keeps_thumb_extent_and_round_trips_edges() {
     let index = test_line_index(
         100,
         1,
         MinimapDensity::Compact,
-        &[0, 100, 101, 201],
-        &[0.0, 100.0, 400.0, 500.0],
+        &[0, 100, 119, 219],
+        &[0.0, 2_750.0, 3_250.0, 6_000.0],
     );
 
-    let dense_text = minimap_thumb_height_for_scroll(&index, 0.0, 100.0, 500.0);
-    let tall_block = minimap_thumb_height_for_scroll(&index, 150.0, 100.0, 500.0);
-    let final_text = minimap_thumb_height_for_scroll(&index, 400.0, 100.0, 500.0);
+    let viewport_pixels = 300.0;
+    let mut heights = Vec::new();
+    for scroll_pixels in [0.0, 500.0, 2_600.0, 2_800.0, 3_100.0, 5_000.0] {
+        let (top, bottom) = minimap_visible_display_range(&index, scroll_pixels, viewport_pixels);
+        assert!(
+            (top - index.display_position_for_pixel(scroll_pixels)).abs() < 0.001,
+            "top edge must map the Reading scroll pixel"
+        );
+        assert!(
+            (bottom - index.display_position_for_pixel(scroll_pixels + viewport_pixels)).abs()
+                < 0.001,
+            "bottom edge must map the Reading viewport bottom pixel"
+        );
+        assert!(
+            (index.pixel_for_display_position(top) - scroll_pixels).abs() < 0.001,
+            "top edge must round-trip through the shared Reading-pixel transform"
+        );
+        assert!(
+            (index.pixel_for_display_position(bottom) - (scroll_pixels + viewport_pixels)).abs()
+                < 0.001,
+            "bottom edge must round-trip through the shared Reading-pixel transform"
+        );
+        heights.push(minimap_thumb_height_for_scroll(
+            &index,
+            scroll_pixels,
+            viewport_pixels,
+            500.0,
+        ));
+    }
 
-    assert_eq!(dense_text, 260.0);
-    assert_eq!(tall_block, MIN_THUMB_PX);
-    assert_eq!(final_text, 260.0);
-    let (top, bottom) = minimap_visible_display_range(&index, 0.0, 100.0);
-    assert_eq!((top, bottom), (0.0, 100.0));
+    let minimum = heights.iter().copied().fold(f32::INFINITY, f32::min);
+    let maximum = heights.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        maximum - minimum < 0.001,
+        "the transparent viewport must not resize while crossing variable-height rows: {heights:?}"
+    );
 }
 
 #[test]
@@ -1536,6 +1784,7 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
     let key = MinimapLineIndexKey::new(
         &presentation,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         previous.revision,
         0,
@@ -1547,6 +1796,7 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         key.width,
         1,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         key.layout,
         1.0,
@@ -1582,6 +1832,7 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
     let folded_key = MinimapLineIndexKey::new(
         &folded_presentation,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         previous.revision,
         1,
@@ -1593,6 +1844,7 @@ fn incremental_document_patch_reuses_unaffected_minimap_layout_chunks() {
         folded_key.width,
         2,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         folded_key.layout,
         1.0,
@@ -1627,6 +1879,7 @@ fn checkbox_paint_patch_keeps_exact_minimap_projection() {
     let key = MinimapLineIndexKey::new(
         &presentation,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         previous.revision,
         0,
@@ -1638,6 +1891,7 @@ fn checkbox_paint_patch_keeps_exact_minimap_projection() {
         key.width,
         1,
         800.0,
+        160.0,
         MinimapDensity::Comfortable,
         key.layout,
         1.0,

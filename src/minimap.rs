@@ -227,6 +227,20 @@ pub(crate) fn thumb_alphas(active: bool, hovered: bool, hover_only: bool) -> (u3
     }
 }
 
+pub(crate) fn visual_thumb_geometry(
+    interaction_top: f32,
+    interaction_height: f32,
+    density: Density,
+) -> (f32, f32) {
+    let inset = density
+        .edge_padding()
+        .min((interaction_height - 1.0).max(0.0) * 0.5);
+    (
+        interaction_top + inset,
+        (interaction_height - inset * 2.0).max(1.0),
+    )
+}
+
 type TextRasterizer = Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)>;
 static TEXT_RASTERIZER: OnceLock<TextRasterizer> = OnceLock::new();
 
@@ -316,6 +330,18 @@ mod tests {
         assert!(
             (viewport.thumb_top + viewport.thumb_height - viewport.interaction_height).abs()
                 < 0.001
+        );
+    }
+
+    #[test]
+    fn visual_thumb_excludes_content_edge_padding_on_both_sides() {
+        assert_eq!(
+            visual_thumb_geometry(10.0, 40.0, Density::Compact),
+            (14.0, 32.0)
+        );
+        assert_eq!(
+            visual_thumb_geometry(10.0, 1.0, Density::Maximum),
+            (10.0, 1.0)
         );
     }
 }

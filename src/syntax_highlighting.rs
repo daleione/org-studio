@@ -1,6 +1,8 @@
+//! Surface-neutral source-code highlighting shared by Editor and Reading.
+
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{Arc, Mutex, OnceLock},
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
@@ -63,15 +65,20 @@ pub(crate) fn highlight_code(
     source: &str,
 ) -> Result<Vec<CodeHighlightSpan>, String> {
     let normalized = language.trim().to_ascii_lowercase();
-    static CONFIGURATIONS: OnceLock<Mutex<HashMap<String, HighlightConfiguration>>> =
+    static CONFIGURATIONS: OnceLock<Mutex<HashMap<String, Arc<HighlightConfiguration>>>> =
         OnceLock::new();
-    let mut configurations = CONFIGURATIONS
+    let lock_wait = tracing::info_span!("highlighter_configuration_lock_wait").entered();
+    let configurations = CONFIGURATIONS
         .get_or_init(|| Mutex::new(HashMap::new()))
         .lock()
         .expect("highlight configuration cache poisoned");
-    if let Some(configuration) = configurations.get(&normalized) {
-        return highlight_with_configuration(configuration, source);
+    drop(lock_wait);
+    if let Some(configuration) = configurations.get(&normalized).cloned() {
+        drop(configurations);
+        let _highlight = tracing::info_span!("syntax_highlight").entered();
+        return highlight_with_configuration(&configuration, source);
     }
+    drop(configurations);
     let combined_query: String;
     let (language, name, highlights, injections, locals) = match normalized.as_str() {
         "sql" | "postgres" | "postgresql" => (
@@ -194,13 +201,20 @@ pub(crate) fn highlight_code(
             .map_err(|error| error.to_string())?;
     configuration.configure(HIGHLIGHT_NAMES);
 
-    configurations.insert(normalized.clone(), configuration);
-    highlight_with_configuration(
-        configurations
-            .get(&normalized)
-            .expect("inserted highlight configuration"),
-        source,
-    )
+    let configuration = Arc::new(configuration);
+    let lock_wait = tracing::info_span!("highlighter_configuration_lock_wait").entered();
+    let mut configurations = CONFIGURATIONS
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .expect("highlight configuration cache poisoned");
+    drop(lock_wait);
+    let configuration = configurations
+        .entry(normalized)
+        .or_insert_with(|| configuration.clone())
+        .clone();
+    drop(configurations);
+    let _highlight = tracing::info_span!("syntax_highlight").entered();
+    highlight_with_configuration(&configuration, source)
 }
 
 fn highlight_with_configuration(

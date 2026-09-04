@@ -1048,19 +1048,7 @@ impl SemanticEditor {
             let clicked_unit =
                 geometry.content_top + ((pointer - density.edge_padding()) / line_height).max(0.0);
             let max_scroll_units = (total_units - viewport_units).max(0.0);
-            let target = if max_scroll_units > 0.0 {
-                (clicked_unit / max_scroll_units).clamp(0.0, 1.0)
-            } else {
-                0.0
-            } * max_scroll_units;
-            let ordinal = target.floor().max(0.0) as u64;
-            let fraction = target.fract();
-            let source_line = self
-                .display_map
-                .source_line_for_visible_ordinal(ordinal)
-                .unwrap_or(0);
-            self.animated_line_start_y(source_line)
-                + fraction * self.animated_line_height_px(source_line)
+            clicked_unit.clamp(0.0, max_scroll_units) * self.display_map.base_line_height().max(1.0)
         };
         let previous_y = self.scroll_y;
         self.scroll_y = target_y.clamp(0.0, max_scroll_pixels);
@@ -1086,7 +1074,8 @@ impl SemanticEditor {
         visible_bottom: f32,
     ) -> super::minimap::ViewportGeometry {
         let viewport_height = f32::from(bounds.size.height);
-        let total_units = self.animated_visible_line_count();
+        let total_units =
+            self.animated_document_height() / self.display_map.base_line_height().max(1.0);
         let density = crate::minimap::Density::for_width(f32::from(bounds.size.width));
         let line_height = self.minimap.line_height(density);
         let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
@@ -1114,7 +1103,8 @@ impl SemanticEditor {
     }
 
     pub(super) fn minimap_source_viewport(&self, viewport_height: f32) -> (f32, f32, f32) {
-        let total = self.animated_visible_line_count();
+        let base_line_height = self.display_map.base_line_height().max(1.0);
+        let total = self.animated_document_height() / base_line_height;
         if total <= 0.0 {
             return (0.0, 0.0, 0.0);
         }
@@ -1124,13 +1114,12 @@ impl SemanticEditor {
         let top = if self.scroll_y <= 0.5 {
             0.0
         } else {
-            self.animated_visible_position_at_y(scroll_y)
+            scroll_y / base_line_height
         };
         let bottom = if scroll_y + viewport_height + 0.5 >= document_height {
             total
         } else {
-            self.animated_visible_position_at_y((scroll_y + viewport_height).min(document_height))
-                .clamp(top, total)
+            ((scroll_y + viewport_height).min(document_height) / base_line_height).clamp(top, total)
         };
         (total, top, bottom)
     }
@@ -1205,7 +1194,7 @@ impl SemanticEditor {
         ByteOffset(row.range.start.0 + local.min(row.range.len() as usize) as u64)
     }
 
-    fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
+    pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
         let viewport_height = self
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));

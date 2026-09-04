@@ -48,8 +48,7 @@ impl Default for WorkspaceWindow {
 
 impl WorkspaceWindow {
     pub fn new() -> Self {
-        let settings = crate::settings::WorkspaceSettings::load();
-        Self::with_settings(settings)
+        Self::with_settings(crate::settings::WorkspaceSettings::load())
     }
 
     #[cfg(test)]
@@ -62,6 +61,10 @@ impl WorkspaceWindow {
     }
 
     fn with_settings(preview_settings: crate::settings::WorkspaceSettings) -> Self {
+        Self::with_settings_state(preview_settings)
+    }
+
+    fn with_settings_state(preview_settings: crate::settings::WorkspaceSettings) -> Self {
         let list_overdraw = std::env::var("ORG_STUDIO_LIST_OVERDRAW")
             .ok()
             .and_then(|value| value.parse().ok())
@@ -73,6 +76,32 @@ impl WorkspaceWindow {
             std::env::var("ORG_STUDIO_SCROLL_BENCH_SURFACE").as_deref() == Ok("reading");
         if benchmark_reading {
             document_workspace.set_surface(PaneSide::Left, PaneSurface::Reading);
+        }
+        if cfg!(feature = "benchmarks")
+            && std::env::var_os("ORG_STUDIO_EDITOR_BENCH_SPLIT").is_some()
+        {
+            document_workspace.enter_split();
+            document_workspace.set_surface(PaneSide::Left, PaneSurface::Editor);
+            document_workspace.set_surface(PaneSide::Right, PaneSurface::Editor);
+        }
+        if cfg!(feature = "benchmarks")
+            && let Ok(layout) = std::env::var("ORG_STUDIO_MINIMAP_VISUAL_LAYOUT")
+        {
+            let surfaces = match layout.as_str() {
+                "editor-reading" => Some((PaneSurface::Editor, PaneSurface::Reading)),
+                "editor-editor" => Some((PaneSurface::Editor, PaneSurface::Editor)),
+                "reading-reading" => Some((PaneSurface::Reading, PaneSurface::Reading)),
+                _ => None,
+            };
+            if let Some((left, right)) = surfaces {
+                document_workspace.enter_split();
+                document_workspace.set_surface(PaneSide::Left, left);
+                document_workspace.set_surface(PaneSide::Right, right);
+            } else {
+                eprintln!(
+                    "org_studio_minimap_visual_layout invalid={layout:?} expected=editor-reading|editor-editor|reading-reading"
+                );
+            }
         }
         let benchmark_reading_style = benchmark_reading
             .then(|| std::env::var("ORG_STUDIO_SCROLL_BENCH_STYLE").ok())
@@ -176,7 +205,7 @@ impl WorkspaceWindow {
                 right: crate::typography::ContentFontSize::default(),
             },
             split_resize: None,
-            soft_wrap: preview_settings.soft_wrap,
+            soft_wrap: true,
             minimap_visible,
             minimap_thumb_visibility: crate::settings::initial_minimap_thumb_visibility(
                 preview_settings.minimap_thumb_visibility,
@@ -221,12 +250,18 @@ impl WorkspaceWindow {
             return;
         }
         let session = ready.session.clone();
+        let editor_syntax = ready.editor_syntax.clone();
         let soft_wrap = self.soft_wrap;
         let minimap_visible = self.minimap_visible;
         let minimap_width = self.minimap_width;
         let content_font_size = *self.content_font_sizes.get(pane);
         let editor = cx.new(move |cx| {
-            let mut editor = crate::editor::SemanticEditor::new_with_autofocus(session, false, cx);
+            let mut editor = crate::editor::SemanticEditor::new_with_syntax_service(
+                session,
+                false,
+                editor_syntax,
+                cx,
+            );
             editor.set_content_font_size(content_font_size, cx);
             editor.set_soft_wrap(soft_wrap, cx);
             editor.set_minimap(minimap_visible, minimap_width, cx);
@@ -372,7 +407,6 @@ impl WorkspaceWindow {
     pub(crate) fn save_preview_settings(&self) {
         crate::settings::WorkspaceSettings {
             split_ratio: self.document_view_preferences.split_ratio,
-            soft_wrap: self.soft_wrap,
             language: self.language,
             minimap_enabled: self.minimap_visible,
             minimap_thumb_visibility: self.minimap_thumb_visibility,
@@ -854,7 +888,7 @@ impl WorkspaceWindow {
 
 #[cfg(test)]
 mod render_coherence_tests {
-    use super::preview_snapshot_is_renderable;
+    use super::{WorkspaceWindow, preview_snapshot_is_renderable};
     use crate::document::{DocumentSnapshot, Revision};
 
     #[test]
@@ -873,5 +907,12 @@ mod render_coherence_tests {
             other.document_id(),
             Revision(4),
         ));
+    }
+
+    #[test]
+    fn every_workspace_starts_with_soft_wrap_enabled() {
+        let workspace =
+            WorkspaceWindow::with_settings(crate::settings::WorkspaceSettings::default());
+        assert!(workspace.soft_wrap);
     }
 }

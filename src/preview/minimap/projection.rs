@@ -23,8 +23,13 @@ use super::{
 pub(crate) struct MinimapLineIndex {
     pub(crate) layout: LayoutKey,
     pub(crate) width: u16,
+    pub(crate) minimap_width: u16,
     pub(crate) rows_signature: u64,
     pub(crate) density: MinimapDensity,
+    /// The single vertical scale shared by Reading content, viewport, tiles and hit-testing.
+    /// Row-specific `display_lines` remain only as a bounded text-raster detail; they must not
+    /// define document geometry because their pixels/unit ratio varies across row kinds.
+    pub(crate) reading_line_height: f32,
     pub(crate) projection: Arc<LayoutSnapshot>,
     pub(crate) total: usize,
 }
@@ -39,7 +44,9 @@ pub(crate) struct CachedMinimapLineIndex {
 pub(crate) struct MinimapLineIndexKey {
     pub(crate) presentation_identity: usize,
     pub(crate) width: u16,
+    pub(crate) minimap_width: u16,
     pub(crate) density: MinimapDensity,
+    pub(crate) reading_line_height_bits: u32,
     pub(crate) layout: LayoutKey,
 }
 
@@ -80,9 +87,11 @@ pub(crate) struct MinimapRefinement {
 }
 
 impl MinimapLineIndexKey {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         presentation_rows: &Arc<Vec<usize>>,
         available_width: f32,
+        minimap_width: f32,
         density: MinimapDensity,
         document_revision: Revision,
         geometry_revision: u64,
@@ -92,7 +101,11 @@ impl MinimapLineIndexKey {
         Self {
             presentation_identity: Arc::as_ptr(presentation_rows) as usize,
             width: available_width.round().clamp(1.0, u16::MAX as f32) as u16,
+            minimap_width: minimap_width.round().clamp(1.0, u16::MAX as f32) as u16,
             density,
+            reading_line_height_bits: (style.typography.body_line_height * zoom)
+                .max(1.0)
+                .to_bits(),
             layout: LayoutKey {
                 document_revision,
                 content_width_px: available_width.round().clamp(1.0, u16::MAX as f32) as u16,
@@ -104,11 +117,13 @@ impl MinimapLineIndexKey {
 }
 
 impl MinimapLineIndexBuilder {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         model: &PreviewDisplayMap,
         key: MinimapLineIndexKey,
         presentation_rows: Arc<Vec<usize>>,
         available_width: f32,
+        minimap_width: f32,
         density: MinimapDensity,
         zoom: f32,
         style: PreviewStyle,
@@ -123,6 +138,7 @@ impl MinimapLineIndexBuilder {
             key.width,
             rows_signature,
             available_width,
+            minimap_width,
             density,
             key.layout,
             zoom,
@@ -178,6 +194,7 @@ impl MinimapLineIndexBuilder {
         key: MinimapLineIndexKey,
         presentation_rows: Arc<Vec<usize>>,
         available_width: f32,
+        minimap_width: f32,
         previous_rows: &[usize],
         previous_projection: &LayoutSnapshot,
         zoom: f32,
@@ -227,7 +244,14 @@ impl MinimapLineIndexBuilder {
                             previous_projection.measure(previous_cursor),
                         )
                     } else {
-                        model.estimated_measure(*row, available_width, zoom, style)
+                        model.minimap_measure(
+                            *row,
+                            model.estimated_measure(*row, available_width, zoom, style),
+                            minimap_width,
+                            key.density,
+                            zoom,
+                            style,
+                        )
                     };
                     model.with_presentation_tail_padding(
                         *row,
@@ -246,7 +270,14 @@ impl MinimapLineIndexBuilder {
                     .iter()
                     .enumerate()
                     .map(|(index, row)| {
-                        let measure = model.estimated_measure(*row, available_width, zoom, style);
+                        let measure = model.minimap_measure(
+                            *row,
+                            model.estimated_measure(*row, available_width, zoom, style),
+                            minimap_width,
+                            key.density,
+                            zoom,
+                            style,
+                        );
                         model.with_presentation_tail_padding(
                             *row,
                             index,
@@ -307,8 +338,10 @@ impl MinimapLineIndexBuilder {
         MinimapLineIndex {
             layout: self.key.layout,
             width: self.key.width,
+            minimap_width: self.key.minimap_width,
             rows_signature: self.rows_signature,
             density,
+            reading_line_height: f32::from_bits(self.key.reading_line_height_bits).max(1.0),
             total: self.projection.total_display_lines(),
             projection: self.projection.clone(),
         }
@@ -363,6 +396,7 @@ impl MinimapLineIndexBuilder {
 }
 
 impl MinimapLineIndex {
+    #[cfg(test)]
     pub(crate) fn locate(&self, display_line: usize) -> (usize, usize) {
         self.projection.locate_display(display_line)
     }
@@ -379,35 +413,20 @@ impl MinimapLineIndex {
     }
 
     pub(crate) fn list_offset_for_display_position(&self, position: f32) -> ListOffset {
-        if self.projection.rows == 0 {
-            return ListOffset::default();
-        }
-        let position = position.clamp(0.0, self.total as f32);
-        let (row, _) = self.locate(position.floor() as usize);
-        let (display_start, _) = self.projection.prefix_for_row(row);
-        let measure = self.projection.measure(row);
-        let display_count = measure.display_lines.max(1) as f32;
-        let pixel_height = measure.pixels;
-        ListOffset {
-            item_ix: row,
-            offset_in_item: px(
-                ((position - display_start as f32) / display_count).clamp(0.0, 1.0) * pixel_height,
-            ),
-        }
+        self.list_offset_for_pixel(self.pixel_for_display_position(position))
     }
 
     pub(crate) fn display_position_for_pixel(&self, pixel: f32) -> f32 {
-        if self.projection.rows == 0 {
-            return 0.0;
-        }
-        let document_pixels = self.projection.total_pixels();
-        let pixel = pixel.clamp(0.0, document_pixels);
-        let (row, pixel_in_row) = self.projection.locate_pixel(pixel);
-        let (display_start, _) = self.projection.prefix_for_row(row);
-        let measure = self.projection.measure(row);
-        display_start as f32
-            + (pixel_in_row / measure.pixels.max(1.0)).clamp(0.0, 1.0)
-                * measure.display_lines.max(1) as f32
+        pixel.clamp(0.0, self.document_pixels()) / self.reading_line_height.max(1.0)
+    }
+
+    pub(crate) fn pixel_for_display_position(&self, position: f32) -> f32 {
+        (position.clamp(0.0, self.total_units()) * self.reading_line_height.max(1.0))
+            .min(self.document_pixels())
+    }
+
+    pub(crate) fn total_units(&self) -> f32 {
+        self.document_pixels() / self.reading_line_height.max(1.0)
     }
 
     pub(crate) fn list_offset_for_pixel(&self, pixel: f32) -> ListOffset {
@@ -429,6 +448,37 @@ impl MinimapLineIndex {
 }
 
 impl PreviewDisplayMap {
+    pub(crate) fn minimap_measure(
+        &self,
+        row: usize,
+        measure: ResolvedRow,
+        _minimap_width: f32,
+        _density: MinimapDensity,
+        zoom: f32,
+        style: PreviewStyle,
+    ) -> ResolvedRow {
+        if !matches!(
+            self.projection.rows.get(row).map(|row| &row.kind),
+            Some(
+                crate::preview::projection::VisualRowKind::Image {
+                    dimensions: Some(_)
+                } | crate::preview::projection::VisualRowKind::Diagram(_)
+            )
+        ) {
+            return measure;
+        }
+
+        // Media must use the same vertical unit as Reading text. Scaling it a
+        // second time to fill the minimap width makes a naturally narrow/tall
+        // image several times larger than the surrounding page and changes the
+        // viewport extent while it crosses the image. One display unit is one
+        // Reading body line; the paint path applies the matching uniform scale
+        // to both image axes.
+        let body_line_height = (style.typography.body_line_height * zoom).max(1.0);
+        let display_lines = (measure.pixels / body_line_height).ceil().max(1.0) as usize;
+        ResolvedRow::new(display_lines, measure.pixels, measure.exact)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn estimated_minimap_line_index(
         &self,
@@ -436,6 +486,7 @@ impl PreviewDisplayMap {
         width: u16,
         rows_signature: u64,
         available_width: f32,
+        minimap_width: f32,
         density: MinimapDensity,
         layout: LayoutKey,
         zoom: f32,
@@ -444,7 +495,14 @@ impl PreviewDisplayMap {
         let mut measures = Vec::with_capacity(presentation_rows.len());
 
         for (index, &row) in presentation_rows.iter().enumerate() {
-            let measure = self.estimated_measure(row, available_width, zoom, style);
+            let measure = self.minimap_measure(
+                row,
+                self.estimated_measure(row, available_width, zoom, style),
+                minimap_width,
+                density,
+                zoom,
+                style,
+            );
             measures.push(self.with_presentation_tail_padding(
                 row,
                 index,
@@ -459,8 +517,10 @@ impl PreviewDisplayMap {
         MinimapLineIndex {
             layout,
             width,
+            minimap_width: minimap_width.round().clamp(1.0, u16::MAX as f32) as u16,
             rows_signature,
             density,
+            reading_line_height: (style.typography.body_line_height * zoom).max(1.0),
             total: projection.total_display_lines(),
             projection,
         }
@@ -472,6 +532,7 @@ impl PreviewDisplayMap {
         state: &super::MinimapState,
         presentation_rows: &Arc<Vec<usize>>,
         available_width: f32,
+        minimap_width: f32,
         density: MinimapDensity,
         refinement: MinimapRefinement,
         zoom: f32,
@@ -481,13 +542,15 @@ impl PreviewDisplayMap {
         let key = MinimapLineIndexKey::new(
             presentation_rows,
             available_width,
+            minimap_width,
             density,
             self.projection.revision,
             refinement.geometry_revision,
             zoom,
             style,
         );
-        let cached = state.cached_line_index(presentation_rows, key.layout, density);
+        let cached =
+            state.cached_line_index(presentation_rows, key.layout, density, key.minimap_width);
         if let Some(index) = cached {
             return MinimapLineIndexProgress {
                 exact_rows: presentation_rows.len(),
@@ -503,6 +566,7 @@ impl PreviewDisplayMap {
         if created {
             let reusable_build = build.as_ref().and_then(|builder| {
                 (builder.key.width == key.width
+                    && builder.key.minimap_width == key.minimap_width
                     && builder.key.density == key.density
                     && builder.key.layout == key.layout)
                     .then(|| {
@@ -521,6 +585,7 @@ impl PreviewDisplayMap {
                     .as_ref()
                     .filter(|cached| {
                         cached.index.width == key.width
+                            && cached.index.minimap_width == key.minimap_width
                             && cached.index.density == key.density
                             && cached.index.layout == key.layout
                     })
@@ -570,6 +635,7 @@ impl PreviewDisplayMap {
                         key,
                         presentation_rows.clone(),
                         available_width,
+                        minimap_width,
                         &previous_rows,
                         &previous_projection,
                         zoom,
@@ -581,6 +647,7 @@ impl PreviewDisplayMap {
                         key,
                         presentation_rows.clone(),
                         available_width,
+                        minimap_width,
                         density,
                         zoom,
                         style,
@@ -627,8 +694,14 @@ impl PreviewDisplayMap {
             };
             let row = builder.presentation_rows[projection_row];
             let lines = self.display_lines(row, available_width, zoom, style, text_system);
-            let count = lines.ranges.len().max(1);
-            let measure = ResolvedRow::new(count, lines.parent_height, true);
+            let measure = self.minimap_measure(
+                row,
+                ResolvedRow::new(lines.ranges.len().max(1), lines.parent_height, true),
+                minimap_width,
+                density,
+                zoom,
+                style,
+            );
             builder.pending_updates.push((
                 projection_row,
                 self.with_presentation_tail_padding(

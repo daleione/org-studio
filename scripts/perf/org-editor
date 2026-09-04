@@ -15,7 +15,16 @@ Commands:
   build               Build release binaries.
   typing [MIB]        Measure edits plus UTF-16 caret mapping without parsing.
   frame [MIB]         Measure visible SemanticEditor prepaint+paint CPU while typing.
+  frame-ab [MIB]      Run the GPUI frame benchmark with Minimap off and on.
+  scroll PIXELS [MIB] Measure ordinary vertical scrolling (default fixture: 50 MiB).
+  scroll-ab PIXELS [MIB] Run ordinary scrolling with Minimap off and on.
+  scroll-split-ab PIXELS [MIB] Run two Editor panes at 1700x1050, Minimap off and on.
+  visual LAYOUT [MIB] Open a stable Minimap visual check on the built-in display.
+                      LAYOUT: editor-reading, editor-editor, or reading-reading.
+  seek [MIB]          Measure deterministic random source-line seeks (default: 50).
+  seek-ab [MIB]       Run random-seek with Minimap off and on.
   first-frame [MIB]   Measure the first readable SemanticEditor frame.
+  first-frame-ab [MIB] Run first-frame with Minimap off and on.
   suite [MIB]         Build, prepare, typing, and first-frame.
 EOF
 }
@@ -31,6 +40,12 @@ fixture_path() {
 
 validate_mib() {
     [[ "$1" =~ ^[1-9][0-9]*$ ]] || die "MiB must be a positive integer: $1"
+}
+
+validate_pixels() {
+    [[ "$1" =~ ^[0-9]+([.][0-9]+)?$ ]] || die "pixels must be a positive number: $1"
+    local significant="${1//[0.]/}"
+    [[ -n "$significant" ]] || die "pixels must be greater than zero: $1"
 }
 
 prepare() {
@@ -70,9 +85,10 @@ first_frame() {
     validate_mib "$mib"
     ensure_fixture "$mib"
     [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
-    new_run_dir "editor-first-frame-${mib}m"
+    local minimap="${ORG_STUDIO_EDITOR_MINIMAP_BENCH:-1}"
+    new_run_dir "editor-first-frame-${mib}m-minimap-${minimap}"
     ORG_STUDIO_EXIT_AFTER_FIRST_FRAME=1 \
-    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 \
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH="$minimap" \
     ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=1 \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/first-frame.log"
 }
@@ -82,13 +98,91 @@ frame() {
     validate_mib "$mib"
     ensure_fixture "$mib"
     [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
-    new_run_dir "editor-frame-${mib}m"
+    local minimap="${ORG_STUDIO_EDITOR_MINIMAP_BENCH:-1}"
+    local workload="frame"
+    if [[ -n "${ORG_STUDIO_EDITOR_BENCH_SCROLL_PIXELS:-}" ]]; then
+        workload="scroll-${ORG_STUDIO_EDITOR_BENCH_SCROLL_PIXELS}px"
+    elif [[ -n "${ORG_STUDIO_EDITOR_BENCH_RANDOM_SEEK:-}" ]]; then
+        workload="seek"
+    fi
+    if [[ -n "${ORG_STUDIO_EDITOR_BENCH_SPLIT:-}" ]]; then
+        workload="$workload-split"
+    fi
+    new_run_dir "editor-${workload}-${mib}m-minimap-${minimap}"
     ORG_STUDIO_EDITOR_BENCH_WARMUP_FRAMES="${ORG_STUDIO_EDITOR_BENCH_WARMUP_FRAMES:-120}" \
     ORG_STUDIO_EDITOR_BENCH_FRAMES="${ORG_STUDIO_EDITOR_BENCH_FRAMES:-500}" \
     ORG_STUDIO_EXIT_AFTER_EDITOR_BENCH=1 \
-    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 \
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH="$minimap" \
+    ORG_STUDIO_EDITOR_MINIMAP_PERF=1 \
+    ORG_STUDIO_PROFILE_FRAMES=1 \
     ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE=1 \
         "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")" 2>&1 | tee "$RUN_DIR/frame.log"
+}
+
+frame_ab() {
+    local mib="${1:-$DEFAULT_MIB}"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=0 frame "$mib"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 frame "$mib"
+}
+
+scroll() {
+    local pixels="${1:-16}"
+    local mib="${2:-$DEFAULT_MIB}"
+    validate_pixels "$pixels"
+    ORG_STUDIO_EDITOR_BENCH_SCROLL_PIXELS="$pixels" frame "$mib"
+}
+
+scroll_ab() {
+    local pixels="${1:-16}"
+    local mib="${2:-$DEFAULT_MIB}"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=0 scroll "$pixels" "$mib"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 scroll "$pixels" "$mib"
+}
+
+scroll_split_ab() {
+    local pixels="${1:-16}"
+    local mib="${2:-$DEFAULT_MIB}"
+    ORG_STUDIO_EDITOR_BENCH_SPLIT=1 \
+    ORG_STUDIO_WINDOW_WIDTH="${ORG_STUDIO_WINDOW_WIDTH:-1700}" \
+    ORG_STUDIO_WINDOW_HEIGHT="${ORG_STUDIO_WINDOW_HEIGHT:-1050}" \
+        scroll_ab "$pixels" "$mib"
+}
+
+visual() {
+    local layout="${1:-editor-reading}"
+    local mib="${2:-1}"
+    case "$layout" in
+        editor-reading|editor-editor|reading-reading) ;;
+        *) die "visual layout must be editor-reading, editor-editor, or reading-reading: $layout" ;;
+    esac
+    validate_mib "$mib"
+    ensure_fixture "$mib"
+    [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
+    ORG_STUDIO_MINIMAP_VISUAL_LAYOUT="$layout" \
+    ORG_STUDIO_MINIMAP=1 \
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 \
+    ORG_STUDIO_EDITOR_MINIMAP_PERF=1 \
+    ORG_STUDIO_DISPLAY_INDEX="${ORG_STUDIO_DISPLAY_INDEX:-1}" \
+    ORG_STUDIO_WINDOW_WIDTH="${ORG_STUDIO_WINDOW_WIDTH:-1700}" \
+    ORG_STUDIO_WINDOW_HEIGHT="${ORG_STUDIO_WINDOW_HEIGHT:-1050}" \
+        "$ROOT_DIR/target/release/org-studio" "$(fixture_path "$mib")"
+}
+
+first_frame_ab() {
+    local mib="${1:-$DEFAULT_MIB}"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=0 first_frame "$mib"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 first_frame "$mib"
+}
+
+seek() {
+    local mib="${1:-$DEFAULT_MIB}"
+    ORG_STUDIO_EDITOR_BENCH_RANDOM_SEEK=1 frame "$mib"
+}
+
+seek_ab() {
+    local mib="${1:-$DEFAULT_MIB}"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=0 seek "$mib"
+    ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 seek "$mib"
 }
 
 suite() {
@@ -108,7 +202,15 @@ case "$command" in
     build) build_release ;;
     typing) typing "$@" ;;
     frame) frame "$@" ;;
+    frame-ab) frame_ab "$@" ;;
+    scroll) scroll "$@" ;;
+    scroll-ab) scroll_ab "$@" ;;
+    scroll-split-ab) scroll_split_ab "$@" ;;
+    visual) visual "$@" ;;
+    seek) seek "$@" ;;
+    seek-ab) seek_ab "$@" ;;
     first-frame) first_frame "$@" ;;
+    first-frame-ab) first_frame_ab "$@" ;;
     suite) suite "$@" ;;
     help|-h|--help) usage ;;
     *) usage >&2; die "unknown command: $command" ;;

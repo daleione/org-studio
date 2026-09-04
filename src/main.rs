@@ -101,6 +101,10 @@ fn preview_window_options(cx: &mut App) -> WindowOptions {
     );
     let mut options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
+        // Centered bounds alone are ambiguous when multiple macOS displays share
+        // the same logical origin. Preserve the selected display through native
+        // window creation so benchmarks actually run on the requested panel.
+        display_id: requested_display,
         titlebar: Some(TitlebarOptions {
             title: Some(SharedString::from("Org Studio")),
             appears_transparent: false,

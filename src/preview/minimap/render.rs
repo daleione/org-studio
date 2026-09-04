@@ -9,10 +9,19 @@ use std::{
     time::Instant,
 };
 
-use crate::preview::PreviewStyle;
+use crate::{
+    document::DocumentFormat,
+    org_syntax::BlockKind,
+    preview::{
+        PreviewSnapshot, PreviewStyle,
+        markdown::MarkdownKind,
+        projection::{VisualRow, VisualRowKind},
+    },
+};
 use gpui::{
-    BorderStyle, Bounds, Corners, CursorStyle, DispatchPhase, ListOffset, ListState, MouseButton,
-    MouseMoveEvent, MouseUpEvent, canvas, div, fill, outline, point, prelude::*, px, rgba,
+    BorderStyle, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, ListOffset, ListState,
+    MouseButton, MouseMoveEvent, MouseUpEvent, RenderImage, canvas, div, fill, outline, point,
+    prelude::*, px, rgba,
 };
 
 use super::projection::MinimapRefinement;
@@ -20,16 +29,106 @@ use super::{
     MINIMAP_RESIZE_HANDLE_PX, MinimapDensity, MinimapDragSession, MinimapInteractionAnchor,
     MinimapLineIndex, MinimapProjectionReadiness, MinimapResizeSession, MinimapState,
     MinimapWidthChange, PreviewDisplayMap, PreviewLineKind, RASTER_TILE_ROWS, RasterRow,
-    RasterTileKey, RasterTilePaint, RasterTileRequest, SCROLL_WHEEL_LINE_PX,
-    current_resize_session, display_window_range, folded_signature, minimap_anchor_for_thumb_top,
+    RasterTableGeometry, RasterTileKey, RasterTilePaint, RasterTileRequest, SCROLL_WHEEL_LINE_PX,
+    current_resize_session, folded_signature, minimap_anchor_for_thumb_top,
     minimap_click_target_for_viewport, minimap_drag_target, minimap_perf_enabled,
     minimap_thumb_for_drag, minimap_trace_enabled, minimap_viewport_for_list_with_anchor,
-    rasterize_tile, scroll_list_to_ratio, scroll_ratio_after_wheel, source_target_for_list_offset,
-    take_resize_session, thumb_alphas, tile_key, width_from_resize_drag,
+    raster_tile_window, rasterize_tile, scroll_list_to_ratio, scroll_ratio_after_wheel,
+    source_target_for_list_offset, take_resize_session, thumb_alphas, tile_key,
+    width_from_resize_drag,
 };
+
+struct MinimapMediaPaint {
+    image: Arc<RenderImage>,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    row_y: f32,
+    row_height: f32,
+}
+
+#[derive(Default)]
+struct MinimapPaintFrame {
+    tiles: SmallVec<[RasterTilePaint; 6]>,
+    media: SmallVec<[MinimapMediaPaint; 4]>,
+}
+
+fn minimap_media_geometry(
+    reading_width: f32,
+    reading_height: f32,
+    reading_line_height: f32,
+    minimap_line_height: f32,
+    minimap_width: f32,
+    row_y: f32,
+    row_height: f32,
+) -> Option<(f32, f32, f32, f32)> {
+    if !reading_width.is_finite()
+        || !reading_height.is_finite()
+        || reading_width <= 0.0
+        || reading_height <= 0.0
+        || reading_line_height <= 0.0
+        || minimap_line_height <= 0.0
+        || row_height <= 0.0
+    {
+        return None;
+    }
+    let inset = 5.0;
+    let available_width = (minimap_width - inset * 2.0).max(1.0);
+    // Use the same uniform scale that maps a Reading body line to a
+    // minimap line. Filling the minimap width independently enlarges a
+    // narrow image relative to the surrounding page.
+    let scale = (minimap_line_height / reading_line_height)
+        .min(available_width / reading_width)
+        .min(row_height / reading_height)
+        .min(1.0);
+    let width = reading_width * scale;
+    let height = reading_height * scale;
+    Some((
+        // Reading media starts at the content origin. Its minimap projection
+        // follows the same left/top anchor instead of centering inside the row.
+        inset, row_y, width, height,
+    ))
+}
+
+fn minimap_media_image(
+    document: &PreviewSnapshot,
+    visual: &VisualRow,
+    window: &mut gpui::Window,
+    cx: &mut gpui::App,
+) -> Option<Arc<RenderImage>> {
+    match &visual.kind {
+        VisualRowKind::Image { .. } => {
+            let source = match document.format {
+                DocumentFormat::Org => {
+                    match &document.blocks.nodes().get(visual.block_id as usize)?.kind {
+                        BlockKind::Image { path } => path.as_ref(),
+                        _ => return None,
+                    }
+                }
+                DocumentFormat::Markdown => {
+                    match &document.markdown_blocks.get(visual.block_id as usize)?.kind {
+                        MarkdownKind::Image { path } => path.as_str(),
+                        _ => return None,
+                    }
+                }
+            };
+            let path = crate::preview::resolve_image_path(&document.path, source);
+            let resource: gpui::Resource = path.into();
+            window
+                .use_asset::<gpui::ImgResourceLoader>(&resource, cx)?
+                .ok()
+        }
+        VisualRowKind::Diagram(crate::preview::diagram::DiagramProjection::Ready {
+            image, ..
+        }) => image.clone().use_render_image(window, cx),
+        _ => None,
+    }
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn render(
+    document: Arc<PreviewSnapshot>,
     model: Arc<PreviewDisplayMap>,
     state: Arc<MinimapState>,
     presentation_rows: Arc<Vec<usize>>,
@@ -64,6 +163,7 @@ pub fn render(
     let paint_list = list_state.clone();
     let shape_list = list_state.clone();
     let shape_model = model.clone();
+    let shape_document = document;
     let shape_state = state.clone();
     let paint_state = state.clone();
     let shape_rows = presentation_rows.clone();
@@ -88,9 +188,9 @@ pub fn render(
         move |bounds, window, cx| {
             profiling::scope!("Minimap::shape_visible");
             *shape_bounds.lock().expect("minimap bounds poisoned") = bounds;
-            let capacity = (f32::from(bounds.size.height) / minimap_line_height)
-                .floor()
-                .max(1.0) as usize;
+            let visible_units = ((f32::from(bounds.size.height) - minimap_edge_padding * 2.0)
+                / minimap_line_height)
+                .max(1.0);
             let width = f32::from(bounds.size.width).ceil().max(1.0) as usize;
             let scale_factor = window.scale_factor().max(1.0);
             let parent_width =
@@ -115,6 +215,7 @@ pub fn render(
                     &shape_state,
                     &shape_rows,
                     parent_width,
+                    minimap_width,
                     density,
                     MinimapRefinement {
                         priority_row,
@@ -164,54 +265,154 @@ pub fn render(
                     viewport_pixels,
                 );
                 eprintln!(
-                    "org_studio_minimap_viewport readiness={projection_readiness:?} exact_rows={projection_exact_rows} rows={} scroll_item={} scroll_inner={:.3} scroll_pixels={scroll_pixels:.3} viewport_pixels={viewport_pixels:.3} visible_top={visible_top:.3} visible_bottom={visible_bottom:.3} total_lines={} document_pixels={:.3} content_top={:.3} thumb_top={:.3} thumb_height={:.3}",
+                    "org_studio_minimap_viewport readiness={projection_readiness:?} exact_rows={projection_exact_rows} rows={} scroll_item={} scroll_inner={:.3} scroll_pixels={scroll_pixels:.3} viewport_pixels={viewport_pixels:.3} visible_top={visible_top:.3} visible_bottom={visible_bottom:.3} total_units={:.3} document_pixels={:.3} content_top={:.3} thumb_top={:.3} thumb_height={:.3}",
                     shape_rows.len(),
                     scroll.item_ix,
                     f32::from(scroll.offset_in_item),
-                    line_index.total,
+                    line_index.total_units(),
                     line_index.document_pixels(),
                     viewport.content_top,
                     viewport.thumb.top,
                     viewport.thumb.height,
                 );
             }
-            let content_line = viewport.content_top.floor() as usize;
-            let content_fraction = viewport.content_top.fract();
-            let (anchor_row, anchor_inner_line) = line_index.locate(content_line);
-            let visible_range = display_window_range(
-                shape_rows.len(),
-                anchor_row,
-                anchor_inner_line,
-                capacity,
-                0,
-                |index| {
-                    shape_model
-                        .display_lines(
-                            shape_rows[index],
-                            parent_width,
-                            zoom,
-                            style,
-                            window.text_system(),
-                        )
-                        .ranges
-                        .len()
-                },
-            );
-            let first_line = visible_range.rows.start;
-            let last_line = visible_range.rows.end;
-            let first_tile = first_line / RASTER_TILE_ROWS * RASTER_TILE_ROWS;
+            let visible_range = if shape_rows.is_empty() {
+                0..0
+            } else {
+                let start_pixel = line_index.pixel_for_display_position(viewport.content_top);
+                let end_pixel = line_index
+                    .pixel_for_display_position(viewport.content_top + visible_units)
+                    .min(line_index.document_pixels());
+                let first = line_index.projection.locate_pixel(start_pixel).0;
+                let end = if end_pixel + f32::EPSILON >= line_index.document_pixels() {
+                    shape_rows.len()
+                } else {
+                    line_index
+                        .projection
+                        .locate_pixel(end_pixel)
+                        .0
+                        .saturating_add(1)
+                        .min(shape_rows.len())
+                };
+                first..end.max(first.saturating_add(1).min(shape_rows.len()))
+            };
+            let mut media: SmallVec<[MinimapMediaPaint; 4]> = SmallVec::new();
+            let media_range = visible_range.start.saturating_sub(RASTER_TILE_ROWS)
+                ..visible_range
+                    .end
+                    .saturating_add(RASTER_TILE_ROWS)
+                    .min(shape_rows.len());
+            for presentation_index in media_range {
+                let document_index = shape_rows[presentation_index];
+                let Some(visual) = shape_model.projection.rows.get(document_index) else {
+                    continue;
+                };
+                if !matches!(
+                    visual.kind,
+                    VisualRowKind::Image { .. } | VisualRowKind::Diagram(_)
+                ) {
+                    continue;
+                }
+                let Some(image) =
+                    minimap_media_image(&shape_document, visual, window, cx)
+                else {
+                    continue;
+                };
+                let Some((reading_width, reading_height)) =
+                    shape_model.image_size(document_index, parent_width)
+                else {
+                    continue;
+                };
+                let (_, pixel_start) = line_index.projection.prefix_for_row(presentation_index);
+                let row_pixels = line_index.projection.measure(presentation_index).pixels;
+                let row_y = minimap_edge_padding
+                    + (line_index.display_position_for_pixel(pixel_start) - viewport.content_top)
+                        * minimap_line_height;
+                let row_height = row_pixels / line_index.reading_line_height * minimap_line_height;
+                let Some((x, y, width, height)) = minimap_media_geometry(
+                    reading_width,
+                    reading_height,
+                    style.typography.body_line_height * zoom,
+                    minimap_line_height,
+                    width as f32,
+                    row_y,
+                    row_height,
+                ) else {
+                    continue;
+                };
+                // `minimap_media_image` touches the asset throughout the bounded
+                // prefetch range. Only visible images become paint operations,
+                // but upcoming media has already started loading.
+                if y + height >= 0.0 && y <= f32::from(bounds.size.height) {
+                    media.push(MinimapMediaPaint {
+                        image,
+                        x,
+                        y,
+                        width,
+                        height,
+                        row_y,
+                        row_height,
+                    });
+                }
+            }
+            let first_line = visible_range.start;
+            let last_line = visible_range.end;
             let mut tiles: SmallVec<[RasterTilePaint; 6]> = SmallVec::new();
-            let mut raster_requests: SmallVec<[RasterTileRequest; 6]> = SmallVec::new();
+            let mut visible_requests: SmallVec<[RasterTileRequest; 6]> = SmallVec::new();
+            let mut prefetch_requests: SmallVec<[RasterTileRequest; 2]> = SmallVec::new();
             let mut visible_keys: SmallVec<[RasterTileKey; 6]> = SmallVec::new();
-            let mut tile_y = minimap_edge_padding - content_fraction * minimap_line_height;
-            for tile_start in (first_tile..last_line).step_by(RASTER_TILE_ROWS) {
+            let mut prefetch_hasher = std::collections::hash_map::DefaultHasher::new();
+            generation.hash(&mut prefetch_hasher);
+            geometry_revision.hash(&mut prefetch_hasher);
+            shape_document.revision.hash(&mut prefetch_hasher);
+            width.hash(&mut prefetch_hasher);
+            density.hash(&mut prefetch_hasher);
+            style.paint_key().hash(&mut prefetch_hasher);
+            style.layout_key().hash(&mut prefetch_hasher);
+            zoom.to_bits().hash(&mut prefetch_hasher);
+            scale_factor.to_bits().hash(&mut prefetch_hasher);
+            first_line
+                .saturating_div(RASTER_TILE_ROWS)
+                .hash(&mut prefetch_hasher);
+            last_line
+                .saturating_sub(1)
+                .saturating_div(RASTER_TILE_ROWS)
+                .hash(&mut prefetch_hasher);
+            let prefetch_signature = prefetch_hasher.finish().max(1);
+            let cache_busy = !shape_state
+                .raster_tiles
+                .lock()
+                .expect("minimap raster tile cache poisoned")
+                .in_flight
+                .is_empty();
+            let include_prefetch = projection_readiness == MinimapProjectionReadiness::Exact
+                && !cache_busy
+                && shape_state
+                    .raster_prefetch_signature
+                    .load(Ordering::Acquire)
+                    != prefetch_signature;
+            let tile_window = raster_tile_window(
+                shape_rows.len(),
+                first_line..last_line,
+                usize::from(include_prefetch),
+            );
+            for tile_start in tile_window.step_by(RASTER_TILE_ROWS) {
                 let tile_end = (tile_start + RASTER_TILE_ROWS).min(shape_rows.len());
                 let tile_rows = &shape_rows[tile_start..tile_end];
+                let (_, tile_pixel_start) = line_index.projection.prefix_for_row(tile_start);
+                let (_, tile_pixel_end) = line_index.projection.prefix_for_row(tile_end);
+                let is_visible_tile = tile_start < last_line && tile_end > first_line;
                 let mut wrap_hasher = std::collections::hash_map::DefaultHasher::new();
                 parent_width.to_bits().hash(&mut wrap_hasher);
+                line_index.layout.hash(&mut wrap_hasher);
+                line_index
+                    .reading_line_height
+                    .to_bits()
+                    .hash(&mut wrap_hasher);
                 let raster_rows = tile_rows
                     .iter()
-                    .map(|&row| {
+                    .enumerate()
+                    .map(|(offset, &row)| {
                         let mut lines =
                             shape_model.display_lines(
                                 row,
@@ -230,9 +431,54 @@ pub fn render(
                             }
                             lines.ranges = ranges.into();
                         }
+                        let presentation_index = tile_start + offset;
+                        let (_, row_pixel_start) =
+                            line_index.projection.prefix_for_row(presentation_index);
+                        let measure = line_index.projection.measure(presentation_index);
+                        let row_layout = shape_model.layout(row, style).scaled(zoom);
+                        let is_table = shape_model.row_kind(row) == PreviewLineKind::Table;
+                        let content_offset_pixels = row_layout.margin_top
+                            + if is_table {
+                                style.spacing.table_cell_y * zoom
+                            } else {
+                                row_layout.padding_top
+                            };
+                        let content_line_step_pixels = if is_table {
+                            (style.typography.body_line_height - 3.0).max(18.0) * zoom
+                        } else {
+                            row_layout.line_height
+                        };
+                        let table = shape_model.table_projection(row).map(|projection| {
+                            let display = shape_model.runs(row);
+                            RasterTableGeometry {
+                                projected: crate::preview::table::project_table(
+                                    projection.table(),
+                                    parent_width,
+                                    zoom,
+                                    width as f32,
+                                    style,
+                                ),
+                                wrapped_cells: projection.shaped_display_cells(
+                                    &display.text,
+                                    parent_width,
+                                    zoom,
+                                    style,
+                                    window.text_system(),
+                                ),
+                            }
+                        });
                         RasterRow {
                             document_index: row,
+                            display_line_count: lines.ranges.len().max(1),
                             lines,
+                            offset_units: (row_pixel_start - tile_pixel_start)
+                                / line_index.reading_line_height,
+                            height_units: measure.pixels / line_index.reading_line_height,
+                            content_offset_units: content_offset_pixels
+                                / line_index.reading_line_height,
+                            content_line_step_units: content_line_step_pixels
+                                / line_index.reading_line_height,
+                            table,
                         }
                     })
                     .collect::<Vec<_>>();
@@ -257,23 +503,33 @@ pub fn render(
                     visual.semantic_revision.hash(&mut wrap_hasher);
                     let lines = &row.lines;
                     lines.parent_height.to_bits().hash(&mut wrap_hasher);
+                    row.offset_units.to_bits().hash(&mut wrap_hasher);
+                    row.height_units.to_bits().hash(&mut wrap_hasher);
+                    row.content_offset_units.to_bits().hash(&mut wrap_hasher);
+                    row.content_line_step_units.to_bits().hash(&mut wrap_hasher);
+                    if let Some(table) = &row.table {
+                        for column in &table.projected.columns {
+                            column.start_x.to_bits().hash(&mut wrap_hasher);
+                            column.end_x.to_bits().hash(&mut wrap_hasher);
+                            column.content_start_x.to_bits().hash(&mut wrap_hasher);
+                            column.content_end_x.to_bits().hash(&mut wrap_hasher);
+                        }
+                        for cell in &table.wrapped_cells {
+                            cell.hash(&mut wrap_hasher);
+                        }
+                    }
                     for range in lines.ranges.iter() {
                         range.start.hash(&mut wrap_hasher);
                         range.end.hash(&mut wrap_hasher);
                     }
                 }
-                let tile_line_count = raster_rows.iter().map(RasterRow::line_count).sum::<usize>();
-                if tile_start == first_tile {
-                    let hidden_lines = raster_rows
-                        .iter()
-                        .take(first_line.saturating_sub(tile_start))
-                        .map(RasterRow::line_count)
-                        .sum::<usize>();
-                    tile_y -= (hidden_lines + visible_range.skip_display_lines) as f32
+                let tile_y = minimap_edge_padding
+                    + (line_index.display_position_for_pixel(tile_pixel_start)
+                        - viewport.content_top)
                         * minimap_line_height;
-                }
-                let tile_height = (tile_line_count as f32 * minimap_line_height)
-                    .ceil()
+                let tile_height = ((tile_pixel_end - tile_pixel_start)
+                    / line_index.reading_line_height
+                    * minimap_line_height)
                     .max(1.0);
                 let key = tile_key(
                     &tile_identity_rows,
@@ -285,13 +541,19 @@ pub fn render(
                     density,
                     style,
                 );
-                visible_keys.push(key);
+                if is_visible_tile {
+                    visible_keys.push(key);
+                }
                 let (image, is_missing) = shape_state
                     .raster_tiles
                     .lock()
                     .expect("minimap raster tile cache poisoned")
                     .image_or_fallback(key);
-                if let Some(image) = image {
+                if is_visible_tile
+                    && let Some(image) = image
+                    && tile_y + tile_height >= 0.0
+                    && tile_y <= f32::from(bounds.size.height)
+                {
                     tiles.push(RasterTilePaint {
                         image,
                         y: tile_y,
@@ -300,13 +562,27 @@ pub fn render(
                     });
                 }
                 if is_missing {
-                    raster_requests.push(RasterTileRequest {
+                    let request = RasterTileRequest {
                         key,
                         rows: raster_rows,
-                    });
+                    };
+                    if is_visible_tile {
+                        visible_requests.push(request);
+                    } else {
+                        prefetch_requests.push(request);
+                    }
                 }
-                tile_y += tile_height;
             }
+            // Never let speculative work delay a missing visible batch. Once every visible
+            // tile is ready, prepare one adjacent tile on each side before it enters the
+            // Minimap camera so scrolling cannot reveal a late raster replacement.
+            let visible_request_count = visible_requests.len();
+            let raster_requests = if visible_requests.is_empty() {
+                visible_requests.extend(prefetch_requests);
+                visible_requests
+            } else {
+                visible_requests
+            };
             let request_count = raster_requests.len();
             let request_keys = raster_requests
                 .iter()
@@ -317,6 +593,14 @@ pub fn render(
                 .lock()
                 .expect("minimap raster tile cache poisoned")
                 .reserve(&request_keys);
+            if include_prefetch
+                && visible_request_count == 0
+                && (request_count == 0 || should_spawn)
+            {
+                shape_state
+                    .raster_prefetch_signature
+                    .store(prefetch_signature, Ordering::Release);
+            }
             if should_spawn {
                 let raster_epoch = shape_state.raster_epoch.load(Ordering::Acquire);
                 let tile_model = shape_model.clone();
@@ -330,7 +614,6 @@ pub fn render(
                             &tile_model,
                             &request.rows,
                             width,
-                            parent_width,
                             &tile_folded,
                             scale_factor,
                             density,
@@ -384,7 +667,7 @@ pub fn render(
                 })
                 .detach();
             }
-            if request_count == 0 && !tiles.is_empty() {
+            if visible_request_count == 0 && !tiles.is_empty() {
                 *shape_state
                     .retained_style_frame
                     .lock()
@@ -401,11 +684,11 @@ pub fn render(
                     .cloned()
                     .collect();
             }
-            tiles
+            MinimapPaintFrame { tiles, media }
         },
-        move |bounds, tiles: SmallVec<[RasterTilePaint; 6]>, window, cx| {
+        move |bounds, frame: MinimapPaintFrame, window, cx| {
             profiling::scope!("Minimap::paint");
-            if !tiles.is_empty()
+            if !frame.tiles.is_empty()
                 && !paint_state
                     .perf
                     .first_pixels_painted
@@ -416,7 +699,7 @@ pub fn render(
                         "org_studio_minimap_first_pixels generation={} revision={} tiles={} since_open_ms={:.3}",
                         generation,
                         geometry_revision,
-                        tiles.len(),
+                        frame.tiles.len(),
                         opened_at.elapsed().as_secs_f64() * 1000.0,
                     );
                     eprintln!(
@@ -430,7 +713,7 @@ pub fn render(
                     cx.quit();
                 }
             }
-            for tile in tiles {
+            for tile in frame.tiles {
                 let image_bounds = Bounds::new(
                     point(bounds.origin.x, bounds.origin.y + px(tile.y)),
                     gpui::size(px(tile.width), px(tile.height)),
@@ -443,6 +726,32 @@ pub fn render(
                     0,
                     false,
                 );
+            }
+            for media in frame.media {
+                let image_bounds = Bounds::new(
+                    point(
+                        bounds.origin.x + px(media.x),
+                        bounds.origin.y + px(media.y),
+                    ),
+                    gpui::size(px(media.width), px(media.height)),
+                );
+                let row_bounds = Bounds::new(
+                    point(bounds.origin.x, bounds.origin.y + px(media.row_y)),
+                    gpui::size(bounds.size.width, px(media.row_height)),
+                )
+                .intersect(&bounds);
+                // Keep rounding or a decoder-specific image size from painting
+                // across the media row boundary and covering following text.
+                window.with_content_mask(Some(ContentMask { bounds: row_bounds }), |window| {
+                    let _ = window.paint_image(
+                        image_bounds,
+                        image_bounds,
+                        Corners::default(),
+                        media.image,
+                        0,
+                        false,
+                    );
+                });
             }
             let track_height = f32::from(bounds.size.height);
             let viewport = paint_line_index
@@ -462,9 +771,14 @@ pub fn render(
                 viewport,
                 *paint_drag.lock().expect("minimap drag state poisoned"),
             );
+            let (visual_thumb_top, visual_thumb_height) = crate::minimap::visual_thumb_geometry(
+                thumb.top,
+                thumb.height,
+                density,
+            );
             let thumb_bounds = Bounds::new(
-                point(bounds.origin.x, bounds.origin.y + px(thumb.top)),
-                gpui::size(bounds.size.width, px(thumb.height)),
+                point(bounds.origin.x, bounds.origin.y + px(visual_thumb_top)),
+                gpui::size(bounds.size.width, px(visual_thumb_height)),
             );
             let active = paint_drag
                 .lock()
@@ -674,14 +988,6 @@ pub fn render(
                 ) {
                     down_seek(source_target, target.offset, window, cx);
                 }
-                *down_anchor.lock().expect("minimap anchor poisoned") =
-                    Some(MinimapInteractionAnchor {
-                        layout: index.layout,
-                        width: index.width,
-                        rows_signature: index.rows_signature,
-                        interaction_height: viewport.interaction_height,
-                        content_top: viewport.content_top,
-                    });
                 if minimap_trace_enabled() {
                     eprintln!(
                         "minimap click display={:.3} target_ratio={:.5} anchor_content={:.3} anchor_thumb={:.2}",
@@ -691,14 +997,14 @@ pub fn render(
                         target.thumb_top,
                     );
                 }
-                if target.ratio >= 1.0 - f32::EPSILON && down_list.item_count() > 0 {
-                    down_list.scroll_to(ListOffset {
-                        item_ix: down_list.item_count() - 1,
-                        offset_in_item: px(0.0),
-                    });
-                } else {
-                    down_list.scroll_to(target.offset);
-                }
+                scroll_list_to_ratio(&index, &down_list, target.ratio);
+                *down_anchor.lock().expect("minimap anchor poisoned") =
+                    Some(minimap_anchor_for_thumb_top(
+                        &index,
+                        &down_list,
+                        track_height,
+                        target.thumb_top,
+                    ));
                 drag_start = (target.thumb_top, target.ratio);
                 window.refresh();
             } else {
@@ -707,6 +1013,7 @@ pub fn render(
                     Some(MinimapInteractionAnchor {
                         layout: index.layout,
                         width: index.width,
+                        minimap_width: index.minimap_width,
                         rows_signature: index.rows_signature,
                         interaction_height: viewport.interaction_height,
                         content_top: viewport.content_top,
@@ -780,4 +1087,26 @@ pub fn render(
                     window.refresh();
                 }),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::minimap_media_geometry;
+
+    #[test]
+    fn minimap_media_geometry_preserves_aspect_ratio_and_row_bounds() {
+        let (x, y, width, height) =
+            minimap_media_geometry(800.0, 400.0, 27.52, 3.8, 110.0, 20.0, 80.0).unwrap();
+        assert!((width / height - 2.0).abs() < 0.001);
+        assert_eq!(x, 5.0);
+        assert_eq!(y, 20.0);
+        assert!(x + width <= 105.0);
+        assert!(y + height <= 100.0);
+
+        let (_, tall_y, tall_width, tall_height) =
+            minimap_media_geometry(200.0, 800.0, 27.52, 3.8, 110.0, -10.0, 60.0).unwrap();
+        assert!((tall_width / tall_height - 0.25).abs() < 0.001);
+        assert_eq!(tall_y, -10.0);
+        assert!(tall_y + tall_height <= 50.001);
+    }
 }

@@ -13,12 +13,15 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::{
     org_syntax::inline::InlineKind,
-    preview::{PreviewStyle, table::Alignment},
+    preview::{
+        PreviewStyle,
+        table::{Alignment, ProjectedTable},
+    },
 };
 
 use super::{
     DisplayLines, DisplayRuns, MinimapDensity, PreviewDisplayMap, PreviewLineKind,
-    RASTER_TILE_CACHE_CAPACITY, kind_color, minimap_perf_enabled, minimap_runs,
+    RASTER_TILE_CACHE_CAPACITY, RASTER_TILE_ROWS, kind_color, minimap_perf_enabled, minimap_runs,
     scene::{
         PrimitiveWidth, VisualContent as RowContent, VisualPrimitive as RowPrimitive,
         resolve_visual_row,
@@ -64,7 +67,10 @@ impl RasterTileCache {
                     && candidate.row_signature == key.row_signature
                     && candidate.theme_signature == key.theme_signature
                     && candidate.folded_signature == key.folded_signature
+                    && candidate.wrap_signature == key.wrap_signature
+                    && candidate.width == key.width
                     && candidate.scale_factor_x100 == key.scale_factor_x100
+                    && candidate.density == key.density
             })
             .or_else(|| {
                 // Folding replaces a complete visible batch. Keep the image previously painted
@@ -75,6 +81,8 @@ impl RasterTileCache {
                     candidate.tile_start == key.tile_start
                         && candidate.width == key.width
                         && candidate.theme_signature == key.theme_signature
+                        && (candidate.folded_signature != key.folded_signature
+                            || candidate.wrap_signature == key.wrap_signature)
                         && candidate.scale_factor_x100 == key.scale_factor_x100
                         && candidate.density == key.density
                 })
@@ -158,11 +166,32 @@ pub(crate) struct RasterTileRequest {
 pub(crate) struct RasterRow {
     pub(crate) document_index: usize,
     pub(crate) lines: DisplayLines,
+    pub(crate) display_line_count: usize,
+    /// Continuous Reading geometry relative to the tile start. These values are derived from
+    /// the same pixel-prefix snapshot used by the viewport and media overlays.
+    pub(crate) offset_units: f32,
+    pub(crate) height_units: f32,
+    pub(crate) content_offset_units: f32,
+    pub(crate) content_line_step_units: f32,
+    pub(crate) table: Option<RasterTableGeometry>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RasterTableGeometry {
+    pub(crate) projected: ProjectedTable,
+    pub(crate) wrapped_cells: Vec<Vec<String>>,
 }
 
 impl RasterRow {
     pub(crate) fn line_count(&self) -> usize {
-        self.lines.ranges.len().max(1)
+        self.display_line_count.max(1)
+    }
+
+    fn content_line_capacity(&self) -> usize {
+        ((self.height_units - self.content_offset_units).max(0.0)
+            / self.content_line_step_units.max(f32::EPSILON))
+        .ceil()
+        .max(1.0) as usize
     }
 }
 
@@ -208,11 +237,32 @@ pub(crate) fn folded_signature(
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg(test)]
 pub(crate) struct DisplayWindow {
     pub(crate) rows: Range<usize>,
     pub(crate) skip_display_lines: usize,
 }
 
+pub(crate) fn raster_tile_window(
+    total_rows: usize,
+    visible_rows: Range<usize>,
+    prefetch_tiles: usize,
+) -> Range<usize> {
+    if total_rows == 0 || visible_rows.is_empty() {
+        return 0..0;
+    }
+    let first_visible_tile = visible_rows.start / RASTER_TILE_ROWS * RASTER_TILE_ROWS;
+    let last_visible_row = visible_rows.end.saturating_sub(1).min(total_rows - 1);
+    let last_visible_tile = last_visible_row / RASTER_TILE_ROWS * RASTER_TILE_ROWS;
+    let padding = RASTER_TILE_ROWS.saturating_mul(prefetch_tiles);
+    let start = first_visible_tile.saturating_sub(padding);
+    let end = last_visible_tile
+        .saturating_add(RASTER_TILE_ROWS.saturating_add(padding))
+        .min(total_rows);
+    start..end
+}
+
+#[cfg(test)]
 pub(crate) fn display_window_range(
     total_rows: usize,
     anchor_row: usize,
@@ -425,7 +475,6 @@ pub(crate) fn rasterize_tile(
     model: &PreviewDisplayMap,
     presentation_rows: &[RasterRow],
     width: usize,
-    parent_width: f32,
     folded: &HashSet<u32>,
     scale_factor: f32,
     density: MinimapDensity,
@@ -440,7 +489,11 @@ pub(crate) fn rasterize_tile(
         .sum::<usize>();
     let scale_factor = scale_factor.max(1.0);
     let physical_line_height = density.line_height() * scale_factor;
-    let height = (line_count as f32 * physical_line_height).ceil().max(1.0) as u32;
+    let tile_height_units = presentation_rows
+        .iter()
+        .map(|row| row.offset_units + row.height_units)
+        .fold(0.0_f32, f32::max);
+    let height = (tile_height_units * physical_line_height).ceil().max(1.0) as u32;
     let logical_width = width.max(1);
     let width = (logical_width as f32 * scale_factor).ceil() as u32;
     let mut pixels = vec![0_u8; width as usize * height as usize * 4];
@@ -460,7 +513,6 @@ pub(crate) fn rasterize_tile(
     );
     buffer.set_wrap(Wrap::None);
 
-    let mut line_slot = 0usize;
     for raster_row in presentation_rows {
         let document_index = raster_row.document_index;
         let scene = resolve_visual_row(
@@ -477,9 +529,11 @@ pub(crate) fn rasterize_tile(
             display_runs.text = format!("{} …", display_runs.text).into();
         }
         let color = scene.color;
-        let row_y = (line_slot as f32 * physical_line_height).round() as usize;
-        let row_visual_height =
-            (raster_row.line_count() as f32 * physical_line_height).ceil() as usize;
+        let row_y = (raster_row.offset_units * physical_line_height).round() as usize;
+        let row_end = ((raster_row.offset_units + raster_row.height_units) * physical_line_height)
+            .round()
+            .max(row_y as f32 + 1.0) as usize;
+        let row_visual_height = row_end.saturating_sub(row_y).max(1);
         for primitive in &scene.primitives {
             let (x, y, primitive_width, primitive_height, token) = match *primitive {
                 RowPrimitive::Rect { x, width, color } => {
@@ -515,12 +569,53 @@ pub(crate) fn rasterize_tile(
             }))
             .weight(cosmic_text::Weight::BLACK);
         let base = Color::rgb((color >> 16) as u8, (color >> 8) as u8, color as u8);
-        if let RowContent::Table(projection) = &scene.content {
-            let table = crate::preview::table::project_table(
-                projection.table(),
-                parent_width,
-                logical_width as f32,
+        if let Some(marker) = scene.list_marker.as_ref() {
+            let marker_width = (marker.width * scale_factor).max(1.0);
+            buffer.set_size(Some(marker_width), Some(physical_line_height));
+            buffer.set_text(marker.label.as_ref(), &attrs, Shaping::Advanced, None);
+            buffer.shape_until_scroll(font_system, false);
+            let estimated_width = UnicodeWidthStr::width(marker.label.as_ref()) as f32
+                * density.font_px()
+                * 0.62
+                * scale_factor;
+            let alignment_offset = if marker.right_aligned {
+                (marker_width - estimated_width).max(0.0)
+            } else {
+                0.0
+            };
+            let origin_x = (marker.x * scale_factor + alignment_offset).round() as i32;
+            let marker_y = ((raster_row.offset_units + raster_row.content_offset_units)
+                * physical_line_height)
+                .round() as i32;
+            let marker_color = style.palette.accent_text;
+            let marker_base = Color::rgb(
+                (marker_color >> 16) as u8,
+                (marker_color >> 8) as u8,
+                marker_color as u8,
             );
+            buffer.draw(
+                font_system,
+                swash_cache,
+                marker_base,
+                |x, y, w, h, color| {
+                    crate::minimap::paint_text_pixels(
+                        &mut pixels,
+                        width as usize,
+                        height as usize,
+                        x + origin_x,
+                        y + marker_y,
+                        w,
+                        h,
+                        color,
+                    );
+                },
+            );
+        }
+        if let RowContent::Table(projection) = &scene.content {
+            let Some(table_geometry) = raster_row.table.as_ref() else {
+                continue;
+            };
+            let table = &table_geometry.projected;
             let columns = &table.columns;
             let table_color = if projection.is_separator() {
                 style.palette.border
@@ -559,52 +654,64 @@ pub(crate) fn rasterize_tile(
                     table_color,
                 );
             } else {
+                let wrapped_cells = &table_geometry.wrapped_cells;
                 for (index, column) in columns.iter().enumerate() {
                     let Some(cell) = projection.cells().get(index) else {
                         continue;
                     };
-                    let cell_text = cell.text(&display_runs.text);
                     let cell_width =
                         ((column.content_end_x - column.content_start_x) * scale_factor).max(1.0);
-                    buffer.set_size(Some(cell_width), Some(physical_line_height));
-                    buffer.set_text(cell_text, &attrs, Shaping::Advanced, None);
-                    buffer.shape_until_scroll(font_system, false);
-                    let estimated_text_width = UnicodeWidthStr::width(cell_text) as f32
-                        * density.font_px()
-                        * 0.62
-                        * scale_factor;
-                    let free = (cell_width - estimated_text_width).max(0.0);
                     let alignment = projection
                         .columns()
                         .get(index)
                         .map(|column| column.alignment())
                         .unwrap_or_default();
-                    let align_offset = match alignment {
-                        Alignment::Center => free * 0.5,
-                        Alignment::Right => free,
-                        Alignment::Left if cell.align_right() => free,
-                        Alignment::Left => 0.0,
-                    };
-                    let origin_x =
-                        (column.content_start_x * scale_factor + align_offset).round() as i32;
-                    let segment_y = (line_slot as f32 * physical_line_height).round() as i32;
-                    buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {
-                        let x = x + origin_x;
-                        let y = y + segment_y;
-                        crate::minimap::paint_text_pixels(
-                            &mut pixels,
-                            width as usize,
-                            height as usize,
-                            x,
-                            y,
-                            w,
-                            h,
-                            color,
-                        );
-                    });
+                    for (inner_line, cell_text) in wrapped_cells
+                        .get(index)
+                        .into_iter()
+                        .flatten()
+                        .take(raster_row.content_line_capacity())
+                        .enumerate()
+                    {
+                        buffer.set_size(Some(cell_width), Some(physical_line_height));
+                        buffer.set_text(cell_text, &attrs, Shaping::Advanced, None);
+                        buffer.shape_until_scroll(font_system, false);
+                        let estimated_text_width = UnicodeWidthStr::width(cell_text.as_str())
+                            as f32
+                            * density.font_px()
+                            * 0.62
+                            * scale_factor;
+                        let free = (cell_width - estimated_text_width).max(0.0);
+                        let align_offset = match alignment {
+                            Alignment::Center => free * 0.5,
+                            Alignment::Right => free,
+                            Alignment::Left if cell.align_right() => free,
+                            Alignment::Left => 0.0,
+                        };
+                        let origin_x =
+                            (column.content_start_x * scale_factor + align_offset).round() as i32;
+                        let segment_y = ((raster_row.offset_units
+                            + raster_row.content_offset_units
+                            + inner_line as f32 * raster_row.content_line_step_units)
+                            * physical_line_height)
+                            .round() as i32;
+                        buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {
+                            let x = x + origin_x;
+                            let y = y + segment_y;
+                            crate::minimap::paint_text_pixels(
+                                &mut pixels,
+                                width as usize,
+                                height as usize,
+                                x,
+                                y,
+                                w,
+                                h,
+                                color,
+                            );
+                        });
+                    }
                 }
             }
-            line_slot += 1;
             continue;
         }
         buffer.set_size(
@@ -612,11 +719,21 @@ pub(crate) fn rasterize_tile(
             Some(physical_line_height),
         );
         if matches!(scene.content, RowContent::None) {
-            line_slot += raster_row.line_count();
             continue;
         }
         let indent = (scene.indent * scale_factor).round() as i32;
-        for range in raster_row.lines.ranges.iter().cloned() {
+        for (inner_line, range) in raster_row
+            .lines
+            .ranges
+            .iter()
+            .take(
+                raster_row
+                    .line_count()
+                    .min(raster_row.content_line_capacity()),
+            )
+            .cloned()
+            .enumerate()
+        {
             let segment = slice_display_runs(&display_runs, range);
             buffer.set_rich_text(
                 cosmic_runs(kind, &segment, style),
@@ -625,7 +742,11 @@ pub(crate) fn rasterize_tile(
                 None,
             );
             buffer.shape_until_scroll(font_system, false);
-            let segment_y = (line_slot as f32 * physical_line_height).round() as i32;
+            let segment_y = ((raster_row.offset_units
+                + raster_row.content_offset_units
+                + inner_line as f32 * raster_row.content_line_step_units)
+                * physical_line_height)
+                .round() as i32;
             buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {
                 let x = x + indent;
                 let y = y + segment_y;
@@ -640,7 +761,6 @@ pub(crate) fn rasterize_tile(
                     color,
                 );
             });
-            line_slot += 1;
         }
     }
     let buffer = RgbaImage::from_raw(width, height, pixels).expect("valid minimap tile dimensions");

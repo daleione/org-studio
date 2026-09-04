@@ -1,4 +1,5 @@
 use smallvec::SmallVec;
+use std::sync::Arc;
 
 use super::super::{
     display_map::{PreviewDisplayMap, PreviewLineKind, kind_color},
@@ -14,7 +15,6 @@ pub(in crate::preview) enum PaintToken {
     CodeBackground,
     CodeBlockAccent,
     Border,
-    Attribute,
     QuoteBorder,
     Heading(u8),
 }
@@ -28,7 +28,6 @@ impl PaintToken {
             Self::CodeBackground => palette.code_background,
             Self::CodeBlockAccent => palette.code_block_accent,
             Self::Border => palette.border,
-            Self::Attribute => palette.attribute,
             Self::QuoteBorder => palette.quote_border,
             Self::Heading(level) => palette.heading[level.min(3) as usize],
         }
@@ -80,9 +79,18 @@ pub(in crate::preview) struct VisualRowRecipe {
     pub(in crate::preview) kind: PreviewLineKind,
     pub(in crate::preview) color: u32,
     pub(in crate::preview) indent: f32,
+    pub(in crate::preview) list_marker: Option<VisualListMarker>,
     pub(in crate::preview) folded_ellipsis: bool,
     pub(in crate::preview) primitives: SmallVec<[VisualPrimitive; 2]>,
     pub(in crate::preview) content: VisualContent,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(in crate::preview) struct VisualListMarker {
+    pub(in crate::preview) label: Arc<str>,
+    pub(in crate::preview) x: f32,
+    pub(in crate::preview) width: f32,
+    pub(in crate::preview) right_aligned: bool,
 }
 
 /// Resolves semantic paint outside either rendering backend. Callers provide
@@ -101,9 +109,37 @@ pub(in crate::preview) fn resolve_visual_row(
         .expect("preview row in bounds");
     let kind = model.row_kind(row);
     let semantic_indent = match visual.kind {
-        VisualRowKind::Heading(_) | VisualRowKind::List(_) => 6.0,
+        VisualRowKind::Heading(_) => 6.0,
         VisualRowKind::Quote => 7.0,
         _ => 4.0,
+    };
+    let list_marker = match &visual.kind {
+        VisualRowKind::List(marker) => {
+            let scale = target_font_px / style.typography.body_size.max(1.0);
+            let right_aligned = marker.checkbox.is_none()
+                && (marker.marker.ends_with('.') || marker.marker.ends_with(')'));
+            let label: Arc<str> = match marker.checkbox {
+                Some(crate::org_syntax::list::CheckboxState::Empty) => Arc::from("□"),
+                Some(crate::org_syntax::list::CheckboxState::Partial) => Arc::from("−"),
+                Some(crate::org_syntax::list::CheckboxState::Checked) => Arc::from("✓"),
+                None if right_aligned => marker.marker.clone(),
+                None => Arc::from("•"),
+            };
+            let reading_width = if marker.checkbox.is_some() {
+                style.spacing.checkbox_size.max(14.0)
+            } else if right_aligned {
+                (label.chars().count() as f32 * 9.0 + 8.0).max(30.0)
+            } else {
+                18.0
+            };
+            Some(VisualListMarker {
+                label,
+                x: 4.0 + f32::from(marker.indent).min(96.0) * scale,
+                width: (reading_width * scale).max(1.0),
+                right_aligned,
+            })
+        }
+        _ => None,
     };
     let mut primitives = SmallVec::new();
     let content = match &visual.kind {
@@ -160,34 +196,10 @@ pub(in crate::preview) fn resolve_visual_row(
             });
             VisualContent::None
         }
-        VisualRowKind::Image { dimensions } => {
-            let fitted_width =
-                dimensions.map_or(target_width.max(10.0) - 10.0, |(width, height)| {
-                    super::super::fitted_image_size(width, height, target_width.max(10.0) - 10.0).0
-                });
-            primitives.push(VisualPrimitive::Rect {
-                x: 5.0,
-                width: PrimitiveWidth::Fixed(fitted_width),
-                color: PaintToken::Attribute,
-            });
-            VisualContent::None
-        }
-        VisualRowKind::Diagram(diagram) => {
-            let fitted_width =
-                diagram
-                    .dimensions()
-                    .map_or(target_width.max(10.0) - 10.0, |(width, height)| {
-                        let available = target_width.max(10.0) - 10.0;
-                        let scale = (available / width).min(480.0 / height).min(1.0);
-                        width * scale
-                    });
-            primitives.push(VisualPrimitive::Rect {
-                x: 5.0,
-                width: PrimitiveWidth::Fixed(fitted_width),
-                color: PaintToken::Attribute,
-            });
-            VisualContent::None
-        }
+        // Media is painted as a live image overlay. Its measured row height still
+        // participates in layout, but a second raster placeholder would become a
+        // visible empty block whenever the overlay and a cached tile swap frames.
+        VisualRowKind::Image { .. } | VisualRowKind::Diagram(_) => VisualContent::None,
         VisualRowKind::Heading(level) => {
             primitives.push(VisualPrimitive::Rect {
                 x: 3.0,
@@ -201,13 +213,20 @@ pub(in crate::preview) fn resolve_visual_row(
             VisualContent::Text
         }
     };
+    let indent = list_marker.as_ref().map_or_else(
+        || {
+            semantic_indent
+                + (style.row_layout(visual.style_kind).padding_left * target_font_px
+                    / style.typography.body_size)
+                    .round()
+        },
+        |marker| marker.x + marker.width + 8.0 * target_font_px / style.typography.body_size,
+    );
     VisualRowRecipe {
         kind,
         color: kind_color(kind, style),
-        indent: semantic_indent
-            + (style.row_layout(visual.style_kind).padding_left * target_font_px
-                / style.typography.body_size)
-                .round(),
+        indent,
+        list_marker,
         folded_ellipsis: matches!(visual.kind, VisualRowKind::Heading(_)),
         primitives,
         content,

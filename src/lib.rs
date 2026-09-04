@@ -17,6 +17,7 @@ pub mod perf_tracing;
 pub mod preview;
 pub mod recent_documents;
 pub mod settings;
+mod syntax_highlighting;
 pub mod theme;
 pub mod typography;
 pub mod typst_runtime;

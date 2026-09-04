@@ -204,6 +204,7 @@ pub(crate) fn render_reading_document(
             minimap_visible.then_some(reading_display_map).flatten(),
             |layout, display_map| {
                 layout.child(minimap::render(
+                    document.clone(),
                     display_map,
                     minimap_state.clone(),
                     minimap_rows.clone(),

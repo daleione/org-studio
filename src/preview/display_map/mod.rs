@@ -234,8 +234,20 @@ impl PreviewDisplayMap {
         if kind == PreviewLineKind::Table {
             let table = self.table_projection(row);
             let line_count = table
+                .filter(|table| !table.is_separator())
                 .map(|table| {
-                    table.estimated_line_count(&display.text, available_width, zoom, style)
+                    table
+                        .shaped_display_cells(
+                            &display.text,
+                            available_width,
+                            zoom,
+                            style,
+                            text_system,
+                        )
+                        .into_iter()
+                        .map(|lines| lines.len().max(1))
+                        .max()
+                        .unwrap_or(1)
                 })
                 .unwrap_or(1);
             let lines = DisplayLines {

@@ -1612,19 +1612,18 @@ mod tests {
         let mut previous = derive_preview(PathBuf::from("large.md"), before.clone());
         let middle = before.len_bytes() / 2;
         let prefix = before.copy_range(ByteRange::new(0, middle));
-        let mut caret = prefix
+        let caret = prefix
             .rfind("body text")
             .expect("fixture contains body text") as u64
             + 5;
         let mut samples = Vec::with_capacity(10);
-        for _ in 0..10 {
+        for caret in (caret..).take(10) {
             let delta = buffer
                 .commit(EditTransaction::new(
                     buffer.revision(),
                     vec![TextEdit::new(ByteRange::new(caret, caret), "x")],
                 ))
                 .unwrap();
-            caret += 1;
             let started = Instant::now();
             let next = derive_preview_incremental(
                 PathBuf::from("large.md"),

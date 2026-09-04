@@ -25,7 +25,11 @@ enum Language {
     Markdown,
 }
 
-pub(super) struct EditorSyntaxCache {
+/// Revision-coherent Editor semantics shared by every Editor pane for a document.
+///
+/// The service owns syntax checkpoints only. Layout, folds, raster state, and
+/// viewport state remain pane-local.
+pub(crate) struct EditorSyntaxService {
     inner: Mutex<SyntaxCacheInner>,
 }
 
@@ -34,9 +38,11 @@ struct SyntaxCacheInner {
     revision: Revision,
     language: Language,
     contexts: BTreeMap<u64, CodeContext>,
+    focus_line: u64,
+    builder_revision: Option<Revision>,
 }
 
-impl Default for EditorSyntaxCache {
+impl Default for EditorSyntaxService {
     fn default() -> Self {
         Self {
             inner: Mutex::new(SyntaxCacheInner {
@@ -44,12 +50,14 @@ impl Default for EditorSyntaxCache {
                 revision: Revision::INITIAL,
                 language: Language::Org,
                 contexts: BTreeMap::from([(0, CodeContext::default())]),
+                focus_line: 0,
+                builder_revision: None,
             }),
         }
     }
 }
 
-impl EditorSyntaxCache {
+impl EditorSyntaxService {
     pub(super) fn invalidate_from(
         &self,
         document_id: DocumentId,
@@ -60,10 +68,12 @@ impl EditorSyntaxCache {
         if cache.document_id != Some(document_id) {
             cache.contexts.clear();
             cache.contexts.insert(0, CodeContext::default());
+            cache.focus_line = 0;
         } else {
             let keep_through = first_line / CONTEXT_CHECKPOINT_LINES * CONTEXT_CHECKPOINT_LINES;
             cache.contexts.retain(|line, _| *line <= keep_through);
             cache.contexts.entry(0).or_default();
+            cache.focus_line = keep_through;
         }
         cache.document_id = Some(document_id);
         cache.revision = revision;
@@ -74,6 +84,7 @@ impl EditorSyntaxCache {
         cache.document_id = None;
         cache.contexts.clear();
         cache.contexts.insert(0, CodeContext::default());
+        cache.focus_line = 0;
     }
 
     fn context_at(
@@ -82,23 +93,30 @@ impl EditorSyntaxCache {
         language: Language,
         first_line: u64,
     ) -> CodeContext {
-        let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
-        if cache.document_id != Some(snapshot.document_id())
-            || cache.revision != snapshot.revision()
-            || cache.language != language
-        {
-            cache.document_id = Some(snapshot.document_id());
-            cache.revision = snapshot.revision();
-            cache.language = language;
-            cache.contexts.clear();
-            cache.contexts.insert(0, CodeContext::default());
-        }
-        let (&start, checkpoint_context) = cache
-            .contexts
-            .range(..=first_line)
-            .next_back()
-            .expect("line zero syntax checkpoint exists");
-        let mut context = checkpoint_context.clone();
+        let document_id = snapshot.document_id();
+        let revision = snapshot.revision();
+        let (start, mut context) = {
+            let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+            if cache.document_id != Some(document_id)
+                || cache.revision != revision
+                || cache.language != language
+            {
+                cache.document_id = Some(document_id);
+                cache.revision = revision;
+                cache.language = language;
+                cache.contexts.clear();
+                cache.contexts.insert(0, CodeContext::default());
+                cache.focus_line = 0;
+            }
+            let (&start, checkpoint_context) = cache
+                .contexts
+                .range(..=first_line)
+                .next_back()
+                .expect("line zero syntax checkpoint exists");
+            (start, checkpoint_context.clone())
+        };
+        let _scan = tracing::info_span!("editor_semantic_scan").entered();
+        let mut completed_checkpoints = Vec::new();
         if start < first_line
             && let (Ok(start_range), Ok(end_range)) = (
                 snapshot.line_content_range(LineIndex(start)),
@@ -112,7 +130,7 @@ impl EditorSyntaxCache {
             let mut line = start;
             while let Some(source) = cursor.next_line() {
                 if line > start && line.is_multiple_of(CONTEXT_CHECKPOINT_LINES) {
-                    cache.contexts.insert(line, context.clone());
+                    completed_checkpoints.push((line, context.clone()));
                 }
                 update_code_context(
                     language,
@@ -123,9 +141,94 @@ impl EditorSyntaxCache {
             }
         }
         if first_line.is_multiple_of(CONTEXT_CHECKPOINT_LINES) {
-            cache.contexts.insert(first_line, context.clone());
+            completed_checkpoints.push((first_line, context.clone()));
+        }
+        if !completed_checkpoints.is_empty() {
+            let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+            if cache.document_id == Some(document_id)
+                && cache.revision == revision
+                && cache.language == language
+            {
+                cache.contexts.extend(completed_checkpoints);
+            }
         }
         context
+    }
+
+    fn ready_context_at(
+        &self,
+        snapshot: &DocumentSnapshot,
+        language: Language,
+        first_line: u64,
+    ) -> Option<CodeContext> {
+        let ready = {
+            let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+            if cache.document_id != Some(snapshot.document_id())
+                || cache.revision != snapshot.revision()
+                || cache.language != language
+            {
+                cache.document_id = Some(snapshot.document_id());
+                cache.revision = snapshot.revision();
+                cache.language = language;
+                cache.contexts.clear();
+                cache.contexts.insert(0, CodeContext::default());
+                cache.focus_line = 0;
+            }
+            let seed = cache
+                .contexts
+                .range(..=first_line)
+                .next_back()
+                .map(|(&line, _)| line)
+                .unwrap_or(0);
+            first_line.saturating_sub(seed) <= CONTEXT_CHECKPOINT_LINES
+        };
+        ready.then(|| self.context_at(snapshot, language, first_line))
+    }
+
+    fn request_build(&self, snapshot: &DocumentSnapshot, language: Language, line: u64) -> bool {
+        let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+        if cache.document_id != Some(snapshot.document_id())
+            || cache.revision != snapshot.revision()
+            || cache.language != language
+        {
+            return false;
+        }
+        cache.focus_line = cache.focus_line.max(line);
+        if cache.builder_revision == Some(snapshot.revision()) {
+            false
+        } else {
+            cache.builder_revision = Some(snapshot.revision());
+            true
+        }
+    }
+
+    /// Advances only shared context checkpoints. This is intended to run on a
+    /// background executor after `query_lines` returns Pending.
+    pub(super) fn build_focused(&self, path: &Path, snapshot: &DocumentSnapshot) {
+        let language = language(path);
+        loop {
+            let next = {
+                let cache = self.inner.lock().expect("editor syntax cache poisoned");
+                if cache.document_id != Some(snapshot.document_id())
+                    || cache.revision != snapshot.revision()
+                    || cache.language != language
+                {
+                    None
+                } else {
+                    let frontier = cache.contexts.keys().next_back().copied().unwrap_or(0);
+                    (cache.focus_line > frontier.saturating_add(CONTEXT_CHECKPOINT_LINES))
+                        .then_some(frontier.saturating_add(CONTEXT_CHECKPOINT_LINES))
+                }
+            };
+            let Some(next) = next else {
+                break;
+            };
+            self.context_at(snapshot, language, next);
+        }
+        let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+        if cache.builder_revision == Some(snapshot.revision()) {
+            cache.builder_revision = None;
+        }
     }
 }
 
@@ -235,6 +338,19 @@ pub(super) struct EditorLineStyle {
     pub(super) metrics: BlockMetrics,
 }
 
+impl EditorLineStyle {
+    pub(super) fn pending_fallback(source_range: ByteRange) -> Self {
+        Self {
+            source_range,
+            id: EditorStyleId::Plain,
+            code_language: None,
+            block: None,
+            todo: None,
+            metrics: BlockMetrics::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 #[derive(Clone, Debug)]
 pub(super) struct EditorStyleSnapshot {
@@ -248,13 +364,19 @@ pub(super) struct SparseEditorStyleSnapshot {
     lines: BTreeMap<u64, EditorLineStyle>,
 }
 
+pub(super) struct EditorStyleQuery {
+    pub(super) snapshot: SparseEditorStyleSnapshot,
+    pub(super) pending: bool,
+    pub(super) start_builder: bool,
+}
+
 #[cfg(test)]
 impl EditorStyleSnapshot {
     pub(super) fn for_lines(
         path: &Path,
         snapshot: &DocumentSnapshot,
         lines: Range<u64>,
-        cache: &EditorSyntaxCache,
+        cache: &EditorSyntaxService,
     ) -> Self {
         let language = language(path);
         let mut code = cache.context_at(snapshot, language, lines.start);
@@ -292,52 +414,128 @@ impl EditorStyleSnapshot {
 }
 
 impl SparseEditorStyleSnapshot {
+    pub(super) fn query_lines(
+        path: &Path,
+        snapshot: &DocumentSnapshot,
+        lines: &[u64],
+        service: &EditorSyntaxService,
+    ) -> EditorStyleQuery {
+        let language = language(path);
+        let mut requested = lines.to_vec();
+        requested.sort_unstable();
+        requested.dedup();
+        let mut styles = BTreeMap::new();
+        let mut pending = false;
+        let mut furthest_pending = 0;
+        let mut index = 0;
+        while index < requested.len() {
+            let range_start = requested[index];
+            let mut range_end = range_start.saturating_add(1);
+            while index + 1 < requested.len() && requested[index + 1] == range_end {
+                index += 1;
+                range_end = range_end.saturating_add(1);
+            }
+            if let Some(code) = service.ready_context_at(snapshot, language, range_start) {
+                append_styles(
+                    snapshot,
+                    language,
+                    range_start..range_end,
+                    code,
+                    &mut styles,
+                );
+            } else {
+                pending = true;
+                furthest_pending = furthest_pending.max(range_start);
+            }
+            index += 1;
+        }
+        let start_builder = pending && service.request_build(snapshot, language, furthest_pending);
+        EditorStyleQuery {
+            snapshot: Self {
+                revision: snapshot.revision(),
+                lines: styles,
+            },
+            pending,
+            start_builder,
+        }
+    }
+
+    #[cfg(test)]
     pub(super) fn for_lines(
         path: &Path,
         snapshot: &DocumentSnapshot,
         lines: &[u64],
-        cache: &EditorSyntaxCache,
+        cache: &EditorSyntaxService,
     ) -> Self {
         let language = language(path);
-        let lines = lines
-            .iter()
-            .filter_map(|&line| {
-                let source_range = snapshot.line_content_range(LineIndex(line)).ok()?;
-                let text = classification_text(snapshot, source_range);
-                let mut code = cache.context_at(snapshot, language, line);
-                let todo = heading_todo_span(language, &text, &code);
-                let block_before = code.block_kind.clone();
-                let block_body_line_before = code.block_body_line;
-                let id = classify_line(language, &text, &mut code);
-                Some((
-                    line,
-                    EditorLineStyle {
-                        source_range,
-                        id,
-                        code_language: (id == EditorStyleId::Code)
-                            .then(|| code.code_language.clone())
-                            .flatten(),
-                        block: block_decoration(
-                            id,
-                            block_before,
-                            code.block_kind.clone(),
-                            block_body_line_before,
-                            code.block_body_line,
-                        ),
-                        todo,
-                        metrics: metrics_for(id),
-                    },
-                ))
-            })
-            .collect();
+        let mut requested = lines.to_vec();
+        requested.sort_unstable();
+        requested.dedup();
+        let mut styles = BTreeMap::new();
+        let mut index = 0;
+        while index < requested.len() {
+            let range_start = requested[index];
+            let mut range_end = range_start.saturating_add(1);
+            while index + 1 < requested.len() && requested[index + 1] == range_end {
+                index += 1;
+                range_end = range_end.saturating_add(1);
+            }
+            let code = cache.context_at(snapshot, language, range_start);
+            append_styles(
+                snapshot,
+                language,
+                range_start..range_end,
+                code,
+                &mut styles,
+            );
+            index += 1;
+        }
         Self {
             revision: snapshot.revision(),
-            lines,
+            lines: styles,
         }
     }
 
     pub(super) fn line(&self, line: u64) -> Option<&EditorLineStyle> {
         self.lines.get(&line)
+    }
+}
+
+fn append_styles(
+    snapshot: &DocumentSnapshot,
+    language: Language,
+    lines: Range<u64>,
+    mut code: CodeContext,
+    styles: &mut BTreeMap<u64, EditorLineStyle>,
+) {
+    for line in lines {
+        let Some(source_range) = snapshot.line_content_range(LineIndex(line)).ok() else {
+            continue;
+        };
+        let text = classification_text(snapshot, source_range);
+        let todo = heading_todo_span(language, &text, &code);
+        let block_before = code.block_kind.clone();
+        let block_body_line_before = code.block_body_line;
+        let id = classify_line(language, &text, &mut code);
+        styles.insert(
+            line,
+            EditorLineStyle {
+                source_range,
+                id,
+                code_language: (id == EditorStyleId::Code)
+                    .then(|| code.code_language.clone())
+                    .flatten(),
+                block: block_decoration(
+                    id,
+                    block_before,
+                    code.block_kind.clone(),
+                    block_body_line_before,
+                    code.block_body_line,
+                ),
+                todo,
+                metrics: metrics_for(id),
+            },
+        );
     }
 }
 
@@ -351,13 +549,13 @@ enum TodoFace {
 }
 
 impl TodoFace {
-    fn color(self, theme: &Theme) -> u32 {
+    fn token(self) -> EditorColorToken {
         match self {
-            Self::Open => theme.todo,
-            Self::Active => theme.todo_active,
-            Self::Project => theme.todo_project,
-            Self::Waiting => theme.waiting,
-            Self::Done => theme.done,
+            Self::Open => EditorColorToken::Todo,
+            Self::Active => EditorColorToken::TodoActive,
+            Self::Project => EditorColorToken::TodoProject,
+            Self::Waiting => EditorColorToken::Waiting,
+            Self::Done => EditorColorToken::Done,
         }
     }
 }
@@ -708,11 +906,82 @@ fn is_org_property_line(text: &str) -> bool {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct SpanStyle {
-    color: Option<u32>,
+    color: Option<EditorColorToken>,
     weight: Option<FontWeight>,
     font_style: Option<FontStyle>,
     underline: bool,
     strikethrough: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum EditorColorToken {
+    Foreground,
+    InlineCode,
+    Verbatim,
+    Link,
+    Date,
+    Todo,
+    TodoActive,
+    TodoProject,
+    Waiting,
+    Done,
+    Keyword,
+    String,
+    Comment,
+    Type,
+    Function,
+    Constant,
+    Number,
+    Variable,
+    Operator,
+    Attribute,
+    Meta,
+}
+
+impl EditorColorToken {
+    pub(super) fn resolve(self, theme: &Theme) -> u32 {
+        match self {
+            Self::Foreground => theme.foreground,
+            Self::InlineCode => theme.inline_code,
+            Self::Verbatim => theme.verbatim,
+            Self::Link => theme.link,
+            Self::Date => theme.date,
+            Self::Todo => theme.todo,
+            Self::TodoActive => theme.todo_active,
+            Self::TodoProject => theme.todo_project,
+            Self::Waiting => theme.waiting,
+            Self::Done => theme.done,
+            Self::Keyword => theme.keyword,
+            Self::String => theme.string,
+            Self::Comment => theme.comment,
+            Self::Type => theme.type_name,
+            Self::Function => theme.function,
+            Self::Constant => theme.constant,
+            Self::Number => theme.number,
+            Self::Variable => theme.variable,
+            Self::Operator => theme.operator,
+            Self::Attribute => theme.attribute,
+            Self::Meta => theme.meta,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) enum EditorSemanticWeight {
+    #[default]
+    Normal,
+    Semibold,
+    Bold,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct EditorSemanticSpan {
+    pub(super) bytes: Range<usize>,
+    pub(super) color: Option<EditorColorToken>,
+    pub(super) weight: EditorSemanticWeight,
+    pub(super) italic: bool,
+    pub(super) underline: bool,
+    pub(super) strikethrough: bool,
 }
 
 /// Produces semantic paint runs without hiding or replacing any source byte.
@@ -745,88 +1014,11 @@ pub(super) fn runs(
         EditorStyleId::List | EditorStyleId::Plain => {}
     }
 
-    let mut spans = Vec::<(Range<usize>, SpanStyle)>::new();
-    let verbatim = matches!(
-        line_style.id,
-        EditorStyleId::Code | EditorStyleId::CodeBoundary
-    );
-    let document_language = language(path);
-    let mut opaque_inline_ranges = Vec::new();
-    if !verbatim {
-        opaque_inline_ranges = collect_inline_semantics(document_language, text, theme, &mut spans);
-        if let Some(todo) = &line_style.todo {
-            spans.push((
-                todo.range.clone(),
-                SpanStyle {
-                    color: Some(todo.face.color(theme)),
-                    weight: Some(FontWeight::BOLD),
-                    ..SpanStyle::default()
-                },
-            ));
-        }
-        match line_style.id {
-            EditorStyleId::Property => collect_org_property_key(text, theme.attribute, &mut spans),
-            EditorStyleId::Meta => collect_org_meta_key(text, theme.meta, &mut spans),
-            EditorStyleId::List => collect_list_marker(text, theme.inline_code, &mut spans),
-            _ => {}
-        }
-    }
-    if line_style.id == EditorStyleId::Code
-        && let Some(language) = line_style.code_language.as_deref()
-        && let Ok(code_spans) = crate::preview::highlight_code(language, text)
-    {
-        spans.extend(
-            code_spans
-                .into_iter()
-                .filter(|span| {
-                    span.start < span.end
-                        && span.end <= text.len()
-                        && text.is_char_boundary(span.start)
-                        && text.is_char_boundary(span.end)
-                })
-                .map(|span| {
-                    (
-                        span.start..span.end,
-                        code_span_style(span.kind, &text[span.start..span.end], theme),
-                    )
-                }),
-        );
-        if matches!(
-            language.trim().to_ascii_lowercase().as_str(),
-            "cpp" | "c++" | "cc" | "cxx" | "hpp"
-        ) {
-            collect_cpp_namespace_qualifiers(text, theme.variable, theme.foreground, &mut spans);
-        }
-    }
-    match document_language {
-        Language::Org if !verbatim => {
-            for keyword in ["SCHEDULED:", "DEADLINE:"] {
-                collect_token_outside(text, keyword, theme.meta, &opaque_inline_ranges, &mut spans);
-            }
-            collect_token_outside(
-                text,
-                "CLOSED:",
-                theme.done,
-                &opaque_inline_ranges,
-                &mut spans,
-            );
-            for priority in ["[#A]", "[#B]", "[#C]"] {
-                collect_token_outside(
-                    text,
-                    priority,
-                    theme.keyword,
-                    &opaque_inline_ranges,
-                    &mut spans,
-                );
-            }
-            collect_org_tags_outside(text, theme.attribute, &opaque_inline_ranges, &mut spans);
-        }
-        Language::Markdown | Language::Org => {}
-    }
+    let spans = semantic_spans(path, text, line_style);
 
     let mut boundaries = vec![0, text.len()];
-    for (range, _) in &spans {
-        boundaries.extend([range.start, range.end]);
+    for span in &spans {
+        boundaries.extend([span.bytes.start, span.bytes.end]);
     }
     if let Some(marked) = &marked {
         boundaries.extend([marked.start, marked.end]);
@@ -844,27 +1036,29 @@ pub(super) fn runs(
                 len: range.len(),
                 ..base.clone()
             };
-            for (_, style) in spans
+            for span in spans
                 .iter()
-                .filter(|(span, _)| span.start <= range.start && range.start < span.end)
+                .filter(|span| span.bytes.start <= range.start && range.start < span.bytes.end)
             {
-                if let Some(color) = style.color {
-                    run.color = rgb(color).into();
+                if let Some(color) = span.color {
+                    run.color = rgb(color.resolve(theme)).into();
                 }
-                if let Some(weight) = style.weight {
-                    run.font.weight = weight;
+                run.font.weight = match span.weight {
+                    EditorSemanticWeight::Normal => run.font.weight,
+                    EditorSemanticWeight::Semibold => FontWeight::SEMIBOLD,
+                    EditorSemanticWeight::Bold => FontWeight::BOLD,
+                };
+                if span.italic {
+                    run.font.style = FontStyle::Italic;
                 }
-                if let Some(font_style) = style.font_style {
-                    run.font.style = font_style;
-                }
-                if style.underline {
+                if span.underline {
                     run.underline = Some(UnderlineStyle {
                         color: Some(run.color),
                         thickness: px(1.0),
                         wavy: false,
                     });
                 }
-                if style.strikethrough {
+                if span.strikethrough {
                     run.strikethrough = Some(gpui::StrikethroughStyle {
                         color: Some(run.color),
                         thickness: px(1.0),
@@ -886,26 +1080,151 @@ pub(super) fn runs(
         .collect()
 }
 
-fn code_span_style(
-    kind: crate::preview::CodeHighlightKind,
-    source: &str,
-    theme: &Theme,
-) -> SpanStyle {
-    use crate::preview::CodeHighlightKind;
+/// Returns theme-independent inline and code semantics for both the editor and
+/// its minimap. Ranges always refer to UTF-8 byte offsets in `text`.
+pub(super) fn semantic_spans(
+    path: &Path,
+    text: &str,
+    line_style: &EditorLineStyle,
+) -> Vec<EditorSemanticSpan> {
+    let mut spans = Vec::<(Range<usize>, SpanStyle)>::new();
+    let verbatim = matches!(
+        line_style.id,
+        EditorStyleId::Code | EditorStyleId::CodeBoundary
+    );
+    let document_language = language(path);
+    let mut opaque_inline_ranges = Vec::new();
+    if !verbatim {
+        opaque_inline_ranges = collect_inline_semantics(document_language, text, &mut spans);
+        if let Some(todo) = &line_style.todo {
+            spans.push((
+                todo.range.clone(),
+                SpanStyle {
+                    color: Some(todo.face.token()),
+                    weight: Some(FontWeight::BOLD),
+                    ..SpanStyle::default()
+                },
+            ));
+        }
+        match line_style.id {
+            EditorStyleId::Property => {
+                collect_org_property_key(text, EditorColorToken::Attribute, &mut spans)
+            }
+            EditorStyleId::Meta => collect_org_meta_key(text, EditorColorToken::Meta, &mut spans),
+            EditorStyleId::List => {
+                collect_list_marker(text, EditorColorToken::InlineCode, &mut spans)
+            }
+            _ => {}
+        }
+    }
+    if line_style.id == EditorStyleId::Code
+        && let Some(language) = line_style.code_language.as_deref()
+        && let Ok(code_spans) = crate::syntax_highlighting::highlight_code(language, text)
+    {
+        spans.extend(
+            code_spans
+                .into_iter()
+                .filter(|span| {
+                    span.start < span.end
+                        && span.end <= text.len()
+                        && text.is_char_boundary(span.start)
+                        && text.is_char_boundary(span.end)
+                })
+                .map(|span| {
+                    (
+                        span.start..span.end,
+                        code_span_style(span.kind, &text[span.start..span.end]),
+                    )
+                }),
+        );
+        if matches!(
+            language.trim().to_ascii_lowercase().as_str(),
+            "cpp" | "c++" | "cc" | "cxx" | "hpp"
+        ) {
+            collect_cpp_namespace_qualifiers(
+                text,
+                EditorColorToken::Variable,
+                EditorColorToken::Foreground,
+                &mut spans,
+            );
+        }
+    }
+    match document_language {
+        Language::Org if !verbatim => {
+            for keyword in ["SCHEDULED:", "DEADLINE:"] {
+                collect_token_outside(
+                    text,
+                    keyword,
+                    EditorColorToken::Meta,
+                    &opaque_inline_ranges,
+                    &mut spans,
+                );
+            }
+            collect_token_outside(
+                text,
+                "CLOSED:",
+                EditorColorToken::Done,
+                &opaque_inline_ranges,
+                &mut spans,
+            );
+            for priority in ["[#A]", "[#B]", "[#C]"] {
+                collect_token_outside(
+                    text,
+                    priority,
+                    EditorColorToken::Keyword,
+                    &opaque_inline_ranges,
+                    &mut spans,
+                );
+            }
+            collect_org_tags_outside(
+                text,
+                EditorColorToken::Attribute,
+                &opaque_inline_ranges,
+                &mut spans,
+            );
+        }
+        Language::Markdown | Language::Org => {}
+    }
+
+    spans
+        .into_iter()
+        .filter(|(range, _)| {
+            range.start < range.end
+                && range.end <= text.len()
+                && text.is_char_boundary(range.start)
+                && text.is_char_boundary(range.end)
+        })
+        .map(|(bytes, style)| EditorSemanticSpan {
+            bytes,
+            color: style.color,
+            weight: match style.weight {
+                Some(FontWeight::BOLD) => EditorSemanticWeight::Bold,
+                Some(FontWeight::SEMIBOLD) => EditorSemanticWeight::Semibold,
+                _ => EditorSemanticWeight::Normal,
+            },
+            italic: style.font_style == Some(FontStyle::Italic),
+            underline: style.underline,
+            strikethrough: style.strikethrough,
+        })
+        .collect()
+}
+
+fn code_span_style(kind: crate::syntax_highlighting::CodeHighlightKind, source: &str) -> SpanStyle {
+    use crate::syntax_highlighting::CodeHighlightKind;
 
     let color = match kind {
-        CodeHighlightKind::Keyword if source.starts_with('#') => theme.comment,
-        CodeHighlightKind::Attribute => theme.attribute,
-        CodeHighlightKind::Boolean | CodeHighlightKind::Constant => theme.constant,
-        CodeHighlightKind::Comment => theme.comment,
-        CodeHighlightKind::Function => theme.function,
-        CodeHighlightKind::Keyword => theme.keyword,
-        CodeHighlightKind::Number => theme.number,
-        CodeHighlightKind::Operator | CodeHighlightKind::Punctuation => theme.operator,
-        CodeHighlightKind::Property => theme.foreground,
-        CodeHighlightKind::Variable => theme.variable,
-        CodeHighlightKind::String => theme.string,
-        CodeHighlightKind::Type => theme.type_name,
+        CodeHighlightKind::Keyword if source.starts_with('#') => EditorColorToken::Comment,
+        CodeHighlightKind::Attribute => EditorColorToken::Attribute,
+        CodeHighlightKind::Boolean | CodeHighlightKind::Constant => EditorColorToken::Constant,
+        CodeHighlightKind::Comment => EditorColorToken::Comment,
+        CodeHighlightKind::Function => EditorColorToken::Function,
+        CodeHighlightKind::Keyword => EditorColorToken::Keyword,
+        CodeHighlightKind::Number => EditorColorToken::Number,
+        CodeHighlightKind::Operator | CodeHighlightKind::Punctuation => EditorColorToken::Operator,
+        CodeHighlightKind::Property => EditorColorToken::Foreground,
+        CodeHighlightKind::Variable => EditorColorToken::Variable,
+        CodeHighlightKind::String => EditorColorToken::String,
+        CodeHighlightKind::Type => EditorColorToken::Type,
     };
     SpanStyle {
         color: Some(color),
@@ -917,20 +1236,37 @@ fn code_span_style(
 fn collect_inline_semantics(
     language: Language,
     text: &str,
-    theme: &Theme,
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) -> Vec<Range<usize>> {
     let inline = match language {
         Language::Org => crate::org_syntax::inline::parse(text),
         Language::Markdown => crate::preview::markdown::parse_markdown_inline(text),
     };
-    let opaque_ranges = collect_inline_spans(language, text, &inline, theme, spans);
+    let opaque_ranges = collect_inline_spans(language, text, &inline, spans);
 
-    collect_token_outside(text, "[ ]", theme.todo, &opaque_ranges, spans);
-    collect_token_outside(text, "[-]", theme.todo_active, &opaque_ranges, spans);
-    collect_token_outside(text, "[?]", theme.waiting, &opaque_ranges, spans);
+    collect_token_outside(text, "[ ]", EditorColorToken::Todo, &opaque_ranges, spans);
+    collect_token_outside(
+        text,
+        "[-]",
+        EditorColorToken::TodoActive,
+        &opaque_ranges,
+        spans,
+    );
+    collect_token_outside(
+        text,
+        "[?]",
+        EditorColorToken::Waiting,
+        &opaque_ranges,
+        spans,
+    );
     for checkbox in ["[X]", "[x]"] {
-        collect_token_outside(text, checkbox, theme.done, &opaque_ranges, spans);
+        collect_token_outside(
+            text,
+            checkbox,
+            EditorColorToken::Done,
+            &opaque_ranges,
+            spans,
+        );
     }
     opaque_ranges
 }
@@ -939,7 +1275,6 @@ fn collect_inline_spans(
     language: Language,
     text: &str,
     inline: &InlineText,
-    theme: &Theme,
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) -> Vec<Range<usize>> {
     let mut opaque_ranges = Vec::new();
@@ -971,28 +1306,28 @@ fn collect_inline_spans(
                 ..SpanStyle::default()
             },
             InlineKind::Code => SpanStyle {
-                color: Some(theme.inline_code),
+                color: Some(EditorColorToken::InlineCode),
                 ..SpanStyle::default()
             },
             InlineKind::Verbatim => SpanStyle {
-                color: Some(theme.verbatim),
+                color: Some(EditorColorToken::Verbatim),
                 ..SpanStyle::default()
             },
             InlineKind::Link | InlineKind::FootnoteReference => SpanStyle {
-                color: Some(theme.link),
+                color: Some(EditorColorToken::Link),
                 underline: language == Language::Markdown,
                 ..SpanStyle::default()
             },
             InlineKind::Timestamp => SpanStyle {
-                color: Some(theme.date),
+                color: Some(EditorColorToken::Date),
                 ..SpanStyle::default()
             },
             InlineKind::Target | InlineKind::RadioTarget => SpanStyle {
-                color: Some(theme.attribute),
+                color: Some(EditorColorToken::Attribute),
                 ..SpanStyle::default()
             },
             InlineKind::Entity | InlineKind::Latex => SpanStyle {
-                color: Some(theme.constant),
+                color: Some(EditorColorToken::Constant),
                 ..SpanStyle::default()
             },
         };
@@ -1011,8 +1346,8 @@ fn collect_inline_spans(
 
 fn collect_cpp_namespace_qualifiers(
     text: &str,
-    qualifier_color: u32,
-    member_color: u32,
+    qualifier_color: EditorColorToken,
+    member_color: EditorColorToken,
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) {
     let mut cursor = 0;
@@ -1085,7 +1420,11 @@ fn push_bold_span(range: Range<usize>, spans: &mut Vec<(Range<usize>, SpanStyle)
     }
 }
 
-fn collect_org_property_key(text: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
+fn collect_org_property_key(
+    text: &str,
+    color: EditorColorToken,
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) {
     let indent = text.len() - text.trim_start().len();
     let trimmed = &text[indent..];
     let Some(rest) = trimmed.strip_prefix(':') else {
@@ -1104,7 +1443,11 @@ fn collect_org_property_key(text: &str, color: u32, spans: &mut Vec<(Range<usize
     ));
 }
 
-fn collect_org_meta_key(text: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
+fn collect_org_meta_key(
+    text: &str,
+    color: EditorColorToken,
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) {
     let indent = text.len() - text.trim_start().len();
     let trimmed = &text[indent..];
     let key_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
@@ -1120,7 +1463,11 @@ fn collect_org_meta_key(text: &str, color: u32, spans: &mut Vec<(Range<usize>, S
     }
 }
 
-fn collect_list_marker(text: &str, color: u32, spans: &mut Vec<(Range<usize>, SpanStyle)>) {
+fn collect_list_marker(
+    text: &str,
+    color: EditorColorToken,
+    spans: &mut Vec<(Range<usize>, SpanStyle)>,
+) {
     let indent = text.len() - text.trim_start().len();
     let trimmed = &text[indent..];
     let marker_len = if trimmed.starts_with("- ") || trimmed.starts_with("+ ") {
@@ -1146,7 +1493,7 @@ fn collect_list_marker(text: &str, color: u32, spans: &mut Vec<(Range<usize>, Sp
 fn collect_token_outside(
     text: &str,
     token: &str,
-    color: u32,
+    color: EditorColorToken,
     opaque_ranges: &[Range<usize>],
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) {
@@ -1169,7 +1516,7 @@ fn collect_token_outside(
 
 fn collect_org_tags_outside(
     text: &str,
-    color: u32,
+    color: EditorColorToken,
     opaque_ranges: &[Range<usize>],
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) {
@@ -1465,7 +1812,7 @@ mod tests {
             Path::new("a.org"),
             &snapshot,
             2..9,
-            &EditorSyntaxCache::default(),
+            &EditorSyntaxService::default(),
         );
         let theme = current_theme();
         for (index, keyword, expected) in [
@@ -1542,7 +1889,7 @@ mod tests {
             Path::new("a.org"),
             &snapshot,
             1..3,
-            &EditorSyntaxCache::default(),
+            &EditorSyntaxService::default(),
         );
         assert_eq!(styles.revision, snapshot.revision());
         assert_eq!(styles.lines.len(), 2);
@@ -1556,7 +1903,7 @@ mod tests {
             b"#+begin_src rust\nlet value = 1;\n#+end_src\nafter\n".to_vec(),
         )
         .unwrap();
-        let cache = EditorSyntaxCache::default();
+        let cache = EditorSyntaxService::default();
         let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..4, &cache);
         assert_eq!(styles.lines[0].id, EditorStyleId::CodeBoundary);
         assert_eq!(
@@ -1594,7 +1941,7 @@ mod tests {
             b"#+begin_src plantuml\n@startuml\nAlice -> Bob\n@enduml\n#+end_src\n".to_vec(),
         )
         .unwrap();
-        let cache = EditorSyntaxCache::default();
+        let cache = EditorSyntaxService::default();
         let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..5, &cache);
         assert_eq!(styles.lines[1].block.as_ref().unwrap().body_line, Some(1));
         assert_eq!(styles.lines[2].block.as_ref().unwrap().body_line, Some(2));
@@ -1622,7 +1969,7 @@ mod tests {
             Path::new("a.org"),
             &snapshot,
             0..16,
-            &EditorSyntaxCache::default(),
+            &EditorSyntaxService::default(),
         );
         let expected = [
             EditorBlockKind::Source,
@@ -1651,7 +1998,7 @@ mod tests {
             b"#+begin_example\n#+name: hello-rust\n#+begin_src rust :results output\nfn main() {\n    println!(\"hello\");\n}\n#+end_src\n#+end_example\nafter\n".to_vec(),
         )
         .unwrap();
-        let cache = EditorSyntaxCache::default();
+        let cache = EditorSyntaxService::default();
         let styles = EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 0..9, &cache);
 
         assert_eq!(styles.lines[0].id, EditorStyleId::CodeBoundary);
@@ -1704,7 +2051,7 @@ mod tests {
             Path::new("a.org"),
             &snapshot,
             0..3,
-            &EditorSyntaxCache::default(),
+            &EditorSyntaxService::default(),
         );
         let text = snapshot.copy_range(styles.lines[1].source_range);
         let theme = current_theme();
@@ -1725,6 +2072,109 @@ mod tests {
     }
 
     #[test]
+    fn semantic_spans_are_shared_tokens_with_valid_complex_utf8_ranges() {
+        let text = "前缀 [[https://例子.invalid][链接😀]] cafe\u{301} שלום *粗体*";
+        let style = EditorLineStyle {
+            source_range: ByteRange::new(0, text.len() as u64),
+            id: EditorStyleId::Plain,
+            code_language: None,
+            block: None,
+            todo: None,
+            metrics: metrics_for(EditorStyleId::Plain),
+        };
+        let spans = semantic_spans(Path::new("unicode.org"), text, &style);
+
+        assert!(!spans.is_empty());
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.color == Some(EditorColorToken::Link))
+        );
+        assert!(spans.iter().all(|span| {
+            span.bytes.start < span.bytes.end
+                && span.bytes.end <= text.len()
+                && text.is_char_boundary(span.bytes.start)
+                && text.is_char_boundary(span.bytes.end)
+        }));
+    }
+
+    #[test]
+    fn supported_code_language_produces_neutral_highlight_tokens() {
+        let text = "fn main() { let message = \"你好😀\"; } // cafe\u{301}";
+        let style = EditorLineStyle {
+            source_range: ByteRange::new(0, text.len() as u64),
+            id: EditorStyleId::Code,
+            code_language: Some(Arc::from("rust")),
+            block: None,
+            todo: None,
+            metrics: metrics_for(EditorStyleId::Code),
+        };
+        let spans = semantic_spans(Path::new("code.org"), text, &style);
+
+        for token in [
+            EditorColorToken::Keyword,
+            EditorColorToken::Function,
+            EditorColorToken::String,
+            EditorColorToken::Comment,
+        ] {
+            assert!(
+                spans.iter().any(|span| span.color == Some(token)),
+                "missing {token:?}"
+            );
+        }
+        assert!(spans.iter().all(|span| {
+            text.is_char_boundary(span.bytes.start) && text.is_char_boundary(span.bytes.end)
+        }));
+    }
+
+    #[test]
+    fn unsupported_code_languages_keep_only_the_code_base_style() {
+        for language in ["typst", "plantuml"] {
+            let text = "#show: 中文😀\nAlice -> Bob";
+            let style = EditorLineStyle {
+                source_range: ByteRange::new(0, text.len() as u64),
+                id: EditorStyleId::Code,
+                code_language: Some(Arc::from(language)),
+                block: None,
+                todo: None,
+                metrics: metrics_for(EditorStyleId::Code),
+            };
+
+            assert!(semantic_spans(Path::new("code.org"), text, &style).is_empty());
+        }
+    }
+
+    #[test]
+    fn long_code_line_highlights_without_invalid_or_truncated_semantic_ranges() {
+        let text = format!("let payload = \"{}😀\"; // 尾部", "x".repeat(16_384));
+        let style = EditorLineStyle {
+            source_range: ByteRange::new(0, text.len() as u64),
+            id: EditorStyleId::Code,
+            code_language: Some(Arc::from("rust")),
+            block: None,
+            todo: None,
+            metrics: metrics_for(EditorStyleId::Code),
+        };
+        let spans = semantic_spans(Path::new("long.org"), &text, &style);
+
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.color == Some(EditorColorToken::String))
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|span| span.color == Some(EditorColorToken::Comment))
+        );
+        assert!(spans.iter().all(|span| {
+            span.bytes.end <= text.len()
+                && text.is_char_boundary(span.bytes.start)
+                && text.is_char_boundary(span.bytes.end)
+        }));
+    }
+
+    #[test]
     fn cpp_source_uses_the_official_feature_illustration_faces() {
         let snapshot = DocumentSnapshot::from_utf8(
             b"#+begin_src cpp\n#include <iostream>\nint main() { std::cout << \"You\"; return 0; }\n#+end_src\n".to_vec(),
@@ -1734,7 +2184,7 @@ mod tests {
             Path::new("a.org"),
             &snapshot,
             0..4,
-            &EditorSyntaxCache::default(),
+            &EditorSyntaxService::default(),
         );
         let theme = current_theme();
 
@@ -1800,7 +2250,7 @@ mod tests {
         source.push_str(&"let value = 1;\n".repeat(700));
         source.push_str("#+end_src\nafter\n");
         let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
-        let cache = EditorSyntaxCache::default();
+        let cache = EditorSyntaxService::default();
 
         let middle =
             EditorStyleSnapshot::for_lines(Path::new("a.org"), &snapshot, 400..402, &cache);
@@ -1830,5 +2280,60 @@ mod tests {
                 .len()
                 >= 3
         );
+    }
+
+    #[test]
+    fn cold_random_queries_return_pending_and_share_one_checkpoint_builder() {
+        let mut source = String::from("#+begin_quote\n");
+        source.push_str(&"body\n".repeat(1_100));
+        source.push_str("#+end_quote\n");
+        let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let service = EditorSyntaxService::default();
+
+        let first = SparseEditorStyleSnapshot::query_lines(
+            Path::new("cold.org"),
+            &snapshot,
+            &[800],
+            &service,
+        );
+        assert!(first.pending);
+        assert!(first.start_builder);
+        assert!(first.snapshot.line(800).is_none());
+        assert_eq!(
+            service
+                .inner
+                .lock()
+                .unwrap()
+                .contexts
+                .keys()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![0],
+            "a cold query must not scan toward the target on its caller"
+        );
+
+        let second = SparseEditorStyleSnapshot::query_lines(
+            Path::new("cold.org"),
+            &snapshot,
+            &[900],
+            &service,
+        );
+        assert!(second.pending);
+        assert!(!second.start_builder);
+
+        service.build_focused(Path::new("cold.org"), &snapshot);
+        let ready = SparseEditorStyleSnapshot::query_lines(
+            Path::new("cold.org"),
+            &snapshot,
+            &[800, 900],
+            &service,
+        );
+        assert!(!ready.pending);
+        assert!(!ready.start_builder);
+        for line in [800, 900] {
+            let style = ready.snapshot.line(line).unwrap();
+            assert_eq!(style.id, EditorStyleId::Code);
+            assert_eq!(style.block.as_ref().unwrap().kind, EditorBlockKind::Quote);
+        }
     }
 }

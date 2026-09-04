@@ -6,12 +6,12 @@ use gpui::{
 mod action;
 mod display_map;
 mod document;
-mod highlighting;
 mod input;
 pub(crate) mod layout;
 mod loading;
 mod view;
 pub(crate) use crate::document::DocumentFormat;
+pub(crate) use crate::syntax_highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 pub(crate) use action::{
     CopyFeedbackState, PendingPreviewAction, PreviewAction, PreviewActionIdentity,
     PreviewActionTarget, PreviewActionVisualState,
@@ -25,10 +25,9 @@ pub use document::{
     DerivedEvent, InitialDocumentLoad, LoadMetrics, LoadedDocument, PreviewSnapshot,
     preload_initial_document,
 };
-pub(crate) use highlighting::{CodeHighlightKind, CodeHighlightSpan, highlight_code};
 pub(crate) use input::*;
 pub(crate) use loading::{
-    derive_preview_incremental, fitted_image_size, load_workspace_document,
+    derive_preview_incremental, fitted_image_size, image_dimensions, load_workspace_document,
     reload_workspace_document, resolve_image_path,
 };
 pub use loading::{
