@@ -317,6 +317,15 @@ impl ReadingPreviewPanel {
         &self.list_state
     }
 
+    pub(crate) fn benchmark_scroll_position(&self) -> (bool, usize, f32, f32) {
+        (
+            minimap::list_viewport_reaches_document_end(&self.list_state),
+            self.list_state.logical_scroll_top().item_ix,
+            -f32::from(self.list_state.scroll_px_offset_for_scrollbar().y),
+            f32::from(self.list_state.max_offset_for_scrollbar().y).max(0.0),
+        )
+    }
+
     pub(crate) fn visible_rows(&self) -> &[usize] {
         &self.visible_rows
     }

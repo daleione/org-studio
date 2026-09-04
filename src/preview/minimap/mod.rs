@@ -51,6 +51,8 @@ use super::{
     parse_document_inline,
 };
 
+mod frame;
+mod media;
 pub(crate) mod projection;
 mod raster;
 mod render;

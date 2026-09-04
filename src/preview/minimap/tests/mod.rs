@@ -43,7 +43,6 @@ fn test_line_index(
         rows_signature,
         density,
         reading_line_height,
-        total: projection.total_display_lines(),
         projection,
     }
 }
@@ -157,12 +156,11 @@ fn image_rows_use_reading_line_units_instead_of_refilling_the_minimap_width() {
 }
 
 #[test]
-fn table_geometry_is_shared_and_stable_across_tiles() {
+fn resolved_table_geometry_projects_stably_into_the_minimap() {
     let projection = test_table_projection();
     let reading_layout = projection.resolved_reading_layout(400.0, 1.0, base_style());
     let table =
-        crate::preview::table::project_table(projection.table(), 400.0, 1.0, 100.0, base_style());
-    assert!(table.shares_reading_layout(&reading_layout));
+        crate::preview::table::project_resolved_table(&reading_layout, 1.0, 100.0, base_style());
     assert_eq!(table.columns.len(), projection.columns().len());
     assert!((table.columns[0].start_x - 4.0).abs() < 0.001);
     assert!((table.columns.last().unwrap().end_x - 96.0).abs() < 0.001);
@@ -244,6 +242,37 @@ fn wrapped_table_rows_fill_their_minimap_height_instead_of_leaving_transparent_l
     assert!(expected > 1, "fixture must exercise a multi-line table row");
     assert_eq!(painted, expected);
     assert!(wrapped.iter().flatten().any(|line| !line.is_empty()));
+}
+
+#[test]
+fn table_layout_cache_keeps_independent_pane_widths() {
+    use crate::document::DocumentBuffer;
+    use crate::preview::loading::derive_preview;
+
+    let source = "| Name | Value |\n|------+-------|\n| alpha | beta |\n";
+    let buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+    let document = derive_preview(std::path::PathBuf::from("table.org"), buffer.snapshot());
+    let model = document.display_map.as_deref().unwrap();
+    let row = document
+        .projection
+        .rows
+        .iter()
+        .position(|visual| matches!(visual.kind, VisualRowKind::Table(_)))
+        .expect("fixture contains a table row");
+    let style = base_style();
+
+    let narrow = model
+        .reading_table_layout(row, 220.0, 1.0, style)
+        .expect("narrow table layout");
+    let wide = model
+        .reading_table_layout(row, 420.0, 1.0, style)
+        .expect("wide table layout");
+    let narrow_again = model
+        .reading_table_layout(row, 220.0, 1.0, style)
+        .expect("cached narrow table layout");
+
+    assert!(Arc::ptr_eq(&narrow, &narrow_again));
+    assert!(!Arc::ptr_eq(&narrow, &wide));
 }
 
 #[test]
@@ -697,7 +726,7 @@ fn raster_tile_key_rejects_fold_and_resize_reuse() {
 }
 
 #[test]
-fn fold_refresh_keeps_the_previous_tile_until_its_replacement_is_ready() {
+fn fold_refresh_never_reuses_a_tile_from_different_geometry() {
     let density = MinimapDensity::Compact;
     let previous = tile_key(&[10, 11, 12], 128, 96, 0, 1, 2.0, density, base_style());
     let folded = tile_key(&[10, 42], 128, 96, 1, 2, 2.0, density, base_style());
@@ -726,8 +755,8 @@ fn fold_refresh_keeps_the_previous_tile_until_its_replacement_is_ready() {
     let (fallback, is_missing) = cache.image_or_fallback(folded);
     assert!(is_missing, "the replacement tile still needs rasterizing");
     assert!(
-        fallback.is_some_and(|fallback| Arc::ptr_eq(&fallback, &image)),
-        "the last image in the same tile slot should remain paintable"
+        fallback.is_none(),
+        "a tile from another fold generation has no compatible placement geometry"
     );
     assert!(cache.image_or_fallback(themed).0.is_none());
     assert!(cache.image_or_fallback(another_slot).0.is_none());
@@ -755,16 +784,19 @@ fn style_invalidation_retains_the_previous_complete_tile_frame() {
         .lock()
         .unwrap()
         .insert_batch(vec![(key, image.clone())], &[key]);
-    state
-        .retained_style_frame
-        .lock()
-        .unwrap()
-        .push(RasterTilePaint {
+    let index = test_line_index(96, 1, MinimapDensity::Compact, &[0, 1], &[0.0, 24.0]);
+    *state.retained_style_frame.lock().unwrap() = Some(super::frame::PreparedMinimapFrame::new(
+        1,
+        index,
+        MinimapViewport::default(),
+        SmallVec::from_vec(vec![RasterTilePaint {
             image,
             y: 0.0,
             width: 96.0,
             height: 10.0,
-        });
+        }]),
+        SmallVec::new(),
+    ));
 
     state.invalidate_style();
 
@@ -775,7 +807,7 @@ fn style_invalidation_retains_the_previous_complete_tile_frame() {
             .retain_style_frame
             .load(std::sync::atomic::Ordering::Acquire)
     );
-    assert_eq!(state.retained_style_frame.lock().unwrap().len(), 1);
+    assert!(state.retained_style_frame.lock().unwrap().is_some());
 }
 
 #[test]

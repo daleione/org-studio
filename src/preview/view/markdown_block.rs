@@ -171,11 +171,14 @@ pub(super) fn render_markdown_block(
                 )
             },
             |projection| {
+                let table_layout = display_map
+                    .reading_table_layout(display_row, context.available_width, context.zoom, style)
+                    .expect("table row has a resolved layout");
                 render_table_row(
                     &text,
                     projection,
                     DocumentFormat::Markdown,
-                    context.available_width,
+                    &table_layout,
                     context.zoom,
                     display_row,
                     context.table_scroll,

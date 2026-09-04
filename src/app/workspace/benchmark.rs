@@ -130,6 +130,13 @@ impl WorkspaceWindow {
                 );
                 crate::perf_tracing::report();
                 this.scroll_benchmark = None;
+                if let Some(panel) = this.reading_panel() {
+                    let (at_end, item, offset_px, max_offset_px) =
+                        panel.read(cx).benchmark_scroll_position();
+                    eprintln!(
+                        "org_preview_scroll_end at_document_end={at_end} item={item} offset_px={offset_px:.3} max_offset_px={max_offset_px:.3}"
+                    );
+                }
                 cx.quit();
             } else {
                 let scroll_pixels = benchmark.scroll_pixels;

@@ -39,7 +39,14 @@ struct SyntaxCacheInner {
     language: Language,
     contexts: BTreeMap<u64, CodeContext>,
     focus_line: u64,
-    builder_revision: Option<Revision>,
+    builder: Option<SyntaxBuilderToken>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SyntaxBuilderToken {
+    document_id: DocumentId,
+    revision: Revision,
+    language: Language,
 }
 
 impl Default for EditorSyntaxService {
@@ -51,7 +58,7 @@ impl Default for EditorSyntaxService {
                 language: Language::Org,
                 contexts: BTreeMap::from([(0, CodeContext::default())]),
                 focus_line: 0,
-                builder_revision: None,
+                builder: None,
             }),
         }
     }
@@ -69,11 +76,15 @@ impl EditorSyntaxService {
             cache.contexts.clear();
             cache.contexts.insert(0, CodeContext::default());
             cache.focus_line = 0;
+            cache.builder = None;
         } else {
             let keep_through = first_line / CONTEXT_CHECKPOINT_LINES * CONTEXT_CHECKPOINT_LINES;
             cache.contexts.retain(|line, _| *line <= keep_through);
             cache.contexts.entry(0).or_default();
             cache.focus_line = keep_through;
+        }
+        if cache.revision != revision {
+            cache.builder = None;
         }
         cache.document_id = Some(document_id);
         cache.revision = revision;
@@ -85,6 +96,7 @@ impl EditorSyntaxService {
         cache.contexts.clear();
         cache.contexts.insert(0, CodeContext::default());
         cache.focus_line = 0;
+        cache.builder = None;
     }
 
     fn context_at(
@@ -107,6 +119,7 @@ impl EditorSyntaxService {
                 cache.contexts.clear();
                 cache.contexts.insert(0, CodeContext::default());
                 cache.focus_line = 0;
+                cache.builder = None;
             }
             let (&start, checkpoint_context) = cache
                 .contexts
@@ -173,6 +186,7 @@ impl EditorSyntaxService {
                 cache.contexts.clear();
                 cache.contexts.insert(0, CodeContext::default());
                 cache.focus_line = 0;
+                cache.builder = None;
             }
             let seed = cache
                 .contexts
@@ -194,10 +208,15 @@ impl EditorSyntaxService {
             return false;
         }
         cache.focus_line = cache.focus_line.max(line);
-        if cache.builder_revision == Some(snapshot.revision()) {
+        let token = SyntaxBuilderToken {
+            document_id: snapshot.document_id(),
+            revision: snapshot.revision(),
+            language,
+        };
+        if cache.builder == Some(token) {
             false
         } else {
-            cache.builder_revision = Some(snapshot.revision());
+            cache.builder = Some(token);
             true
         }
     }
@@ -226,8 +245,13 @@ impl EditorSyntaxService {
             self.context_at(snapshot, language, next);
         }
         let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
-        if cache.builder_revision == Some(snapshot.revision()) {
-            cache.builder_revision = None;
+        let token = SyntaxBuilderToken {
+            document_id: snapshot.document_id(),
+            revision: snapshot.revision(),
+            language,
+        };
+        if cache.builder == Some(token) {
+            cache.builder = None;
         }
     }
 }
@@ -2335,5 +2359,28 @@ mod tests {
             assert_eq!(style.id, EditorStyleId::Code);
             assert_eq!(style.block.as_ref().unwrap().kind, EditorBlockKind::Quote);
         }
+    }
+
+    #[test]
+    fn reset_releases_builder_token_even_when_revision_is_reused() {
+        let snapshot = DocumentSnapshot::from_utf8("body\n".repeat(1_100).into_bytes()).unwrap();
+        let service = EditorSyntaxService::default();
+
+        let first = SparseEditorStyleSnapshot::query_lines(
+            Path::new("before.org"),
+            &snapshot,
+            &[900],
+            &service,
+        );
+        assert!(first.pending && first.start_builder);
+
+        service.reset();
+        let after_reset = SparseEditorStyleSnapshot::query_lines(
+            Path::new("after.org"),
+            &snapshot,
+            &[900],
+            &service,
+        );
+        assert!(after_reset.pending && after_reset.start_builder);
     }
 }

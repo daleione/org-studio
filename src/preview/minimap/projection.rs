@@ -31,7 +31,6 @@ pub(crate) struct MinimapLineIndex {
     /// define document geometry because their pixels/unit ratio varies across row kinds.
     pub(crate) reading_line_height: f32,
     pub(crate) projection: Arc<LayoutSnapshot>,
-    pub(crate) total: usize,
 }
 
 #[derive(Clone)]
@@ -342,7 +341,6 @@ impl MinimapLineIndexBuilder {
             rows_signature: self.rows_signature,
             density,
             reading_line_height: f32::from_bits(self.key.reading_line_height_bits).max(1.0),
-            total: self.projection.total_display_lines(),
             projection: self.projection.clone(),
         }
     }
@@ -521,7 +519,6 @@ impl PreviewDisplayMap {
             rows_signature,
             density,
             reading_line_height: (style.typography.body_line_height * zoom).max(1.0),
-            total: projection.total_display_lines(),
             projection,
         }
     }

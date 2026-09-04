@@ -9,21 +9,17 @@ use std::{
     time::Instant,
 };
 
-use crate::{
-    document::DocumentFormat,
-    org_syntax::BlockKind,
-    preview::{
-        PreviewSnapshot, PreviewStyle,
-        markdown::MarkdownKind,
-        projection::{VisualRow, VisualRowKind},
-    },
-};
+use crate::preview::{PreviewSnapshot, PreviewStyle, projection::VisualRowKind};
 use gpui::{
     BorderStyle, Bounds, ContentMask, Corners, CursorStyle, DispatchPhase, ListOffset, ListState,
-    MouseButton, MouseMoveEvent, MouseUpEvent, RenderImage, canvas, div, fill, outline, point,
-    prelude::*, px, rgba,
+    MouseButton, MouseMoveEvent, MouseUpEvent, canvas, div, fill, outline, point, prelude::*, px,
+    rgba,
 };
 
+use super::frame::PreparedMinimapFrame;
+use super::media::{
+    MinimapMediaPaint, geometry as minimap_media_geometry, image as minimap_media_image,
+};
 use super::projection::MinimapRefinement;
 use super::{
     MINIMAP_RESIZE_HANDLE_PX, MinimapDensity, MinimapDragSession, MinimapInteractionAnchor,
@@ -37,94 +33,6 @@ use super::{
     source_target_for_list_offset, take_resize_session, thumb_alphas, tile_key,
     width_from_resize_drag,
 };
-
-struct MinimapMediaPaint {
-    image: Arc<RenderImage>,
-    x: f32,
-    y: f32,
-    width: f32,
-    height: f32,
-    row_y: f32,
-    row_height: f32,
-}
-
-#[derive(Default)]
-struct MinimapPaintFrame {
-    tiles: SmallVec<[RasterTilePaint; 6]>,
-    media: SmallVec<[MinimapMediaPaint; 4]>,
-}
-
-fn minimap_media_geometry(
-    reading_width: f32,
-    reading_height: f32,
-    reading_line_height: f32,
-    minimap_line_height: f32,
-    minimap_width: f32,
-    row_y: f32,
-    row_height: f32,
-) -> Option<(f32, f32, f32, f32)> {
-    if !reading_width.is_finite()
-        || !reading_height.is_finite()
-        || reading_width <= 0.0
-        || reading_height <= 0.0
-        || reading_line_height <= 0.0
-        || minimap_line_height <= 0.0
-        || row_height <= 0.0
-    {
-        return None;
-    }
-    let inset = 5.0;
-    let available_width = (minimap_width - inset * 2.0).max(1.0);
-    // Use the same uniform scale that maps a Reading body line to a
-    // minimap line. Filling the minimap width independently enlarges a
-    // narrow image relative to the surrounding page.
-    let scale = (minimap_line_height / reading_line_height)
-        .min(available_width / reading_width)
-        .min(row_height / reading_height)
-        .min(1.0);
-    let width = reading_width * scale;
-    let height = reading_height * scale;
-    Some((
-        // Reading media starts at the content origin. Its minimap projection
-        // follows the same left/top anchor instead of centering inside the row.
-        inset, row_y, width, height,
-    ))
-}
-
-fn minimap_media_image(
-    document: &PreviewSnapshot,
-    visual: &VisualRow,
-    window: &mut gpui::Window,
-    cx: &mut gpui::App,
-) -> Option<Arc<RenderImage>> {
-    match &visual.kind {
-        VisualRowKind::Image { .. } => {
-            let source = match document.format {
-                DocumentFormat::Org => {
-                    match &document.blocks.nodes().get(visual.block_id as usize)?.kind {
-                        BlockKind::Image { path } => path.as_ref(),
-                        _ => return None,
-                    }
-                }
-                DocumentFormat::Markdown => {
-                    match &document.markdown_blocks.get(visual.block_id as usize)?.kind {
-                        MarkdownKind::Image { path } => path.as_str(),
-                        _ => return None,
-                    }
-                }
-            };
-            let path = crate::preview::resolve_image_path(&document.path, source);
-            let resource: gpui::Resource = path.into();
-            window
-                .use_asset::<gpui::ImgResourceLoader>(&resource, cx)?
-                .ok()
-        }
-        VisualRowKind::Diagram(crate::preview::diagram::DiagramProjection::Ready {
-            image, ..
-        }) => image.clone().use_render_image(window, cx),
-        _ => None,
-    }
-}
 
 #[allow(clippy::too_many_arguments)]
 pub fn render(
@@ -160,7 +68,6 @@ pub fn render(
     let on_width_change = Arc::new(on_width_change);
     let on_seek = Arc::new(on_seek);
     let interaction_anchor = state.interaction_anchor.clone();
-    let paint_list = list_state.clone();
     let shape_list = list_state.clone();
     let shape_model = model.clone();
     let shape_document = document;
@@ -170,9 +77,7 @@ pub fn render(
     let shape_folded = folded;
     let active_line_index = Arc::new(Mutex::new(None::<MinimapLineIndex>));
     let shape_line_index = active_line_index.clone();
-    let paint_line_index = active_line_index.clone();
     let shape_anchor = interaction_anchor.clone();
-    let paint_anchor = interaction_anchor.clone();
     let track_bounds = Arc::new(Mutex::new(Bounds::default()));
     let shape_bounds = track_bounds.clone();
     let paint_drag = drag_session.clone();
@@ -180,7 +85,6 @@ pub fn render(
     let event_resize = resize_session.clone();
     let event_width_change = on_width_change.clone();
     let event_anchor = interaction_anchor.clone();
-    let event_line_index = active_line_index.clone();
     let event_list = list_state.clone();
     let hovered = Arc::new(AtomicBool::new(false));
     let paint_hovered = hovered.clone();
@@ -245,8 +149,6 @@ pub fn render(
                 }
             }
             let line_index = projection.index;
-            *shape_line_index.lock().expect("active line index poisoned") =
-                Some(line_index.clone());
             let viewport = minimap_viewport_for_list_with_anchor(
                 &line_index,
                 &shape_list,
@@ -448,23 +350,15 @@ pub fn render(
                         } else {
                             row_layout.line_height
                         };
-                        let table = shape_model.table_projection(row).map(|projection| {
-                            let display = shape_model.runs(row);
+                        let table = lines.table.as_ref().map(|resolved| {
                             RasterTableGeometry {
-                                projected: crate::preview::table::project_table(
-                                    projection.table(),
-                                    parent_width,
+                                projected: crate::preview::table::project_resolved_table(
+                                    &resolved.layout,
                                     zoom,
                                     width as f32,
                                     style,
                                 ),
-                                wrapped_cells: projection.shaped_display_cells(
-                                    &display.text,
-                                    parent_width,
-                                    zoom,
-                                    style,
-                                    window.text_system(),
-                                ),
+                                wrapped_cells: resolved.wrapped_cells.clone(),
                             }
                         });
                         RasterRow {
@@ -514,7 +408,7 @@ pub fn render(
                             column.content_start_x.to_bits().hash(&mut wrap_hasher);
                             column.content_end_x.to_bits().hash(&mut wrap_hasher);
                         }
-                        for cell in &table.wrapped_cells {
+                        for cell in table.wrapped_cells.iter() {
                             cell.hash(&mut wrap_hasher);
                         }
                     }
@@ -667,26 +561,38 @@ pub fn render(
                 })
                 .detach();
             }
-            if visible_request_count == 0 && !tiles.is_empty() {
+            let current_frame = PreparedMinimapFrame::new(
+                generation,
+                line_index,
+                viewport,
+                tiles,
+                media,
+            );
+            let frame = if visible_request_count == 0 && !current_frame.tiles.is_empty() {
                 *shape_state
                     .retained_style_frame
                     .lock()
-                    .expect("retained minimap frame poisoned") = tiles.iter().cloned().collect();
+                    .expect("retained minimap frame poisoned") = Some(current_frame.clone());
                 shape_state
                     .retain_style_frame
                     .store(false, Ordering::Release);
+                current_frame
             } else if shape_state.retain_style_frame.load(Ordering::Acquire) {
-                tiles = shape_state
+                shape_state
                     .retained_style_frame
                     .lock()
                     .expect("retained minimap frame poisoned")
-                    .iter()
-                    .cloned()
-                    .collect();
-            }
-            MinimapPaintFrame { tiles, media }
+                    .clone()
+                    .unwrap_or(current_frame)
+            } else {
+                current_frame
+            };
+            debug_assert!(frame.is_coherent());
+            *shape_line_index.lock().expect("active line index poisoned") =
+                Some(frame.line_index.clone());
+            frame
         },
-        move |bounds, frame: MinimapPaintFrame, window, cx| {
+        move |bounds, frame: PreparedMinimapFrame, window, cx| {
             profiling::scope!("Minimap::paint");
             if !frame.tiles.is_empty()
                 && !paint_state
@@ -753,22 +659,8 @@ pub fn render(
                     );
                 });
             }
-            let track_height = f32::from(bounds.size.height);
-            let viewport = paint_line_index
-                .lock()
-                .expect("active line index poisoned")
-                .as_ref()
-                .map(|index| {
-                    minimap_viewport_for_list_with_anchor(
-                        index,
-                        &paint_list,
-                        track_height,
-                        *paint_anchor.lock().expect("minimap anchor poisoned"),
-                    )
-                })
-                .unwrap_or_default();
             let thumb = minimap_thumb_for_drag(
-                viewport,
+                frame.viewport,
                 *paint_drag.lock().expect("minimap drag state poisoned"),
             );
             let (visual_thumb_top, visual_thumb_height) = crate::minimap::visual_thumb_geometry(
@@ -807,7 +699,7 @@ pub fn render(
             let move_resize = event_resize.clone();
             let move_width_change = event_width_change.clone();
             let move_anchor = event_anchor.clone();
-            let move_index = event_line_index.clone();
+            let move_index = frame.line_index.clone();
             let move_list = event_list.clone();
             window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, _cx| {
                 if phase != DispatchPhase::Bubble || !event.dragging() {
@@ -827,17 +719,10 @@ pub fn render(
                 let Some(session) = session else {
                     return;
                 };
-                let index = move_index
-                    .lock()
-                    .expect("active line index poisoned")
-                    .clone();
-                let Some(index) = index else {
-                    return;
-                };
                 let local_y = f32::from(event.position.y - bounds.origin.y);
                 let current_anchor = *move_anchor.lock().expect("minimap anchor poisoned");
                 let viewport = minimap_viewport_for_list_with_anchor(
-                    &index,
+                    &move_index,
                     &move_list,
                     f32::from(bounds.size.height),
                     current_anchor,
@@ -855,9 +740,9 @@ pub fn render(
                         viewport.scroll_ratio,
                     );
                 }
-                scroll_list_to_ratio(&index, &move_list, target);
+                scroll_list_to_ratio(&move_index, &move_list, target);
                 let settled_viewport = minimap_viewport_for_list_with_anchor(
-                    &index,
+                    &move_index,
                     &move_list,
                     f32::from(bounds.size.height),
                     current_anchor,
@@ -868,7 +753,7 @@ pub fn render(
                 );
                 *move_anchor.lock().expect("minimap anchor poisoned") =
                     Some(minimap_anchor_for_thumb_top(
-                        &index,
+                        &move_index,
                         &move_list,
                         f32::from(bounds.size.height),
                         desired_thumb_top,
@@ -1087,26 +972,4 @@ pub fn render(
                     window.refresh();
                 }),
         )
-}
-
-#[cfg(test)]
-mod tests {
-    use super::minimap_media_geometry;
-
-    #[test]
-    fn minimap_media_geometry_preserves_aspect_ratio_and_row_bounds() {
-        let (x, y, width, height) =
-            minimap_media_geometry(800.0, 400.0, 27.52, 3.8, 110.0, 20.0, 80.0).unwrap();
-        assert!((width / height - 2.0).abs() < 0.001);
-        assert_eq!(x, 5.0);
-        assert_eq!(y, 20.0);
-        assert!(x + width <= 105.0);
-        assert!(y + height <= 100.0);
-
-        let (_, tall_y, tall_width, tall_height) =
-            minimap_media_geometry(200.0, 800.0, 27.52, 3.8, 110.0, -10.0, 60.0).unwrap();
-        assert!((tall_width / tall_height - 0.25).abs() < 0.001);
-        assert_eq!(tall_y, -10.0);
-        assert!(tall_y + tall_height <= 50.001);
-    }
 }

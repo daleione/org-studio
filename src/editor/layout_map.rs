@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Range};
+use std::{collections::HashMap, ops::Range, sync::Arc};
 
 use crate::document::{ByteOffset, ByteRange, DocumentSnapshot, LineIndex, TextSnapshot};
 use unicode_width::UnicodeWidthChar;
@@ -85,6 +85,7 @@ pub(super) struct VisibleSourceLine {
 
 /// Sparse pixel-height index. Every physical line has a baseline height; only measured lines
 /// consume memory. Chunk totals use a Fenwick tree, avoiding a per-line allocation.
+#[derive(Clone)]
 pub(super) struct EditorLayoutMap {
     line_height: f32,
     max_shaped_line_bytes: usize,
@@ -93,6 +94,7 @@ pub(super) struct EditorLayoutMap {
     line_count: u64,
     wrap_width_bits: u32,
     measured_heights: HashMap<u64, Box<[u32; CHUNK_LINES as usize]>>,
+    measured_wrap_starts: HashMap<u64, Arc<[u32]>>,
     height_fenwick: Vec<i64>,
     hidden_ranges: Vec<(Range<u64>, u64)>,
 }
@@ -107,6 +109,7 @@ impl Default for EditorLayoutMap {
             line_count: 0,
             wrap_width_bits: 0,
             measured_heights: HashMap::new(),
+            measured_wrap_starts: HashMap::new(),
             height_fenwick: vec![0],
             hidden_ranges: Vec::new(),
         }
@@ -200,6 +203,8 @@ impl EditorLayoutMap {
             let last_local = (line_count % CHUNK_LINES) as usize;
             self.measured_heights
                 .retain(|chunk, _| *chunk * CHUNK_LINES < line_count);
+            self.measured_wrap_starts
+                .retain(|line, _| *line < line_count);
             if last_local > 0
                 && let Some(heights) = self.measured_heights.get_mut(&last_chunk)
             {
@@ -212,6 +217,7 @@ impl EditorLayoutMap {
 
     fn clear_layout(&mut self) {
         self.measured_heights.clear();
+        self.measured_wrap_starts.clear();
         self.height_fenwick = vec![0; self.line_count.div_ceil(CHUNK_LINES) as usize + 1];
     }
 
@@ -278,6 +284,8 @@ impl EditorLayoutMap {
         self.measured_heights.retain(|chunk, heights| {
             *chunk <= first_chunk && heights.iter().any(|height| *height != 0)
         });
+        self.measured_wrap_starts
+            .retain(|line, _| *line < first_line);
         self.rebuild_fenwick();
     }
 
@@ -288,13 +296,14 @@ impl EditorLayoutMap {
         if line >= self.line_count {
             return false;
         }
+        let wraps_changed = self.measured_wrap_starts.remove(&line).is_some();
         let chunk = line / CHUNK_LINES;
         let local = (line % CHUNK_LINES) as usize;
         let Some(heights) = self.measured_heights.get_mut(&chunk) else {
-            return false;
+            return wraps_changed;
         };
         if heights[local] == 0 {
-            return false;
+            return wraps_changed;
         }
         heights[local] = 0;
         if heights.iter().all(|height| *height == 0) {
@@ -312,6 +321,7 @@ impl EditorLayoutMap {
         let old_end = old_range.end.min(self.line_count).max(old_start);
         let old_count = old_end - old_start;
         let measured = std::mem::take(&mut self.measured_heights);
+        let measured_wraps = std::mem::take(&mut self.measured_wrap_starts);
         self.line_count = new_total;
 
         for (chunk, heights) in measured {
@@ -342,6 +352,24 @@ impl EditorLayoutMap {
                 self.measured_heights
                     .entry(new_chunk)
                     .or_insert_with(|| Box::new([0; CHUNK_LINES as usize]))[new_local] = height;
+            }
+        }
+        for (old_line, starts) in measured_wraps {
+            let new_line = if old_line < old_start {
+                Some(old_line)
+            } else if old_line == old_start && new_count > 0 {
+                Some(old_start)
+            } else if old_line >= old_end {
+                Some(if new_count >= old_count {
+                    old_line.saturating_add(new_count - old_count)
+                } else {
+                    old_line.saturating_sub(old_count - new_count)
+                })
+            } else {
+                None
+            };
+            if let Some(new_line) = new_line.filter(|line| *line < new_total) {
+                self.measured_wrap_starts.insert(new_line, starts);
             }
         }
         self.rebuild_fenwick();
@@ -419,6 +447,38 @@ impl EditorLayoutMap {
             }
         }
         height_changed
+    }
+
+    pub(super) fn update_line_wrap_starts(&mut self, line: u64, starts: &[usize]) -> bool {
+        if line >= self.line_count || !self.soft_wrap || self.is_hidden(line) {
+            return false;
+        }
+        let mut starts = starts
+            .iter()
+            .copied()
+            .filter(|start| *start > 0)
+            .map(|start| start.min(u32::MAX as usize) as u32)
+            .collect::<Vec<_>>();
+        starts.sort_unstable();
+        starts.dedup();
+        if starts.is_empty() {
+            return self.measured_wrap_starts.remove(&line).is_some();
+        }
+        if self
+            .measured_wrap_starts
+            .get(&line)
+            .is_some_and(|current| current.as_ref() == starts)
+        {
+            return false;
+        }
+        self.measured_wrap_starts.insert(line, Arc::from(starts));
+        true
+    }
+
+    pub(super) fn line_wrap_starts(&self, line: u64) -> &[u32] {
+        self.measured_wrap_starts
+            .get(&line)
+            .map_or(&[], |starts| starts.as_ref())
     }
 
     fn extra_height_before_chunk(&self, chunk: usize) -> i64 {
@@ -624,6 +684,25 @@ mod tests {
         assert_eq!(map.line_height_px(500), 76.0);
         assert_eq!(map.line_height_px(800), 110.0);
         assert_eq!(map.total_height(), before);
+    }
+
+    #[test]
+    fn wrap_boundaries_follow_the_same_sparse_invalidation_and_splice_rules() {
+        let mut map = EditorLayoutMap::default();
+        map.configure(1_000, 640.0);
+        assert!(map.update_line_wrap_starts(500, &[12, 29]));
+        assert!(map.update_line_wrap_starts(800, &[8]));
+        assert_eq!(map.line_wrap_starts(500), &[12, 29]);
+
+        map.splice_lines(500..501, 2, 1_001);
+        assert_eq!(map.line_wrap_starts(500), &[12, 29]);
+        assert_eq!(map.line_wrap_starts(801), &[8]);
+
+        map.invalidate_layout_from(700);
+        assert_eq!(map.line_wrap_starts(500), &[12, 29]);
+        assert!(map.line_wrap_starts(801).is_empty());
+        assert!(map.invalidate_line_layout(500));
+        assert!(map.line_wrap_starts(500).is_empty());
     }
 
     #[test]

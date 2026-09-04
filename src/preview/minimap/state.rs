@@ -8,7 +8,7 @@ use std::{
 
 use super::{
     CachedMinimapLineIndex, MinimapDragSession, MinimapInteractionAnchor, MinimapLineIndexBuilder,
-    RasterTileCache, RasterTilePaint, projection::MinimapLineIndexKey,
+    RasterTileCache, frame::PreparedMinimapFrame, projection::MinimapLineIndexKey,
 };
 use crate::preview::{PreviewSnapshot, PreviewStyle, projection::VisualPatch};
 
@@ -21,7 +21,7 @@ pub(crate) struct MinimapState {
     pub(crate) drag: Arc<Mutex<Option<MinimapDragSession>>>,
     pub(crate) resize_drag: Arc<Mutex<Option<ResizeSession>>>,
     pub(crate) interaction_anchor: Arc<Mutex<Option<MinimapInteractionAnchor>>>,
-    pub(crate) retained_style_frame: Mutex<Vec<RasterTilePaint>>,
+    pub(super) retained_style_frame: Mutex<Option<PreparedMinimapFrame>>,
     pub(crate) retain_style_frame: AtomicBool,
     pub(crate) raster_epoch: AtomicU64,
     pub(crate) raster_prefetch_signature: AtomicU64,
@@ -49,7 +49,7 @@ impl MinimapState {
             drag: Arc::new(Mutex::new(None)),
             resize_drag: Arc::new(Mutex::new(None)),
             interaction_anchor: Arc::new(Mutex::new(None)),
-            retained_style_frame: Mutex::new(Vec::new()),
+            retained_style_frame: Mutex::new(None),
             retain_style_frame: AtomicBool::new(false),
             raster_epoch: AtomicU64::new(0),
             raster_prefetch_signature: AtomicU64::new(0),
@@ -88,11 +88,11 @@ impl MinimapState {
             .raster_tiles
             .lock()
             .expect("minimap raster tile cache poisoned");
-        let has_retained_frame = !self
+        let has_retained_frame = self
             .retained_style_frame
             .lock()
             .expect("retained minimap frame poisoned")
-            .is_empty();
+            .is_some();
         self.retain_style_frame
             .store(has_retained_frame, Ordering::Release);
         // Raster keys contain paint, wrap, width and density signatures. Preserve completed
@@ -280,7 +280,6 @@ impl MinimapState {
             .collect::<Vec<_>>();
         index.index.projection = Arc::new(index.index.projection.replacing(&replacements));
         index.index.layout.document_revision = document.revision;
-        index.index.total = index.index.projection.total_display_lines();
         index.presentation_rows = presentation_rows.clone();
     }
 }

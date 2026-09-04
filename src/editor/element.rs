@@ -1,5 +1,6 @@
+use std::time::Duration;
 #[cfg(feature = "benchmarks")]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use std::{ops::Range, sync::Arc};
 
 use gpui::{
@@ -16,7 +17,15 @@ use crate::{
 
 #[cfg(feature = "benchmarks")]
 use super::FrameBenchmarkAction;
-use super::{HitRow, SemanticEditor, ShapeKey, layout_map::EditorLayoutMap, syntax};
+use super::{
+    HitRow, SemanticEditor, ShapeKey,
+    layout_map::EditorLayoutMap,
+    minimap_media::{
+        MinimapImagePaint, geometry as editor_minimap_media_geometry,
+        image_path as editor_minimap_image_path,
+    },
+    syntax,
+};
 
 const GUTTER_PADDING: f32 = 16.0;
 const MAX_ANIMATED_PAINT_LINES: u64 = 192;
@@ -75,12 +84,6 @@ struct MinimapPaint {
     overlays: Vec<PaintQuad>,
 }
 
-struct MinimapImagePaint {
-    path: std::path::PathBuf,
-    row_y: f32,
-    row_height: f32,
-}
-
 #[derive(Clone, Copy)]
 struct MinimapMediaCandidate {
     line: u64,
@@ -91,10 +94,11 @@ struct MinimapMediaCandidate {
 
 struct MinimapRasterRequest {
     key: super::minimap::RasterKey,
+    layout: Arc<EditorLayoutMap>,
     path: std::path::PathBuf,
     snapshot: crate::document::DocumentSnapshot,
     source_lines: Vec<u64>,
-    raster_lines: Vec<Option<u64>>,
+    raster_lines: Vec<Option<super::minimap::RasterSourceRow>>,
     media_candidates: Vec<MinimapMediaCandidate>,
     syntax_service: Arc<syntax::EditorSyntaxService>,
     theme: crate::theme::Theme,
@@ -108,6 +112,20 @@ struct MinimapRasterRequest {
     telemetry: Arc<super::minimap::EditorMinimapTelemetry>,
     epoch: std::sync::Arc<std::sync::atomic::AtomicU64>,
     expected_epoch: u64,
+}
+
+struct MinimapLayoutPreparationRequest {
+    key: super::minimap::PreparedLayoutKey,
+    epoch: u64,
+    cancellation_epoch: Arc<std::sync::atomic::AtomicU64>,
+    layout: EditorLayoutMap,
+    snapshot: crate::document::DocumentSnapshot,
+    syntax_service: Arc<syntax::EditorSyntaxService>,
+    text_system: Arc<gpui::TextSystem>,
+    font: gpui::Font,
+    font_size: Pixels,
+    theme: crate::theme::Theme,
+    fold_markers: Arc<std::collections::HashSet<u64>>,
 }
 
 struct PaintRow {
@@ -256,6 +274,9 @@ impl Element for EditorElement {
         self.editor.update(cx, |editor, _| {
             editor.minimap.update_snapshot(&snapshot);
             editor.minimap.scale_factor = window.scale_factor().max(1.0);
+            if editor.minimap.settle_layout_raster_invalidation() {
+                window.request_animation_frame();
+            }
         });
         let digits = snapshot.len_lines().max(1).ilog10() + 1;
         let editor_font_size = self.editor.read(cx).font_size_px();
@@ -428,9 +449,13 @@ impl Element for EditorElement {
             &paint_lines,
             &editor.syntax_service,
         );
-        let syntax_build_request = style_query
-            .start_builder
-            .then(|| (editor.syntax_service.clone(), editor_path, snapshot.clone()));
+        let syntax_build_request = style_query.start_builder.then(|| {
+            (
+                editor.syntax_service.clone(),
+                editor_path.clone(),
+                snapshot.clone(),
+            )
+        });
         let styles_pending = style_query.pending;
         let style_snapshot = style_query.snapshot;
         debug_assert_eq!(style_snapshot.revision, snapshot.revision());
@@ -444,6 +469,15 @@ impl Element for EditorElement {
         let theme = current_theme();
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
+        let minimap_layout_preparation = prepare_minimap_layout_request(
+            editor,
+            &editor_path,
+            &snapshot,
+            style.font(),
+            font_size,
+            theme,
+            cx.text_system().clone(),
+        );
         let mut rows = Vec::with_capacity(paint_lines.len());
         let mut selection_quads = Vec::new();
         let mut caret = None;
@@ -756,6 +790,9 @@ impl Element for EditorElement {
         }
         if schedule_minimap && let Some(request) = minimap_raster_request {
             schedule_minimap_raster(self.editor.clone(), request, cx);
+        }
+        if schedule_minimap && let Some(request) = minimap_layout_preparation {
+            schedule_minimap_layout_preparation(self.editor.clone(), request, cx);
         }
         let viewport_text_left = bounds.left() + px(gutter_width);
         let viewport_text_right = bounds.right() - px(minimap_width);
@@ -1153,7 +1190,22 @@ impl Element for EditorElement {
         let measured_rows = state
             .rows
             .iter()
-            .map(|row| (row.hit.line.0, row.visual_rows, row.metrics))
+            .map(|row| {
+                let wrap_starts = (1..row.visual_rows)
+                    .map(|visual_row| {
+                        let display = row
+                            .hit
+                            .layout
+                            .index_for_position(
+                                point(px(0.0), px(visual_row as f32 * row.metrics.line_height)),
+                                px(row.metrics.line_height),
+                            )
+                            .unwrap_or_else(|index| index);
+                        row.hit.display.display_to_source(display)
+                    })
+                    .collect::<Vec<_>>();
+                (row.hit.line.0, row.visual_rows, row.metrics, wrap_starts)
+            })
             .collect::<Vec<_>>();
         let _benchmark = self.editor.update(cx, |editor, cx| {
             let viewport_changed = editor.viewport != Some(bounds);
@@ -1184,20 +1236,24 @@ impl Element for EditorElement {
             let anchor_fraction = ((editor.scroll_y - anchor_start)
                 / editor.animated_line_height_px(anchor_line).max(1.0))
             .clamp(0.0, 1.0);
-            let layout_changed =
-                measured_rows
-                    .into_iter()
-                    .fold(false, |changed, (line, rows, metrics)| {
-                        editor.display_map.update_line_layout(
-                            line,
-                            rows,
-                            metrics.line_height,
-                            metrics.before,
-                            metrics.after,
-                        ) || changed
-                    });
+            let layout_changed = measured_rows.into_iter().fold(
+                false,
+                |changed, (line, rows, metrics, wrap_starts)| {
+                    let height_changed = editor.display_map.update_line_layout(
+                        line,
+                        rows,
+                        metrics.line_height,
+                        metrics.before,
+                        metrics.after,
+                    );
+                    let wraps_changed = editor
+                        .display_map
+                        .update_line_wrap_starts(line, &wrap_starts);
+                    height_changed || wraps_changed || changed
+                },
+            );
             if layout_changed {
-                editor.minimap.invalidate_raster();
+                editor.minimap.note_layout_changed();
             }
             let anchored = if layout_changed {
                 editor.animated_line_start_y(anchor_line)
@@ -1273,6 +1329,40 @@ fn scroll_is_at_end(scroll_y: f32, viewport_height: f32, document_height: f32) -
     scroll_y + viewport_height + 0.5 >= document_height
 }
 
+fn minimap_geometry_for_layout(
+    editor: &SemanticEditor,
+    layout: &EditorLayoutMap,
+    viewport_height: f32,
+    density: crate::minimap::Density,
+    line_height: f32,
+) -> super::minimap::ViewportGeometry {
+    let viewport = super::minimap::source_viewport_for_layout(
+        layout,
+        &editor.display_map,
+        editor.scroll_y,
+        editor.animated_document_height(),
+        viewport_height,
+    );
+    crate::minimap::projection_viewport_with_line_height(
+        viewport.total_units,
+        viewport.visible_top,
+        viewport.visible_bottom,
+        viewport.scroll_ratio,
+        viewport_height,
+        density,
+        line_height,
+    )
+}
+
+#[cfg(feature = "benchmarks")]
+fn minimap_camera_source(layout: &EditorLayoutMap, content_top: f32) -> f64 {
+    let y = content_top.max(0.0) * layout.base_line_height().max(1.0);
+    let line = layout.line_at_y(y);
+    let fraction =
+        ((y - layout.line_start_y(line)) / layout.line_height_px(line).max(1.0)).clamp(0.0, 1.0);
+    line as f64 + f64::from(fraction)
+}
+
 fn stabilized_scroll_y(
     was_at_end: bool,
     anchored: f32,
@@ -1303,70 +1393,6 @@ fn shape_key(
         code_language,
         marked: marked.map(|range| (range.start, range.end)),
     }
-}
-
-fn editor_minimap_image_path(
-    document_path: &std::path::Path,
-    text: &str,
-) -> Option<std::path::PathBuf> {
-    if crate::document::DocumentFormat::from_path(document_path)
-        != crate::document::DocumentFormat::Org
-    {
-        return None;
-    }
-    crate::org_syntax::standalone_image_path(text)
-        .map(|source| crate::preview::resolve_image_path(document_path, source))
-}
-
-fn editor_minimap_media_geometry(
-    natural_width: f32,
-    natural_height: f32,
-    minimap_width: f32,
-    row_y: f32,
-    row_height: f32,
-) -> Option<(f32, f32, f32, f32)> {
-    if natural_width <= 0.0 || natural_height <= 0.0 || minimap_width <= 0.0 || row_height <= 0.0 {
-        return None;
-    }
-    const INSET: f32 = 5.0;
-    let available_width = (minimap_width - INSET * 2.0).max(1.0);
-    let scale = (available_width / natural_width)
-        // The row already uses Editor visual units (正文 pixels / base line
-        // height). Fitting to that row preserves the same uniform scale as
-        // text; an unrelated 48px cap made tall images too short.
-        .min(row_height / natural_height)
-        .min(1.0);
-    let width = natural_width * scale;
-    let height = natural_height * scale;
-    Some((
-        // Inline images start at the Editor text origin. Keep their minimap
-        // projection on the same left edge instead of centering narrow or tall
-        // media inside the track.
-        INSET,
-        row_y + (row_height - height) * 0.5,
-        width,
-        height,
-    ))
-}
-
-fn fill_editor_minimap_visual_rows(
-    raster_lines: &mut [Option<u64>],
-    line: u64,
-    row_offset_units: f32,
-    row_height_units: f32,
-) {
-    if row_height_units <= 0.0 || raster_lines.is_empty() {
-        return;
-    }
-    let first = row_offset_units.floor() as isize;
-    let end = (row_offset_units + row_height_units).ceil() as isize;
-    let first = first.clamp(0, raster_lines.len() as isize) as usize;
-    let end = end.clamp(first as isize, raster_lines.len() as isize) as usize;
-    // A source line may occupy several Editor visual rows because of soft wrap,
-    // block spacing, or inline media. Every occupied minimap unit needs content;
-    // assigning only the first slot leaves transparent holes and makes the next
-    // raster publish look like previously missing document text appeared late.
-    raster_lines[first..end].fill(Some(line));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1400,11 +1426,36 @@ fn build_minimap(
     )];
     let density = crate::minimap::Density::for_width(f32::from(bounds.size.width));
     let line_height = editor.minimap.line_height(density);
-    let editor_line_height = editor.display_map.base_line_height().max(1.0);
-    let total_units = (editor.animated_document_height() / editor_line_height).max(1.0);
+    let active_frame = editor.minimap.active_frame();
+    let minimap_layout = active_frame
+        .as_ref()
+        .map_or(&editor.display_map, |frame| frame.layout.as_ref());
+    let cached_raster = active_frame.as_ref().map(|frame| frame.raster.clone());
+    let request_layout = editor.minimap.prepared_layout().unwrap_or_else(|| {
+        active_frame
+            .as_ref()
+            .filter(|frame| frame.raster.key.generation == editor.minimap.generation)
+            .map_or_else(
+                || Arc::new(editor.display_map.clone()),
+                |frame| frame.layout.clone(),
+            )
+    });
+    let request_geometry = if std::ptr::eq(request_layout.as_ref(), minimap_layout) {
+        geometry
+    } else {
+        minimap_geometry_for_layout(
+            editor,
+            request_layout.as_ref(),
+            f32::from(bounds.size.height),
+            density,
+            line_height,
+        )
+    };
+    let editor_line_height = request_layout.base_line_height().max(1.0);
+    let total_units = (request_layout.total_height() / editor_line_height).max(1.0);
     let (first_unit, row_count) = super::minimap::raster_window(
-        geometry.content_top,
-        geometry.interaction_height,
+        request_geometry.content_top,
+        request_geometry.interaction_height,
         total_units,
         density,
         line_height,
@@ -1417,38 +1468,70 @@ fn build_minimap(
         scale_x100: (scale_factor.max(1.0) * 100.0).round().min(u16::MAX as f32) as u16,
         density,
     };
-    let cached_raster = editor
-        .minimap
-        .raster
-        .lock()
-        .expect("editor minimap raster poisoned")
-        .as_ref()
-        .cloned();
+    #[cfg(feature = "benchmarks")]
+    {
+        let active_total_units =
+            minimap_layout.total_height() / minimap_layout.base_line_height().max(1.0);
+        let visible_minimap_units = ((geometry.interaction_height - density.edge_padding() * 2.0)
+            / line_height.max(1.0))
+        .max(1.0);
+        let max_content_top = (active_total_units - visible_minimap_units).max(0.0);
+        let camera_margin = 2.0;
+        editor.minimap.telemetry.note_camera(
+            editor.scroll_y,
+            geometry.content_top,
+            minimap_camera_source(minimap_layout, geometry.content_top),
+            geometry.thumb_top,
+            editor.scroll_y <= 0.5
+                || editor.scroll_y + f32::from(bounds.size.height) + 0.5
+                    >= editor.animated_document_height(),
+            geometry.content_top > camera_margin
+                && geometry.content_top < max_content_top - camera_margin,
+            editor.minimap.viewport_generation(),
+            active_frame
+                .as_ref()
+                .map_or(editor.minimap.generation, |frame| frame.geometry_identity()),
+            cached_raster.as_ref().map(|cached| cached.key.first_unit),
+            cached_raster
+                .as_ref()
+                .map(|cached| cached.viewport_generation),
+        );
+    }
     let cached_matches = cached_raster
         .as_ref()
         .is_some_and(|cached| cached.key == key);
     editor.minimap.note_cache_lookup(cached_matches);
+    let defer_layout_refinement = active_frame.is_some()
+        && !editor.minimap.background_camera_movable()
+        && editor
+            .minimap
+            .is_layout_refinement_generation(key.generation);
     let mut raster_request = None;
-    if !semantics_pending && !cached_matches && editor.minimap.reserve_raster(key) {
+    if !semantics_pending
+        && !cached_matches
+        && !defer_layout_refinement
+        && editor.minimap.reserve_raster(key)
+    {
         let first_y = first_unit as f32 * editor_line_height;
         let end_y = (first_unit as f32 + row_count as f32) * editor_line_height;
-        let first_line = editor.animated_line_at_y(first_y);
-        let last_line = editor
-            .animated_line_at_y(end_y.min(editor.animated_document_height()))
+        let first_line = request_layout.line_at_y(first_y);
+        let last_line = request_layout
+            .line_at_y(end_y.min(request_layout.total_height()))
             .saturating_add(1)
             .min(snapshot.len_lines());
-        let source_lines = visible_source_lines(&editor.display_map, first_line..last_line);
+        let source_lines = visible_source_lines(request_layout.as_ref(), first_line..last_line);
         let mut raster_lines = vec![None; row_count];
         let mut media_candidates = Vec::with_capacity(source_lines.len());
         for &line in &source_lines {
-            let start_units = editor.animated_line_start_y(line) / editor_line_height;
-            let height_units = editor.animated_line_height_px(line) / editor_line_height;
+            let start_units = request_layout.line_start_y(line) / editor_line_height;
+            let height_units = request_layout.line_height_px(line) / editor_line_height;
             let row_offset_units = start_units - first_unit as f32;
-            fill_editor_minimap_visual_rows(
+            super::minimap::fill_visual_rows(
                 &mut raster_lines,
                 line,
                 row_offset_units,
                 height_units,
+                request_layout.line_wrap_starts(line),
             );
             if let Ok(range) = snapshot.line_content_range(LineIndex(line))
                 && editor.previews_inline_image_at(range.start)
@@ -1461,7 +1544,7 @@ fn build_minimap(
                 });
             }
         }
-        let visible_rows = (((geometry.interaction_height - density.edge_padding() * 2.0)
+        let visible_rows = (((request_geometry.interaction_height - density.edge_padding() * 2.0)
             / line_height.max(1.0))
         .ceil() as usize
             + 1)
@@ -1472,6 +1555,7 @@ fn build_minimap(
             .note_request(snapshot.revision(), &source_lines);
         raster_request = Some(MinimapRasterRequest {
             key,
+            layout: request_layout,
             path: path.to_path_buf(),
             snapshot: snapshot.clone(),
             source_lines,
@@ -1479,7 +1563,7 @@ fn build_minimap(
             media_candidates,
             syntax_service: editor.syntax_service.clone(),
             theme: *theme,
-            content_top: geometry.content_top,
+            content_top: request_geometry.content_top,
             viewport_generation: editor.minimap.viewport_generation(),
             scale_factor,
             density,
@@ -1560,8 +1644,7 @@ fn build_minimap(
     ));
     for mark in editor.minimap.search_marks.iter().take(2_000) {
         if let Ok(line) = snapshot.line_index_at(mark.start) {
-            let line_unit = editor.display_map.line_start_y(line.0)
-                / editor.display_map.base_line_height().max(1.0);
+            let line_unit = minimap_layout.line_start_y(line.0) / editor_line_height;
             let y = density.edge_padding() + (line_unit - geometry.content_top) * line_height;
             if y < 0.0 || y > geometry.interaction_height {
                 continue;
@@ -1602,6 +1685,293 @@ fn schedule_syntax_builder(
     cx.spawn(async move |cx| {
         background.await;
         editor.update(cx, |_, cx| cx.notify());
+    })
+    .detach();
+}
+
+fn prepare_minimap_layout_request(
+    editor: &SemanticEditor,
+    path: &std::path::Path,
+    snapshot: &crate::document::DocumentSnapshot,
+    font: gpui::Font,
+    font_size: Pixels,
+    theme: &crate::theme::Theme,
+    text_system: Arc<gpui::TextSystem>,
+) -> Option<MinimapLayoutPreparationRequest> {
+    if !editor.minimap.visible || editor.fold_animation.is_some() {
+        return None;
+    }
+    let mut inline_image_overrides = editor
+        .inline_image_preview_overrides
+        .iter()
+        .map(|(&line_start, &enabled)| (line_start, enabled))
+        .collect::<Vec<_>>();
+    inline_image_overrides.sort_unstable_by_key(|entry| entry.0);
+    let key = super::minimap::PreparedLayoutKey {
+        revision: snapshot.revision(),
+        path: path.to_path_buf(),
+        line_count: snapshot.len_lines(),
+        wrap_width_bits: editor.display_map.wrap_width().to_bits(),
+        base_line_height_bits: editor.display_map.base_line_height().to_bits(),
+        soft_wrap: editor.display_map.soft_wrap(),
+        font: font.clone(),
+        font_size_bits: f32::from(font_size).to_bits(),
+        content_scale_bits: editor.content_font_size().scale().to_bits(),
+        fold_revision: editor.fold_animation_revision,
+        inline_images: editor.inline_image_previews,
+        inline_image_overrides: inline_image_overrides.into(),
+        inline_image_resource_generation: editor.inline_image_cache.borrow().resource_generation,
+    };
+    let epoch = editor.minimap.reserve_layout_preparation(key.clone())?;
+    Some(MinimapLayoutPreparationRequest {
+        key,
+        epoch,
+        cancellation_epoch: editor.minimap.layout_preparation_epoch(),
+        layout: editor.display_map.clone(),
+        snapshot: snapshot.clone(),
+        syntax_service: editor.syntax_service.clone(),
+        text_system,
+        font,
+        font_size,
+        theme: *theme,
+        fold_markers: editor.fold_markers.clone(),
+    })
+}
+
+fn schedule_minimap_layout_preparation(
+    editor: gpui::Entity<SemanticEditor>,
+    request: MinimapLayoutPreparationRequest,
+    cx: &mut App,
+) {
+    const YIELD_LINE_INTERVAL: u64 = 128;
+
+    let key = request.key.clone();
+    let epoch = request.epoch;
+    let cancellation_epoch = request.cancellation_epoch.clone();
+    let scheduler = cx.background_executor().clone();
+    let background = cx.background_executor().spawn(async move {
+        let started_at = std::time::Instant::now();
+        let text_system = gpui::WindowTextSystem::new(request.text_system.clone());
+        let mut layout = request.layout;
+        let line_count = request.snapshot.len_lines();
+        if line_count > 0 {
+            let last = [line_count - 1];
+            let tail = syntax::SparseEditorStyleSnapshot::query_lines(
+                &request.key.path,
+                &request.snapshot,
+                &last,
+                &request.syntax_service,
+            );
+            if tail.pending {
+                // A visible-line request may already own the builder token. It also observes the
+                // furthest requested line, so completing it here is safe and guarantees this
+                // supposedly complete geometry never falls back to plain-line metrics.
+                request
+                    .syntax_service
+                    .build_focused(&request.key.path, &request.snapshot);
+            }
+        }
+
+        let base_run_color = gpui::rgb(request.theme.foreground).into();
+        let content_scale = f32::from_bits(request.key.content_scale_bits);
+        let overrides = request
+            .key
+            .inline_image_overrides
+            .iter()
+            .copied()
+            .collect::<std::collections::HashMap<_, _>>();
+
+        for chunk_start in (0..line_count).step_by(YIELD_LINE_INTERVAL as usize) {
+            if cancellation_epoch.load(std::sync::atomic::Ordering::Acquire) != epoch {
+                return None;
+            }
+            let chunk_end = (chunk_start + YIELD_LINE_INTERVAL).min(line_count);
+            let source_lines = visible_source_lines(&layout, chunk_start..chunk_end);
+            let mut style_query = syntax::SparseEditorStyleSnapshot::query_lines(
+                &request.key.path,
+                &request.snapshot,
+                &source_lines,
+                &request.syntax_service,
+            );
+            if style_query.pending {
+                request
+                    .syntax_service
+                    .build_focused(&request.key.path, &request.snapshot);
+                style_query = syntax::SparseEditorStyleSnapshot::query_lines(
+                    &request.key.path,
+                    &request.snapshot,
+                    &source_lines,
+                    &request.syntax_service,
+                );
+                if style_query.pending {
+                    return None;
+                }
+            }
+            let styles = style_query.snapshot;
+
+            for line_number in source_lines {
+                let line = LineIndex(line_number);
+                let Ok(source_range) = request.snapshot.line_content_range(line) else {
+                    continue;
+                };
+                let Some(source_line) = layout.source_line(&request.snapshot, line, None) else {
+                    continue;
+                };
+                let folded = request.fold_markers.contains(&line_number);
+                let fallback_style;
+                let line_style = if let Some(style) = styles.line(line_number) {
+                    style
+                } else {
+                    fallback_style = syntax::EditorLineStyle::pending_fallback(source_range);
+                    &fallback_style
+                };
+                let text_inset = editor_block_text_inset(line_style.block.as_ref());
+                let row_wrap_width = if text_inset > 0.0 {
+                    (layout.wrap_width()
+                        - text_inset
+                        - BLOCK_RIGHT_INSET
+                        - BLOCK_TEXT_RIGHT_PADDING)
+                        .max(1.0)
+                } else {
+                    layout.wrap_width()
+                };
+                let mut metrics = line_style.metrics.scaled(content_scale);
+                let image_enabled = overrides
+                    .get(&source_range.start.0)
+                    .copied()
+                    .unwrap_or(request.key.inline_images);
+                let inline_image_height = (!folded && image_enabled)
+                    .then(|| crate::org_syntax::standalone_image_path(&source_line.display.text))
+                    .flatten()
+                    .and_then(|target| {
+                        let path = crate::preview::resolve_image_path(&request.key.path, target);
+                        crate::preview::image_dimensions(&path).ok()
+                    })
+                    .map(|(width, height)| {
+                        crate::preview::fitted_image_size(
+                            width,
+                            height,
+                            layout.wrap_width().min(INLINE_IMAGE_MAX_WIDTH),
+                        )
+                        .1
+                    });
+
+                let (visual_rows, wrap_starts) = if let Some(height) = inline_image_height {
+                    metrics.before = INLINE_IMAGE_VERTICAL_PADDING;
+                    metrics.line_height = height;
+                    metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
+                    (1, Vec::new())
+                } else {
+                    let display = source_line.display;
+                    let text: gpui::SharedString =
+                        folded_display_text(display.text.clone(), folded).into();
+                    let runs = syntax::runs(
+                        &request.key.path,
+                        &text,
+                        TextRun {
+                            len: text.len(),
+                            font: request.font.clone(),
+                            color: base_run_color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        },
+                        line_style,
+                        None,
+                        &request.theme,
+                    );
+                    let effective_wrap_width = request.key.soft_wrap.then_some(px(row_wrap_width));
+                    let wrapped = text_system
+                        .shape_text(
+                            text,
+                            px(f32::from(request.font_size) * metrics.font_scale),
+                            &runs,
+                            effective_wrap_width,
+                            None,
+                        )
+                        .ok()
+                        .and_then(|lines| lines.into_iter().next())
+                        .unwrap_or_default();
+                    let visual_rows = wrapped.wrap_boundaries().len() + 1;
+                    let wrap_starts = (1..visual_rows)
+                        .map(|visual_row| {
+                            let display_index = wrapped
+                                .index_for_position(
+                                    point(px(0.0), px(visual_row as f32 * metrics.line_height)),
+                                    px(metrics.line_height),
+                                )
+                                .unwrap_or_else(|index| index);
+                            display.display_to_source(display_index)
+                        })
+                        .collect::<Vec<_>>();
+                    (visual_rows, wrap_starts)
+                };
+                layout.update_line_layout(
+                    line_number,
+                    visual_rows,
+                    metrics.line_height,
+                    metrics.before,
+                    metrics.after,
+                );
+                layout.update_line_wrap_starts(line_number, &wrap_starts);
+            }
+            scheduler.timer(Duration::from_millis(0)).await;
+        }
+        Some((Arc::new(layout), started_at.elapsed()))
+    });
+
+    cx.spawn(async move |cx| {
+        let prepared = background.await;
+        editor.update(cx, |editor, cx| {
+            let Some((layout, elapsed)) = prepared else {
+                if editor.minimap.abandon_layout_preparation(&key, epoch) {
+                    cx.notify();
+                }
+                return;
+            };
+            if editor
+                .minimap
+                .publish_prepared_layout(&key, epoch, layout.clone())
+            {
+                // Once complete geometry exists, make it authoritative for both the Editor and
+                // its minimap. Keeping the live Editor sparse would require two scroll cameras
+                // and gives the thumb/background a different follow policy from Reading.
+                let viewport_height = editor
+                    .viewport
+                    .map_or(0.0, |viewport| f32::from(viewport.size.height));
+                let was_at_end = scroll_is_at_end(
+                    editor.scroll_y,
+                    viewport_height,
+                    editor.animated_document_height(),
+                );
+                let anchor_line = editor.animated_line_at_y(editor.scroll_y);
+                let anchor_start = editor.animated_line_start_y(anchor_line);
+                let anchor_fraction = ((editor.scroll_y - anchor_start)
+                    / editor.animated_line_height_px(anchor_line).max(1.0))
+                .clamp(0.0, 1.0);
+                editor.display_map = layout.as_ref().clone();
+                let anchored = editor.animated_line_start_y(anchor_line)
+                    + anchor_fraction * editor.animated_line_height_px(anchor_line);
+                editor.scroll_y = stabilized_scroll_y(
+                    was_at_end,
+                    anchored,
+                    viewport_height,
+                    editor.animated_document_height(),
+                );
+                editor.hit_rows = Arc::from([]);
+                if std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_PERF").is_some() {
+                    eprintln!(
+                        "org_editor_minimap_layout_ready host_id={} lines={} elapsed_ms={:.3}",
+                        editor.minimap.telemetry.host_id(),
+                        key.line_count,
+                        elapsed.as_secs_f64() * 1_000.0,
+                    );
+                }
+                editor.minimap.note_viewport_changed();
+                editor.minimap.invalidate_raster();
+                cx.notify();
+            }
+        });
     })
     .detach();
 }
@@ -1665,7 +2035,6 @@ fn apply_editor_minimap_media_dimensions(
         return false;
     }
 
-    editor.minimap.invalidate_raster();
     let anchored = editor.animated_line_start_y(anchor_line)
         + anchor_fraction * editor.animated_line_height_px(anchor_line);
     editor.scroll_y = stabilized_scroll_y(
@@ -1683,6 +2052,7 @@ fn schedule_minimap_raster(
     cx: &mut App,
 ) {
     let key = request.key;
+    let layout = request.layout.clone();
     let content_top = request.content_top;
     let viewport_generation = request.viewport_generation;
     let line_height = request.line_height;
@@ -1745,8 +2115,8 @@ fn schedule_minimap_raster(
         let rows = request
             .raster_lines
             .iter()
-            .map(|line| {
-                let Some(line) = *line else {
+            .map(|source| {
+                let Some(source) = *source else {
                     return minimap_text_row(
                         String::new(),
                         None,
@@ -1755,6 +2125,7 @@ fn schedule_minimap_raster(
                         &request.theme,
                     );
                 };
+                let line = source.line;
                 let mut text = request
                     .snapshot
                     .line_content_range(LineIndex(line))
@@ -1762,6 +2133,16 @@ fn schedule_minimap_raster(
                     .map(|range| bounded_minimap_text(&request.snapshot, range, 1_024))
                     .unwrap_or_default();
                 if image_lines.contains(&line) {
+                    text.clear();
+                } else if let Some((start, end)) = source.text_range {
+                    let start = start as usize;
+                    let end = end.map_or(text.len(), |end| end as usize).min(text.len());
+                    if start < end && text.is_char_boundary(start) && text.is_char_boundary(end) {
+                        text = text[start..end].to_owned();
+                    } else {
+                        text.clear();
+                    }
+                } else {
                     text.clear();
                 }
                 let line_style = semantics.snapshot.line(line);
@@ -1838,21 +2219,36 @@ fn schedule_minimap_raster(
             // built against final visual units, so reaching the image cannot make
             // the whole minimap shift when the inline image is loaded later.
             if apply_editor_minimap_media_dimensions(editor, &media) {
+                editor.minimap.note_layout_changed();
                 cx.notify();
                 return;
             }
-            *editor
+            if editor.minimap.active_frame().is_some()
+                && !editor.minimap.background_camera_movable()
+                && editor
+                    .minimap
+                    .is_layout_refinement_generation(key.generation)
+            {
+                // A measurement-only candidate can contain better soft-wrap geometry, but
+                // replacing the active frame while its background crop is pinned to an edge
+                // makes the whole background visibly jump. Keep it deferred until that crop is
+                // moving and can hand its source anchor to the coherent candidate.
+                cx.notify();
+                return;
+            }
+            editor
                 .minimap
-                .raster
-                .lock()
-                .expect("editor minimap raster poisoned") = Some(super::minimap::CachedRaster {
-                key,
-                image,
-                media,
-                content_top,
-                viewport_generation,
-                line_height,
-            });
+                .publish_frame(super::minimap::PreparedEditorMinimapFrame::new(
+                    layout,
+                    super::minimap::CachedRaster {
+                        key,
+                        image,
+                        media,
+                        content_top,
+                        viewport_generation,
+                        line_height,
+                    },
+                ));
             publish_telemetry.note_publish();
             cx.notify();
         });
@@ -2246,9 +2642,8 @@ mod tests {
     use super::{
         EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES, animated_paint_lines,
         apply_editor_minimap_media_dimensions, editor_block_horizontal_bounds,
-        editor_block_segments, editor_block_text_inset, editor_minimap_image_path,
-        editor_minimap_media_geometry, fill_editor_minimap_visual_rows, folded_display_text,
-        minimap_text_row, scroll_is_at_end, stabilized_scroll_y,
+        editor_block_segments, editor_block_text_inset, folded_display_text, minimap_text_row,
+        scroll_is_at_end, stabilized_scroll_y,
     };
     use crate::document::{DocumentSession, DocumentSnapshot, TextSnapshot};
     use crate::editor::{
@@ -2344,69 +2739,6 @@ mod tests {
         assert_eq!(
             folded_display_text("* Heading".to_owned(), false),
             "* Heading"
-        );
-    }
-
-    #[test]
-    fn editor_minimap_resolves_org_image_rows_but_not_markdown_source() {
-        assert_eq!(
-            editor_minimap_image_path(
-                Path::new("/tmp/project/note.org"),
-                "[[file:images/diagram.png]]"
-            ),
-            Some(std::path::PathBuf::from("/tmp/project/images/diagram.png"))
-        );
-        assert_eq!(
-            editor_minimap_image_path(
-                Path::new("/tmp/project/note.md"),
-                "[[file:images/diagram.png]]"
-            ),
-            None
-        );
-        assert_eq!(
-            editor_minimap_image_path(Path::new("/tmp/project/note.org"), "ordinary text"),
-            None
-        );
-    }
-
-    #[test]
-    fn editor_minimap_thumbnail_is_bounded_and_preserves_aspect_ratio() {
-        assert_eq!(
-            editor_minimap_media_geometry(400.0, 200.0, 96.0, 12.0, 60.0),
-            Some((5.0, 20.5, 86.0, 43.0))
-        );
-        assert_eq!(
-            editor_minimap_media_geometry(20.0, 10.0, 96.0, 12.0, 60.0),
-            Some((5.0, 37.0, 20.0, 10.0))
-        );
-        assert_eq!(
-            editor_minimap_media_geometry(100.0, 400.0, 96.0, 0.0, 100.0),
-            Some((5.0, 0.0, 25.0, 100.0))
-        );
-        assert_eq!(
-            editor_minimap_media_geometry(0.0, 10.0, 96.0, 0.0, 60.0),
-            None
-        );
-    }
-
-    #[test]
-    fn wrapped_editor_rows_fill_their_complete_minimap_visual_span() {
-        let mut raster_lines = vec![None; 8];
-        fill_editor_minimap_visual_rows(&mut raster_lines, 12, 1.25, 3.5);
-        fill_editor_minimap_visual_rows(&mut raster_lines, 13, 4.75, 1.0);
-
-        assert_eq!(
-            raster_lines,
-            vec![
-                None,
-                Some(12),
-                Some(12),
-                Some(12),
-                Some(13),
-                Some(13),
-                None,
-                None
-            ]
         );
     }
 

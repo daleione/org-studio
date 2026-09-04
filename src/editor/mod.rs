@@ -4,6 +4,7 @@ mod folding;
 mod input;
 mod layout_map;
 mod minimap;
+mod minimap_media;
 mod org_commands;
 mod syntax;
 
@@ -327,6 +328,9 @@ struct EditorFrameBenchmark {
     samples: Vec<Duration>,
     random_seek: bool,
     scroll_pixels: Option<f32>,
+    bounce_scroll: bool,
+    returning_to_top: bool,
+    turn_pause_remaining: usize,
     step: usize,
 }
 
@@ -352,6 +356,9 @@ impl EditorFrameBenchmark {
             samples: Vec::with_capacity(target_samples),
             random_seek: std::env::var_os("ORG_STUDIO_EDITOR_BENCH_RANDOM_SEEK").is_some(),
             scroll_pixels,
+            bounce_scroll: std::env::var_os("ORG_STUDIO_EDITOR_BENCH_BOUNCE").is_some(),
+            returning_to_top: false,
+            turn_pause_remaining: 0,
             step: 0,
         })
     }
@@ -378,7 +385,9 @@ impl EditorFrameBenchmark {
         eprintln!(
             "org_editor_frame_cpu host_id={} mode={} scroll_pixels={:.3} samples={} p50_ms={:.3} p95_ms={:.3} p99_ms={:.3}",
             host_id,
-            if self.scroll_pixels.is_some() {
+            if self.bounce_scroll {
+                "scroll_bounce"
+            } else if self.scroll_pixels.is_some() {
                 "scroll"
             } else if self.random_seek {
                 "random_seek"
@@ -1104,16 +1113,40 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) -> FrameBenchmarkAction {
         let host_id = self.minimap.telemetry.host_id();
+        let current_scroll_y = self.scroll_y;
+        let viewport_height = self
+            .viewport
+            .map_or(0.0, |viewport| f32::from(viewport.size.height));
+        let current_max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let Some(benchmark) = self.frame_benchmark.as_mut() else {
             return FrameBenchmarkAction::Inactive;
         };
         let random_seek = benchmark.random_seek;
         let scroll_pixels = benchmark.scroll_pixels;
+        let bounce_scroll = benchmark.bounce_scroll;
         let step = benchmark.step;
         let warmup_completes = benchmark.warmup_remaining == 1;
         benchmark.step = benchmark.step.wrapping_add(1);
+        if benchmark.bounce_scroll && benchmark.step.is_multiple_of(120) {
+            eprintln!(
+                "org_editor_scroll_bounce_progress step={} scroll_y={:.3} max_scroll={:.3} returning_to_top={} pause_remaining={}",
+                benchmark.step,
+                current_scroll_y,
+                current_max_scroll,
+                benchmark.returning_to_top,
+                benchmark.turn_pause_remaining,
+            );
+        }
         if benchmark.record(elapsed) {
             benchmark.report(host_id);
+            if benchmark.bounce_scroll {
+                eprintln!(
+                    "org_editor_scroll_bounce_end returning_to_top={} scroll_y={:.3} at_top={}",
+                    benchmark.returning_to_top,
+                    current_scroll_y,
+                    current_scroll_y <= 0.5,
+                );
+            }
             self.minimap.telemetry.report_summary();
             crate::perf_tracing::report();
             self.frame_benchmark = None;
@@ -1123,7 +1156,25 @@ impl SemanticEditor {
             self.minimap.telemetry.reset_samples();
         }
         if let Some(scroll_pixels) = scroll_pixels {
-            self.scroll(0.0, -scroll_pixels, cx);
+            let scroll_delta = if bounce_scroll {
+                if !benchmark.returning_to_top && current_scroll_y + 0.5 >= current_max_scroll {
+                    benchmark.returning_to_top = true;
+                    benchmark.turn_pause_remaining = 12;
+                }
+                if benchmark.turn_pause_remaining > 0 {
+                    benchmark.turn_pause_remaining -= 1;
+                    None
+                } else if benchmark.returning_to_top {
+                    Some(scroll_pixels)
+                } else {
+                    Some(-scroll_pixels)
+                }
+            } else {
+                Some(-scroll_pixels)
+            };
+            if let Some(scroll_delta) = scroll_delta {
+                self.scroll(0.0, scroll_delta, cx);
+            }
         } else if random_seek {
             let snapshot = self.snapshot(cx);
             let line_count = snapshot.len_lines().max(1);
@@ -1936,7 +1987,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn minimap_geometry_uses_the_settled_visible_visual_span(cx: &mut gpui::TestAppContext) {
+    fn minimap_geometry_uses_one_complete_visual_span_while_scrolling(
+        cx: &mut gpui::TestAppContext,
+    ) {
         cx.update(init);
         let wrapping_text = "wrapped source text ".repeat(20);
         let source = (0..1_000)
@@ -1950,7 +2003,15 @@ mod tests {
         let (editor, cx) =
             cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
         cx.run_until_parked();
-        let initial_height = cx.read(|cx| editor.read(cx).display_map.total_height());
+        let (initial_height, baseline_height) = cx.read(|cx| {
+            let editor = editor.read(cx);
+            (
+                editor.display_map.total_height(),
+                editor.display_map.line_count() as f32 * editor.display_map.base_line_height(),
+            )
+        });
+        assert!(initial_height > baseline_height + 2_000.0);
+        let mut camera_samples = Vec::new();
         for scroll_y in [0.0, 5_000.0, 10_000.0, 15_000.0, 20_000.0] {
             editor.update(cx, |editor, cx| {
                 editor.scroll_y = scroll_y;
@@ -1970,10 +2031,21 @@ mod tests {
                     .max(crate::minimap::MIN_THUMB_PX)
                     .min(geometry.interaction_height);
                 assert!((geometry.thumb_height - expected).abs() < 0.001);
+                camera_samples.push((geometry.content_top, geometry.thumb_top));
             });
         }
+        for pair in camera_samples.windows(2) {
+            assert!(
+                pair[1].0 > pair[0].0,
+                "minimap background must move forward"
+            );
+            assert!(
+                pair[1].1 > pair[0].1,
+                "transparent viewport must move forward"
+            );
+        }
         let final_height = cx.read(|cx| editor.read(cx).display_map.total_height());
-        assert!(final_height > initial_height + 2_000.0);
+        assert!((final_height - initial_height).abs() < 0.001);
     }
 
     #[gpui::test]

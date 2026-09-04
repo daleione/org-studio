@@ -1048,7 +1048,12 @@ impl SemanticEditor {
             let clicked_unit =
                 geometry.content_top + ((pointer - density.edge_padding()) / line_height).max(0.0);
             let max_scroll_units = (total_units - viewport_units).max(0.0);
-            clicked_unit.clamp(0.0, max_scroll_units) * self.display_map.base_line_height().max(1.0)
+            let ratio = if max_scroll_units > 0.0 {
+                (clicked_unit / max_scroll_units).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            ratio * max_scroll_pixels
         };
         let previous_y = self.scroll_y;
         self.scroll_y = target_y.clamp(0.0, max_scroll_pixels);
@@ -1074,54 +1079,104 @@ impl SemanticEditor {
         visible_bottom: f32,
     ) -> super::minimap::ViewportGeometry {
         let viewport_height = f32::from(bounds.size.height);
+        let active_layout = self.minimap.active_layout();
+        let minimap_layout = active_layout.as_deref().unwrap_or(&self.display_map);
         let total_units =
-            self.animated_document_height() / self.display_map.base_line_height().max(1.0);
+            minimap_layout.total_height() / minimap_layout.base_line_height().max(1.0);
         let density = crate::minimap::Density::for_width(f32::from(bounds.size.width));
         let line_height = self.minimap.line_height(density);
-        let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
-        let scroll_ratio = if max_scroll > 0.0 {
-            (self.scroll_y / max_scroll).clamp(0.0, 1.0)
+        let viewport_units = (visible_bottom - visible_top).max(0.0);
+        let max_scroll_units = (total_units - viewport_units).max(0.0);
+        let scroll_ratio = if visible_bottom >= total_units - f32::EPSILON {
+            1.0
+        } else if max_scroll_units > 0.0 {
+            (visible_top / max_scroll_units).clamp(0.0, 1.0)
         } else {
             0.0
         };
-        self.minimap.stabilize_viewport(
-            crate::minimap::projection_viewport_with_line_height(
-                total_units,
-                visible_top,
-                visible_bottom,
-                scroll_ratio,
-                viewport_height,
-                density,
-                line_height,
-            ),
+        let viewport = crate::minimap::projection_viewport_with_line_height(
             total_units,
             visible_top,
             visible_bottom,
+            scroll_ratio,
             viewport_height,
             density,
-        )
+            line_height,
+        );
+        if self.minimap.active_frame_uses_prepared_layout() {
+            // The complete Editor layout is now the same immutable geometry used by the active
+            // minimap frame. Follow the shared Editor/Reading projection directly; the legacy
+            // stabilization camera is only needed during the short sparse-layout bootstrap.
+            viewport
+        } else {
+            self.minimap.stabilize_viewport(
+                viewport,
+                total_units,
+                visible_top,
+                visible_bottom,
+                viewport_height,
+                density,
+            )
+        }
     }
 
     pub(super) fn minimap_source_viewport(&self, viewport_height: f32) -> (f32, f32, f32) {
-        let base_line_height = self.display_map.base_line_height().max(1.0);
-        let total = self.animated_document_height() / base_line_height;
-        if total <= 0.0 {
+        let active_frame = self.minimap.active_frame();
+        let minimap_layout = active_frame
+            .as_ref()
+            .map_or(&self.display_map, |frame| frame.layout.as_ref());
+        let base_line_height = minimap_layout.base_line_height().max(1.0);
+        let minimap_document_height = minimap_layout.total_height();
+        let total_units = minimap_document_height / base_line_height;
+        if total_units <= 0.0 {
             return (0.0, 0.0, 0.0);
         }
-        let document_height = self.animated_document_height();
-        let max_scroll = (document_height - viewport_height).max(0.0);
-        let scroll_y = self.scroll_y.clamp(0.0, max_scroll);
-        let top = if self.scroll_y <= 0.5 {
-            0.0
+        let live_document_height = self.animated_document_height();
+        let live_max_scroll = (live_document_height - viewport_height).max(0.0);
+        let live_scroll_y = self.scroll_y.clamp(0.0, live_max_scroll);
+        let at_end = live_scroll_y + viewport_height + 0.5 >= live_document_height;
+        let prepared_max_scroll = (minimap_document_height - viewport_height).max(0.0);
+        let minimap_scroll_y = active_frame.as_ref().map_or_else(
+            || {
+                super::minimap::source_viewport_for_layout(
+                    minimap_layout,
+                    &self.display_map,
+                    live_scroll_y,
+                    live_document_height,
+                    viewport_height,
+                )
+                .visible_top
+                    * base_line_height
+            },
+            |frame| {
+                if self.minimap.active_frame_uses_prepared_layout() {
+                    return super::minimap::source_viewport_for_layout(
+                        frame.layout.as_ref(),
+                        &self.display_map,
+                        live_scroll_y,
+                        live_document_height,
+                        viewport_height,
+                    )
+                    .visible_top
+                        * base_line_height;
+                }
+                self.minimap.project_scroll_camera(
+                    &self.display_map,
+                    frame,
+                    live_scroll_y,
+                    live_max_scroll,
+                    prepared_max_scroll,
+                )
+            },
+        );
+        let visible_top = minimap_scroll_y / base_line_height;
+        let visible_bottom = if at_end {
+            total_units
         } else {
-            scroll_y / base_line_height
+            ((minimap_scroll_y + viewport_height).min(minimap_document_height) / base_line_height)
+                .clamp(visible_top, total_units)
         };
-        let bottom = if scroll_y + viewport_height + 0.5 >= document_height {
-            total
-        } else {
-            ((scroll_y + viewport_height).min(document_height) / base_line_height).clamp(top, total)
-        };
-        (total, top, bottom)
+        (total_units, visible_top, visible_bottom)
     }
 
     fn drag_is_outside_viewport(&self) -> bool {
@@ -1149,8 +1204,9 @@ impl SemanticEditor {
             let speed = distance.signum() * (distance.abs() / 8.0).clamp(4.0, 64.0);
             let previous_y = self.scroll_y;
             self.scroll_y = (self.scroll_y + speed).clamp(0.0, max_scroll);
-            if (self.scroll_y - previous_y).abs() > 0.5 {
-                self.minimap.note_viewport_changed();
+            let scroll_delta = self.scroll_y - previous_y;
+            if scroll_delta.abs() > 0.5 {
+                self.minimap.note_viewport_scrolled(scroll_delta);
             }
         }
         self.selection = self.selection.with_head(self.hit_test(position));
@@ -1204,8 +1260,9 @@ impl SemanticEditor {
         if !self.display_map.soft_wrap() {
             self.scroll_x = (self.scroll_x - delta_x).clamp(0.0, self.max_horizontal_scroll());
         }
-        if (self.scroll_y - previous_y).abs() > 0.5 {
-            self.minimap.note_viewport_changed();
+        let scroll_delta = self.scroll_y - previous_y;
+        if scroll_delta.abs() > 0.5 {
+            self.minimap.note_viewport_scrolled(scroll_delta);
         }
         cx.notify();
     }

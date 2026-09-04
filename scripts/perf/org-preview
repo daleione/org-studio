@@ -205,6 +205,7 @@ run_scroll() {
     new_run_dir "scroll-${pixels}px-${mib}m-style${style_switches}"
     {
         printf 'minimap_enabled=%s\n' "${ORG_STUDIO_MINIMAP:-settings}"
+        printf 'visual_layout=%s\n' "${ORG_STUDIO_MINIMAP_VISUAL_LAYOUT:-single-reading}"
         printf 'minimap_width=%s\n' "$DEFAULT_MINIMAP_WIDTH"
         printf 'window_size=%sx%s\n' "$DEFAULT_WINDOW_WIDTH" "$DEFAULT_WINDOW_HEIGHT"
         printf 'requested_display_index=%s\n' "${ORG_STUDIO_DISPLAY_INDEX:-manual}"

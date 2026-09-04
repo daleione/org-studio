@@ -72,21 +72,6 @@ impl RasterTileCache {
                     && candidate.scale_factor_x100 == key.scale_factor_x100
                     && candidate.density == key.density
             })
-            .or_else(|| {
-                // Folding replaces a complete visible batch. Keep the image previously painted
-                // in the same tile slot until that batch is ready, rather than exposing an empty
-                // canvas between the two frames. Style changes retain a whole paint frame in
-                // MinimapState because their row geometry may differ.
-                self.order.iter().rev().find(|candidate| {
-                    candidate.tile_start == key.tile_start
-                        && candidate.width == key.width
-                        && candidate.theme_signature == key.theme_signature
-                        && (candidate.folded_signature != key.folded_signature
-                            || candidate.wrap_signature == key.wrap_signature)
-                        && candidate.scale_factor_x100 == key.scale_factor_x100
-                        && candidate.density == key.density
-                })
-            })
             .and_then(|candidate| self.entries.get(candidate).cloned());
         (fallback, true)
     }
@@ -179,7 +164,7 @@ pub(crate) struct RasterRow {
 #[derive(Clone)]
 pub(crate) struct RasterTableGeometry {
     pub(crate) projected: ProjectedTable,
-    pub(crate) wrapped_cells: Vec<Vec<String>>,
+    pub(crate) wrapped_cells: Arc<[Vec<String>]>,
 }
 
 impl RasterRow {

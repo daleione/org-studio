@@ -17,7 +17,7 @@ use crate::{
         parse_document_inline,
         projection::{ReadingCodeRow, ReadingProjection, VisualRowId, VisualRowKind},
         style::PreviewStyle,
-        table::TableRowProjection,
+        table::{ReadingTableLayout, TableRowProjection},
     },
 };
 #[cfg(test)]
@@ -103,6 +103,7 @@ pub(crate) struct PreviewDisplayMap {
     pub(crate) projection: Arc<ReadingProjection>,
     pub(crate) display_runs: Mutex<DisplayRunCache>,
     pub(crate) display_lines: Mutex<DisplayLineCache>,
+    table_layouts: Mutex<TableLayoutCache>,
 }
 
 impl PreviewDisplayMap {
@@ -117,11 +118,44 @@ impl PreviewDisplayMap {
 pub(crate) struct DisplayLines {
     pub(crate) ranges: Arc<[Range<usize>]>,
     pub(crate) parent_height: f32,
+    pub(crate) table: Option<ResolvedTableDisplay>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ResolvedTableDisplay {
+    pub(crate) layout: Arc<ReadingTableLayout>,
+    pub(crate) wrapped_cells: Arc<[Vec<String>]>,
 }
 
 pub(crate) struct DisplayLineCache {
     entries: HashMap<((VisualRowId, u64), u16, u16, u64), DisplayLines>,
     order: VecDeque<((VisualRowId, u64), u16, u16, u64)>,
+}
+
+struct TableLayoutCache {
+    entries: HashMap<(crate::org_syntax::BlockId, u16, u16, u64), Arc<ReadingTableLayout>>,
+    order: VecDeque<(crate::org_syntax::BlockId, u16, u16, u64)>,
+}
+
+impl TableLayoutCache {
+    const CAPACITY: usize = 256;
+
+    fn insert(
+        &mut self,
+        key: (crate::org_syntax::BlockId, u16, u16, u64),
+        layout: Arc<ReadingTableLayout>,
+    ) {
+        if self.entries.contains_key(&key) {
+            return;
+        }
+        while self.entries.len() >= Self::CAPACITY {
+            if let Some(oldest) = self.order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+        self.order.push_back(key);
+        self.entries.insert(key, layout);
+    }
 }
 
 impl DisplayLineCache {
@@ -164,6 +198,48 @@ impl DisplayRunCache {
 }
 
 impl PreviewDisplayMap {
+    pub(crate) fn reading_table_layout(
+        &self,
+        row: usize,
+        available_width: f32,
+        zoom: f32,
+        style: PreviewStyle,
+    ) -> Option<Arc<ReadingTableLayout>> {
+        let projection = self.table_projection(row)?;
+        // Use the same quantized identity as DisplayLineCache. Tiny sub-pixel width changes must
+        // not make row measurement and the rendered table select different layout generations.
+        let width_key = available_width.round().clamp(1.0, u16::MAX as f32) as u16;
+        let zoom_key = (zoom * 1_000.0).round().clamp(1.0, u16::MAX as f32) as u16;
+        let key = (
+            projection.group_id(),
+            width_key,
+            zoom_key,
+            style.layout_key(),
+        );
+        if let Some(layout) = self
+            .table_layouts
+            .lock()
+            .expect("table layout cache poisoned")
+            .entries
+            .get(&key)
+            .cloned()
+        {
+            return Some(layout);
+        }
+        // Resolve from the canonical values represented by the key. Otherwise whichever pane
+        // first inserts a sub-pixel width would silently define the geometry for the other pane.
+        let layout = projection.resolved_reading_layout(
+            f32::from(width_key),
+            f32::from(zoom_key) / 1_000.0,
+            style,
+        );
+        self.table_layouts
+            .lock()
+            .expect("table layout cache poisoned")
+            .insert(key, layout.clone());
+        Some(layout)
+    }
+
     pub(crate) fn runs(&self, row: usize) -> DisplayRuns {
         let visual_row = self
             .projection
@@ -233,18 +309,32 @@ impl PreviewDisplayMap {
         let layout = self.layout(row, style).scaled(zoom);
         if kind == PreviewLineKind::Table {
             let table = self.table_projection(row);
-            let line_count = table
-                .filter(|table| !table.is_separator())
+            let resolved_table = table.map(|table| {
+                let table_layout = self
+                    .reading_table_layout(row, available_width, zoom, style)
+                    .expect("table row has a resolved layout");
+                let wrapped_cells = if table.is_separator() {
+                    Vec::new()
+                } else {
+                    table.shaped_display_cells(
+                        &display.text,
+                        &table_layout,
+                        zoom,
+                        style,
+                        text_system,
+                    )
+                };
+                ResolvedTableDisplay {
+                    layout: table_layout,
+                    wrapped_cells: wrapped_cells.into(),
+                }
+            });
+            let line_count = resolved_table
+                .as_ref()
                 .map(|table| {
                     table
-                        .shaped_display_cells(
-                            &display.text,
-                            available_width,
-                            zoom,
-                            style,
-                            text_system,
-                        )
-                        .into_iter()
+                        .wrapped_cells
+                        .iter()
                         .map(|lines| lines.len().max(1))
                         .max()
                         .unwrap_or(1)
@@ -263,6 +353,7 @@ impl PreviewDisplayMap {
                         + layout.margin_top
                         + layout.margin_bottom
                 },
+                table: resolved_table,
             };
             self.display_lines
                 .lock()
@@ -332,6 +423,7 @@ impl PreviewDisplayMap {
         let lines = DisplayLines {
             ranges: ranges.into(),
             parent_height,
+            table: None,
         };
         self.display_lines
             .lock()
@@ -516,6 +608,10 @@ pub(crate) fn build_display_map(document: &PreviewSnapshot) -> PreviewDisplayMap
             entries: HashMap::with_capacity(DisplayLineCache::CAPACITY),
             order: VecDeque::with_capacity(DisplayLineCache::CAPACITY),
         }),
+        table_layouts: Mutex::new(TableLayoutCache {
+            entries: HashMap::with_capacity(TableLayoutCache::CAPACITY),
+            order: VecDeque::with_capacity(TableLayoutCache::CAPACITY),
+        }),
     }
 }
 
@@ -552,6 +648,12 @@ pub(crate) fn build_display_map_reusing(
         display_lines: Mutex::new(DisplayLineCache {
             entries: line_entries,
             order: line_order,
+        }),
+        // Layout identities are presentation-local and cheap to rebuild. Do not carry viewport
+        // state across document snapshots even when semantic display runs can be reused safely.
+        table_layouts: Mutex::new(TableLayoutCache {
+            entries: HashMap::with_capacity(TableLayoutCache::CAPACITY),
+            order: VecDeque::with_capacity(TableLayoutCache::CAPACITY),
         }),
     }
 }
