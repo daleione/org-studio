@@ -7,12 +7,14 @@ use crate::preview::{DocumentFormat, PreviewStyleId};
 pub(crate) const DOCUMENT_PANE_ID: PaneId = PaneId(1);
 pub(crate) const DIRED_PANE_ID: PaneId = PaneId(2);
 pub(crate) const RIGHT_DOCUMENT_PANE_ID: PaneId = PaneId(3);
+pub(crate) const AGENDA_PANE_ID: PaneId = PaneId(4);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum StatusHost {
     Reading,
     Editor,
     Dired,
+    Agenda,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +22,7 @@ pub(crate) enum StatusPosition {
     ReadingSource { line: u64, total_lines: u64 },
     EditorCaret { line: u64, column: u64 },
     DiredSelection { selected: usize, total: usize },
+    AgendaSelection { selected: usize, total: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

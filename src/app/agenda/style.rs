@@ -1,0 +1,15 @@
+pub(crate) const TITLEBAR_HEIGHT: f32 = 88.0;
+pub(crate) const SIDEBAR_WIDTH: f32 = 220.0;
+pub(crate) const TASK_ROW_HEIGHT: f32 = 45.0;
+pub(crate) const DAY_HEADER_HEIGHT: f32 = 34.0;
+pub(crate) const COLUMN_HEADER_HEIGHT: f32 = 44.0;
+pub(crate) const COMPACT_BREAKPOINT: f32 = 940.0;
+pub(crate) const WIDE_BREAKPOINT: f32 = 1180.0;
+pub(crate) const INK: u32 = 0x292b31;
+pub(crate) const MUTED: u32 = 0x767a82;
+pub(crate) const BORDER: u32 = 0xdedfe2;
+pub(crate) const SIDEBAR: u32 = 0xfafafa;
+pub(crate) const TOOLBAR: u32 = 0xfbfbfc;
+pub(crate) const PURPLE: u32 = 0x70417c;
+pub(crate) const PURPLE_SELECTION: u32 = 0xf0ecf9;
+pub(crate) const BLUE_SELECTION: u32 = 0xeff6ff;

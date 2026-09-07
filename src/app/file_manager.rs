@@ -650,6 +650,9 @@ impl WorkspaceWindow {
             return self.body(entity, viewport_width, window, cx);
         }
         let body = match self.content_route {
+            ContentRoute::Agenda => div()
+                .size_full()
+                .child(self.agenda.render(entity.clone(), viewport_width)),
             ContentRoute::FileManager => {
                 self.full_page_file_manager(entity.clone(), viewport_width, window, cx)
             }

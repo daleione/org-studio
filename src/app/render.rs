@@ -28,6 +28,7 @@ impl Render for WorkspaceWindow {
         profiling::scope!("WorkspaceWindow::render");
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
+        self.ensure_agenda_runtime(cx);
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),
@@ -116,6 +117,7 @@ impl Render for WorkspaceWindow {
         let resizing_split = self.split_resize.is_some();
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
+        let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda);
         let content_font_size_actions_enabled = self.content_font_size_command_available();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
@@ -214,10 +216,12 @@ impl Render for WorkspaceWindow {
                         window,
                         cx,
                     )))
-                    .child(crate::app::echo_area::render_echo_area(
-                        echo_message,
-                        entity.clone(),
-                    )),
+                    .when(show_echo_area, |workspace| {
+                        workspace.child(crate::app::echo_area::render_echo_area(
+                            echo_message,
+                            entity.clone(),
+                        ))
+                    }),
             )
             .when(resizing_sidebar, |view| {
                 view.child(
@@ -315,9 +319,12 @@ impl WorkspaceWindow {
                             gpui::ImageSource::from(path.clone()).remove_asset(cx);
                             this.schedule_derived_resource_update(cx);
                         }
-                        crate::document::DocumentEvent::Saved { .. }
-                        | crate::document::DocumentEvent::DiskChanged { .. } => {}
+                        crate::document::DocumentEvent::Saved { .. } => {
+                            this.flush_agenda_clock(cx);
+                        }
+                        crate::document::DocumentEvent::DiskChanged { .. } => {}
                     }
+                    this.sync_agenda_document(cx);
                     cx.notify();
                 },
             ));

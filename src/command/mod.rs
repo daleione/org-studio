@@ -54,6 +54,7 @@ impl CommandKey {
 pub enum BuiltinCommand {
     OpenDocument,
     ShowHome,
+    OpenAgenda,
     ReloadDocument,
     SaveDocument,
     SaveDocumentAs,

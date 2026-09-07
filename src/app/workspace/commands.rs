@@ -92,6 +92,12 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ShowHome) => {
                 self.request_home(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::OpenAgenda) => {
+                self.content_route = ContentRoute::Agenda;
+                self.agenda.requery();
+                self.focus_workspace_on_render = true;
+                cx.notify();
+            }
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
                 if self.content_route == ContentRoute::FileManager
                     || self.file_manager.sidebar_focused()
@@ -518,6 +524,144 @@ impl WorkspaceWindow {
                 self.close_export_panel(cx);
             }
             return;
+        }
+        if matches!(self.content_route, ContentRoute::Agenda) {
+            let key = event.keystroke.key.as_str();
+            if event.keystroke.modifiers.platform && key.eq_ignore_ascii_case("k") {
+                if let Some(input) = &self.agenda.search_input {
+                    let focus = input.read(cx).focus.clone();
+                    window.focus(&focus, cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
+            if self
+                .agenda
+                .search_input
+                .as_ref()
+                .is_some_and(|input| input.read(cx).focus.is_focused(window))
+            {
+                return;
+            }
+            if key.eq_ignore_ascii_case("q")
+                && self.agenda.state.overlay == crate::app::agenda::state::AgendaOverlay::None
+            {
+                self.content_route = ContentRoute::Document;
+                self.install_document_keymap();
+                self.focus_workspace_on_render = true;
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if event.keystroke.modifiers.platform && key.eq_ignore_ascii_case("n") {
+                self.dispatch_agenda_intent(crate::app::agenda::UiIntent::OpenCapture, cx);
+                cx.stop_propagation();
+                return;
+            }
+            if self.agenda.state.overlay == crate::app::agenda::state::AgendaOverlay::Capture {
+                match key {
+                    "escape" => {
+                        self.agenda.close_top_layer();
+                    }
+                    "enter" => {
+                        self.dispatch_agenda_intent(crate::app::agenda::UiIntent::SubmitCapture, cx)
+                    }
+                    "backspace" => {
+                        self.agenda.state.capture.title.pop();
+                    }
+                    _ if !event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.control
+                        && !event.keystroke.modifiers.alt =>
+                    {
+                        if let Some(text) = event.keystroke.key_char.as_deref() {
+                            self.agenda.state.capture.title.push_str(text);
+                        }
+                    }
+                    _ => {}
+                }
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if self.agenda.state.overlay == crate::app::agenda::state::AgendaOverlay::Refile {
+                match key {
+                    "escape" => {
+                        self.agenda.close_top_layer();
+                    }
+                    "enter" => {
+                        self.dispatch_agenda_intent(crate::app::agenda::UiIntent::SubmitRefile, cx)
+                    }
+                    "up" => self
+                        .dispatch_agenda_intent(crate::app::agenda::UiIntent::RefileNext(-1), cx),
+                    "down" => {
+                        self.dispatch_agenda_intent(crate::app::agenda::UiIntent::RefileNext(1), cx)
+                    }
+                    "backspace" => {
+                        self.agenda.state.refile_search.pop();
+                        self.agenda.state.refile_selected = 0;
+                    }
+                    _ if !event.keystroke.modifiers.platform
+                        && !event.keystroke.modifiers.control
+                        && !event.keystroke.modifiers.alt =>
+                    {
+                        if let Some(text) = event.keystroke.key_char.as_deref() {
+                            self.agenda.state.refile_search.push_str(text);
+                            self.agenda.state.refile_selected = 0;
+                        }
+                    }
+                    _ => {}
+                }
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if self.agenda.state.overlay == crate::app::agenda::state::AgendaOverlay::Repeat {
+                let action = match key {
+                    "1" | "enter" => Some(crate::agenda::RepeatCompletionAction::Occurrence),
+                    "2" => Some(crate::agenda::RepeatCompletionAction::Series),
+                    "escape" | "3" => Some(crate::agenda::RepeatCompletionAction::Cancel),
+                    _ => None,
+                };
+                if let Some(action) = action {
+                    self.dispatch_agenda_intent(
+                        crate::app::agenda::UiIntent::ResolveRepeat(action),
+                        cx,
+                    );
+                }
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if key.eq_ignore_ascii_case("c")
+                && !event.keystroke.modifiers.platform
+                && !event.keystroke.modifiers.control
+                && !event.keystroke.modifiers.alt
+            {
+                if let Some(key) = self.agenda.selected_task_key() {
+                    self.dispatch_agenda_intent(crate::app::agenda::UiIntent::ToggleClock(key), cx);
+                }
+                cx.stop_propagation();
+                return;
+            }
+            if key == "escape" && self.agenda.close_top_layer() {
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if matches!(key, "up" | "k" | "down" | "j") {
+                self.agenda
+                    .move_selection(if matches!(key, "up" | "k") { -1 } else { 1 });
+                cx.stop_propagation();
+                cx.notify();
+                return;
+            }
+            if key == "enter"
+                && let Some(task) = self.agenda.selected_task()
+            {
+                self.dispatch_agenda_intent(crate::app::agenda::UiIntent::OpenSource(task), cx);
+                cx.stop_propagation();
+                return;
+            }
         }
         if event.keystroke.key.eq_ignore_ascii_case("c")
             && event.keystroke.modifiers.platform

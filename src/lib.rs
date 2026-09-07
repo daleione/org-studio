@@ -1,3 +1,4 @@
+pub(crate) mod agenda;
 pub mod app;
 mod babel;
 pub mod command;
@@ -12,6 +13,7 @@ pub mod input;
 pub mod keymap;
 pub mod minimap;
 pub mod navigation;
+pub(crate) mod org_semantic;
 pub mod org_syntax;
 pub mod perf_tracing;
 pub mod preview;

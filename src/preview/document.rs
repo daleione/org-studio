@@ -4,6 +4,7 @@ use crate::{
         DocumentFormat, DocumentId, DocumentSession, PreparedReload, Revision, RevisionRange,
         SharedTextSnapshot, TextSnapshot, TextStatistics,
     },
+    org_semantic::OrgAnalysisSnapshot,
     org_syntax::{BlockArena, BlockId},
 };
 use gpui::App;
@@ -20,6 +21,10 @@ pub struct PreviewSnapshot {
     pub text: SharedTextSnapshot,
     pub(crate) format: DocumentFormat,
     pub blocks: Arc<BlockArena>,
+    // Published now so Agenda can reuse the same revision-coherent derivation
+    // pipeline; the first Agenda consumer lands in the next implementation slice.
+    #[allow(dead_code)]
+    pub(crate) semantic: Option<Arc<OrgAnalysisSnapshot>>,
     pub(crate) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     pub(crate) outline_paths: Arc<Vec<Option<Arc<str>>>>,
     pub(crate) projection: Arc<ReadingProjection>,
@@ -209,8 +214,10 @@ pub struct LoadMetrics {
     pub read: Duration,
     pub rope: Duration,
     pub parse: Duration,
+    pub semantic: Duration,
     pub display_map: Duration,
     pub total: Duration,
     pub syntax_reparsed_bytes: u64,
+    pub semantic_source_bytes: u64,
     pub full_syntax_fallback: bool,
 }

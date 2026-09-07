@@ -227,6 +227,7 @@ impl StatusLineSnapshot {
     fn mode_label(&self) -> &'static str {
         match self.host {
             StatusHost::Dired => "FILES",
+            StatusHost::Agenda => "AGENDA",
             StatusHost::Reading | StatusHost::Editor => match self.surface {
                 crate::app::PaneSurface::Editor => "EDITOR",
                 crate::app::PaneSurface::Reading => "READING",
@@ -423,6 +424,13 @@ fn position_text(position: StatusPosition, compact: bool, language: Language) ->
                 format!("{selected} / {total}")
             }
         }
+        StatusPosition::AgendaSelection { selected, total } => {
+            if compact {
+                selected.to_string()
+            } else {
+                format!("{selected} / {total}")
+            }
+        }
     }
 }
 
@@ -452,6 +460,14 @@ fn position_reserve_text(position: StatusPosition, compact: bool, language: Lang
             }
         }
         StatusPosition::DiredSelection { total, .. } => {
+            let number = "9".repeat(digits(total as u64));
+            if compact {
+                number
+            } else {
+                format!("{number} / {number}")
+            }
+        }
+        StatusPosition::AgendaSelection { total, .. } => {
             let number = "9".repeat(digits(total as u64));
             if compact {
                 number
@@ -826,12 +842,39 @@ fn progress_ring(progress: u8) -> impl gpui::IntoElement {
 }
 
 impl WorkspaceWindow {
+    fn agenda_status_snapshot(&self) -> Option<StatusLineSnapshot> {
+        let (selected, total, progress, errors) = self.agenda.status_counts();
+        Some(StatusLineSnapshot {
+            pane: model::AGENDA_PANE_ID,
+            language: self.language,
+            host: StatusHost::Agenda,
+            surface: crate::app::PaneSurface::Editor,
+            dirty: false,
+            reading_style: None,
+            outline: Some(self.agenda.mode_name().into()),
+            position: Some(StatusPosition::AgendaSelection { selected, total }),
+            progress: (progress < 100).then_some(progress),
+            statistics: Some(
+                if errors == 0 {
+                    format!("{total} tasks")
+                } else {
+                    format!("{total} tasks · {errors} errors")
+                }
+                .into(),
+            ),
+            document_statistics: None,
+            format: None,
+            transient: None,
+        })
+    }
+
     pub(crate) fn status_snapshot(&self, cx: &gpui::App) -> Option<StatusLineSnapshot> {
         match self.content_route {
             ContentRoute::Document => {
                 self.document_status_snapshot(self.document_workspace.active_pane, cx)
             }
             ContentRoute::FileManager => self.dired_status_snapshot(DIRED_PANE_ID),
+            ContentRoute::Agenda => self.agenda_status_snapshot(),
         }
     }
 

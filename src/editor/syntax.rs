@@ -834,44 +834,27 @@ fn update_code_context(language: Language, text: &str, code: &mut CodeContext) {
 }
 
 fn update_org_todo_faces(text: &str, context: &mut CodeContext) {
-    let Some((key, value)) = text.split_once(':') else {
+    let Some(sequence) = crate::org_semantic::parse_todo_directive(text) else {
         return;
     };
-    if !["#+TODO", "#+SEQ_TODO", "#+TYP_TODO"]
-        .iter()
-        .any(|candidate| key.eq_ignore_ascii_case(candidate))
-    {
-        return;
-    }
 
     if !context.has_custom_todo_faces {
         context.todo_faces.clear();
         context.has_custom_todo_faces = true;
     }
 
-    let tokens = value.split_whitespace().collect::<Vec<_>>();
-    let separator = tokens.iter().position(|token| *token == "|");
-    let last_keyword = tokens.iter().rposition(|token| *token != "|");
-    for (index, token) in tokens.into_iter().enumerate() {
-        if token == "|" {
-            continue;
-        }
-        let keyword = token.split_once('(').map_or(token, |(keyword, _)| keyword);
-        if keyword.is_empty() {
-            continue;
-        }
-        let default_face = if separator.map_or(Some(index) == last_keyword, |pipe| index > pipe) {
-            TodoFace::Done
-        } else {
-            TodoFace::Open
+    for state in sequence.states.iter() {
+        let default_face = match state.kind {
+            crate::org_semantic::TodoStateKind::Open => TodoFace::Open,
+            crate::org_semantic::TodoStateKind::Done => TodoFace::Done,
         };
-        let face = match keyword {
+        let face = match state.keyword.as_ref() {
             "PROJ" => TodoFace::Project,
             "STRT" => TodoFace::Active,
             "WAIT" | "HOLD" => TodoFace::Waiting,
             _ => default_face,
         };
-        context.todo_faces.insert(Arc::from(keyword), face);
+        context.todo_faces.insert(Arc::clone(&state.keyword), face);
     }
 }
 

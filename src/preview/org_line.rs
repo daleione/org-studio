@@ -82,12 +82,25 @@ impl PlanningParts {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn parse_heading(text: &str) -> HeadingParts {
+    parse_heading_with_config(text, None)
+}
+
+pub(crate) fn parse_heading_with_config(
+    text: &str,
+    config: Option<&crate::org_semantic::OrgFileConfig>,
+) -> HeadingParts {
     let (body, tags) = split_tags(text.trim());
     let mut words = body.split_whitespace().peekable();
     let todo = words
         .peek()
-        .filter(|word| is_todo_keyword(word))
+        .filter(|word| {
+            config.map_or_else(
+                || is_todo_keyword(word),
+                |config| config.todo_state(word).is_some(),
+            )
+        })
         .map(|word| (*word).to_owned());
     if todo.is_some() {
         words.next();
@@ -221,6 +234,10 @@ fn is_statistics_cookie(word: &&str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use crate::{document::DocumentSnapshot, org_semantic, org_syntax};
+
     use super::*;
 
     #[test]
@@ -284,6 +301,21 @@ mod tests {
         let heading = parse_heading("API Design");
         assert_eq!(heading.todo, None);
         assert_eq!(heading.title, "API Design");
+    }
+
+    #[test]
+    fn preview_heading_uses_the_shared_file_local_todo_configuration() {
+        let snapshot = DocumentSnapshot::from_utf8(
+            b"#+TODO: PLAN(p) | SHIPPED(s)\n* PLAN Build native Agenda\n".to_vec(),
+        )
+        .unwrap();
+        let semantic = org_semantic::analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
+        let heading = super::parse_heading_with_config(
+            "PLAN Build native Agenda",
+            Some(semantic.config.as_ref()),
+        );
+        assert_eq!(heading.todo.as_deref(), Some("PLAN"));
+        assert_eq!(heading.title, "Build native Agenda");
     }
 
     #[test]

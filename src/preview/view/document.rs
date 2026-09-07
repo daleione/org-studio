@@ -11,7 +11,7 @@ use crate::preview::{
     diagram::DiagramProjection,
     display_map::{DisplayRuns, PreviewLineKind},
     layout::reading_content_width,
-    org_line::{CheckboxState, parse_heading},
+    org_line::CheckboxState,
     projection::{ReadingCodeRow, ReadingListMarker, VisualRowKind},
     style::CodeBlockVariant,
 };
@@ -469,7 +469,13 @@ fn render_block(
         BlockKind::Heading { level } => {
             let heading_index = (*level as usize).saturating_sub(1);
             let source = document.text.copy_range(row.content.range);
-            let parts = parse_heading(source.trim_end_matches(['\r', '\n']));
+            let parts = super::super::org_line::parse_heading_with_config(
+                source.trim_end_matches(['\r', '\n']),
+                document
+                    .semantic
+                    .as_ref()
+                    .map(|semantic| semantic.config.as_ref()),
+            );
             div()
                 .flex()
                 .items_center()

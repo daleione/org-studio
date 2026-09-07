@@ -20,13 +20,13 @@ use super::{
     DIRED_PREVIOUS_COMMAND, DIRED_RENAME_COMMAND, DIRED_TRASH_COMMAND, DIRED_UNMARK_ALL_COMMAND,
     DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, EXECUTE_SOURCE_BLOCK_COMMAND,
     EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, INCREASE_CONTENT_FONT_SIZE_COMMAND,
-    OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND,
-    QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
-    RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND,
-    SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND,
-    SHOW_HOME_COMMAND, SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND,
-    TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
-    TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
+    OPEN_AGENDA_COMMAND, OPEN_DEFAULT_DIRED_COMMAND, OPEN_DOCUMENT_COMMAND,
+    OPEN_FILE_MANAGER_COMMAND, QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND,
+    RELOAD_DOCUMENT_COMMAND, RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND,
+    SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND,
+    SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND, SHOW_HOME_COMMAND, SHOW_READING_COMMAND,
+    SHOW_SPLIT_COMMAND, TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND, TOGGLE_MINIMAP_COMMAND,
+    TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
 };
 
 #[cfg(test)]
@@ -181,6 +181,23 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::None,
         })
         .expect("valid built-in home command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: OPEN_AGENDA_COMMAND.into(),
+            aliases: &["org-agenda"],
+            title: "Agenda",
+            description: "Open the Org Agenda workspace",
+            command: BuiltinCommand::OpenAgenda,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::None,
+            required_capabilities: CapabilitySet::empty(),
+            redaction: RedactionPolicy::None,
+        })
+        .expect("valid built-in Agenda command");
     builder
         .register_builtin(BuiltinCommandSpec {
             name: RELOAD_DOCUMENT_COMMAND.into(),
@@ -592,6 +609,10 @@ pub(crate) fn preview_bindings() -> Vec<BindingSpec<'static>> {
 
 pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
     vec![
+        BindingSpec {
+            keys: "C-c a",
+            behavior: BindingBehavior::Command(OPEN_AGENDA_COMMAND),
+        },
         BindingSpec {
             keys: "C-c C-c",
             behavior: BindingBehavior::Command(EXECUTE_SOURCE_BLOCK_COMMAND),

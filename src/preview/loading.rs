@@ -10,6 +10,7 @@ use crate::{
         DocumentSession, DocumentSnapshot, ReloadRequest, RevisionDelta, SharedTextSnapshot,
         TextSnapshot, TextStatistics,
     },
+    org_semantic,
     org_syntax::{BlockArena, BlockId, BlockKind, SyntaxPatch, parse, parse_incremental},
 };
 
@@ -294,10 +295,13 @@ struct IncrementalPreview {
     text: SharedTextSnapshot,
     format: DocumentFormat,
     blocks: Arc<BlockArena>,
+    semantic: Option<Arc<org_semantic::OrgAnalysisSnapshot>>,
     markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     outline_paths: Arc<Vec<Option<Arc<str>>>>,
     projection: Arc<super::projection::ReadingProjection>,
     syntax_elapsed: Duration,
+    semantic_elapsed: Duration,
+    semantic_source_bytes: u64,
     syntax_reparsed_bytes: u64,
     patch: super::projection::VisualPatch,
     reused_chunks: usize,
@@ -316,6 +320,7 @@ fn finish_incremental_preview(
         text: parts.text,
         format: parts.format,
         blocks: parts.blocks,
+        semantic: parts.semantic,
         markdown_blocks: parts.markdown_blocks,
         outline_paths: parts.outline_paths,
         projection: parts.projection,
@@ -326,9 +331,11 @@ fn finish_incremental_preview(
             read: Duration::ZERO,
             rope: Duration::ZERO,
             parse: parts.syntax_elapsed,
+            semantic: parts.semantic_elapsed,
             display_map: Duration::ZERO,
             total: Duration::ZERO,
             syntax_reparsed_bytes: parts.syntax_reparsed_bytes,
+            semantic_source_bytes: parts.semantic_source_bytes,
             full_syntax_fallback: false,
         },
         update: DerivedUpdate::Incremental {
@@ -356,16 +363,29 @@ fn build_preview(
     let text: SharedTextSnapshot = Arc::new(snapshot);
     let parse_started = Instant::now();
     let format = DocumentFormat::from_path(&path);
-    let (blocks, markdown_blocks, rows) = match format {
+    // Stage 1 publishes document semantics from the one shared syntax arena. Stage 2 below builds
+    // the optional reading projection; Agenda can consume stage 1 without reparsing the file.
+    let (blocks, semantic, semantic_elapsed, markdown_blocks, rows) = match format {
         DocumentFormat::Org => {
             let blocks = org_blocks.unwrap_or_else(|| Arc::new(parse(text.as_ref())));
+            let semantic_started = Instant::now();
+            let semantic = Arc::new(org_semantic::analyze(text.as_ref(), blocks.clone()));
+            let semantic_elapsed = semantic_started.elapsed();
             let rows = Arc::new(build_preview_rows(text.as_ref(), &blocks));
-            (blocks, Arc::new(Vec::new()), rows)
+            (
+                blocks,
+                Some(semantic),
+                semantic_elapsed,
+                Arc::new(Vec::new()),
+                rows,
+            )
         }
         DocumentFormat::Markdown => {
             let (markdown_blocks, rows) = markdown::parse_markdown(text.as_ref());
             (
                 Arc::new(BlockArena::default()),
+                None,
+                Duration::ZERO,
                 Arc::new(markdown_blocks),
                 Arc::new(rows),
             )
@@ -403,7 +423,9 @@ fn build_preview(
             diagrams: &diagrams,
         },
     );
-
+    let semantic_source_bytes = semantic
+        .as_ref()
+        .map_or(0, |semantic| semantic.metrics.semantic_source_bytes);
     let mut document = PreviewSnapshot {
         document_id: text.document_id(),
         path,
@@ -411,6 +433,7 @@ fn build_preview(
         text,
         format,
         blocks,
+        semantic,
         markdown_blocks,
         outline_paths,
         projection,
@@ -421,11 +444,13 @@ fn build_preview(
             read: build.read,
             rope: build.rope,
             parse,
+            semantic: semantic_elapsed,
             display_map: Duration::ZERO,
             total: Duration::ZERO,
             syntax_reparsed_bytes: build
                 .syntax_patch
                 .map_or(build.byte_count, |patch| patch.reparsed_bytes),
+            semantic_source_bytes,
             full_syntax_fallback: build.full_syntax_fallback,
         },
         update: DerivedUpdate::Full,
@@ -680,10 +705,13 @@ fn build_markdown_incremental(
             text,
             format: DocumentFormat::Markdown,
             blocks,
+            semantic: None,
             markdown_blocks,
             outline_paths,
             projection,
             syntax_elapsed,
+            semantic_elapsed: Duration::ZERO,
+            semantic_source_bytes: 0,
             syntax_reparsed_bytes: markdown_patch.reparsed_bytes,
             patch,
             reused_chunks,
@@ -743,6 +771,22 @@ fn build_org_incremental(
     if rows.len() != old_visual.len() {
         return None;
     }
+    // Keep semantic extraction ahead of the visual patch so both publications are based on the
+    // same syntax patch and revision, without parsing Org a second time.
+    let semantic_started = Instant::now();
+    let semantic = previous.semantic.as_deref().map_or_else(
+        || Arc::new(org_semantic::analyze(text.as_ref(), blocks.clone())),
+        |previous| {
+            Arc::new(org_semantic::analyze_incremental(
+                text.as_ref(),
+                blocks.clone(),
+                previous,
+                syntax_patch,
+            ))
+        },
+    );
+    let semantic_elapsed = semantic_started.elapsed();
+    let semantic_source_bytes = semantic.metrics.semantic_source_bytes;
     let replacements = build_visual_rows(
         text.as_ref(),
         text.revision(),
@@ -783,10 +827,13 @@ fn build_org_incremental(
             text,
             format: DocumentFormat::Org,
             blocks,
+            semantic: Some(semantic),
             markdown_blocks: Arc::new(Vec::new()),
             outline_paths,
             projection,
             syntax_elapsed,
+            semantic_elapsed,
+            semantic_source_bytes,
             syntax_reparsed_bytes: syntax_patch.reparsed_bytes,
             patch,
             reused_chunks,

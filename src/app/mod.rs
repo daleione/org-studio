@@ -23,6 +23,7 @@ use save::SaveHost;
 use status_line::StatusLineHost;
 use workspace::ScrollBenchmark;
 
+mod agenda;
 mod command_window;
 mod derived;
 mod echo_area;
@@ -148,6 +149,7 @@ pub struct DocumentViewPreferences {
 pub(crate) enum ContentRoute {
     Document,
     FileManager,
+    Agenda,
 }
 
 #[derive(Clone)]
@@ -273,6 +275,7 @@ pub struct WorkspaceWindow {
     pub(crate) file_watch_directory: Option<PathBuf>,
     pub(crate) file_watch_target: Option<crate::file_watcher::FileWatchTarget>,
     pub(crate) file_manager: FileManagerHost,
+    pub(crate) agenda: agenda::AgendaHost,
     pub(crate) picker_task: Option<Task<()>>,
     pub(crate) export: ExportHost,
     pub(crate) save: SaveHost,

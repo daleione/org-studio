@@ -1,0 +1,18 @@
+#+TODO: TODO(t) WAIT(w@/!) | DONE(d!) CANCELED(c@)
+#+FILETAGS: :fixture:official:
+#+CATEGORY: baseline
+#+PROPERTY: Effort_ALL 0:15 0:30 1:00
+#+ARCHIVE: archive/%s_archive::
+
+* TODO Plain appointment :meeting:
+  <2006-11-02 Thu 10:00-12:00>
+* WAIT Date range
+  <2006-11-03 Fri>--<2006-11-06 Mon>
+* TODO Repeater and warning
+  DEADLINE: <2005-10-01 Sat +1m -3d>
+* TODO Catch up
+  DEADLINE: <2008-02-10 Sun ++1w>
+* TODO Restart from completion
+  DEADLINE: <2019-04-05 Fri 08:00 .+1h>
+* DONE Inactive history
+  CLOSED: [2026-09-04 Fri 18:00]

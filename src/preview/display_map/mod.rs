@@ -9,11 +9,12 @@ use gpui::{FontWeight, SharedString, TextRun, font, px};
 
 use crate::{
     document::SharedTextSnapshot,
+    org_semantic::OrgFileConfig,
     org_syntax::inline::{InlineKind, InlineSpan},
     preview::{
         CodeHighlightSpan, DocumentFormat, PreviewRow, PreviewSnapshot, code_highlight_style,
         highlight_code,
-        org_line::{parse_heading, parse_list_item},
+        org_line::{parse_heading_with_config, parse_list_item},
         parse_document_inline,
         projection::{ReadingCodeRow, ReadingProjection, VisualRowId, VisualRowKind},
         style::PreviewStyle,
@@ -101,6 +102,7 @@ pub(crate) struct PreviewDisplayMap {
     pub(crate) text: SharedTextSnapshot,
     pub(crate) format: DocumentFormat,
     pub(crate) projection: Arc<ReadingProjection>,
+    pub(crate) org_config: Option<Arc<OrgFileConfig>>,
     pub(crate) display_runs: Mutex<DisplayRunCache>,
     pub(crate) display_lines: Mutex<DisplayLineCache>,
     table_layouts: Mutex<TableLayoutCache>,
@@ -600,6 +602,10 @@ pub(crate) fn build_display_map(document: &PreviewSnapshot) -> PreviewDisplayMap
         text: document.text.clone(),
         format: document.format,
         projection: document.projection.clone(),
+        org_config: document
+            .semantic
+            .as_ref()
+            .map(|semantic| semantic.config.clone()),
         display_runs: Mutex::new(DisplayRunCache {
             entries: HashMap::with_capacity(DisplayRunCache::CAPACITY),
             order: VecDeque::with_capacity(DisplayRunCache::CAPACITY),
@@ -641,6 +647,10 @@ pub(crate) fn build_display_map_reusing(
         text: document.text.clone(),
         format: document.format,
         projection: document.projection.clone(),
+        org_config: document
+            .semantic
+            .as_ref()
+            .map(|semantic| semantic.config.clone()),
         display_runs: Mutex::new(DisplayRunCache {
             entries: run_entries,
             order: run_order,
@@ -669,7 +679,9 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
     let source = model.text.copy_range(line.content.range);
     let source = source.trim_end_matches(['\r', '\n']);
     let source = match (&model.format, &visual.kind, &kind) {
-        (DocumentFormat::Org, _, PreviewLineKind::Heading(_)) => parse_heading(source).title,
+        (DocumentFormat::Org, _, PreviewLineKind::Heading(_)) => {
+            parse_heading_with_config(source, model.org_config.as_deref()).title
+        }
         (_, _, PreviewLineKind::List) => {
             let parts = parse_list_item(source);
             parts.term.map_or(parts.body.clone(), |term| {

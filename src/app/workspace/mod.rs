@@ -139,6 +139,7 @@ impl WorkspaceWindow {
             file_manager: crate::app::file_manager::FileManagerHost::new(
                 preview_settings.sidebar_width,
             ),
+            agenda: crate::app::agenda::AgendaHost::new(),
             picker_task: None,
             export: crate::app::export_ui::ExportHost::default(),
             save: crate::app::save::SaveHost::default(),
@@ -195,7 +196,11 @@ impl WorkspaceWindow {
             key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
             echo: crate::app::echo_area::EchoAreaHost::default(),
-            content_route: ContentRoute::Document,
+            content_route: if std::env::var_os("ORG_STUDIO_AGENDA").is_some() {
+                ContentRoute::Agenda
+            } else {
+                ContentRoute::Document
+            },
             document_workspace,
             document_view_preferences: DocumentViewPreferences {
                 split_ratio: preview_settings.split_ratio,

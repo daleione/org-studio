@@ -97,8 +97,16 @@ fn fields_of(path: &Path, name: &str) -> Fields {
 fn document_foundation_has_no_preview_or_editor_dependency() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = Vec::new();
-    for relative in ["src/document", "src/org_syntax"] {
-        rust_files_under(&root.join(relative), &mut files);
+    for relative in [
+        "src/document",
+        "src/org_syntax",
+        "src/org_semantic",
+        "src/agenda",
+    ] {
+        let directory = root.join(relative);
+        if directory.exists() {
+            rust_files_under(&directory, &mut files);
+        }
     }
 
     let mut violations = Vec::new();
@@ -106,6 +114,9 @@ fn document_foundation_has_no_preview_or_editor_dependency() {
         for dependency in dependencies(&path) {
             if dependency.starts_with("crate::preview")
                 || dependency.starts_with("crate::editor")
+                || dependency.starts_with("crate::app")
+                || dependency.starts_with("crate::agenda")
+                    && path.starts_with(root.join("src/org_semantic"))
                 || dependency.starts_with("super::preview")
                 || dependency.starts_with("super::editor")
             {
@@ -129,7 +140,42 @@ fn document_foundation_has_no_preview_or_editor_dependency() {
     }
     assert!(
         violations.is_empty(),
-        "document/syntax dependency violations:\n{}",
+        "document/syntax/semantic dependency violations:\n{}",
+        violations.join("\n")
+    );
+}
+
+#[test]
+fn agenda_views_do_not_reach_into_sessions_indexes_or_filesystem() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let agenda_ui = root.join("src/app/agenda");
+    if !agenda_ui.exists() {
+        return;
+    }
+    let mut files = Vec::new();
+    rust_files_under(&agenda_ui, &mut files);
+    let mut violations = Vec::new();
+    for path in files.into_iter().filter(|path| {
+        path.components().any(|part| {
+            matches!(
+                part.as_os_str().to_str(),
+                Some("component" | "view" | "overlay" | "sheet")
+            )
+        })
+    }) {
+        for dependency in dependencies(&path) {
+            if dependency.contains("DocumentSession")
+                || dependency.starts_with("crate::agenda::index")
+                || dependency.starts_with("std::fs")
+                || dependency.starts_with("notify")
+            {
+                violations.push(format!("{} depends on {dependency}", path.display()));
+            }
+        }
+    }
+    assert!(
+        violations.is_empty(),
+        "Agenda UI boundary violations:\n{}",
         violations.join("\n")
     );
 }

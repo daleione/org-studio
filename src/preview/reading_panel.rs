@@ -764,7 +764,14 @@ impl ReadingPreviewPanel {
                 let source = self.document.text.copy_range(source_row.content.range);
                 let source_title = match self.document.format {
                     DocumentFormat::Org => {
-                        super::org_line::parse_heading(source.trim_end_matches(['\r', '\n'])).title
+                        super::org_line::parse_heading_with_config(
+                            source.trim_end_matches(['\r', '\n']),
+                            self.document
+                                .semantic
+                                .as_ref()
+                                .map(|semantic| semantic.config.as_ref()),
+                        )
+                        .title
                     }
                     DocumentFormat::Markdown => source
                         .trim_end_matches(['\r', '\n'])
