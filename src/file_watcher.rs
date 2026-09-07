@@ -39,10 +39,12 @@ impl InitialScanProgress {
     pub fn percent(self) -> u8 {
         if self.finished {
             100
-        } else if self.discovered == 0 {
-            0
         } else {
-            ((self.indexed.min(self.discovered) * 100) / self.discovered) as u8
+            self.indexed
+                .min(self.discovered)
+                .checked_mul(100)
+                .and_then(|value| value.checked_div(self.discovered))
+                .unwrap_or(0) as u8
         }
     }
 }

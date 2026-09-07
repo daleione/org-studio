@@ -906,7 +906,7 @@ fn editor_to_reading_keeps_the_top_line_across_async_projection(cx: &mut gpui::T
     let (anchor, session) = workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
-            Ok(super::WorkspaceLoadedDocument::Source(session)),
+            Ok(super::WorkspaceLoadedDocument::Source(Box::new(session))),
             cx,
         ));
         let ready = workspace.state.ready().unwrap();
@@ -1129,13 +1129,13 @@ fn editors_are_created_on_demand(cx: &mut gpui::TestAppContext) {
         assert!(
             workspace.apply_load_result(
                 0,
-                Ok(super::WorkspaceLoadedDocument::Source(
+                Ok(super::WorkspaceLoadedDocument::Source(Box::new(
                     crate::document::DocumentSession::from_utf8(
                         std::path::PathBuf::from("lazy-editor.org"),
                         b"* Heading\nbody\n".to_vec(),
                     )
                     .unwrap(),
-                )),
+                ))),
                 cx,
             )
         );
@@ -1176,13 +1176,13 @@ fn loading_two_editor_panes_only_autofocuses_the_active_one(cx: &mut gpui::TestA
         assert!(
             workspace.apply_load_result(
                 0,
-                Ok(super::WorkspaceLoadedDocument::Source(
+                Ok(super::WorkspaceLoadedDocument::Source(Box::new(
                     crate::document::DocumentSession::from_utf8(
                         std::path::PathBuf::from("two-editors.org"),
                         b"* Heading\nbody\n".to_vec(),
                     )
                     .unwrap(),
-                )),
+                ))),
                 cx,
             )
         );
@@ -1330,13 +1330,13 @@ fn minimap_width_changes_reach_every_materialized_editor(cx: &mut gpui::TestAppC
         assert!(
             workspace.apply_load_result(
                 0,
-                Ok(super::WorkspaceLoadedDocument::Source(
+                Ok(super::WorkspaceLoadedDocument::Source(Box::new(
                     crate::document::DocumentSession::from_utf8(
                         std::path::PathBuf::from("minimap-width.org"),
                         b"body\n".to_vec(),
                     )
                     .unwrap(),
-                )),
+                ))),
                 cx,
             )
         );
@@ -1550,7 +1550,7 @@ fn pane_layout_changes_preserve_editor_state_and_publish_only_latest_revision(
     workspace.update(cx, |workspace, cx| {
         assert!(workspace.apply_load_result(
             0,
-            Ok(super::WorkspaceLoadedDocument::Source(session)),
+            Ok(super::WorkspaceLoadedDocument::Source(Box::new(session))),
             cx,
         ));
     });
@@ -2009,7 +2009,7 @@ fn opening_preview_while_a_source_load_finishes_schedules_the_new_document(
         workspace.show_split(cx);
         assert!(workspace.apply_load_result(
             generation,
-            Ok(super::WorkspaceLoadedDocument::Source(session)),
+            Ok(super::WorkspaceLoadedDocument::Source(Box::new(session))),
             cx,
         ));
         workspace.reconcile_derived_preview(cx);

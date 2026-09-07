@@ -87,6 +87,7 @@ pub(in crate::preview) fn parse_document_inline(
 pub(crate) const OPEN_DOCUMENT_COMMAND: &str = "org-studio.workspace.open-file";
 pub(crate) const SHOW_HOME_COMMAND: &str = "org-studio.workspace.show-home";
 pub(crate) const OPEN_AGENDA_COMMAND: &str = "org-studio.workspace.open-agenda";
+pub(crate) const OPEN_AGENDA_TEXT_COMMAND: &str = "org-studio.workspace.open-agenda-text";
 pub(crate) const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
 pub(crate) const SAVE_DOCUMENT_COMMAND: &str = "org-studio.document.save";
 pub(crate) const SAVE_DOCUMENT_AS_COMMAND: &str = "org-studio.document.save-as";

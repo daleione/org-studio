@@ -1,12 +1,13 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use jiff::{Span, civil::Date};
 
 use crate::org_semantic::TimestampKind;
 
 use super::{
-    AgendaDateKind, AgendaDayGroup, AgendaFacets, AgendaIndexSnapshot, AgendaResultSnapshot,
-    AgendaRow, TaskRecord,
+    AgendaDateKind, AgendaEntry, AgendaEntryKey, AgendaFacets, AgendaIndexSnapshot,
+    AgendaOccurrence, AgendaPlacement, AgendaPlacementGroup, AgendaPlacementKey,
+    AgendaResultSnapshot, AgendaRow, AgendaTimestampIdentity, TaskRecord,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,27 +136,64 @@ impl QueryEngine {
             }
         }
         rows.sort_by(compare_rows);
-        let mut groups = Vec::new();
-        let mut start = 0;
-        while start < rows.len() {
-            let date = rows[start].date;
-            let mut end = start + 1;
-            while end < rows.len() && rows[end].date == date {
-                end += 1;
+        let entries = rows
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(index, row)| {
+                let occurrence = row.timestamp_range.zip(row.date_kind).zip(row.date).map(
+                    |((source_range, kind), start_date)| AgendaOccurrence {
+                        timestamp: AgendaTimestampIdentity { source_range, kind },
+                        start_date,
+                        start_time: row.time,
+                        end_date: row.end_date,
+                        end_time: row.end_time,
+                    },
+                );
+                AgendaEntry {
+                    key: AgendaEntryKey(index as u32),
+                    row,
+                    occurrence,
+                }
+            })
+            .collect::<Vec<_>>();
+        let mut placements = entries
+            .iter()
+            .flat_map(|entry| entry_placements(entry, query.window))
+            .collect::<Vec<_>>();
+        placements.sort_by(|left, right| {
+            left.date
+                .cmp(&right.date)
+                .then_with(|| left.start_time.cmp(&right.start_time))
+                .then_with(|| left.entry.cmp(&right.entry))
+        });
+        for (index, placement) in placements.iter_mut().enumerate() {
+            placement.key = AgendaPlacementKey(index as u32);
+        }
+        let mut placement_groups = Vec::new();
+        let mut placement_start = 0;
+        while placement_start < placements.len() {
+            let date = placements[placement_start].date;
+            let mut placement_end = placement_start + 1;
+            while placement_end < placements.len() && placements[placement_end].date == date {
+                placement_end += 1;
             }
-            groups.push(AgendaDayGroup {
+            placement_groups.push(AgendaPlacementGroup {
                 date,
-                rows: start..end,
+                placements: placement_start..placement_end,
             });
-            start = end;
+            placement_start = placement_end;
         }
         AgendaResultSnapshot {
+            query_id: None,
+            query: Arc::new(query.clone()),
             index_generation: index.generation,
             query_generation: self.next_generation,
-            rows: rows.into(),
             facets,
             diagnostics: diagnostics.into(),
-            groups: groups.into(),
+            entries: entries.into(),
+            placements: placements.into(),
+            placement_groups: placement_groups.into(),
         }
     }
 }
@@ -201,7 +239,6 @@ pub(crate) fn task_matches_text(task: &TaskRecord, needle: &str) -> bool {
 
 fn active_occurrences(task: &TaskRecord, start: Date, end: Date) -> Vec<AgendaRow> {
     let mut rows = Vec::new();
-    let mut seen = HashSet::new();
     for timestamp in task
         .timestamps
         .iter()
@@ -216,16 +253,15 @@ fn active_occurrences(task: &TaskRecord, start: Date, end: Date) -> Vec<AgendaRo
                     TimestampKind::Deadline => AgendaDateKind::Deadline,
                     _ => AgendaDateKind::Plain,
                 };
-                if seen.insert((date, timestamp.start_time, kind as u8)) {
-                    rows.push(occurrence_row(
-                        task,
-                        date,
-                        timestamp.start_time,
-                        timestamp.end_date,
-                        timestamp.end_time,
-                        kind,
-                    ));
-                }
+                rows.push(occurrence_row(
+                    task,
+                    date,
+                    timestamp.start_time,
+                    repeated_end_date(timestamp, date),
+                    timestamp.end_time,
+                    kind,
+                    timestamp.source_range,
+                ));
             }
             let Some(repeater) = timestamp.repeater else {
                 break;
@@ -301,6 +337,7 @@ fn task_row(task: &TaskRecord) -> AgendaRow {
         end_date: None,
         end_time: None,
         date_kind: None,
+        timestamp_range: None,
     }
 }
 fn occurrence_row(
@@ -310,6 +347,7 @@ fn occurrence_row(
     end_date: Option<Date>,
     end_time: Option<jiff::civil::Time>,
     kind: AgendaDateKind,
+    timestamp_range: crate::document::ByteRange,
 ) -> AgendaRow {
     let mut row = task_row(task);
     row.date = Some(date);
@@ -317,7 +355,60 @@ fn occurrence_row(
     row.end_date = end_date;
     row.end_time = end_time;
     row.date_kind = Some(kind);
+    row.timestamp_range = Some(timestamp_range);
     row
+}
+
+fn repeated_end_date(
+    timestamp: &crate::org_semantic::OrgTimestamp,
+    occurrence: Date,
+) -> Option<Date> {
+    timestamp.end_date.and_then(|end| {
+        let duration = end.since(timestamp.start_date).ok()?;
+        occurrence.checked_add(duration).ok()
+    })
+}
+
+fn entry_placements(entry: &AgendaEntry, window: Option<(Date, Date)>) -> Vec<AgendaPlacement> {
+    let row = &entry.row;
+    let Some(start) = row.date else {
+        return vec![AgendaPlacement {
+            key: AgendaPlacementKey(0),
+            entry: entry.key,
+            date: None,
+            start_time: None,
+            end_time: None,
+            continues_before: false,
+            continues_after: false,
+        }];
+    };
+    let end = row.end_date.unwrap_or(start);
+    let timed = row.time.is_some();
+    let midnight = jiff::civil::Time::new(0, 0, 0, 0).expect("midnight is valid");
+    let display_end = if timed && end > start && row.end_time == Some(midnight) {
+        end.checked_sub(Span::new().days(1)).unwrap_or(start)
+    } else {
+        end
+    };
+    let mut result = Vec::new();
+    let mut date = window.map_or(start, |(window_start, _)| start.max(window_start));
+    let display_end = window.map_or(display_end, |(_, window_end)| display_end.min(window_end));
+    while date <= display_end {
+        result.push(AgendaPlacement {
+            key: AgendaPlacementKey(0),
+            entry: entry.key,
+            date: Some(date),
+            start_time: if date == start { row.time } else { None },
+            end_time: if date == end { row.end_time } else { None },
+            continues_before: date > start,
+            continues_after: date < end,
+        });
+        let Ok(next) = date.checked_add(Span::new().days(1)) else {
+            break;
+        };
+        date = next;
+    }
+    result
 }
 
 fn compare_rows(left: &AgendaRow, right: &AgendaRow) -> std::cmp::Ordering {

@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use gpui::{Context, EventEmitter};
 
@@ -106,6 +109,7 @@ pub enum DiskChangeAction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ReloadError {
+    NoFileBackend,
     Dirty,
     DifferentDocument,
     DifferentPath,
@@ -190,12 +194,27 @@ impl PreparedReload {
 /// Views and workers receive immutable snapshots. Reload and save results carry an explicit
 /// document identity and revision so delayed background work cannot mutate a newer document.
 pub struct DocumentSession {
-    read_only: bool,
-    path: PathBuf,
+    user_editable: bool,
     buffer: DocumentBuffer,
     saved_revision: Revision,
     history: UndoHistory,
-    file: Box<SessionFileState>,
+    backend: SessionBackend,
+}
+
+enum SessionBackend {
+    File {
+        path: PathBuf,
+        state: Box<SessionFileState>,
+    },
+    Generated {
+        source: GeneratedSource,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct GeneratedSource {
+    pub(crate) producer: Arc<str>,
+    pub(crate) display_name: Arc<str>,
 }
 
 struct SessionFileState {
@@ -208,6 +227,9 @@ impl EventEmitter<DocumentEvent> for DocumentSession {}
 
 impl DocumentSession {
     pub(crate) fn resource_changed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.is_generated() {
+            return;
+        }
         cx.emit(DocumentEvent::ResourceChanged {
             document_id: self.id(),
             path,
@@ -220,33 +242,60 @@ impl DocumentSession {
         let metadata = FileMetadata::from_loaded(&path, &bytes);
         let buffer = DocumentBuffer::from_utf8(bytes)?;
         Ok(Self {
-            read_only: false,
-            path,
+            user_editable: true,
             saved_revision: buffer.revision(),
             buffer,
             history: UndoHistory::default(),
-            file: Box::new(SessionFileState {
-                metadata,
-                sync_state: SyncState::InSync { stamp },
-                save_state: SaveState::Idle,
-            }),
+            backend: SessionBackend::File {
+                path,
+                state: Box::new(SessionFileState {
+                    metadata,
+                    sync_state: SyncState::InSync { stamp },
+                    save_state: SaveState::Idle,
+                }),
+            },
         })
     }
 
     /// A generated buffer is never a save target and has no user edit history.
+    #[cfg(test)]
     pub(crate) fn read_only_text(text: String) -> Self {
-        let mut session = Self::from_utf8(PathBuf::from("*Generated*"), text.into_bytes())
-            .expect("String is valid UTF-8");
-        session.read_only = true;
-        session
+        Self::generated_text(text, "Generated", "editor.generated")
+    }
+
+    pub(crate) fn generated_text(
+        text: String,
+        display_name: impl Into<Arc<str>>,
+        producer: impl Into<Arc<str>>,
+    ) -> Self {
+        let buffer = DocumentBuffer::from_utf8(text.into_bytes()).expect("String is valid UTF-8");
+        Self {
+            user_editable: false,
+            saved_revision: buffer.revision(),
+            buffer,
+            history: UndoHistory::default(),
+            backend: SessionBackend::Generated {
+                source: GeneratedSource {
+                    producer: producer.into(),
+                    display_name: display_name.into(),
+                },
+            },
+        }
     }
 
     pub(crate) fn is_read_only(&self) -> bool {
-        self.read_only
+        !self.user_editable
     }
 
-    pub(crate) fn replace_read_only_text(&mut self, text: String, cx: &mut Context<Self>) {
-        assert!(self.read_only);
+    pub(crate) fn is_generated(&self) -> bool {
+        matches!(self.backend, SessionBackend::Generated { .. })
+    }
+
+    pub(crate) fn publish_generated_text(&mut self, text: String, cx: &mut Context<Self>) {
+        assert!(
+            self.is_generated(),
+            "only a generated controller may publish content"
+        );
         let delta = self
             .buffer
             .commit(EditTransaction::new(
@@ -267,7 +316,35 @@ impl DocumentSession {
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        self.file_path().unwrap_or_else(|| Path::new(""))
+    }
+
+    pub(crate) fn file_path(&self) -> Option<&Path> {
+        match &self.backend {
+            SessionBackend::File { path, .. } => Some(path),
+            SessionBackend::Generated { .. } => None,
+        }
+    }
+
+    pub(crate) fn generated_source(&self) -> Option<&GeneratedSource> {
+        match &self.backend {
+            SessionBackend::Generated { source } => Some(source),
+            _ => None,
+        }
+    }
+
+    fn file(&self) -> &SessionFileState {
+        match &self.backend {
+            SessionBackend::File { state, .. } => state,
+            _ => panic!("generated buffer has no file state"),
+        }
+    }
+
+    fn file_mut(&mut self) -> &mut SessionFileState {
+        match &mut self.backend {
+            SessionBackend::File { state, .. } => state,
+            _ => panic!("generated buffer has no file state"),
+        }
     }
 
     pub fn revision(&self) -> Revision {
@@ -283,11 +360,11 @@ impl DocumentSession {
     }
 
     pub fn sync_state(&self) -> &SyncState {
-        &self.file.sync_state
+        &self.file().sync_state
     }
 
     pub fn save_state(&self) -> &SaveState {
-        &self.file.save_state
+        &self.file().save_state
     }
 
     pub fn snapshot(&self) -> DocumentSnapshot {
@@ -317,7 +394,7 @@ impl DocumentSession {
         transaction: EditTransaction,
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
         let delta = self.buffer.commit(transaction)?;
@@ -335,7 +412,7 @@ impl DocumentSession {
         edit: DocumentCommand,
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
         let snapshot = self.buffer.snapshot();
@@ -363,7 +440,7 @@ impl DocumentSession {
         after: Selection,
         origin: EditOrigin,
     ) -> Result<(), EditError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
         if self.revision() != expected_revision {
@@ -378,7 +455,7 @@ impl DocumentSession {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) -> Result<HistoryOutcome, EditError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
         let Some((transactions, selection)) = self.history.prepare_undo(self.revision())? else {
@@ -394,7 +471,7 @@ impl DocumentSession {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) -> Result<HistoryOutcome, EditError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
         let Some((transactions, selection)) = self.history.prepare_redo(self.revision())? else {
@@ -417,9 +494,9 @@ impl DocumentSession {
     }
 
     fn note_edit(&mut self) {
-        match &self.file.sync_state {
+        match &self.file().sync_state {
             SyncState::InSync { stamp } => {
-                self.file.sync_state = SyncState::Dirty {
+                self.file_mut().sync_state = SyncState::Dirty {
                     base: stamp.clone(),
                 };
             }
@@ -428,24 +505,25 @@ impl DocumentSession {
     }
 
     pub fn save_request(&self, target: Option<PathBuf>) -> Result<SaveRequest, SaveStartError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(SaveStartError::ReadOnly);
         }
-        if !matches!(self.file.save_state, SaveState::Idle) {
+        if !matches!(self.file().save_state, SaveState::Idle) {
             return Err(SaveStartError::AlreadySaving);
         }
+        let source_path = self.path().to_path_buf();
         let target_path =
-            super::resolve_symlink_target(&target.unwrap_or_else(|| self.path.clone()));
-        let same_target = target_path == super::resolve_symlink_target(&self.path);
-        if same_target && matches!(self.file.sync_state, SyncState::Conflict { .. }) {
+            super::resolve_symlink_target(&target.unwrap_or_else(|| source_path.clone()));
+        let same_target = target_path == super::resolve_symlink_target(&source_path);
+        if same_target && matches!(self.file().sync_state, SyncState::Conflict { .. }) {
             return Err(SaveStartError::Conflict);
         }
         let expected_target = if same_target {
-            match &self.file.sync_state {
+            match &self.file().sync_state {
                 SyncState::InSync { stamp }
                 | SyncState::Dirty { base: stamp }
                 | SyncState::Missing { base: stamp } => {
-                    if matches!(self.file.sync_state, SyncState::Missing { .. }) {
+                    if matches!(self.file().sync_state, SyncState::Missing { .. }) {
                         TargetExpectation::Exact(None)
                     } else {
                         TargetExpectation::Exact(Some(stamp.clone()))
@@ -466,15 +544,18 @@ impl DocumentSession {
             document_id: self.id(),
             save_point: self.save_point(),
             snapshot: self.snapshot(),
-            source_path: self.path.clone(),
+            source_path,
             target_path,
             expected_target,
-            metadata: self.file.metadata.clone(),
+            metadata: self.file().metadata.clone(),
         })
     }
 
     pub fn newline_sequence(&self) -> &'static str {
-        match self.file.metadata.newline {
+        if self.is_generated() {
+            return "\n";
+        }
+        match self.file().metadata.newline {
             super::OriginalNewline::CrLf => "\r\n",
             super::OriginalNewline::None
             | super::OriginalNewline::Lf
@@ -484,7 +565,7 @@ impl DocumentSession {
 
     pub fn begin_save(&mut self, target: Option<PathBuf>) -> Result<SaveRequest, SaveStartError> {
         let request = self.save_request(target)?;
-        self.file.save_state = SaveState::Saving {
+        self.file_mut().save_state = SaveState::Saving {
             revision: request.revision(),
             target: request.target_path.clone(),
         };
@@ -492,25 +573,25 @@ impl DocumentSession {
     }
 
     pub fn begin_force_save(&mut self) -> Result<SaveRequest, SaveStartError> {
-        if self.read_only {
+        if !self.user_editable {
             return Err(SaveStartError::ReadOnly);
         }
-        if !matches!(self.file.save_state, SaveState::Idle) {
+        if !matches!(self.file().save_state, SaveState::Idle) {
             return Err(SaveStartError::AlreadySaving);
         }
-        let SyncState::Conflict { external, .. } = &self.file.sync_state else {
+        let SyncState::Conflict { external, .. } = &self.file().sync_state else {
             return self.begin_save(None);
         };
         let request = SaveRequest {
             document_id: self.id(),
             save_point: self.save_point(),
             snapshot: self.snapshot(),
-            source_path: self.path.clone(),
-            target_path: super::resolve_symlink_target(&self.path),
+            source_path: self.path().to_path_buf(),
+            target_path: super::resolve_symlink_target(self.path()),
             expected_target: TargetExpectation::Exact(Some(external.clone())),
-            metadata: self.file.metadata.clone(),
+            metadata: self.file().metadata.clone(),
         };
-        self.file.save_state = SaveState::Saving {
+        self.file_mut().save_state = SaveState::Saving {
             revision: request.revision(),
             target: request.target_path.clone(),
         };
@@ -519,13 +600,13 @@ impl DocumentSession {
 
     pub fn cancel_save(&mut self, revision: Revision) {
         if matches!(
-            self.file.save_state,
+            self.file().save_state,
             SaveState::Saving {
                 revision: active,
                 ..
             } if active == revision
         ) {
-            self.file.save_state = SaveState::Idle;
+            self.file_mut().save_state = SaveState::Idle;
         }
     }
 
@@ -539,20 +620,22 @@ impl DocumentSession {
         }
         let SaveState::Saving {
             revision, target, ..
-        } = &self.file.save_state
+        } = &self.file().save_state
         else {
             return Err(SaveAckError::NotSaving);
         };
         if *revision != outcome.save_point.revision() || *target != outcome.target_path {
             return Err(SaveAckError::DifferentTarget);
         }
-        if outcome.source_path != self.path {
+        if outcome.source_path != self.path() {
             return Err(SaveAckError::DifferentTarget);
         }
-        self.path = outcome.target_path;
-        self.file.metadata = outcome.metadata;
-        self.file.save_state = SaveState::Idle;
-        self.file.sync_state = if self.revision() == outcome.save_point.revision() {
+        if let SessionBackend::File { path, .. } = &mut self.backend {
+            *path = outcome.target_path;
+        }
+        self.file_mut().metadata = outcome.metadata;
+        self.file_mut().save_state = SaveState::Idle;
+        self.file_mut().sync_state = if self.revision() == outcome.save_point.revision() {
             SyncState::InSync {
                 stamp: outcome.stamp,
             }
@@ -565,17 +648,20 @@ impl DocumentSession {
     }
 
     pub fn observe_disk(&mut self, observed: Option<FileStamp>) -> DiskChangeAction {
-        if matches!(self.file.save_state, SaveState::Saving { .. }) {
+        if self.is_generated() {
+            return DiskChangeAction::Ignore;
+        }
+        if matches!(self.file().save_state, SaveState::Saving { .. }) {
             return DiskChangeAction::Defer;
         }
-        let base = self.file.sync_state.base().clone();
+        let base = self.file().sync_state.base().clone();
         match observed {
-            Some(stamp) if &stamp == self.file.sync_state.base() => {
+            Some(stamp) if &stamp == self.file().sync_state.base() => {
                 if matches!(
-                    self.file.sync_state,
+                    self.file().sync_state,
                     SyncState::Conflict { .. } | SyncState::Missing { .. }
                 ) {
-                    self.file.sync_state = if self.is_dirty() {
+                    self.file_mut().sync_state = if self.is_dirty() {
                         SyncState::Dirty { base: stamp }
                     } else {
                         SyncState::InSync { stamp }
@@ -586,12 +672,12 @@ impl DocumentSession {
                 }
             }
             None => {
-                self.file.sync_state = SyncState::Missing { base };
+                self.file_mut().sync_state = SyncState::Missing { base };
                 DiskChangeAction::Missing
             }
             Some(_) if !self.is_dirty() => DiskChangeAction::Reload,
             Some(external) => {
-                self.file.sync_state = SyncState::Conflict { base, external };
+                self.file_mut().sync_state = SyncState::Conflict { base, external };
                 DiskChangeAction::Conflict
             }
         }
@@ -604,15 +690,23 @@ impl DocumentSession {
         permissions: Option<std::fs::Permissions>,
         cx: &mut Context<Self>,
     ) -> std::io::Result<()> {
-        if !matches!(self.file.save_state, SaveState::Idle) {
+        if self.is_generated() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::Unsupported,
+                "generated buffer has no file backend",
+            ));
+        }
+        if !matches!(self.file().save_state, SaveState::Idle) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 "cannot move a document while it is being saved",
             ));
         }
-        self.file.metadata.permissions = permissions;
-        self.path = destination.clone();
-        self.file.sync_state = if self.is_dirty() {
+        self.file_mut().metadata.permissions = permissions;
+        if let SessionBackend::File { path, .. } = &mut self.backend {
+            *path = destination.clone();
+        }
+        self.file_mut().sync_state = if self.is_dirty() {
             SyncState::Dirty { base: stamp }
         } else {
             SyncState::InSync { stamp }
@@ -650,19 +744,25 @@ impl DocumentSession {
     }
 
     pub fn disk_changed(&self, cx: &mut Context<Self>) {
+        if self.is_generated() {
+            return;
+        }
         cx.emit(DocumentEvent::DiskChanged {
             document_id: self.id(),
-            path: self.path.clone(),
+            path: self.path().to_path_buf(),
         });
     }
 
     pub fn reload_request(&self) -> Result<ReloadRequest, ReloadError> {
+        if self.is_generated() {
+            return Err(ReloadError::NoFileBackend);
+        }
         if self.is_dirty() {
             return Err(ReloadError::Dirty);
         }
         Ok(ReloadRequest {
             document_id: self.id(),
-            path: self.path.clone(),
+            path: self.path().to_path_buf(),
             base_revision: self.revision(),
             old_len: self.snapshot().len_bytes(),
         })
@@ -676,7 +776,7 @@ impl DocumentSession {
         if prepared.request.document_id != self.id() {
             return Err(ReloadError::DifferentDocument);
         }
-        if prepared.request.path != self.path {
+        if prepared.request.path != self.path() {
             return Err(ReloadError::DifferentPath);
         }
         if self.is_dirty() {
@@ -691,11 +791,11 @@ impl DocumentSession {
         let delta = prepared.delta;
         self.buffer.replace_prepared(prepared.text, delta.clone())?;
         self.saved_revision = delta.after;
-        self.file.metadata = prepared.metadata;
-        self.file.sync_state = SyncState::InSync {
+        self.file_mut().metadata = prepared.metadata;
+        self.file_mut().sync_state = SyncState::InSync {
             stamp: prepared.stamp,
         };
-        self.file.save_state = SaveState::Idle;
+        self.file_mut().save_state = SaveState::Idle;
         self.history.clear();
         cx.emit(DocumentEvent::Reloaded {
             document_id: self.id(),

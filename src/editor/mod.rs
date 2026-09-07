@@ -9,7 +9,9 @@ mod org_commands;
 mod read_only;
 mod syntax;
 
-pub(crate) use read_only::LineHighlights;
+pub(crate) use read_only::{
+    CommandDisposition, GeneratedCommand, GeneratedTextView, LineHighlights,
+};
 pub(crate) use syntax::EditorSyntaxService;
 
 use std::{
@@ -414,6 +416,7 @@ impl EditorFrameBenchmark {
 
 pub struct SemanticEditor {
     generated_highlights: Option<Vec<LineHighlights>>,
+    activate_read_only_lines: bool,
     session: Entity<DocumentSession>,
     focus_handle: FocusHandle,
     selection: Selection,
@@ -768,6 +771,7 @@ impl SemanticEditor {
         Self {
             session,
             generated_highlights: None,
+            activate_read_only_lines: false,
             focus_handle: cx.focus_handle(),
             selection: Selection::default(),
             selection_revision: initial_snapshot.revision(),

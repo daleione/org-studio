@@ -1,8 +1,8 @@
 use super::worker::LatestRequestWorker;
 use crate::{
     agenda::{
-        AgendaIndexSnapshot, FileAgendaShard, FileId, discover_sources, shard_from_disk,
-        shard_from_live,
+        AgendaIndex, AgendaIndexSnapshot, FileAgendaShard, FileId, discover_sources,
+        shard_from_disk, shard_from_live,
     },
     app::WorkspaceWindow,
     document::{DocumentSnapshot, TextSnapshot},
@@ -172,6 +172,7 @@ pub(super) fn scan(mut request: ScanRequest) -> ScanResult {
 }
 
 pub(super) struct AgendaRuntime {
+    pub index: AgendaIndex,
     pub initialized: bool,
     pub identities: std::collections::BTreeMap<PathBuf, FileId>,
     pub worker: LatestRequestWorker<ScanRequest, ScanResult>,
@@ -183,6 +184,7 @@ pub(super) struct AgendaRuntime {
 impl Default for AgendaRuntime {
     fn default() -> Self {
         Self {
+            index: AgendaIndex::default(),
             initialized: false,
             identities: Default::default(),
             worker: LatestRequestWorker::spawn(scan),
@@ -239,14 +241,14 @@ impl WorkspaceWindow {
                     .update(cx, |this, cx| {
                         if let Some(result) = this.agenda.runtime.worker.try_latest() {
                             this.agenda.runtime.identities = result.identities;
-                            let previous = this.agenda.index.snapshot();
+                            let previous = this.agenda.runtime.index.snapshot();
                             for shard in previous.files.iter() {
                                 if !result.shards.iter().any(|new| new.file == shard.file) {
-                                    this.agenda.index.remove(shard.file);
+                                    this.agenda.runtime.index.remove(shard.file);
                                 }
                             }
                             for shard in result.shards {
-                                this.agenda.index.replace(shard);
+                                this.agenda.runtime.index.replace(shard);
                             }
                             if !result.errors.is_empty() {
                                 this.agenda.state.workflow_message = Some(Arc::from(
@@ -260,6 +262,9 @@ impl WorkspaceWindow {
                             }
                             this.agenda.scan_progress.finish();
                             this.agenda.requery();
+                            if matches!(this.content_route, crate::app::ContentRoute::AgendaText) {
+                                this.agenda.requery_independent_text();
+                            }
                             if !this.agenda.runtime.initialized {
                                 this.agenda.runtime.initialized = true;
                                 this.agenda.apply_initial_view();

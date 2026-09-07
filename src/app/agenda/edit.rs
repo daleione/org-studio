@@ -146,7 +146,7 @@ impl WorkspaceWindow {
                 Arc::new(crate::org_syntax::parse(&snapshot)),
             );
             self.agenda.analysis_generation += 1;
-            self.agenda.index.replace(shard_from_live(
+            self.agenda.runtime.index.replace(shard_from_live(
                 task.key.file,
                 self.agenda.analysis_generation,
                 indexed_path,
@@ -246,7 +246,7 @@ mod tests {
         });
         let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
         workspace.update(cx, |workspace, cx| {
-            workspace.agenda.index.replace(shard);
+            workspace.agenda.runtime.index.replace(shard);
             workspace.state = WorkspaceLoadState::Ready {
                 document: ReadyDocument {
                     session: session.clone(),
@@ -264,7 +264,7 @@ mod tests {
             workspace
                 .apply_agenda_command(&original, &AgendaCommand::SetPriority(Some('B')), cx)
                 .unwrap();
-            let current = workspace.agenda.index.snapshot().files[0].tasks[0].clone();
+            let current = workspace.agenda.runtime.index.snapshot().files[0].tasks[0].clone();
             assert!(matches!(current.source.version, SourceVersion::Live { .. }));
             workspace
                 .apply_agenda_command(&current, &AgendaCommand::SetPriority(Some('A')), cx)

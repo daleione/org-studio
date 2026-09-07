@@ -2,7 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use crate::{
     document::{ByteRange, DocumentId, Revision},
-    org_syntax::{BlockArena, SyntaxId},
+    org_syntax::SyntaxId,
 };
 
 use super::timestamp::OrgTimestamp;
@@ -28,11 +28,8 @@ pub(crate) struct TodoSequence {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct OrgFileConfig {
-    // Retained as ordered source data for the future state-picker UI; lookup
-    // consumers use `todo_index` today.
-    #[allow(dead_code)]
-    pub(crate) todo_sequences: Arc<[TodoSequence]>,
     todo_index: HashMap<Arc<str>, TodoState>,
+    todo_keywords: Arc<[Arc<str>]>,
     pub(crate) file_tags: Arc<[Arc<str>]>,
     pub(crate) category: Option<Arc<str>>,
     pub(crate) property_defaults: Arc<[(Arc<str>, Arc<str>)]>,
@@ -47,14 +44,19 @@ impl OrgFileConfig {
         property_defaults: Vec<(Arc<str>, Arc<str>)>,
         archive_location: Option<Arc<str>>,
     ) -> Self {
+        let todo_keywords = todo_sequences
+            .iter()
+            .flat_map(|sequence| sequence.states.iter().map(|state| state.keyword.clone()))
+            .collect::<Vec<_>>()
+            .into();
         let todo_index = todo_sequences
             .iter()
             .flat_map(|sequence| sequence.states.iter().cloned())
             .map(|state| (Arc::clone(&state.keyword), state))
             .collect();
         Self {
-            todo_sequences: todo_sequences.into(),
             todo_index,
+            todo_keywords,
             file_tags: file_tags.into(),
             category,
             property_defaults: property_defaults.into(),
@@ -67,11 +69,7 @@ impl OrgFileConfig {
     }
 
     pub(crate) fn todo_keywords(&self) -> Arc<[Arc<str>]> {
-        self.todo_sequences
-            .iter()
-            .flat_map(|sequence| sequence.states.iter().map(|state| state.keyword.clone()))
-            .collect::<Vec<_>>()
-            .into()
+        self.todo_keywords.clone()
     }
 }
 
@@ -93,29 +91,11 @@ pub(crate) struct OrgHeading {
 
 #[derive(Clone)]
 pub(crate) struct OrgAnalysisSnapshot {
-    #[allow(dead_code)]
     pub(crate) document_id: DocumentId,
-    #[allow(dead_code)]
     pub(crate) revision: Revision,
-    #[allow(dead_code)]
-    pub(crate) blocks: Arc<BlockArena>,
     pub(crate) config: Arc<OrgFileConfig>,
     pub(crate) headings: Arc<[OrgHeading]>,
-    #[allow(dead_code)]
-    pub(crate) diagnostics: Arc<[SemanticDiagnostic]>,
-    #[allow(dead_code)]
     pub(crate) metrics: SemanticMetrics,
-}
-
-#[allow(dead_code)]
-pub(crate) type SemanticDocument = OrgAnalysisSnapshot;
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SemanticDiagnostic {
-    #[allow(dead_code)]
-    pub(crate) range: ByteRange,
-    #[allow(dead_code)]
-    pub(crate) message: Arc<str>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

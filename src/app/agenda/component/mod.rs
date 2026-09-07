@@ -6,7 +6,7 @@ mod task_row;
 mod toolbar;
 
 pub(crate) use navigation::{
-    saved_view_item, sidebar_filter_item, sidebar_item, sidebar_section_header,
+    StaticSidebarItem, saved_view_item, sidebar_filter_item, sidebar_item, sidebar_section_header,
     source_context_menu, static_sidebar_item,
 };
 pub(crate) use primitives::{

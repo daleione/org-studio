@@ -273,10 +273,8 @@ impl AgendaViewState {
             self.sheet = AgendaSheet::None;
             self.inspector = None;
             true
-        } else if self.selected.take().is_some() {
-            true
         } else {
-            false
+            self.selected.take().is_some()
         }
     }
 
@@ -295,10 +293,10 @@ impl AgendaViewState {
         result: &crate::agenda::AgendaResultSnapshot,
     ) {
         let visible = result
-            .groups
+            .placement_groups
             .iter()
             .filter(|group| !self.collapsed_days.contains(&group.date))
-            .flat_map(|group| group.rows.clone())
+            .flat_map(|group| group.placements.clone())
             .collect::<Vec<_>>();
         if visible.is_empty() {
             self.selected = None;

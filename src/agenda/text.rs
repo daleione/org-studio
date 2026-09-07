@@ -1,13 +1,83 @@
-use super::{AgendaDateKind, AgendaResultSnapshot};
+use super::{AgendaDateKind, AgendaPlacementKey, AgendaResultSnapshot};
+use jiff::civil::Date;
 use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
 
 /// Presentation-neutral text and UTF-8 ranges for Org agenda faces.
+#[derive(Clone)]
 pub(crate) struct AgendaTextLine {
     pub(crate) text: String,
     pub(crate) todo: Range<usize>,
     pub(crate) priority: Option<Range<usize>>,
     pub(crate) tags: Option<Range<usize>>,
+}
+
+pub(crate) enum AgendaProjectedLine {
+    Header {
+        date: Option<Date>,
+        text: String,
+    },
+    Entry {
+        entry: usize,
+        placement: AgendaPlacementKey,
+        line: AgendaTextLine,
+    },
+}
+
+pub(crate) fn project_agenda_text(
+    result: &AgendaResultSnapshot,
+    scheduled: &str,
+    deadline: &str,
+    unscheduled: &str,
+    window: Option<(Date, Date)>,
+    mut date_heading: impl FnMut(Date, bool) -> String,
+) -> Vec<AgendaProjectedLine> {
+    let mut groups =
+        std::collections::BTreeMap::<Option<Date>, Vec<(usize, AgendaPlacementKey)>>::new();
+    for group in result.placement_groups.iter() {
+        groups.entry(group.date).or_default().extend(
+            result.placements[group.placements.clone()]
+                .iter()
+                .map(|placement| (placement.entry.0 as usize, placement.key)),
+        );
+    }
+    if let Some((start, end)) = window {
+        let mut date = start;
+        while date <= end {
+            groups.entry(Some(date)).or_default();
+            let Ok(next) = date.checked_add(jiff::Span::new().days(1)) else {
+                break;
+            };
+            date = next;
+        }
+    }
+    let formatted = format_agenda_text(result, scheduled, deadline);
+    let mut output = Vec::new();
+    for (group_index, (date, placements)) in groups.into_iter().enumerate() {
+        output.push(AgendaProjectedLine::Header {
+            date,
+            text: date.map_or_else(
+                || unscheduled.to_owned(),
+                |date| {
+                    date_heading(
+                        date,
+                        group_index == 0 || date.weekday().to_monday_zero_offset() == 0,
+                    )
+                },
+            ),
+        });
+        for (entry, placement) in placements {
+            let Some(line) = formatted.get(entry).cloned() else {
+                continue;
+            };
+            output.push(AgendaProjectedLine::Entry {
+                entry,
+                placement,
+                line,
+            });
+        }
+    }
+    output
 }
 
 pub(crate) fn format_agenda_text(
@@ -16,16 +86,17 @@ pub(crate) fn format_agenda_text(
     deadline: &str,
 ) -> Vec<AgendaTextLine> {
     let category_width = result
-        .rows
+        .entries
         .iter()
-        .map(|row| UnicodeWidthStr::width(category(row).as_str()))
+        .map(|entry| UnicodeWidthStr::width(category(&entry.row).as_str()))
         .max()
         .unwrap_or(0)
         .max(10);
     result
-        .rows
+        .entries
         .iter()
-        .map(|row| {
+        .map(|entry| {
+            let row = &entry.row;
             let category = category(row);
             let padding = " "
                 .repeat(category_width.saturating_sub(UnicodeWidthStr::width(category.as_str())));

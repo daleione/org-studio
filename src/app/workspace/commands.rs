@@ -93,12 +93,39 @@ impl WorkspaceWindow {
                 self.request_home(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::OpenAgenda) => {
+                self.agenda.text_query.hide();
+                self.agenda.text_view.hide();
                 self.content_route = ContentRoute::Agenda;
                 self.agenda.requery();
                 self.focus_workspace_on_render = true;
                 cx.notify();
             }
+            CommandImplementation::Builtin(BuiltinCommand::OpenAgendaText) => {
+                if !self.agenda_text_open {
+                    self.agenda_text_return = Some(self.content_route);
+                    self.agenda_text_open = true;
+                    self.agenda.text_view.reopen();
+                    self.agenda
+                        .query_runtime
+                        .reopen(&mut self.agenda.text_query);
+                } else {
+                    self.agenda.text_view.mount();
+                }
+                self.content_route = ContentRoute::AgendaText;
+                self.agenda.state.projection = crate::app::agenda::state::AgendaProjection::Source;
+                if self.agenda.text_query.resume() {
+                    self.agenda.requery_independent_text();
+                }
+                self.sync_agenda_text_buffer(cx);
+                if let Some(editor) = &self.agenda.text_editor {
+                    editor.update(cx, |editor, cx| editor.request_focus(cx));
+                }
+                cx.notify();
+            }
             CommandImplementation::Builtin(BuiltinCommand::ReloadDocument) => {
+                if self.refresh_generated_result(cx) {
+                    return;
+                }
                 if self.content_route == ContentRoute::FileManager
                     || self.file_manager.sidebar_focused()
                 {
@@ -108,9 +135,19 @@ impl WorkspaceWindow {
                 }
             }
             CommandImplementation::Builtin(BuiltinCommand::SaveDocument) => {
+                if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
+                    == crate::editor::CommandDisposition::Disabled
+                {
+                    return;
+                }
                 self.save_document(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::SaveDocumentAs) => {
+                if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
+                    == crate::editor::CommandDisposition::Disabled
+                {
+                    return;
+                }
                 self.save_document_as(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ExecuteSourceBlock) => {
@@ -120,12 +157,22 @@ impl WorkspaceWindow {
                 window.dispatch_action(Box::new(crate::editor::ToggleInlineImagePreviews), cx);
             }
             CommandImplementation::Builtin(BuiltinCommand::UndoDocument) => {
+                if self.generated_command_disposition(crate::editor::GeneratedCommand::Undo)
+                    == crate::editor::CommandDisposition::Disabled
+                {
+                    return;
+                }
                 if let Some(session) = self.document_session().cloned() {
                     let _ = session.update(cx, |session, cx| session.undo(cx));
                     cx.notify();
                 }
             }
             CommandImplementation::Builtin(BuiltinCommand::RedoDocument) => {
+                if self.generated_command_disposition(crate::editor::GeneratedCommand::Redo)
+                    == crate::editor::CommandDisposition::Disabled
+                {
+                    return;
+                }
                 if let Some(session) = self.document_session().cloned() {
                     let _ = session.update(cx, |session, cx| session.redo(cx));
                     cx.notify();
@@ -176,7 +223,11 @@ impl WorkspaceWindow {
                 self.open_default_dired(cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ReturnToDocument) => {
-                self.return_to_document(cx)
+                if self.content_route == ContentRoute::AgendaText {
+                    self.close_agenda_text(cx)
+                } else {
+                    self.return_to_document(cx)
+                }
             }
             CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => {
                 self.toggle_sidebar(cx)

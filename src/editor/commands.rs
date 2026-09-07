@@ -318,12 +318,14 @@ impl SemanticEditor {
 
     fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_read_only(cx) {
-            window.dispatch_action(
-                Box::new(ActivateReadOnlyLine {
-                    line: self.selected_line(cx),
-                }),
-                cx,
-            );
+            if self.activate_read_only_lines {
+                window.dispatch_action(
+                    Box::new(ActivateReadOnlyLine {
+                        line: self.selected_line(cx),
+                    }),
+                    cx,
+                );
+            }
             return;
         }
         let newline = self.session.read(cx).newline_sequence();

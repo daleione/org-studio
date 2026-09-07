@@ -20,10 +20,12 @@ pub(crate) use command::{
 pub(crate) use config::{AgendaConfig, AgendaConfigStore};
 pub(crate) use habit::{HabitStats, habit_stats};
 pub(crate) use index::{AgendaIndex, AgendaIndexSnapshot, FileAgendaShard};
+#[allow(unused_imports)]
 pub(crate) use model::{
-    AgendaDateKind, AgendaDayGroup, AgendaDiagnostic, AgendaFacets, AgendaResultSnapshot,
-    AgendaRow, FileId, HeadingFingerprint, OrgAnchor, SourceLocator, SourceVersion, TaskKey,
-    TaskRecord,
+    AgendaDateKind, AgendaDiagnostic, AgendaEntry, AgendaEntryKey, AgendaEntryRef, AgendaFacets,
+    AgendaOccurrence, AgendaPlacement, AgendaPlacementGroup, AgendaPlacementKey,
+    AgendaPlacementRef, AgendaResultSnapshot, AgendaRow, AgendaTimestampIdentity, FileId,
+    HeadingFingerprint, OrgAnchor, QueryId, SourceLocator, SourceVersion, TaskKey, TaskRecord,
 };
 pub(crate) use query::{AgendaQuery, BuiltinQuery, QueryEngine, task_matches_text};
 pub(crate) use repeat::{
@@ -31,7 +33,7 @@ pub(crate) use repeat::{
 };
 pub(crate) use source::{DiscoveredSource, discover_sources, shard_from_disk, shard_from_live};
 pub(crate) use task_rules::{compatibility_diagnostics, project_blocked_reason};
-pub(crate) use text::format_agenda_text;
+pub(crate) use text::{AgendaProjectedLine, project_agenda_text};
 pub(crate) use workflow::{
     CaptureDraft, CaptureTemplate, InboxSession, ProjectSummary, RecoveryStage, RefileTarget,
     WorkflowError, append_capture, capture_text, cleanup_recovery_duplicate, cross_file_refile,

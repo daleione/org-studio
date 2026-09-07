@@ -37,8 +37,8 @@ pub use revision::{
 };
 pub use selection::Selection;
 pub use session::{
-    DiskChangeAction, DocumentCommand, DocumentEvent, DocumentSession, PreparedReload, ReloadError,
-    ReloadRequest, SaveAckError, SavePoint, SaveStartError,
+    DiskChangeAction, DocumentCommand, DocumentEvent, DocumentSession, GeneratedSource,
+    PreparedReload, ReloadError, ReloadRequest, SaveAckError, SavePoint, SaveStartError,
 };
 pub use transaction::{DocumentBuffer, EditError, EditTransaction, TextEdit};
 pub use undo::{EditOrigin, HistoryOutcome};

@@ -175,10 +175,8 @@ fn analyze_impl(
     OrgAnalysisSnapshot {
         document_id: snapshot.document_id(),
         revision: snapshot.revision(),
-        blocks,
         config,
         headings: headings.into(),
-        diagnostics: Arc::from([]),
         metrics,
     }
 }

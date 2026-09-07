@@ -482,7 +482,7 @@ impl WorkspaceWindow {
                 // choice must never leak into the next opened document.
                 self.soft_wrap = true;
                 let (session, preview) = match loaded.into() {
-                    WorkspaceLoadedDocument::Source(session) => (session, None),
+                    WorkspaceLoadedDocument::Source(session) => (*session, None),
                     WorkspaceLoadedDocument::Preview(loaded) => {
                         let (session, preview) = loaded.into_parts();
                         (session, Some(preview))
@@ -617,6 +617,10 @@ impl WorkspaceWindow {
                 }
             }
         };
+        if matches!(self.state, WorkspaceLoadState::Failed { .. }) {
+            self.agenda.pending_text_task = None;
+            self.agenda.pending_text_generation = None;
+        }
         self.apply_pending_navigation(generation, cx);
         true
     }

@@ -359,16 +359,28 @@ pub(crate) fn refile_overlay(
         )
 }
 
-pub(crate) fn workflow_overlay(
-    language: crate::i18n::Language,
-    kind: AgendaOverlay,
-    workspace: Entity<WorkspaceWindow>,
-    draft: &CaptureDraft,
-    targets: Vec<RefileTarget>,
-    selected: usize,
-    search: &str,
-    message: Option<&str>,
-) -> Option<gpui::Div> {
+pub(crate) struct WorkflowOverlay<'a> {
+    pub language: crate::i18n::Language,
+    pub kind: AgendaOverlay,
+    pub workspace: Entity<WorkspaceWindow>,
+    pub draft: &'a CaptureDraft,
+    pub targets: Vec<RefileTarget>,
+    pub selected: usize,
+    pub search: &'a str,
+    pub message: Option<&'a str>,
+}
+
+pub(crate) fn workflow_overlay(props: WorkflowOverlay<'_>) -> Option<gpui::Div> {
+    let WorkflowOverlay {
+        language,
+        kind,
+        workspace,
+        draft,
+        targets,
+        selected,
+        search,
+        message,
+    } = props;
     match kind {
         AgendaOverlay::Capture => Some(capture_overlay(language, workspace, draft, message)),
         AgendaOverlay::Refile => Some(refile_overlay(

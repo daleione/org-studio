@@ -12,6 +12,7 @@ impl super::AgendaHost {
         let layout = super::layout::AgendaLayout::for_width(viewport_width);
         let compact = matches!(layout, super::layout::AgendaLayout::Compact);
         let facets = self
+            .page_query
             .result
             .as_ref()
             .map(|r| r.facets.clone())
@@ -19,7 +20,8 @@ impl super::AgendaHost {
         let mut tag_counts = BTreeMap::<String, usize>::new();
         let mut source_counts = BTreeMap::<(crate::agenda::FileId, String), usize>::new();
         if let Some(result) = self.navigation_result.as_ref() {
-            for row in result.rows.iter() {
+            for entry in result.entries.iter() {
+                let row = &entry.row;
                 for tag in row.tags.iter() {
                     *tag_counts.entry(tag.to_string()).or_default() += 1;
                 }
@@ -50,14 +52,16 @@ impl super::AgendaHost {
                         div()
                             .relative()
                             .child(super::component::static_sidebar_item(
-                                language,
-                                workspace.clone(),
-                                "收件箱",
-                                "assets/icons/agenda/tray.svg",
-                                Some(self.inbox_tasks().len()),
-                                self.state.navigation.as_ref() == "收件箱",
-                                compact,
-                                crate::agenda::BuiltinQuery::Unscheduled,
+                                super::component::StaticSidebarItem {
+                                    language,
+                                    workspace: workspace.clone(),
+                                    label: "收件箱",
+                                    icon: "assets/icons/agenda/tray.svg",
+                                    count: Some(self.inbox_tasks().len()),
+                                    selected: self.state.navigation.as_ref() == "收件箱",
+                                    compact,
+                                    query: crate::agenda::BuiltinQuery::Unscheduled,
+                                },
                             ))
                             .when(!compact, |row| {
                                 row.child(
@@ -94,34 +98,40 @@ impl super::AgendaHost {
                             }),
                     )
                     .child(super::component::static_sidebar_item(
-                        language,
-                        workspace.clone(),
-                        "Agenda",
-                        "assets/icons/agenda/calendar-dots.svg",
-                        None,
-                        self.state.navigation.as_ref() == "Agenda",
-                        compact,
-                        crate::agenda::BuiltinQuery::NextSevenDays,
+                        super::component::StaticSidebarItem {
+                            language,
+                            workspace: workspace.clone(),
+                            label: "Agenda",
+                            icon: "assets/icons/agenda/calendar-dots.svg",
+                            count: None,
+                            selected: self.state.navigation.as_ref() == "Agenda",
+                            compact,
+                            query: crate::agenda::BuiltinQuery::NextSevenDays,
+                        },
                     ))
                     .child(super::component::static_sidebar_item(
-                        language,
-                        workspace.clone(),
-                        "Tasks",
-                        "assets/icons/agenda/check-circle.svg",
-                        None,
-                        self.state.navigation.as_ref() == "Tasks",
-                        compact,
-                        crate::agenda::BuiltinQuery::Next,
+                        super::component::StaticSidebarItem {
+                            language,
+                            workspace: workspace.clone(),
+                            label: "Tasks",
+                            icon: "assets/icons/agenda/check-circle.svg",
+                            count: None,
+                            selected: self.state.navigation.as_ref() == "Tasks",
+                            compact,
+                            query: crate::agenda::BuiltinQuery::Next,
+                        },
                     ))
                     .child(super::component::static_sidebar_item(
-                        language,
-                        workspace.clone(),
-                        "Projects",
-                        "assets/icons/agenda/tree-structure.svg",
-                        Some(self.projects().len()),
-                        self.state.navigation.as_ref() == "Projects",
-                        compact,
-                        crate::agenda::BuiltinQuery::Next,
+                        super::component::StaticSidebarItem {
+                            language,
+                            workspace: workspace.clone(),
+                            label: "Projects",
+                            icon: "assets/icons/agenda/tree-structure.svg",
+                            count: Some(self.projects().len()),
+                            selected: self.state.navigation.as_ref() == "Projects",
+                            compact,
+                            query: crate::agenda::BuiltinQuery::Next,
+                        },
                     )),
             )
             .when(!compact, |side| {
@@ -315,7 +325,8 @@ impl super::AgendaHost {
             .then(|| {
                 self.state
                     .selected
-                    .and_then(|index| self.result.as_ref()?.rows.get(index))
+                    .and_then(|index| self.page_query.result.as_ref()?.placement_entry(index))
+                    .map(|(_, entry)| &entry.row)
             })
             .flatten()
             .map(|row| {
@@ -372,7 +383,7 @@ impl super::AgendaHost {
                     }),
                 })
             });
-        let content = self.result.clone();
+        let content = self.page_query.result.clone();
 
         use super::component::TaskColumns;
         let list_width = viewport_width
@@ -384,9 +395,12 @@ impl super::AgendaHost {
             - if inspector.is_some() { 360. } else { 0. };
         let task_columns = TaskColumns::for_width(
             list_width,
-            self.result
-                .as_ref()
-                .is_some_and(|result| result.rows.iter().any(|row| !row.tags.is_empty())),
+            self.page_query.result.as_ref().is_some_and(|result| {
+                result
+                    .entries
+                    .iter()
+                    .any(|entry| !entry.row.tags.is_empty())
+            }),
         );
         let columns = TaskColumns::row()
             .mx(px(TaskColumns::GUTTER + 1.))
@@ -561,23 +575,23 @@ impl super::AgendaHost {
                         .refile_task
                         .map(|task| {
                             crate::agenda::refile_targets(
-                                &self.index.snapshot(),
+                                &self.runtime.index.snapshot(),
                                 task,
                                 &self.state.refile_search,
                                 &self.state.recent_refile_targets,
                             )
                         })
                         .unwrap_or_default();
-                    super::view::workflow_overlay(
+                    super::view::workflow_overlay(super::view::WorkflowOverlay {
                         language,
-                        self.state.overlay,
-                        workspace.clone(),
-                        &self.state.capture,
+                        kind: self.state.overlay,
+                        workspace: workspace.clone(),
+                        draft: &self.state.capture,
                         targets,
-                        self.state.refile_selected,
-                        &self.state.refile_search,
-                        self.state.workflow_message.as_deref(),
-                    )
+                        selected: self.state.refile_selected,
+                        search: &self.state.refile_search,
+                        message: self.state.workflow_message.as_deref(),
+                    })
                 },
                 |root, overlay| root.child(overlay),
             )

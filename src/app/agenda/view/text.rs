@@ -1,5 +1,5 @@
 use crate::{
-    agenda::{AgendaDateKind, AgendaResultSnapshot, format_agenda_text},
+    agenda::{AgendaDateKind, AgendaProjectedLine, AgendaResultSnapshot, project_agenda_text},
     i18n::Language,
 };
 use gpui::{FontWeight, HighlightStyle, rgb};
@@ -8,7 +8,7 @@ use jiff::civil::Date;
 pub(crate) struct AgendaTextBuffer {
     pub(crate) text: String,
     pub(crate) highlights: Vec<crate::editor::LineHighlights>,
-    pub(crate) targets: Vec<Option<crate::agenda::TaskKey>>,
+    pub(crate) targets: Vec<Option<crate::agenda::AgendaPlacementRef>>,
 }
 
 pub(crate) fn agenda_text(
@@ -16,127 +16,117 @@ pub(crate) fn agenda_text(
     language: Language,
     window: Option<(Date, Date)>,
 ) -> AgendaTextBuffer {
-    let today = jiff::Zoned::now().date();
-    let lines = format_agenda_text(
+    let today = result.query.today;
+    let lines = project_agenda_text(
         result,
         language.text("agenda.scheduled"),
         language.text("agenda.deadline"),
+        language.text("agenda.unscheduled"),
+        window,
+        |date, week| date_heading(date, language, week),
     );
-    let mut groups = std::collections::BTreeMap::<Option<Date>, Vec<usize>>::new();
-    for (index, row) in result.rows.iter().enumerate() {
-        let date = row
-            .date
-            .map(|date| window.map_or(date, |(start, _)| date.max(start)));
-        groups.entry(date).or_default().push(index);
-    }
-    if let Some((start, end)) = window {
-        let mut date = start;
-        while date <= end {
-            groups.entry(Some(date)).or_default();
-            let Ok(next) = date.checked_add(jiff::Span::new().days(1)) else {
-                break;
-            };
-            date = next;
-        }
-    }
     let mut content = AgendaTextBuffer {
         text: String::new(),
         highlights: Vec::new(),
         targets: Vec::new(),
     };
-    for (day_index, (date, rows)) in groups.into_iter().enumerate() {
-        let header = date.map_or_else(
-            || language.text("agenda.unscheduled").to_owned(),
-            |date| {
-                date_heading(
-                    date,
-                    language,
-                    day_index == 0 || date.weekday().to_monday_zero_offset() == 0,
-                )
-            },
-        );
-        let weekend = date.is_some_and(|date| date.weekday().to_monday_zero_offset() >= 5);
-        content.highlights.push(vec![(
-            0..header.len(),
-            HighlightStyle {
-                color: Some(
-                    rgb(if date == Some(today) {
-                        0xd291d8
-                    } else if weekend {
-                        0x732b79
-                    } else {
-                        0xb54cbd
-                    })
-                    .into(),
-                ),
-                font_weight: Some(FontWeight::BOLD),
-                ..Default::default()
-            },
-        )]);
-        content.text.push_str(&header);
-        content.text.push('\n');
-        content.targets.push(None);
-        for index in rows {
-            let row = &result.rows[index];
-            let line = &lines[index];
-            let deadline = row.date_kind == Some(AgendaDateKind::Deadline);
-            let overdue = deadline && row.date.is_some_and(|date| date < today);
-            let mut highlights = vec![
-                (
-                    0..line.text.len(),
+    for projected in lines {
+        match projected {
+            AgendaProjectedLine::Header { date, text: header } => {
+                let weekend = date.is_some_and(|date| date.weekday().to_monday_zero_offset() >= 5);
+                content.highlights.push(vec![(
+                    0..header.len(),
                     HighlightStyle {
                         color: Some(
-                            rgb(if overdue {
-                                0xff4a40
-                            } else if deadline {
-                                0x986801
+                            rgb(if date == Some(today) {
+                                0xd291d8
+                            } else if weekend {
+                                0x732b79
                             } else {
-                                0x383a42
+                                0xb54cbd
                             })
                             .into(),
                         ),
-                        font_weight: Some(FontWeight::NORMAL),
-                        ..Default::default()
-                    },
-                ),
-                (
-                    line.todo.clone(),
-                    HighlightStyle {
-                        color: Some(rgb(0x50a14f).into()),
                         font_weight: Some(FontWeight::BOLD),
                         ..Default::default()
                     },
-                ),
-            ];
-            if let Some(range) = &line.priority {
-                highlights.push((
-                    range.clone(),
-                    HighlightStyle {
-                        color: Some(
-                            rgb(match row.priority {
-                                Some('A') => 0xff4a40,
-                                Some('B') => 0x986801,
-                                _ => 0x50a14f,
-                            })
-                            .into(),
-                        ),
-                        ..Default::default()
-                    },
-                ));
+                )]);
+                content.text.push_str(&header);
+                content.text.push('\n');
+                content.targets.push(None);
             }
-            if let Some(range) = &line.tags {
-                highlights.push((
-                    range.clone(),
-                    HighlightStyle {
-                        color: Some(rgb(0x986801).into()),
-                        ..Default::default()
-                    },
-                ));
+            AgendaProjectedLine::Entry {
+                entry: index,
+                placement: placement_key,
+                line,
+            } => {
+                let entry = &result.entries[index];
+                let row = &entry.row;
+                let deadline = entry.occurrence.as_ref().is_some_and(|occurrence| {
+                    occurrence.timestamp.kind == AgendaDateKind::Deadline
+                });
+                let overdue = deadline
+                    && entry
+                        .occurrence
+                        .as_ref()
+                        .is_some_and(|occurrence| occurrence.start_date < today);
+                let mut highlights = vec![
+                    (
+                        0..line.text.len(),
+                        HighlightStyle {
+                            color: Some(
+                                rgb(if overdue {
+                                    0xff4a40
+                                } else if deadline {
+                                    0x986801
+                                } else {
+                                    0x383a42
+                                })
+                                .into(),
+                            ),
+                            font_weight: Some(FontWeight::NORMAL),
+                            ..Default::default()
+                        },
+                    ),
+                    (
+                        line.todo.clone(),
+                        HighlightStyle {
+                            color: Some(rgb(0x50a14f).into()),
+                            font_weight: Some(FontWeight::BOLD),
+                            ..Default::default()
+                        },
+                    ),
+                ];
+                if let Some(range) = &line.priority {
+                    highlights.push((
+                        range.clone(),
+                        HighlightStyle {
+                            color: Some(
+                                rgb(match row.priority {
+                                    Some('A') => 0xff4a40,
+                                    Some('B') => 0x986801,
+                                    _ => 0x50a14f,
+                                })
+                                .into(),
+                            ),
+                            ..Default::default()
+                        },
+                    ));
+                }
+                if let Some(range) = &line.tags {
+                    highlights.push((
+                        range.clone(),
+                        HighlightStyle {
+                            color: Some(rgb(0x986801).into()),
+                            ..Default::default()
+                        },
+                    ));
+                }
+                content.text.push_str(&line.text);
+                content.text.push('\n');
+                content.highlights.push(highlights);
+                content.targets.push(result.placement_ref(placement_key));
             }
-            content.text.push_str(&line.text);
-            content.text.push('\n');
-            content.highlights.push(highlights);
-            content.targets.push(Some(row.task));
         }
     }
     content

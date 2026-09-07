@@ -150,6 +150,7 @@ pub(crate) enum ContentRoute {
     Document,
     FileManager,
     Agenda,
+    AgendaText,
 }
 
 #[derive(Clone)]
@@ -289,6 +290,10 @@ pub struct WorkspaceWindow {
     pub(crate) key_feedback_request: u64,
     pub(crate) which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
     pub(crate) content_route: ContentRoute,
+    /// Route restored when the independently mounted generated result is closed.  The document
+    /// itself remains in `state`, so this record never owns or resurrects a replaced session.
+    pub(crate) agenda_text_return: Option<ContentRoute>,
+    pub(crate) agenda_text_open: bool,
     pub(crate) document_workspace: DocumentWorkspaceState,
     pub(crate) document_view_preferences: DocumentViewPreferences,
     pub(crate) content_font_sizes: PanePair<crate::typography::ContentFontSize>,

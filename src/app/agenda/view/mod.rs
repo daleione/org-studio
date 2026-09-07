@@ -12,4 +12,4 @@ pub(crate) use inspector::{InspectorProps, agenda_inspector};
 pub(crate) use list::agenda_list;
 pub(crate) use projects::projects_view;
 pub(crate) use text::agenda_text;
-pub(crate) use workflows::workflow_overlay;
+pub(crate) use workflows::{WorkflowOverlay, workflow_overlay};

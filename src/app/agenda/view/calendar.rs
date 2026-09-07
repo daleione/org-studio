@@ -161,12 +161,15 @@ fn month_view(
         .overflow_y_scroll();
     for date in days {
         let rows: Vec<_> = result
-            .rows
+            .placements
             .iter()
             .enumerate()
-            .filter(|(_, row)| {
-                row.date
-                    .is_some_and(|start| start <= *date && row.end_date.unwrap_or(start) >= *date)
+            .filter(|(_, placement)| placement.date == Some(*date))
+            .filter_map(|(index, placement)| {
+                result
+                    .entries
+                    .get(placement.entry.0 as usize)
+                    .map(|entry| (index, &entry.row))
             })
             .collect();
         let mut cell = div()
@@ -276,10 +279,18 @@ fn time_view(
                 .border_r_1()
                 .border_color(rgb(0xececef));
             for (index, task) in result
-                .rows
+                .placements
                 .iter()
                 .enumerate()
-                .filter(|(_, task)| task.date == Some(*date) && task.time.is_none())
+                .filter(|(_, placement)| {
+                    placement.date == Some(*date) && placement.start_time.is_none()
+                })
+                .filter_map(|(index, placement)| {
+                    result
+                        .entries
+                        .get(placement.entry.0 as usize)
+                        .map(|entry| (index, &entry.row))
+                })
                 .take(2)
             {
                 cell = cell.child(draggable_task(
@@ -354,15 +365,24 @@ fn time_view(
                     }),
             );
         }
-        for (index, task) in result
-            .rows
+        for (index, placement) in result
+            .placements
             .iter()
             .enumerate()
-            .filter(|(_, task)| task.date == Some(*date) && task.time.is_some())
+            .filter(|(_, placement)| {
+                placement.date == Some(*date) && placement.start_time.is_some()
+            })
         {
-            let time = task.time.unwrap();
+            let Some(task) = result
+                .entries
+                .get(placement.entry.0 as usize)
+                .map(|entry| &entry.row)
+            else {
+                continue;
+            };
+            let time = placement.start_time.unwrap();
             let top = ((time.hour() as i32 - 8).max(0) as f32 * 54.) + time.minute() as f32 * 0.9;
-            let height = task.end_time.map_or(80., |end| {
+            let height = placement.end_time.map_or(80., |end| {
                 let start_minutes = time.hour() as i32 * 60 + time.minute() as i32;
                 let end_minutes = end.hour() as i32 * 60 + end.minute() as i32;
                 ((end_minutes - start_minutes).max(30) as f32 * 0.9).clamp(36., 216.)
@@ -372,11 +392,13 @@ fn time_view(
                 .or_insert(0usize);
             let lane_index = *lane;
             let lane_count = result
-                .rows
+                .placements
                 .iter()
                 .filter(|candidate| {
                     candidate.date == Some(*date)
-                        && candidate.time.map(|value| (value.hour(), value.minute()))
+                        && candidate
+                            .start_time
+                            .map(|value| (value.hour(), value.minute()))
                             == Some((time.hour(), time.minute()))
                 })
                 .count()

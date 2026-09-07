@@ -45,16 +45,28 @@ pub(crate) fn sidebar_section_header(
         })
 }
 
-pub(crate) fn static_sidebar_item(
-    language: crate::i18n::Language,
-    workspace: Entity<WorkspaceWindow>,
-    label: &'static str,
-    icon: &'static str,
-    count: Option<usize>,
-    selected: bool,
-    compact: bool,
-    query: BuiltinQuery,
-) -> Div {
+pub(crate) struct StaticSidebarItem {
+    pub language: crate::i18n::Language,
+    pub workspace: Entity<WorkspaceWindow>,
+    pub label: &'static str,
+    pub icon: &'static str,
+    pub count: Option<usize>,
+    pub selected: bool,
+    pub compact: bool,
+    pub query: BuiltinQuery,
+}
+
+pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Div {
+    let StaticSidebarItem {
+        language,
+        workspace,
+        label,
+        icon,
+        count,
+        selected,
+        compact,
+        query,
+    } = props;
     div()
         .relative()
         .h(px(39.))

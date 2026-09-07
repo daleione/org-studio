@@ -173,7 +173,7 @@ pub(crate) fn load_workspace_document(
         snapshot
             .byte_to_utf16(crate::document::ByteOffset(snapshot.len_bytes()))
             .expect("document end is a valid coordinate");
-        Ok(super::WorkspaceLoadedDocument::Source(session))
+        Ok(super::WorkspaceLoadedDocument::Source(Box::new(session)))
     } else {
         load_document(path)
             .map(Box::new)

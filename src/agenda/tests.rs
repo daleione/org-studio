@@ -1,9 +1,10 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use jiff::civil::Date;
 
 use crate::{document::DocumentSnapshot, org_semantic::analyze, org_syntax};
 
+use super::text::format_agenda_text;
 use super::*;
 
 pub(crate) fn task_record_for_workflow(
@@ -81,9 +82,9 @@ fn benchmark_10k_headings_across_50_files() {
         "M5_BENCH headings=10000 files=50 index_ms={} query_ms={} rows={}",
         indexed.as_millis(),
         queried.as_millis(),
-        result.rows.len()
+        result.entries.len()
     );
-    assert_eq!(result.rows.len(), 10_000);
+    assert_eq!(result.entries.len(), 10_000);
     assert!(indexed.as_secs() < 30);
     assert!(queried.as_secs() < 5);
 }
@@ -119,16 +120,24 @@ fn calendar_query_uses_visible_month_instead_of_today_window() {
         Date::new(2026, 10, 31).unwrap(),
     ));
     let result = QueryEngine::default().execute(index.replace(shard), &query);
-    assert!(result.rows.iter().any(|row| row.title.as_ref() == "Future"));
     assert!(
-        result.rows.iter().any(|row| row.title.as_ref() == "Repeat"
-            && row.date == Some(Date::new(2026, 10, 20).unwrap()))
+        result
+            .entries
+            .iter()
+            .any(|entry| entry.row.title.as_ref() == "Future")
     );
     assert!(
         result
-            .rows
+            .entries
             .iter()
-            .all(|row| row.date.unwrap().month() == 10)
+            .any(|entry| entry.row.title.as_ref() == "Repeat"
+                && entry.row.date == Some(Date::new(2026, 10, 20).unwrap()))
+    );
+    assert!(
+        result
+            .entries
+            .iter()
+            .all(|entry| entry.row.date.unwrap().month() == 10)
     );
 }
 
@@ -142,23 +151,30 @@ fn builtins_and_facets_share_one_traversal_result() {
         snapshot.clone(),
         &AgendaQuery::builtin(BuiltinQuery::Today, today),
     );
-    assert_eq!(today_result.rows.len(), 1);
-    assert_eq!(today_result.rows[0].title.as_ref(), "Ship release");
+    assert_eq!(today_result.entries.len(), 1);
+    assert_eq!(today_result.entries[0].row.title.as_ref(), "Ship release");
     assert_eq!(today_result.facets.next, 1);
     assert_eq!(today_result.facets.waiting, 1);
     assert_eq!(today_result.facets.unscheduled, 1);
     let overdue = engine.execute(
-        snapshot,
+        snapshot.clone(),
         &AgendaQuery::builtin(BuiltinQuery::Overdue, today),
     );
     assert_eq!(
         overdue
-            .rows
+            .entries
             .iter()
-            .map(|row| row.title.as_ref())
+            .map(|entry| entry.row.title.as_ref())
             .collect::<Vec<_>>(),
         ["Weekly", "Vendor"]
     );
+    let unscheduled = engine.execute(
+        snapshot,
+        &AgendaQuery::builtin(BuiltinQuery::Unscheduled, today),
+    );
+    assert_eq!(unscheduled.entries.len(), 1);
+    assert!(unscheduled.entries[0].occurrence.is_none());
+    assert_eq!(unscheduled.placements[0].date, None);
 }
 
 #[test]
@@ -171,8 +187,11 @@ fn repeater_expands_only_inside_visible_query_window() {
         &AgendaQuery::builtin(BuiltinQuery::NextSevenDays, Date::new(2026, 9, 7).unwrap()),
     );
     assert!(
-        result.rows.iter().any(|row| row.title.as_ref() == "Weekly"
-            && row.date == Some(Date::new(2026, 9, 8).unwrap()))
+        result
+            .entries
+            .iter()
+            .any(|entry| entry.row.title.as_ref() == "Weekly"
+                && entry.row.date == Some(Date::new(2026, 9, 8).unwrap()))
     );
 }
 
@@ -193,18 +212,155 @@ fn calendar_occurrence_retains_time_range_and_cross_day_end() {
         &AgendaQuery::builtin(BuiltinQuery::NextSevenDays, Date::new(2026, 3, 8).unwrap()),
     );
     let range = result
-        .rows
+        .entries
         .iter()
+        .map(|entry| &entry.row)
         .find(|row| row.title.as_ref() == "中文重叠事件")
         .unwrap();
     assert_eq!(range.time.unwrap().to_string(), "10:00:00");
     assert_eq!(range.end_time.unwrap().to_string(), "11:30:00");
     let cross_day = result
-        .rows
+        .entries
         .iter()
+        .map(|entry| &entry.row)
         .find(|row| row.title.as_ref() == "DST cross day")
         .unwrap();
     assert_eq!(cross_day.end_date, Some(Date::new(2026, 3, 9).unwrap()));
+}
+
+#[test]
+fn cross_day_occurrence_has_clipped_daily_placements() {
+    let source = "* TODO Trip\n<2026-09-06 Sun 23:00>--<2026-09-08 Tue 01:00>\n";
+    let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+    let analysis = analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
+    let shard = shard_from_live(
+        FileId(10),
+        1,
+        Arc::new(PathBuf::from("/notes/trip.org")),
+        &analysis,
+    );
+    let mut query =
+        AgendaQuery::builtin(BuiltinQuery::NextSevenDays, "2026-09-07".parse().unwrap());
+    query.window = Some(("2026-09-07".parse().unwrap(), "2026-09-08".parse().unwrap()));
+    let mut index = AgendaIndex::default();
+    let mut result = QueryEngine::default().execute(index.replace(shard), &query);
+    result.query_id = Some(QueryId(44));
+    assert_eq!(result.entries.len(), 1);
+    let occurrence = result.entries[0].occurrence.as_ref().unwrap();
+    assert_eq!(occurrence.start_date.to_string(), "2026-09-06");
+    assert_eq!(occurrence.end_date.unwrap().to_string(), "2026-09-08");
+    assert_eq!(result.placements.len(), 2);
+    assert_eq!(result.placements[0].date.unwrap().to_string(), "2026-09-07");
+    assert!(result.placements[0].continues_before);
+    assert!(result.placements[0].continues_after);
+    assert_eq!(result.placements[1].date.unwrap().to_string(), "2026-09-08");
+    assert_eq!(
+        result.placements[1].end_time.unwrap().to_string(),
+        "01:00:00"
+    );
+    let reference = result.entry_ref(result.entries[0].key).unwrap();
+    assert_eq!(
+        result.resolve_entry(reference).unwrap().key,
+        result.entries[0].key
+    );
+    let placement = result.placement_ref(result.placements[0].key).unwrap();
+    assert_eq!(placement.entry, reference);
+    let mut stale = reference;
+    stale.request_generation += 1;
+    assert!(result.resolve_entry(stale).is_none());
+}
+
+#[test]
+fn equal_timestamps_in_one_task_remain_distinct_entries() {
+    let source = "* TODO Pair\n<2026-09-07 Mon 10:00> <2026-09-07 Mon 10:00>\n";
+    let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+    let analysis = analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
+    let shard = shard_from_live(
+        FileId(11),
+        1,
+        Arc::new(PathBuf::from("/notes/pair.org")),
+        &analysis,
+    );
+    let mut index = AgendaIndex::default();
+    let result = QueryEngine::default().execute(
+        index.replace(shard),
+        &AgendaQuery::builtin(BuiltinQuery::Today, "2026-09-07".parse().unwrap()),
+    );
+    assert_eq!(result.entries.len(), 2);
+    assert_ne!(
+        result.entries[0].occurrence.as_ref().unwrap().timestamp,
+        result.entries[1].occurrence.as_ref().unwrap().timestamp
+    );
+}
+
+#[test]
+fn placement_contract_distinguishes_midnight_end_and_inclusive_date_range() {
+    let source = "* TODO Timed\n<2026-09-07 Mon 20:00>--<2026-09-08 Tue 00:00>\n* TODO Dates\n<2026-09-07 Mon>--<2026-09-08 Tue>\n";
+    let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+    let analysis = analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
+    let shard = shard_from_live(
+        FileId(12),
+        1,
+        Arc::new(PathBuf::from("/notes/ranges.org")),
+        &analysis,
+    );
+    let mut query =
+        AgendaQuery::builtin(BuiltinQuery::NextSevenDays, "2026-09-07".parse().unwrap());
+    query.window = Some(("2026-09-07".parse().unwrap(), "2026-09-08".parse().unwrap()));
+    let mut index = AgendaIndex::default();
+    let result = QueryEngine::default().execute(index.replace(shard), &query);
+    let timed = result
+        .entries
+        .iter()
+        .find(|entry| entry.row.title.as_ref() == "Timed")
+        .unwrap();
+    let dates = result
+        .entries
+        .iter()
+        .find(|entry| entry.row.title.as_ref() == "Dates")
+        .unwrap();
+    assert_eq!(
+        result
+            .placements
+            .iter()
+            .filter(|item| item.entry == timed.key)
+            .count(),
+        1
+    );
+    assert_eq!(
+        result
+            .placements
+            .iter()
+            .filter(|item| item.entry == dates.key)
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn repeated_occurrence_recomputes_its_real_end_before_placement() {
+    let source = "* TODO Repeated trip\n<2026-09-01 Tue 23:00 +1w>--<2026-09-03 Thu 01:00>\n";
+    let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+    let analysis = analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
+    let shard = shard_from_live(
+        FileId(13),
+        1,
+        Arc::new(PathBuf::from("/notes/repeated-range.org")),
+        &analysis,
+    );
+    let mut query =
+        AgendaQuery::builtin(BuiltinQuery::NextSevenDays, "2026-09-07".parse().unwrap());
+    query.window = Some(("2026-09-07".parse().unwrap(), "2026-09-10".parse().unwrap()));
+    let mut index = AgendaIndex::default();
+    let result = QueryEngine::default().execute(index.replace(shard), &query);
+    let occurrence = result
+        .entries
+        .iter()
+        .find_map(|entry| entry.occurrence.as_ref())
+        .unwrap();
+    assert_eq!(occurrence.start_date.to_string(), "2026-09-08");
+    assert_eq!(occurrence.end_date.unwrap().to_string(), "2026-09-10");
+    assert_eq!(result.placements.len(), 3);
 }
 
 #[test]
@@ -229,7 +385,8 @@ fn text_projection_preserves_org_prefixes_ranges_and_unicode_alignment() {
         index.replace(fixture_shard()),
         &AgendaQuery::builtin(BuiltinQuery::Today, Date::new(2026, 9, 5).unwrap()),
     );
-    let mut row = result.rows[0].clone();
+    let mut entry = result.entries[0].clone();
+    let row = &mut entry.row;
     row.category = Some(Arc::from("工作"));
     row.title = Arc::from("发布说明");
     row.todo = Arc::from("TODO");
@@ -239,9 +396,10 @@ fn text_projection_preserves_org_prefixes_ranges_and_unicode_alignment() {
     row.end_time = Some("11:30".parse().unwrap());
     row.end_date = row.date;
     row.date_kind = Some(AgendaDateKind::Scheduled);
-    let mut other = row.clone();
-    other.category = Some(Arc::from("work"));
-    result.rows = Arc::from([row, other]);
+    let mut other = entry.clone();
+    other.key = AgendaEntryKey(1);
+    other.row.category = Some(Arc::from("work"));
+    result.entries = Arc::from([entry, other]);
     let lines = format_agenda_text(&result, "Scheduled", "Deadline");
     for line in &lines {
         assert!(
@@ -259,6 +417,69 @@ fn text_projection_preserves_org_prefixes_ranges_and_unicode_alignment() {
     let chinese = format_agenda_text(&result, "计划", "截止");
     assert!(chinese[0].text.contains("计划: TODO"));
     assert_eq!(&chinese[0].text[chinese[0].todo.clone()], "TODO");
+}
+
+#[test]
+fn unified_projection_preserves_cross_day_membership_empty_dates_and_targets() {
+    let source =
+        "* TODO 跨日任务 :中文:very-long-tag:\n<2026-09-06 Sun 23:00>--<2026-09-08 Tue 01:00>\n";
+    let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+    let analysis = analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
+    let mut index = AgendaIndex::default();
+    let mut query =
+        AgendaQuery::builtin(BuiltinQuery::NextSevenDays, Date::new(2026, 9, 6).unwrap());
+    query.window = Some((
+        Date::new(2026, 9, 6).unwrap(),
+        Date::new(2026, 9, 9).unwrap(),
+    ));
+    let result = QueryEngine::default().execute(
+        index.replace(shard_from_live(
+            FileId(71),
+            1,
+            Arc::new(PathBuf::from("/notes/中文.org")),
+            &analysis,
+        )),
+        &query,
+    );
+    assert_eq!(result.entries.len(), 1);
+    assert_eq!(result.placements.len(), 3);
+    let started = Instant::now();
+    let projection = project_agenda_text(
+        &result,
+        "计划",
+        "截止",
+        "无日期",
+        query.window,
+        |date, week| format!("{date}{}", if week { " W" } else { "" }),
+    );
+    assert!(started.elapsed().as_secs() < 5);
+    let headers = projection
+        .iter()
+        .filter(|line| matches!(line, AgendaProjectedLine::Header { .. }))
+        .count();
+    let entries = projection
+        .iter()
+        .filter_map(|line| match line {
+            AgendaProjectedLine::Entry {
+                entry,
+                placement,
+                line,
+            } => Some((*entry, *placement, line.text.as_str())),
+            AgendaProjectedLine::Header { .. } => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(headers, 4, "the empty fourth date remains visible");
+    assert_eq!(entries.len(), 3);
+    assert!(entries.iter().all(|(entry, _, text)| {
+        *entry == 0 && text.contains("跨日任务") && text.contains(":中文:very-long-tag:")
+    }));
+    assert_eq!(
+        entries
+            .iter()
+            .map(|(_, placement, _)| placement.0)
+            .collect::<Vec<_>>(),
+        [0, 1, 2]
+    );
 }
 
 #[test]

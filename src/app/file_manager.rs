@@ -653,6 +653,12 @@ impl WorkspaceWindow {
             ContentRoute::Agenda => div()
                 .size_full()
                 .child(self.agenda.render(entity.clone(), viewport_width)),
+            ContentRoute::AgendaText => div()
+                .size_full()
+                .p(px(12.0))
+                .when_some(self.agenda.text_editor.clone(), |body, editor| {
+                    body.child(editor)
+                }),
             ContentRoute::FileManager => {
                 self.full_page_file_manager(entity.clone(), viewport_width, window, cx)
             }

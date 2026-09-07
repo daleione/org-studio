@@ -55,6 +55,7 @@ pub enum BuiltinCommand {
     OpenDocument,
     ShowHome,
     OpenAgenda,
+    OpenAgendaText,
     ReloadDocument,
     SaveDocument,
     SaveDocumentAs,

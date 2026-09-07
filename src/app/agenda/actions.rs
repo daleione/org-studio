@@ -13,6 +13,7 @@ impl WorkspaceWindow {
     ) {
         let path = self
             .agenda
+            .runtime
             .index
             .snapshot()
             .files
@@ -158,29 +159,32 @@ impl WorkspaceWindow {
                 self.agenda.requery();
             }
             UiIntent::MoveOccurrence(index, date, time) => {
-                let Some(row) = self
+                let Some((placement, entry)) = self
                     .agenda
+                    .page_query
                     .result
                     .as_ref()
-                    .and_then(|result| result.rows.get(index))
-                    .cloned()
+                    .and_then(|result| result.placement_entry(index))
+                    .map(|(placement, entry)| (placement.clone(), entry.clone()))
                 else {
                     return;
                 };
+                let row = entry.row;
                 let Some(task) = self.agenda.task(row.task) else {
+                    return;
+                };
+                let Some(identity) = entry.occurrence.as_ref().map(|value| value.timestamp) else {
                     return;
                 };
                 let Some(mut timestamp) = task
                     .timestamps
                     .iter()
-                    .find(|timestamp| {
-                        timestamp.start_date == row.date.unwrap_or(timestamp.start_date)
-                            && timestamp.start_time == row.time
-                    })
+                    .find(|timestamp| timestamp.source_range == identity.source_range)
                     .cloned()
                 else {
                     return;
                 };
+                let _displayed_date = placement.date;
                 timestamp.start_date = date;
                 timestamp.start_time = time;
                 if timestamp.end_date.is_some() {
@@ -211,28 +215,30 @@ impl WorkspaceWindow {
                 return;
             }
             UiIntent::ResizeOccurrence(index, date, end_time) => {
-                let Some(row) = self
+                let Some((_, entry)) = self
                     .agenda
+                    .page_query
                     .result
                     .as_ref()
-                    .and_then(|result| result.rows.get(index))
-                    .cloned()
+                    .and_then(|result| result.placement_entry(index))
+                    .map(|(placement, entry)| (placement.clone(), entry.clone()))
                 else {
                     return;
                 };
+                let row = entry.row;
                 if row.end_time.is_none() {
                     return;
                 }
                 let Some(task) = self.agenda.task(row.task) else {
                     return;
                 };
+                let Some(identity) = entry.occurrence.as_ref().map(|value| value.timestamp) else {
+                    return;
+                };
                 let Some(mut timestamp) = task
                     .timestamps
                     .iter()
-                    .find(|timestamp| {
-                        timestamp.start_date == row.date.unwrap_or(timestamp.start_date)
-                            && timestamp.start_time == row.time
-                    })
+                    .find(|timestamp| timestamp.source_range == identity.source_range)
                     .cloned()
                 else {
                     return;
@@ -344,6 +350,7 @@ impl WorkspaceWindow {
                 self.agenda.state.tag_filter = saved.query.tag.map(Arc::from);
                 self.agenda.state.source_filter = saved.query.source.as_ref().and_then(|path| {
                     self.agenda
+                        .runtime
                         .index
                         .snapshot()
                         .files
@@ -430,23 +437,23 @@ impl WorkspaceWindow {
                     .inbox_session
                     .as_ref()
                     .and_then(|session| session.current());
-                if let Some(key) = key {
-                    if let Some(task) = self.agenda.task(key) {
-                        match self.apply_agenda_command(
-                            &task,
-                            &crate::agenda::AgendaCommand::SetTodo(Some(Arc::from("NEXT"))),
-                            cx,
-                        ) {
-                            Ok(()) => {
-                                if let Some(session) = self.agenda.state.inbox_session.as_mut() {
-                                    session.finish();
-                                }
-                                self.agenda.refresh_sources();
+                if let Some(key) = key
+                    && let Some(task) = self.agenda.task(key)
+                {
+                    match self.apply_agenda_command(
+                        &task,
+                        &crate::agenda::AgendaCommand::SetTodo(Some(Arc::from("NEXT"))),
+                        cx,
+                    ) {
+                        Ok(()) => {
+                            if let Some(session) = self.agenda.state.inbox_session.as_mut() {
+                                session.finish();
                             }
-                            Err(error) => {
-                                self.agenda.state.workflow_message =
-                                    Some(Arc::from(format!("整理失败，原文未改动：{error:?}")))
-                            }
+                            self.agenda.refresh_sources();
+                        }
+                        Err(error) => {
+                            self.agenda.state.workflow_message =
+                                Some(Arc::from(format!("整理失败，原文未改动：{error:?}")))
                         }
                     }
                 }
@@ -474,7 +481,7 @@ impl WorkspaceWindow {
                     return;
                 };
                 let targets = crate::agenda::refile_targets(
-                    &self.agenda.index.snapshot(),
+                    &self.agenda.runtime.index.snapshot(),
                     task,
                     &self.agenda.state.refile_search,
                     &self.agenda.state.recent_refile_targets,
@@ -490,7 +497,7 @@ impl WorkspaceWindow {
                     return;
                 };
                 let targets = crate::agenda::refile_targets(
-                    &self.agenda.index.snapshot(),
+                    &self.agenda.runtime.index.snapshot(),
                     source_key,
                     &self.agenda.state.refile_search,
                     &self.agenda.state.recent_refile_targets,
@@ -784,7 +791,7 @@ mod source_file_tests {
                         )
                         .unwrap();
                 });
-                workspace.agenda.index.replace(shard);
+                workspace.agenda.runtime.index.replace(shard);
                 workspace.content_route = crate::app::ContentRoute::Agenda;
                 workspace.open_agenda_source_file(crate::agenda::FileId(1), window, cx);
                 assert!(matches!(

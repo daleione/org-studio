@@ -165,7 +165,6 @@ fn pinned_official_fixture_builds_one_coherent_semantic_snapshot() {
     );
     assert_eq!(analysis.document_id, snapshot.document_id());
     assert_eq!(analysis.revision, snapshot.revision());
-    assert!(analysis.diagnostics.is_empty());
 }
 
 #[test]

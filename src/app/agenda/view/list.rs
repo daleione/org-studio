@@ -15,7 +15,7 @@ pub(crate) fn agenda_list(
     columns: super::super::component::TaskColumns,
 ) -> AnyElement {
     list(state, move |group_index, _, _| {
-        let group = &result.groups[group_index];
+        let group = &result.placement_groups[group_index];
         let collapsed = collapsed_days.contains(&group.date);
         let group_date = group.date;
         let toggle_workspace = workspace.clone();
@@ -42,11 +42,14 @@ pub(crate) fn agenda_list(
         );
         let rows = (!collapsed).then(|| {
             group
-                .rows
+                .placements
                 .clone()
                 .fold(div().flex().flex_col(), |container, index| {
                     let workspace = workspace.clone();
-                    let row = &result.rows[index];
+                    let Some((_, entry)) = result.placement_entry(index) else {
+                        return container;
+                    };
+                    let row = &entry.row;
                     container.child(
                         super::super::component::task_row(
                             language,

@@ -21,9 +21,6 @@ pub struct PreviewSnapshot {
     pub text: SharedTextSnapshot,
     pub(crate) format: DocumentFormat,
     pub blocks: Arc<BlockArena>,
-    // Published now so Agenda can reuse the same revision-coherent derivation
-    // pipeline; the first Agenda consumer lands in the next implementation slice.
-    #[allow(dead_code)]
     pub(crate) semantic: Option<Arc<OrgAnalysisSnapshot>>,
     pub(crate) markdown_blocks: Arc<Vec<markdown::MarkdownBlock>>,
     pub(crate) outline_paths: Arc<Vec<Option<Arc<str>>>>,
@@ -51,7 +48,7 @@ pub struct LoadedDocument {
 }
 
 pub(crate) enum WorkspaceLoadedDocument {
-    Source(DocumentSession),
+    Source(Box<DocumentSession>),
     Preview(Box<LoadedDocument>),
 }
 

@@ -10,8 +10,8 @@ use crate::{
 
 impl WorkspaceWindow {
     pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.content_route, crate::app::ContentRoute::Agenda)
-            && self.agenda.state.projection == crate::app::agenda::state::AgendaProjection::Source
+        if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
+            == crate::editor::CommandDisposition::Disabled
         {
             return;
         }
@@ -34,8 +34,8 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.content_route, crate::app::ContentRoute::Agenda)
-            && self.agenda.state.projection == crate::app::agenda::state::AgendaProjection::Source
+        if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
+            == crate::editor::CommandDisposition::Disabled
         {
             return;
         }
@@ -342,7 +342,12 @@ impl WorkspaceWindow {
                 match choice {
                     Some(0) => this.save_document_then(Some(transition), window, cx),
                     Some(1) => this.complete_transition(transition, true, window, cx),
-                    _ => {}
+                    _ => {
+                        // A generated-view source jump is tied to this prompt.  Cancelling must
+                        // invalidate it so a later save cannot unexpectedly perform the jump.
+                        this.agenda.pending_text_task = None;
+                        this.agenda.pending_text_generation = None;
+                    }
                 }
             });
         }));

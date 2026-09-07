@@ -68,6 +68,7 @@ impl WorkspaceWindow {
             }
             let candidates = self
                 .agenda
+                .runtime
                 .index
                 .snapshot()
                 .files
@@ -136,7 +137,7 @@ mod tests {
         let task = shard.tasks[0].clone();
         let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
         workspace.update(cx, |workspace, cx| {
-            workspace.agenda.index.replace(shard);
+            workspace.agenda.runtime.index.replace(shard);
             workspace.agenda.clock_store_path = Some(receipt.clone());
             workspace.agenda.clock_store = crate::agenda::ClockStore::default();
             workspace
@@ -153,7 +154,7 @@ mod tests {
                 1
             );
             assert!(!std::fs::read_to_string(&path).unwrap().contains("CLOCK:"));
-            workspace.agenda.index.replace(
+            workspace.agenda.runtime.index.replace(
                 crate::agenda::shard_from_disk(crate::agenda::FileId(1), 2, path.clone()).unwrap(),
             );
             workspace.flush_agenda_clock(cx);

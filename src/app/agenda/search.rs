@@ -409,6 +409,7 @@ mod tests {
             );
             workspace
                 .agenda
+                .runtime
                 .index
                 .replace(crate::agenda::shard_from_live(
                     crate::agenda::FileId(99),
@@ -429,12 +430,32 @@ mod tests {
         cx.run_until_parked();
         input.update(cx, |input, _| assert_eq!(input.text, "qckj"));
         workspace.update(cx, |workspace, _| {
-            assert_eq!(workspace.agenda.result.as_ref().unwrap().rows.len(), 1)
+            assert_eq!(
+                workspace
+                    .agenda
+                    .page_query
+                    .result
+                    .as_ref()
+                    .unwrap()
+                    .entries
+                    .len(),
+                1
+            )
         });
         cx.simulate_keystrokes("cmd-a backspace");
         cx.run_until_parked();
         workspace.update(cx, |workspace, _| {
-            assert_eq!(workspace.agenda.result.as_ref().unwrap().rows.len(), 2)
+            assert_eq!(
+                workspace
+                    .agenda
+                    .page_query
+                    .result
+                    .as_ref()
+                    .unwrap()
+                    .entries
+                    .len(),
+                2
+            )
         });
         cx.update(|window, app| {
             input.update(app, |input, cx| {
@@ -447,7 +468,17 @@ mod tests {
         cx.run_until_parked();
         workspace.update(cx, |workspace, _| {
             assert_eq!(&*workspace.agenda.state.search, "中文");
-            assert_eq!(workspace.agenda.result.as_ref().unwrap().rows.len(), 1);
+            assert_eq!(
+                workspace
+                    .agenda
+                    .page_query
+                    .result
+                    .as_ref()
+                    .unwrap()
+                    .entries
+                    .len(),
+                1
+            );
         });
     }
 }

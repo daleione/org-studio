@@ -3,7 +3,7 @@ use std::sync::Arc;
 use gpui::{ListAlignment, ListState, ScrollHandle, px};
 
 use crate::agenda::{
-    AgendaConfigStore, AgendaIndex, AgendaQuery, AgendaResultSnapshot, BuiltinQuery, QueryEngine,
+    AgendaConfigStore, AgendaQuery, AgendaResultSnapshot, BuiltinQuery, QueryEngine,
 };
 
 use super::state::AgendaViewState;
@@ -12,19 +12,26 @@ pub(crate) struct AgendaHost {
     pub(super) language: crate::i18n::Language,
     pub(crate) search_input: Option<gpui::Entity<super::search::AgendaSearch>>,
     pub(crate) text_editor: Option<gpui::Entity<crate::editor::SemanticEditor>>,
-    pub(crate) text_targets: Vec<Option<crate::agenda::TaskKey>>,
-    pub(super) pending_text_task: Option<crate::agenda::TaskRecord>,
-    pub(super) text_generation: Option<(u64, crate::i18n::Language, jiff::civil::Date)>,
-    pub(super) index: AgendaIndex,
-    pub(super) result: Option<Arc<AgendaResultSnapshot>>,
+    pub(crate) text_view: crate::editor::GeneratedTextView<crate::agenda::AgendaPlacementRef>,
+    pub(super) text_projection_version: Option<u64>,
+    pub(crate) pending_text_task: Option<crate::agenda::TaskRecord>,
+    pub(crate) pending_text_generation: Option<u64>,
+    pub(super) text_generation: Option<(
+        Option<crate::agenda::QueryId>,
+        u64,
+        crate::i18n::Language,
+        jiff::civil::Date,
+    )>,
     pub(super) navigation_result: Option<Arc<AgendaResultSnapshot>>,
     pub(crate) state: AgendaViewState,
     pub(super) list_state: ListState,
     pub(super) sidebar_scroll: ScrollHandle,
     pub(super) inspector_scroll: ScrollHandle,
     pub(super) analysis_generation: u64,
-    pub(super) query_generation: u64,
-    query_engine: QueryEngine,
+    navigation_engine: QueryEngine,
+    pub(super) page_query: super::query_session::AgendaQuerySession,
+    pub(crate) text_query: super::query_session::AgendaQuerySession,
+    pub(crate) query_runtime: super::query_session::AgendaQueryRuntime,
     pub(super) scan_progress: crate::file_watcher::InitialScanProgress,
     pub(super) config: crate::agenda::AgendaConfig,
     pub(super) recovery_receipt: Option<std::path::PathBuf>,
@@ -35,23 +42,28 @@ pub(crate) struct AgendaHost {
 
 impl AgendaHost {
     pub(crate) fn new() -> Self {
+        let mut query_runtime = super::query_session::AgendaQueryRuntime::default();
+        let page_query = query_runtime.open();
+        let text_query = query_runtime.open();
         let mut host = Self {
             language: crate::i18n::Language::system(),
             search_input: None,
             text_editor: None,
-            text_targets: Vec::new(),
+            text_view: Default::default(),
+            text_projection_version: None,
             pending_text_task: None,
+            pending_text_generation: None,
             text_generation: None,
-            index: AgendaIndex::default(),
-            result: None,
             navigation_result: None,
             state: AgendaViewState::default(),
             list_state: ListState::new(0, ListAlignment::Top, px(80.0)),
             sidebar_scroll: ScrollHandle::new(),
             inspector_scroll: ScrollHandle::new(),
             analysis_generation: 0,
-            query_generation: 0,
-            query_engine: QueryEngine::default(),
+            navigation_engine: QueryEngine::default(),
+            page_query,
+            text_query,
+            query_runtime,
             scan_progress: crate::file_watcher::InitialScanProgress::default(),
             config: crate::agenda::AgendaConfig::default(),
             recovery_receipt: None,
@@ -81,9 +93,10 @@ impl AgendaHost {
     pub(super) fn apply_initial_view(&mut self) {
         if std::env::var_os("ORG_STUDIO_AGENDA_SELECT_FIRST").is_some()
             && self
+                .page_query
                 .result
                 .as_ref()
-                .is_some_and(|result| !result.rows.is_empty())
+                .is_some_and(|result| !result.placements.is_empty())
         {
             self.state.select_row(0);
         }
@@ -116,23 +129,34 @@ impl AgendaHost {
         }
         match std::env::var("ORG_STUDIO_AGENDA_M5_VIEW").as_deref() {
             Ok("habit") => {
-                if let Some(index) = self.result.as_ref().and_then(|result| {
-                    result
-                        .rows
-                        .iter()
-                        .position(|row| row.title.as_ref() == "每日回顾")
+                if let Some(index) = self.page_query.result.as_ref().and_then(|result| {
+                    result.placements.iter().position(|placement| {
+                        result.entries[placement.entry.0 as usize]
+                            .row
+                            .title
+                            .as_ref()
+                            == "每日回顾"
+                    })
                 }) {
                     self.state.select_row(index);
                 }
             }
             Ok("repeat") => {
-                if let Some((index, key)) = self.result.as_ref().and_then(|result| {
+                if let Some((index, key)) = self.page_query.result.as_ref().and_then(|result| {
                     result
-                        .rows
+                        .placements
                         .iter()
                         .enumerate()
-                        .find(|(_, row)| row.title.as_ref() == "每日回顾")
-                        .map(|(index, row)| (index, row.task))
+                        .find(|(_, placement)| {
+                            result.entries[placement.entry.0 as usize]
+                                .row
+                                .title
+                                .as_ref()
+                                == "每日回顾"
+                        })
+                        .map(|(index, placement)| {
+                            (index, result.entries[placement.entry.0 as usize].row.task)
+                        })
                 }) {
                     self.state.select_row(index);
                     self.state.repeat_task = Some(key);
@@ -218,14 +242,10 @@ impl AgendaHost {
     }
 
     pub(super) fn publish(&mut self, result: Arc<AgendaResultSnapshot>) {
-        if result.index_generation != self.index.snapshot().generation
-            || result.query_generation < self.query_generation
-        {
+        if result.index_generation != self.runtime.index.snapshot().generation {
             return;
         }
-        self.query_generation = result.query_generation;
-        self.list_state.reset(result.groups.len());
-        self.result = Some(result);
+        self.list_state.reset(result.placement_groups.len());
     }
 
     pub(super) fn select_builtin(&mut self, builtin: BuiltinQuery) {
@@ -241,31 +261,53 @@ impl AgendaHost {
         query.scheduled = self.state.structured_scheduled;
         // Sidebar facets must not be derived from the already-filtered result: doing so
         // makes tags and sources disappear or change count as soon as they are clicked.
-        let navigation_result = self.query_engine.execute(self.index.snapshot(), &query);
+        let navigation_result = self
+            .navigation_engine
+            .execute(self.runtime.index.snapshot(), &query);
         self.navigation_result = Some(Arc::new(navigation_result));
         query.tag = self.state.tag_filter.clone();
         query.source = self.state.source_filter;
         if self.state.browses_dates() {
             query.window = Some(self.state.calendar_window(today));
         }
-        let result = self.query_engine.execute(self.index.snapshot(), &query);
-        self.publish(Arc::new(result));
+        let result = self
+            .page_query
+            .execute(self.runtime.index.snapshot(), &query);
+        debug_assert!(!self.page_query.is_invalid());
+        self.publish(result);
+    }
+
+    pub(crate) fn requery_independent_text(&mut self) {
+        let today = jiff::Zoned::now().date();
+        let mut query = AgendaQuery::builtin(BuiltinQuery::NextSevenDays, today);
+        query.window = Some((
+            today,
+            today
+                .checked_add(jiff::Span::new().days(6))
+                .unwrap_or(today),
+        ));
+        self.text_query
+            .execute(self.runtime.index.snapshot(), &query);
+        self.text_generation = None;
     }
 
     pub(super) fn refresh_sources(&mut self) {
+        self.query_runtime
+            .source_changed(&mut [&mut self.page_query, &mut self.text_query]);
         self.analysis_generation += 1;
         self.scan_progress.finished = false;
         self.runtime.worker.submit(super::runtime::ScanRequest {
             identities: self.runtime.identities.clone(),
             roots: self.config.sources.clone(),
-            previous: self.index.snapshot(),
+            previous: self.runtime.index.snapshot(),
             generation: self.analysis_generation,
             live: self.runtime.live.clone(),
         });
     }
 
     pub(super) fn task(&self, key: crate::agenda::TaskKey) -> Option<crate::agenda::TaskRecord> {
-        self.index
+        self.runtime
+            .index
             .snapshot()
             .files
             .iter()
@@ -278,20 +320,26 @@ impl AgendaHost {
 
     pub(crate) fn selected_task_key(&self) -> Option<crate::agenda::TaskKey> {
         self.state.selected.and_then(|index| {
-            self.result
+            self.page_query
+                .result
                 .as_ref()
-                .and_then(|result| result.rows.get(index))
-                .map(|row| row.task)
+                .and_then(|result| result.placement_entry(index))
+                .map(|(_, entry)| entry.row.task)
         })
     }
 
     pub(crate) fn status_counts(&self) -> (usize, usize, u8, usize) {
-        let total = self.result.as_ref().map_or(0, |result| result.rows.len());
+        let total = self
+            .page_query
+            .result
+            .as_ref()
+            .map_or(0, |result| result.placements.len());
         (
             self.state.selected.map_or(0, |index| index + 1),
             total,
             self.scan_progress.percent(),
-            self.result
+            self.page_query
+                .result
                 .as_ref()
                 .map_or(0, |result| result.diagnostics.len()),
         )
@@ -308,7 +356,10 @@ impl AgendaHost {
     }
 
     pub(crate) fn row_count(&self) -> usize {
-        self.result.as_ref().map_or(0, |result| result.rows.len())
+        self.page_query
+            .result
+            .as_ref()
+            .map_or(0, |result| result.placements.len())
     }
 
     pub(crate) fn close_top_layer(&mut self) -> bool {
@@ -317,13 +368,13 @@ impl AgendaHost {
 
     pub(crate) fn move_selection(&mut self, delta: isize) {
         if self.state.projection == super::state::AgendaProjection::List {
-            if let Some(result) = &self.result {
+            if let Some(result) = &self.page_query.result {
                 self.state.move_visible_selection(delta, result);
                 if let Some(index) = self.state.selected
                     && let Some(group) = result
-                        .groups
+                        .placement_groups
                         .iter()
-                        .position(|group| group.rows.contains(&index))
+                        .position(|group| group.placements.contains(&index))
                 {
                     self.list_state.scroll_to_reveal_item(group);
                 }
@@ -334,9 +385,9 @@ impl AgendaHost {
     }
 
     pub(super) fn toggle_day_group(&mut self, date: Option<jiff::civil::Date>) {
-        let Some((index, group)) = self.result.as_ref().and_then(|result| {
+        let Some((index, group)) = self.page_query.result.as_ref().and_then(|result| {
             result
-                .groups
+                .placement_groups
                 .iter()
                 .enumerate()
                 .find(|(_, group)| group.date == date)
@@ -348,7 +399,7 @@ impl AgendaHost {
         } else if self
             .state
             .selected
-            .is_some_and(|selected| group.rows.contains(&selected))
+            .is_some_and(|selected| group.placements.contains(&selected))
         {
             self.state.selected = None;
             self.state.inspector = None;
@@ -360,8 +411,8 @@ impl AgendaHost {
     pub(crate) fn selected_task(&self) -> Option<crate::agenda::TaskKey> {
         self.state
             .selected
-            .and_then(|index| self.result.as_ref()?.rows.get(index))
-            .map(|row| row.task)
+            .and_then(|index| self.page_query.result.as_ref()?.placement_entry(index))
+            .map(|(_, entry)| entry.row.task)
     }
 
     pub(crate) fn inbox_tasks(&self) -> Vec<crate::agenda::TaskRecord> {
@@ -371,7 +422,8 @@ impl AgendaHost {
             .inbox
             .as_ref()
             .and_then(|inbox| inbox.heading.as_deref());
-        self.index
+        self.runtime
+            .index
             .snapshot()
             .files
             .iter()
@@ -391,7 +443,7 @@ impl AgendaHost {
     }
 
     pub(crate) fn projects(&self) -> Vec<crate::agenda::ProjectSummary> {
-        crate::agenda::derive_projects(&self.index.snapshot())
+        crate::agenda::derive_projects(&self.runtime.index.snapshot())
             .into_iter()
             .filter(|project| {
                 crate::agenda::task_matches_text(&project.project, &self.state.search)
@@ -424,8 +476,8 @@ mod tests {
         let analysis =
             crate::org_semantic::analyze(&snapshot, Arc::new(crate::org_syntax::parse(&snapshot)));
         let mut host = AgendaHost::new();
-        host.index = AgendaIndex::default();
-        let index = host.index.replace(crate::agenda::shard_from_live(
+        host.runtime.index = crate::agenda::AgendaIndex::default();
+        let index = host.runtime.index.replace(crate::agenda::shard_from_live(
             crate::agenda::FileId(1),
             1,
             Arc::new("/tmp/agenda-fold.org".into()),
@@ -437,6 +489,7 @@ mod tests {
             index,
             &AgendaQuery::builtin(BuiltinQuery::NextSevenDays, first.unwrap()),
         ));
+        host.page_query.result = Some(result.clone());
         host.publish(result.clone());
         host.state.select_row(0);
         host.toggle_day_group(first);
