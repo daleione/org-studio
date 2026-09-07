@@ -3,12 +3,33 @@ use crate::{
     app::WorkspaceWindow,
 };
 use gpui::{
-    Div, Entity, InteractiveElement, MouseButton, ParentElement, Stateful,
-    StatefulInteractiveElement, Styled, div, prelude::*, px, svg,
+    Context, Div, Entity, InteractiveElement, MouseButton, ParentElement, Render, SharedString,
+    Stateful, StatefulInteractiveElement, Styled, Window, div, prelude::*, px, svg,
 };
 use std::sync::Arc;
 
-use super::badge;
+use super::{badge, compact_badge};
+
+struct AgendaTooltip(SharedString);
+
+impl Render for AgendaTooltip {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_3()
+            .py_2()
+            .rounded(px(7.))
+            .bg(gpui::rgb(0x303238))
+            .text_color(gpui::rgb(0xffffff))
+            .text_size(px(11.))
+            .shadow_md()
+            .child(self.0.clone())
+    }
+}
+
+fn tooltip(text: impl Into<SharedString>) -> impl Fn(&mut Window, &mut gpui::App) -> gpui::AnyView {
+    let text = text.into();
+    move |_, cx| cx.new(|_| AgendaTooltip(text.clone())).into()
+}
 
 pub(crate) fn sidebar_section_header(
     workspace: Entity<WorkspaceWindow>,
@@ -72,6 +93,12 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
         compact,
         query,
     } = props;
+    let display_label = language.text(match label {
+        "收件箱" => "agenda.inbox",
+        "Tasks" => "agenda.tasks",
+        "Projects" => "agenda.projects",
+        _ => "agenda.agenda",
+    });
     div()
         .id(format!("agenda-static-sidebar-item-{label}"))
         .relative()
@@ -102,27 +129,22 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
                 ),
         )
         .when(!compact, |item| {
-            item.child(div().flex_1().child(language.text(match label {
-                "收件箱" => "agenda.inbox",
-                "Tasks" => "agenda.tasks",
-                "Projects" => "agenda.projects",
-                _ => "agenda.agenda",
-            })))
+            item.child(div().flex_1().child(display_label))
         })
         .when_some(count, |item, count| {
-            item.child(badge(count.to_string()).when(compact, |badge| {
-                badge
+            item.child(if compact {
+                compact_badge(count.to_string())
                     .absolute()
-                    .top(px(1.))
-                    .right(px(0.))
-                    .min_w(px(18.))
-                    .h(px(18.))
-                    .text_size(px(9.))
-            }))
+                    .top(px(0.))
+                    .right(px(3.))
+            } else {
+                badge(count.to_string())
+            })
         })
         .cursor_pointer()
         .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
         .active(|style| style.opacity(0.72))
+        .when(compact, |item| item.tooltip(tooltip(display_label)))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
                 this.dispatch_agenda_intent(
@@ -322,15 +344,14 @@ pub(crate) fn sidebar_item(
     selected: bool,
     compact: bool,
 ) -> Stateful<Div> {
-    let count_badge = badge(count.to_string()).when(compact, |badge| {
-        badge
+    let count_badge = if compact {
+        compact_badge(count.to_string())
             .absolute()
-            .top(px(1.))
-            .right(px(0.))
-            .min_w(px(18.))
-            .h(px(18.))
-            .text_size(px(9.))
-    });
+            .top(px(0.))
+            .right(px(3.))
+    } else {
+        badge(count.to_string())
+    };
     div()
         .id(format!("agenda-sidebar-item-{label}"))
         .relative()
@@ -350,6 +371,7 @@ pub(crate) fn sidebar_item(
         .cursor_pointer()
         .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
         .active(|style| style.opacity(0.72))
+        .when(compact, |item| item.tooltip(tooltip(label)))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
                 this.dispatch_agenda_intent(

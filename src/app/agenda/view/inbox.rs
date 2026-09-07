@@ -326,8 +326,8 @@ pub(crate) fn inbox_view(
     };
     div()
         .size_full()
-        .p_6()
-        .pb_8()
+        .px_6()
+        .pt_6()
         .flex()
         .flex_col()
         .bg(rgb(0xfdfdfe))

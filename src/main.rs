@@ -2,7 +2,7 @@ use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gpui::{
     App, Bounds, KeyBinding, Menu, MenuItem, SharedString, SystemMenuType, TitlebarOptions,
-    WindowBounds, WindowHandle, WindowOptions, prelude::*, px, size,
+    WindowAppearance, WindowBounds, WindowHandle, WindowOptions, prelude::*, px, size,
 };
 use org_studio::{
     app::WorkspaceWindow,
@@ -143,6 +143,9 @@ fn main() {
     });
 
     application.run(move |cx: &mut App| {
+        // Until Org Studio ships a complete dark theme, keep native macOS chrome in sync with
+        // the application's light palette instead of inheriting a dark system titlebar.
+        cx.set_window_appearance(Some(WindowAppearance::Light));
         // Give command-line documents a head start while menus, displays and the native window are
         // initialized. `open_initial` consumes an already-ready small document synchronously and
         // continues awaiting a large one without blocking the window.

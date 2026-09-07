@@ -18,6 +18,22 @@ pub(crate) fn badge(text: impl Into<String>) -> Div {
         .text_size(px(11.))
         .child(text.into())
 }
+
+pub(crate) fn compact_badge(text: impl Into<String>) -> Div {
+    div()
+        .min_w(px(18.))
+        .h(px(17.))
+        .px(px(4.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(rgb(0xdeedff))
+        .text_color(rgb(0x0a6ed1))
+        .font_weight(gpui::FontWeight::SEMIBOLD)
+        .text_size(px(9.))
+        .child(text.into())
+}
 pub(crate) fn pill(text: impl Into<String>) -> Div {
     div()
         .h(px(24.))
