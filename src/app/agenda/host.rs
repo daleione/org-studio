@@ -237,7 +237,7 @@ impl AgendaHost {
         self.navigation_result = Some(Arc::new(navigation_result));
         query.tag = self.state.tag_filter.clone();
         query.source = self.state.source_filter;
-        if self.state.projection == super::state::AgendaProjection::Calendar {
+        if self.state.browses_dates() {
             query.window = Some(self.state.calendar_window(today));
         }
         let result = self.query_engine.execute(self.index.snapshot(), &query);

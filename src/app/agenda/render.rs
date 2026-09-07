@@ -422,150 +422,18 @@ impl super::AgendaHost {
             .when(task_columns.tags, |h| {
                 h.child(TaskColumns::cell(TaskColumns::TAGS).child(language.text("agenda.tags")))
             });
-        let toolbar = div()
-            .h(px(super::style::TITLEBAR_HEIGHT))
-            .px_6()
-            .flex()
-            .items_center()
-            .gap_3()
-            .when(compact, |toolbar| toolbar.px_4().gap_2())
-            .bg(rgb(super::style::TOOLBAR))
-            .border_b_1()
-            .border_color(rgb(super::style::BORDER))
-            .child(super::component::action_icon_button(
-                workspace.clone(),
-                "assets/icons/agenda/caret-left.svg",
-                super::UiIntent::NavigateBack,
-                false,
-            ))
-            .child(super::component::action_icon_button(
-                workspace.clone(),
-                "assets/icons/agenda/caret-right.svg",
-                super::UiIntent::NavigateForward,
-                false,
-            ))
-            .child(
-                div()
-                    .ml_3()
-                    .min_w(px(if compact { 155. } else { 250. }))
-                    .flex()
-                    .flex_col()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_size(px(24.))
-                            .font_weight(gpui::FontWeight::BOLD)
-                            .child(match self.state.workspace {
-                                super::state::AgendaWorkspace::Inbox => {
-                                    language.text("agenda.inbox")
-                                }
-                                super::state::AgendaWorkspace::Projects => {
-                                    language.text("agenda.projects")
-                                }
-                                super::state::AgendaWorkspace::Tasks => {
-                                    language.text("agenda.tasks")
-                                }
-                                super::state::AgendaWorkspace::Agenda => {
-                                    language.text("agenda.agenda")
-                                }
-                            }),
-                    )
-                    .when(
-                        !compact
-                            && matches!(
-                                self.state.workspace,
-                                super::state::AgendaWorkspace::Agenda
-                                    | super::state::AgendaWorkspace::Tasks
-                            ),
-                        |title| {
-                            title.child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(0x686b72))
-                                    .child(jiff::Zoned::now().date().to_string()),
-                            )
-                        },
-                    ),
-            )
-            .when(
-                !compact
-                    && matches!(
-                        self.state.workspace,
-                        super::state::AgendaWorkspace::Agenda
-                            | super::state::AgendaWorkspace::Tasks
-                    ),
-                |toolbar| {
-                    toolbar
-                        .child(super::component::action_icon_button(
-                            workspace.clone(),
-                            "assets/icons/agenda/calendar-blank.svg",
-                            super::UiIntent::SetProjection(
-                                super::state::AgendaProjection::Calendar,
-                            ),
-                            self.state.projection == super::state::AgendaProjection::Calendar,
-                        ))
-                        .child(super::component::action_icon_button(
-                            workspace.clone(),
-                            "assets/icons/agenda/caret-left.svg",
-                            super::UiIntent::ShiftCalendar(-1),
-                            false,
-                        ))
-                        .child(super::component::action_icon_button(
-                            workspace.clone(),
-                            "assets/icons/agenda/caret-right.svg",
-                            super::UiIntent::ShiftCalendar(1),
-                            false,
-                        ))
-                        .child(
-                            div()
-                                .h(px(38.))
-                                .px_4()
-                                .flex()
-                                .items_center()
-                                .rounded(px(8.))
-                                .border_1()
-                                .border_color(rgb(0xdfe0e3))
-                                .bg(rgb(0xffffff))
-                                .text_size(px(12.))
-                                .child(language.text("agenda.today"))
-                                .cursor_pointer()
-                                .on_mouse_down(gpui::MouseButton::Left, {
-                                    let workspace = workspace.clone();
-                                    move |_, _, cx| {
-                                        workspace.update(cx, |this, cx| {
-                                            this.dispatch_agenda_intent(
-                                                super::UiIntent::CalendarToday,
-                                                cx,
-                                            )
-                                        })
-                                    }
-                                }),
-                        )
+        let toolbar = super::component::agenda_toolbar(
+            workspace.clone(),
+            &self.state,
+            language,
+            viewport_width
+                - if compact {
+                    70.
+                } else {
+                    super::style::SIDEBAR_WIDTH
                 },
-            )
-            .child(div().flex_1())
-            .child(
-                super::component::field(div().children(self.search_input.clone()))
-                    .w(px(300.))
-                    .when(compact, |field| field.w(px(190.))),
-            )
-            .child(super::component::icon_button(
-                "assets/icons/agenda/funnel.svg",
-            ))
-            .when(
-                matches!(
-                    self.state.workspace,
-                    super::state::AgendaWorkspace::Agenda | super::state::AgendaWorkspace::Tasks
-                ),
-                |toolbar| {
-                    toolbar
-                        .child(div().flex_none().w(px(1.)).h(px(28.)).bg(rgb(0xdfe0e3)))
-                        .child(super::component::projection_switch(
-                            workspace.clone(),
-                            self.state.projection,
-                        ))
-                },
-            );
+            self.search_input.clone(),
+        );
         div()
             .size_full()
             .relative()

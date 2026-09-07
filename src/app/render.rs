@@ -29,6 +29,12 @@ impl Render for WorkspaceWindow {
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
         self.ensure_agenda_runtime(cx);
+        if std::mem::take(&mut self.agenda.state.search_focus_pending)
+            && let Some(input) = &self.agenda.search_input
+        {
+            let focus = input.read(cx).focus.clone();
+            window.focus(&focus, cx);
+        }
         let viewport = window.viewport_size();
         let viewport_key = (
             f32::from(viewport.width).to_bits(),

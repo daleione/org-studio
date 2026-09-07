@@ -417,6 +417,7 @@ mod tests {
                     &analysis,
                 ));
             workspace.agenda.state.builtin = crate::agenda::BuiltinQuery::Unscheduled;
+            workspace.agenda.state.navigation = "Unscheduled".into();
             workspace.agenda.requery();
         });
         let (input, cx) = cx.add_window_view(|_, cx| AgendaSearch::new(workspace.downgrade(), cx));

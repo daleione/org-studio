@@ -1,4 +1,3 @@
-pub(crate) const TITLEBAR_HEIGHT: f32 = 88.0;
 pub(crate) const SIDEBAR_WIDTH: f32 = 220.0;
 pub(crate) const TASK_ROW_HEIGHT: f32 = 45.0;
 pub(crate) const DAY_HEADER_HEIGHT: f32 = 34.0;

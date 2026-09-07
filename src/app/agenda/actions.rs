@@ -60,7 +60,6 @@ impl WorkspaceWindow {
                 self.agenda.state.source_context_menu = None;
             }
             UiIntent::SelectNavigation(navigation, query) => {
-                self.agenda.state.push_navigation();
                 self.agenda.state.workspace = match navigation {
                     "收件箱" => super::state::AgendaWorkspace::Inbox,
                     "Projects" => super::state::AgendaWorkspace::Projects,
@@ -68,6 +67,10 @@ impl WorkspaceWindow {
                     _ => super::state::AgendaWorkspace::Agenda,
                 };
                 self.agenda.state.navigation = navigation.into();
+                self.agenda.state.date_picker = false;
+                if !self.agenda.state.browses_dates() {
+                    self.agenda.state.projection = super::state::AgendaProjection::List;
+                }
                 self.agenda.state.tag_filter = None;
                 self.agenda.state.source_filter = None;
                 self.agenda.state.structured_todo = None;
@@ -75,8 +78,12 @@ impl WorkspaceWindow {
                 self.agenda.select_builtin(query);
             }
             UiIntent::SetProjection(projection) => {
+                if projection == super::state::AgendaProjection::Calendar
+                    && !self.agenda.state.browses_dates()
+                {
+                    return;
+                }
                 if self.agenda.state.projection != projection {
-                    self.agenda.state.push_navigation();
                     self.agenda.state.projection = projection;
                     self.agenda.requery();
                     if projection != super::state::AgendaProjection::List {
@@ -85,48 +92,64 @@ impl WorkspaceWindow {
                 }
             }
             UiIntent::SetCalendarRange(range) => {
+                if !self.agenda.state.browses_dates() {
+                    return;
+                }
                 if self.agenda.state.calendar_range != range {
-                    self.agenda.state.push_navigation();
+                    self.agenda.state.calendar_anchor =
+                        Some(self.agenda.state.period_anchor(jiff::Zoned::now().date()));
                     self.agenda.state.calendar_range = range;
+                    self.agenda.state.clear_task_selection();
                     self.agenda.state.calendar_offset = 0;
                     self.agenda.requery();
                 }
             }
             UiIntent::ShiftCalendar(delta) => {
-                self.agenda.state.push_navigation();
+                if !self.agenda.state.browses_dates() {
+                    return;
+                }
                 self.agenda.state.calendar_offset =
                     self.agenda.state.calendar_offset.saturating_add(delta);
+                self.agenda.state.clear_task_selection();
                 self.agenda.requery();
             }
             UiIntent::CalendarToday => {
-                if self.agenda.state.calendar_offset != 0 {
-                    self.agenda.state.push_navigation();
+                if !self.agenda.state.browses_dates() {
+                    return;
+                }
+                if self.agenda.state.calendar_offset != 0
+                    || self.agenda.state.calendar_anchor.is_some()
+                {
                     self.agenda.state.calendar_offset = 0;
+                    self.agenda.state.calendar_anchor = None;
+                    self.agenda.state.clear_task_selection();
                     self.agenda.requery();
                 }
             }
             UiIntent::ToggleAllDay => {
                 self.agenda.state.all_day_expanded = !self.agenda.state.all_day_expanded;
             }
-            UiIntent::NavigateBack => {
-                if let Some(previous) = self.agenda.state.back_history.pop() {
-                    self.agenda
-                        .state
-                        .forward_history
-                        .push(self.agenda.state.navigation_snapshot());
-                    self.agenda.state.restore_navigation(previous);
-                    self.agenda.requery();
-                }
+            UiIntent::ToggleSearch => {
+                self.agenda.state.search_expanded = !self.agenda.state.search_expanded;
+                self.agenda.state.search_focus_pending = self.agenda.state.search_expanded;
             }
-            UiIntent::NavigateForward => {
-                if let Some(next) = self.agenda.state.forward_history.pop() {
-                    self.agenda
-                        .state
-                        .back_history
-                        .push(self.agenda.state.navigation_snapshot());
-                    self.agenda.state.restore_navigation(next);
-                    self.agenda.requery();
+            UiIntent::ToggleDatePicker => {
+                self.agenda.state.date_picker = !self.agenda.state.date_picker;
+                self.agenda.state.picker_offset = 0;
+            }
+            UiIntent::ShiftDatePicker(delta) => {
+                self.agenda.state.picker_offset =
+                    self.agenda.state.picker_offset.saturating_add(delta);
+            }
+            UiIntent::JumpToDate(date) => {
+                if !self.agenda.state.browses_dates() {
+                    return;
                 }
+                self.agenda.state.calendar_anchor = Some(date);
+                self.agenda.state.clear_task_selection();
+                self.agenda.state.calendar_offset = 0;
+                self.agenda.state.date_picker = false;
+                self.agenda.requery();
             }
             UiIntent::MoveOccurrence(index, date, time) => {
                 let Some(row) = self
@@ -285,8 +308,9 @@ impl WorkspaceWindow {
                 self.agenda.requery();
             }
             UiIntent::SetTag(tag) => {
-                self.agenda.state.push_navigation();
                 self.agenda.state.navigation = Arc::from("tag");
+                self.agenda.state.workspace = super::state::AgendaWorkspace::Tasks;
+                self.agenda.state.projection = super::state::AgendaProjection::List;
                 self.agenda.state.tag_filter = tag;
                 self.agenda.state.source_filter = None;
                 self.agenda.state.structured_todo = None;
@@ -294,8 +318,9 @@ impl WorkspaceWindow {
                 self.agenda.requery();
             }
             UiIntent::SetSource(source) => {
-                self.agenda.state.push_navigation();
                 self.agenda.state.navigation = Arc::from("source");
+                self.agenda.state.workspace = super::state::AgendaWorkspace::Tasks;
+                self.agenda.state.projection = super::state::AgendaProjection::List;
                 self.agenda.state.source_filter = source;
                 self.agenda.state.tag_filter = None;
                 self.agenda.state.structured_todo = None;
@@ -306,8 +331,9 @@ impl WorkspaceWindow {
                 let Some(saved) = self.agenda.config.saved_views.get(index).cloned() else {
                     return;
                 };
-                self.agenda.state.push_navigation();
                 self.agenda.state.navigation = Arc::from(saved.name);
+                self.agenda.state.workspace = super::state::AgendaWorkspace::Tasks;
+                self.agenda.state.projection = super::state::AgendaProjection::List;
                 self.agenda.state.search = Arc::from(saved.query.text.unwrap_or_default());
                 self.agenda.state.tag_filter = saved.query.tag.map(Arc::from);
                 self.agenda.state.source_filter = saved.query.source.as_ref().and_then(|path| {
@@ -648,6 +674,45 @@ impl WorkspaceWindow {
         state.pending = false;
         state.error = Some(message);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod toolbar_tests {
+    use super::*;
+    use crate::app::agenda::state::{AgendaProjection, CalendarRange};
+    use gpui::AppContext;
+
+    #[gpui::test]
+    fn date_navigation_is_shared_by_projections_and_scoped_to_agenda(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        workspace.update(cx, |workspace, cx| {
+            let date = "2026-09-18".parse().unwrap();
+            workspace.dispatch_agenda_intent(UiIntent::JumpToDate(date), cx);
+            workspace.dispatch_agenda_intent(UiIntent::SetCalendarRange(CalendarRange::Day), cx);
+            workspace.dispatch_agenda_intent(UiIntent::ShiftCalendar(1), cx);
+            let window = workspace.agenda.state.calendar_window(date);
+            assert_eq!(window.0.to_string(), "2026-09-19");
+            workspace.agenda.state.search = "保留搜索".into();
+            workspace
+                .dispatch_agenda_intent(UiIntent::SetProjection(AgendaProjection::Calendar), cx);
+            assert_eq!(workspace.agenda.state.calendar_window(date), window);
+            assert_eq!(&*workspace.agenda.state.search, "保留搜索");
+            workspace.dispatch_agenda_intent(UiIntent::SetProjection(AgendaProjection::List), cx);
+            assert_eq!(workspace.agenda.state.calendar_window(date), window);
+            workspace.dispatch_agenda_intent(
+                UiIntent::SelectNavigation("Tasks", crate::agenda::BuiltinQuery::Next),
+                cx,
+            );
+            workspace.dispatch_agenda_intent(UiIntent::ShiftCalendar(4), cx);
+            workspace
+                .dispatch_agenda_intent(UiIntent::SetProjection(AgendaProjection::Calendar), cx);
+            assert_eq!(workspace.agenda.state.calendar_window(date), window);
+            assert_eq!(workspace.agenda.state.projection, AgendaProjection::List);
+            assert!(!workspace.agenda.state.browses_dates());
+        });
     }
 }
 

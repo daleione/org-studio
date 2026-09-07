@@ -32,6 +32,7 @@ pub(crate) fn pill(text: impl Into<String>) -> Div {
 }
 pub(crate) fn icon_button(path: &'static str) -> Div {
     div()
+        .flex_none()
         .size(px(38.0))
         .flex()
         .items_center()
@@ -60,6 +61,7 @@ pub(crate) fn action_icon_button(
             button.bg(rgb(0xf1eafb)).text_color(rgb(0x7540c4))
         })
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
             let intent = intent.clone();
             workspace.update(cx, |this, cx| this.dispatch_agenda_intent(intent, cx));
         })

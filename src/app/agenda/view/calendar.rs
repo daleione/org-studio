@@ -437,38 +437,6 @@ pub(crate) fn agenda_calendar(
         };
         date = next;
     }
-    let tabs = [
-        (CalendarRange::Day, language.text("agenda.day")),
-        (CalendarRange::Week, language.text("agenda.week")),
-        (CalendarRange::Month, language.text("agenda.month")),
-    ]
-    .into_iter()
-    .fold(div().flex().h_full().gap_4(), |tabs, (value, label)| {
-        let target = workspace.clone();
-        tabs.child(
-            div()
-                .min_w(px(38.))
-                .px_2()
-                .h_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(12.))
-                .cursor_pointer()
-                .text_color(rgb(if value == range { 0x7540c4 } else { 0x50545b }))
-                .when(value == range, |tab| {
-                    tab.border_b_2()
-                        .border_color(rgb(0x7540c4))
-                        .font_weight(gpui::FontWeight::SEMIBOLD)
-                })
-                .child(label)
-                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                    target.update(cx, |this, cx| {
-                        this.dispatch_agenda_intent(UiIntent::SetCalendarRange(value), cx)
-                    })
-                }),
-        )
-    });
     let toggle = workspace.clone();
     div()
         .size_full()
@@ -478,7 +446,7 @@ pub(crate) fn agenda_calendar(
         .child(
             div()
                 .flex_none()
-                .h(px(52.))
+                .h(px(38.))
                 .px_5()
                 .flex()
                 .items_center()
@@ -486,7 +454,6 @@ pub(crate) fn agenda_calendar(
                 .border_b_1()
                 .border_color(rgb(0xe1e2e5))
                 .bg(rgb(0xfbfbfc))
-                .child(tabs)
                 .child(
                     div()
                         .flex()
@@ -494,7 +461,6 @@ pub(crate) fn agenda_calendar(
                         .gap_4()
                         .text_size(px(10.))
                         .text_color(rgb(0x979aa0))
-                        .child(language.text("agenda.drag_hint"))
                         .child(
                             div()
                                 .h(px(30.))

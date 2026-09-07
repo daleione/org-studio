@@ -24,21 +24,6 @@ pub(crate) enum CalendarRange {
     Month,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct NavigationSnapshot {
-    pub(crate) workspace: AgendaWorkspace,
-    pub(crate) builtin: BuiltinQuery,
-    pub(crate) navigation: Arc<str>,
-    pub(crate) tag_filter: Option<Arc<str>>,
-    pub(crate) source_filter: Option<FileId>,
-    pub(crate) structured_todo: Option<Arc<str>>,
-    pub(crate) structured_scheduled: Option<bool>,
-    pub(crate) projection: AgendaProjection,
-    pub(crate) calendar_range: CalendarRange,
-    pub(crate) calendar_offset: i32,
-    pub(crate) selected: Option<usize>,
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum AgendaOverlay {
     None,
@@ -68,6 +53,10 @@ pub(crate) struct SourceContextMenu {
 }
 
 pub(crate) struct AgendaViewState {
+    pub(crate) search_expanded: bool,
+    pub(crate) search_focus_pending: bool,
+    pub(crate) date_picker: bool,
+    pub(crate) picker_offset: i32,
     pub(crate) workspace: AgendaWorkspace,
     pub(crate) builtin: BuiltinQuery,
     pub(crate) navigation: Arc<str>,
@@ -83,6 +72,7 @@ pub(crate) struct AgendaViewState {
     pub(crate) projection: AgendaProjection,
     pub(crate) calendar_range: CalendarRange,
     pub(crate) calendar_offset: i32,
+    pub(crate) calendar_anchor: Option<jiff::civil::Date>,
     pub(crate) all_day_expanded: bool,
     pub(crate) collapsed_days: std::collections::BTreeSet<Option<jiff::civil::Date>>,
     pub(crate) smart_views_expanded: bool,
@@ -90,8 +80,6 @@ pub(crate) struct AgendaViewState {
     pub(crate) tags_expanded: bool,
     pub(crate) sources_expanded: bool,
     pub(crate) source_context_menu: Option<SourceContextMenu>,
-    pub(crate) back_history: Vec<NavigationSnapshot>,
-    pub(crate) forward_history: Vec<NavigationSnapshot>,
     pub(crate) capture: crate::agenda::CaptureDraft,
     pub(crate) inbox_session: Option<crate::agenda::InboxSession>,
     pub(crate) selected_project: usize,
@@ -112,11 +100,44 @@ pub(crate) struct InspectorState {
 }
 
 impl AgendaViewState {
+    pub(crate) fn clear_task_selection(&mut self) {
+        self.selected = None;
+        self.inspector = None;
+        self.sheet = AgendaSheet::None;
+    }
+
+    pub(crate) fn browses_dates(&self) -> bool {
+        self.workspace == AgendaWorkspace::Agenda && self.navigation.as_ref() == "Agenda"
+    }
+
+    pub(crate) fn period_anchor(&self, today: jiff::civil::Date) -> jiff::civil::Date {
+        let anchor = self.calendar_anchor.unwrap_or(today);
+        let offset = i64::from(self.calendar_offset);
+        let span = match self.calendar_range {
+            CalendarRange::Day => jiff::Span::new().days(offset),
+            CalendarRange::Week => jiff::Span::new().weeks(offset),
+            CalendarRange::Month => jiff::Span::new().months(offset),
+        };
+        if self.calendar_range == CalendarRange::Month {
+            let month = anchor
+                .first_of_month()
+                .checked_add(span)
+                .unwrap_or(anchor.first_of_month());
+            return month
+                .checked_add(
+                    jiff::Span::new().days(i64::from(anchor.day().min(month.days_in_month()) - 1)),
+                )
+                .unwrap_or(month);
+        }
+        anchor.checked_add(span).unwrap_or(anchor)
+    }
+
     pub(crate) fn calendar_window(
         &self,
         today: jiff::civil::Date,
     ) -> (jiff::civil::Date, jiff::civil::Date) {
         use jiff::Span;
+        let today = self.calendar_anchor.unwrap_or(today);
         let (start, days) = match self.calendar_range {
             CalendarRange::Day => (
                 today
@@ -177,6 +198,10 @@ mod calendar_tests {
 impl Default for AgendaViewState {
     fn default() -> Self {
         Self {
+            search_expanded: false,
+            search_focus_pending: false,
+            date_picker: false,
+            picker_offset: 0,
             workspace: AgendaWorkspace::Agenda,
             builtin: BuiltinQuery::NextSevenDays,
             navigation: Arc::from("Agenda"),
@@ -192,6 +217,7 @@ impl Default for AgendaViewState {
             projection: AgendaProjection::List,
             calendar_range: CalendarRange::Week,
             calendar_offset: 0,
+            calendar_anchor: None,
             all_day_expanded: true,
             collapsed_days: Default::default(),
             smart_views_expanded: true,
@@ -199,8 +225,6 @@ impl Default for AgendaViewState {
             tags_expanded: true,
             sources_expanded: true,
             source_context_menu: None,
-            back_history: Vec::new(),
-            forward_history: Vec::new(),
             capture: crate::agenda::CaptureDraft {
                 todo: "TODO".into(),
                 ..Default::default()
@@ -229,45 +253,6 @@ impl AgendaViewState {
         *expanded = !*expanded;
     }
 
-    pub(crate) fn navigation_snapshot(&self) -> NavigationSnapshot {
-        NavigationSnapshot {
-            workspace: self.workspace,
-            builtin: self.builtin,
-            navigation: self.navigation.clone(),
-            tag_filter: self.tag_filter.clone(),
-            source_filter: self.source_filter,
-            structured_todo: self.structured_todo.clone(),
-            structured_scheduled: self.structured_scheduled,
-            projection: self.projection,
-            calendar_range: self.calendar_range,
-            calendar_offset: self.calendar_offset,
-            selected: self.selected,
-        }
-    }
-
-    pub(crate) fn push_navigation(&mut self) {
-        self.back_history.push(self.navigation_snapshot());
-        self.forward_history.clear();
-    }
-
-    pub(crate) fn restore_navigation(&mut self, snapshot: NavigationSnapshot) {
-        self.workspace = snapshot.workspace;
-        self.builtin = snapshot.builtin;
-        self.navigation = snapshot.navigation;
-        self.tag_filter = snapshot.tag_filter;
-        self.source_filter = snapshot.source_filter;
-        self.structured_todo = snapshot.structured_todo;
-        self.structured_scheduled = snapshot.structured_scheduled;
-        self.projection = snapshot.projection;
-        self.calendar_range = snapshot.calendar_range;
-        self.calendar_offset = snapshot.calendar_offset;
-        self.selected = snapshot.selected;
-        self.sheet = if self.selected.is_some() {
-            AgendaSheet::Inspector
-        } else {
-            AgendaSheet::None
-        };
-    }
     pub(crate) fn select_row(&mut self, index: usize) {
         self.selected = Some(index);
         self.overlay = AgendaOverlay::None;
@@ -276,7 +261,10 @@ impl AgendaViewState {
     }
 
     pub(crate) fn close_top_layer(&mut self) -> bool {
-        if self.source_context_menu.take().is_some() {
+        if self.date_picker {
+            self.date_picker = false;
+            true
+        } else if self.source_context_menu.take().is_some() {
             true
         } else if self.overlay != AgendaOverlay::None {
             self.overlay = AgendaOverlay::None;
@@ -357,31 +345,5 @@ mod tests {
         assert!(state.inspector.is_none());
         assert!(state.close_top_layer());
         assert!(!state.close_top_layer());
-    }
-
-    #[test]
-    fn calendar_navigation_history_restores_projection_range_and_selection() {
-        let mut state = AgendaViewState::default();
-        state.navigation = Arc::from("Today");
-        state.builtin = BuiltinQuery::Today;
-        state.tag_filter = Some(Arc::from("work"));
-        state.source_filter = Some(FileId(7));
-        state.selected = Some(3);
-        state.push_navigation();
-        state.projection = AgendaProjection::Calendar;
-        state.calendar_range = CalendarRange::Month;
-        state.calendar_offset = 2;
-        let current = state.navigation_snapshot();
-        let previous = state.back_history.pop().unwrap();
-        state.forward_history.push(current);
-        state.restore_navigation(previous);
-        assert_eq!(state.projection, AgendaProjection::List);
-        assert_eq!(state.calendar_range, CalendarRange::Week);
-        assert_eq!(state.calendar_offset, 0);
-        assert_eq!(state.selected, Some(3));
-        assert_eq!(state.navigation.as_ref(), "Today");
-        assert_eq!(state.builtin, BuiltinQuery::Today);
-        assert_eq!(state.tag_filter.as_deref(), Some("work"));
-        assert_eq!(state.source_filter, Some(FileId(7)));
     }
 }

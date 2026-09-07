@@ -528,6 +528,8 @@ impl WorkspaceWindow {
         if matches!(self.content_route, ContentRoute::Agenda) {
             let key = event.keystroke.key.as_str();
             if event.keystroke.modifiers.platform && key.eq_ignore_ascii_case("k") {
+                self.agenda.state.search_expanded = true;
+                cx.notify();
                 if let Some(input) = &self.agenda.search_input {
                     let focus = input.read(cx).focus.clone();
                     window.focus(&focus, cx);

@@ -156,20 +156,6 @@ pub(crate) fn agenda_list(
                                 .text_size(px(10.))
                                 .child(marker),
                         )
-                    })
-                    .when(marker.is_some(), |header| {
-                        header.child(
-                            div()
-                                .h(px(22.))
-                                .px_2()
-                                .flex()
-                                .items_center()
-                                .rounded_full()
-                                .bg(rgb(0xf1e8f8))
-                                .text_color(rgb(0x7a4691))
-                                .text_size(px(10.))
-                                .child("W36"),
-                        )
                     }),
             )
             .when_some(rows, |card, rows| card.child(rows));
