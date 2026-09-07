@@ -66,6 +66,7 @@ impl super::AgendaHost {
                             .when(!compact, |row| {
                                 row.child(
                                     div()
+                                        .id("agenda-open-capture")
                                         .absolute()
                                         .right(px(42.))
                                         .top(px(5.))
@@ -75,6 +76,7 @@ impl super::AgendaHost {
                                         .justify_center()
                                         .rounded(px(6.))
                                         .cursor_pointer()
+                                        .hover(|style| style.bg(gpui::rgb(0xeeeeF1)))
                                         .child(
                                             gpui::svg()
                                                 .data(super::icon::agenda_icon(

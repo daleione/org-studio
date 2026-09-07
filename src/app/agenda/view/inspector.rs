@@ -97,6 +97,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .text_size(px(10.))
                     .font_weight(gpui::FontWeight::BOLD)
                     .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0xe5e6e9)))
                     .child(state.to_string())
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         workspace.update(cx, |this, cx| {
@@ -134,6 +135,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     }))
                     .text_size(px(10.))
                     .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0xffffff)).shadow_sm())
                     .child(
                         priority.map_or(language.text("agenda.clear").into(), |value| {
                             value.to_string()
@@ -166,6 +168,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .py_1()
                     .bg(rgb(0x6b2525))
                     .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0x812d2d)))
                     .child(language.text("agenda.confirm_delete"))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         confirm.update(cx, |this, cx| {
@@ -181,6 +184,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .px_2()
                     .py_1()
                     .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0xeeeeF1)))
                     .child(language.text("agenda.cancel"))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cancel.update(cx, |this, cx| {
@@ -196,6 +200,8 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .py_1()
                 .text_color(rgb(0xd85c5c))
                 .cursor_pointer()
+                .rounded(px(5.))
+                .hover(|style| style.bg(rgb(0xffeeee)))
                 .child(language.text("agenda.delete_subtree"))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     workspace.update(cx, |this, cx| {
@@ -237,6 +243,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .justify_center()
                         .rounded(px(6.))
                         .cursor_pointer()
+                        .hover(|style| style.bg(rgb(0xeeeeF1)))
                         .child(
                             svg()
                                 .data(super::super::icon::agenda_icon("assets/icons/agenda/x.svg"))
@@ -404,6 +411,13 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                             0xf1f2f4
                         }))
                         .cursor_pointer()
+                        .hover(|style| {
+                            style.bg(rgb(if props.clock_active {
+                                0xe2f1e6
+                            } else {
+                                0xe7e8eb
+                            }))
+                        })
                         .child(
                             div()
                                 .size(px(30.))

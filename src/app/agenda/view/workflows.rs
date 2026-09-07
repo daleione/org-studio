@@ -74,6 +74,13 @@ fn action(
         .text_color(rgb(if primary { 0xffffff } else { 0x454950 }))
         .text_size(px(11.))
         .cursor_pointer()
+        .hover(move |style| {
+            if primary {
+                style.bg(rgb(0x6835b5)).border_color(rgb(0x6835b5))
+            } else {
+                style.bg(rgb(0xf3f3f5)).border_color(rgb(0xcfd1d5))
+            }
+        })
         .child(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
@@ -289,6 +296,7 @@ pub(crate) fn refile_overlay(
                         .children(targets.into_iter().enumerate().map(|(index, target)| {
                             let choose = workspace.clone();
                             div()
+                                .id(("agenda-refile-target", index))
                                 .min_h(px(48.))
                                 .px_3()
                                 .flex()
@@ -296,6 +304,13 @@ pub(crate) fn refile_overlay(
                                 .rounded(px(7.))
                                 .when(index == selected, |row| row.bg(rgb(0xf1eafb)))
                                 .cursor_pointer()
+                                .hover(move |style| {
+                                    style.bg(rgb(if index == selected {
+                                        0xe4d8f4
+                                    } else {
+                                        0xe6e7ea
+                                    }))
+                                })
                                 .child(
                                     div()
                                         .flex_1()

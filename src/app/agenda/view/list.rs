@@ -53,7 +53,9 @@ pub(crate) fn agenda_list(
                     container.child(
                         super::super::component::task_row(
                             language,
+                            workspace.clone(),
                             row,
+                            index,
                             selected == Some(index),
                             columns,
                         )
@@ -104,6 +106,7 @@ pub(crate) fn agenda_list(
                 div()
                     .id(("agenda-day-header", group_index))
                     .cursor_pointer()
+                    .hover(|style| style.bg(rgb(0xeee9f2)))
                     .on_click(move |_, _, cx| {
                         toggle_workspace.update(cx, |this, cx| {
                             this.dispatch_agenda_intent(

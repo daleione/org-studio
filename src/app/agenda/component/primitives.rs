@@ -1,7 +1,7 @@
 use crate::app::WorkspaceWindow;
 use gpui::{
-    Div, Entity, InteractiveElement, MouseButton, ParentElement, Styled, div,
-    prelude::FluentBuilder, px, rgb, svg,
+    Div, Entity, InteractiveElement, MouseButton, ParentElement, Stateful,
+    StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, rgb, svg,
 };
 
 pub(crate) fn badge(text: impl Into<String>) -> Div {
@@ -54,12 +54,21 @@ pub(crate) fn action_icon_button(
     path: &'static str,
     intent: super::super::UiIntent,
     selected: bool,
-) -> Div {
+) -> Stateful<Div> {
     icon_button(path)
+        .id(format!("agenda-action-icon-{path}"))
         .cursor_pointer()
         .when(selected, |button| {
             button.bg(rgb(0xf1eafb)).text_color(rgb(0x7540c4))
         })
+        .hover(move |style| {
+            if selected {
+                style.bg(rgb(0xe5d9f7)).border_color(rgb(0xa98ad5))
+            } else {
+                style.bg(rgb(0xe9eaed)).border_color(rgb(0xbfc2c8))
+            }
+        })
+        .active(|style| style.opacity(0.72))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             let intent = intent.clone();
@@ -70,8 +79,9 @@ pub(crate) fn text_action_button(
     workspace: Entity<WorkspaceWindow>,
     label: &'static str,
     intent: super::super::UiIntent,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id(format!("agenda-text-action-{label}"))
         .h(px(28.))
         .px_3()
         .flex()
@@ -82,14 +92,17 @@ pub(crate) fn text_action_button(
         .bg(rgb(0xffffff))
         .text_size(px(10.))
         .cursor_pointer()
+        .hover(|style| style.bg(rgb(0xfff8e9)).border_color(rgb(0xcaa75e)))
+        .active(|style| style.opacity(0.72))
         .child(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             let intent = intent.clone();
             workspace.update(cx, |this, cx| this.dispatch_agenda_intent(intent, cx));
         })
 }
-pub(crate) fn field(value: impl gpui::IntoElement) -> Div {
+pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
     div()
+        .id("agenda-search-field")
         .w(px(250.))
         .h(px(38.))
         .px_3()
@@ -102,6 +115,9 @@ pub(crate) fn field(value: impl gpui::IntoElement) -> Div {
         .text_color(rgb(0x858990))
         .text_size(px(12.))
         .gap_2()
+        .cursor_text()
+        .hover(|style| style.bg(rgb(0xf8fbff)).border_color(rgb(0x8eb9df)))
+        .active(|style| style.border_color(rgb(0x1688ff)))
         .child(
             svg()
                 .data(super::super::icon::agenda_icon(

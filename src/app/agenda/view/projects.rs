@@ -37,11 +37,19 @@ pub(crate) fn projects_view(
             let target = workspace.clone();
             list.child(
                 div()
+                    .id(("agenda-project", index))
                     .min_h(px(76.))
                     .p_3()
                     .rounded(px(8.))
                     .cursor_pointer()
                     .when(index == selected, |row| row.bg(rgb(0xffffff)).shadow_sm())
+                    .hover(move |style| {
+                        style.bg(rgb(if index == selected {
+                            0xebe7f1
+                        } else {
+                            0xe5e6e9
+                        }))
+                    })
                     .child(
                         div()
                             .text_size(px(12.))
@@ -76,14 +84,14 @@ pub(crate) fn projects_view(
     );
     let detail = if let Some(project) = active {
         let source = workspace.clone();
-        let rows = project
-            .children
-            .iter()
-            .fold(div().mt_4().flex().flex_col(), |rows, task| {
+        let rows = project.children.iter().enumerate().fold(
+            div().mt_4().flex().flex_col(),
+            |rows, (index, task)| {
                 let target = workspace.clone();
                 let key = task.key;
                 rows.child(
                     div()
+                        .id(("agenda-project-task", index))
                         .min_h(px(43.))
                         .px_2()
                         .flex()
@@ -92,6 +100,7 @@ pub(crate) fn projects_view(
                         .border_t_1()
                         .border_color(rgb(0xeeeeef))
                         .cursor_pointer()
+                        .hover(|style| style.bg(rgb(0xf5f5f7)))
                         .child(
                             div()
                                 .w(px(70.))
@@ -128,7 +137,8 @@ pub(crate) fn projects_view(
                             })
                         }),
                 )
-            });
+            },
+        );
         div()
             .flex_1()
             .min_w_0()
@@ -208,13 +218,7 @@ pub(crate) fn projects_view(
         .flex()
         .flex_col()
         .bg(rgb(0xfdfdfe))
-        .child(
-            div()
-                .text_size(px(20.))
-                .font_weight(gpui::FontWeight::BOLD)
-                .child(language.text("agenda.projects")),
-        )
-        .child(div().mt_4().child(summary))
+        .child(summary)
         .child(
             div()
                 .mt_4()

@@ -3,7 +3,9 @@ use super::super::{
     state::{AgendaProjection, AgendaViewState, AgendaWorkspace, CalendarRange},
 };
 use crate::{app::WorkspaceWindow, i18n::Language};
-use gpui::{Div, Entity, MouseButton, div, prelude::*, px, rgb};
+use gpui::{
+    Div, Entity, MouseButton, Stateful, StatefulInteractiveElement, div, prelude::*, px, rgb,
+};
 
 fn button(
     workspace: Entity<WorkspaceWindow>,
@@ -11,9 +13,10 @@ fn button(
     intent: UiIntent,
     selected: bool,
     enabled: bool,
-) -> Div {
+) -> Stateful<Div> {
     let label = label.into();
     div()
+        .id(format!("agenda-toolbar-button-{label}"))
         .debug_selector({
             let label = label.clone();
             move || format!("agenda-toolbar-{label}")
@@ -37,6 +40,19 @@ fn button(
         }))
         .text_size(px(12.))
         .child(label)
+        .hover(move |style| {
+            if selected {
+                style.bg(rgb(0xd8eaff)).border_color(rgb(0x76b6f2))
+            } else if enabled {
+                style.bg(rgb(0xe9eaed)).border_color(rgb(0xbfc2c8))
+            } else {
+                style
+                    .bg(rgb(0xf1f2f4))
+                    .border_color(rgb(0xd1d3d7))
+                    .text_color(rgb(0x858990))
+            }
+        })
+        .active(|style| style.opacity(0.72))
         .when(enabled, |button| {
             button
                 .cursor_pointer()
@@ -49,7 +65,7 @@ fn button(
         })
 }
 
-fn icon(workspace: Entity<WorkspaceWindow>, path: &'static str, intent: UiIntent) -> Div {
+fn icon(workspace: Entity<WorkspaceWindow>, path: &'static str, intent: UiIntent) -> Stateful<Div> {
     super::action_icon_button(workspace, path, intent, false)
         .debug_selector(move || format!("agenda-toolbar-icon-{path}"))
         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
@@ -394,6 +410,7 @@ fn projection_switch(
             let workspace = workspace.clone();
             control.child(
                 div()
+                    .id(format!("agenda-projection-{value:?}"))
                     .debug_selector(move || format!("agenda-projection-{value:?}"))
                     .flex_none()
                     .w(px(40.))
@@ -407,6 +424,10 @@ fn projection_switch(
                     .when(!selected, |button| {
                         button.hover(|style| style.bg(rgb(0xeaeaec)))
                     })
+                    .when(selected, |button| {
+                        button.hover(|style| style.bg(rgb(0xd8eaff)))
+                    })
+                    .active(|style| style.opacity(0.72))
                     .child(
                         gpui::svg()
                             .data(super::super::icon::agenda_icon(path))

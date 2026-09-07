@@ -3,7 +3,8 @@ use crate::{
     app::WorkspaceWindow,
 };
 use gpui::{
-    Div, Entity, InteractiveElement, MouseButton, ParentElement, Styled, div, prelude::*, px, svg,
+    Div, Entity, InteractiveElement, MouseButton, ParentElement, Stateful,
+    StatefulInteractiveElement, Styled, div, prelude::*, px, svg,
 };
 use std::sync::Arc;
 
@@ -14,8 +15,9 @@ pub(crate) fn sidebar_section_header(
     label: &'static str,
     section: super::super::state::SidebarSection,
     expanded: bool,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id(format!("agenda-sidebar-section-{label}"))
         .h(px(29.))
         .px_5()
         .flex()
@@ -24,6 +26,9 @@ pub(crate) fn sidebar_section_header(
         .text_size(px(11.))
         .text_color(gpui::rgb(0x8a8d93))
         .cursor_pointer()
+        .rounded(px(6.))
+        .hover(|style| style.bg(gpui::rgb(0xe2e3e7)))
+        .active(|style| style.opacity(0.72))
         .child(
             svg()
                 .data(&b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M4 2L9 6L4 10Z'/></svg>"[..])
@@ -56,7 +61,7 @@ pub(crate) struct StaticSidebarItem {
     pub query: BuiltinQuery,
 }
 
-pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Div {
+pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
     let StaticSidebarItem {
         language,
         workspace,
@@ -68,6 +73,7 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Div {
         query,
     } = props;
     div()
+        .id(format!("agenda-static-sidebar-item-{label}"))
         .relative()
         .h(px(39.))
         .px_3()
@@ -115,6 +121,8 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Div {
             }))
         })
         .cursor_pointer()
+        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .active(|style| style.opacity(0.72))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
                 this.dispatch_agenda_intent(
@@ -133,9 +141,10 @@ pub(crate) fn sidebar_filter_item(
     source: Option<FileId>,
     selected: bool,
     is_source: bool,
-) -> Div {
+) -> Stateful<Div> {
     let context_workspace = workspace.clone();
     let context_source = source;
+    let element_id = label.clone();
     let label = if is_source {
         div()
             .overflow_hidden()
@@ -156,6 +165,7 @@ pub(crate) fn sidebar_filter_item(
             .child(label)
     };
     div()
+        .id(format!("agenda-sidebar-filter-{element_id}"))
         .min_h(px(if is_source { 32. } else { 35. }))
         .px_3()
         .flex()
@@ -168,6 +178,8 @@ pub(crate) fn sidebar_filter_item(
         .text_size(px(12.))
         .text_color(gpui::rgb(0x555960))
         .cursor_pointer()
+        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .active(|style| style.opacity(0.72))
         .child(
             div()
                 .flex_1()
@@ -262,8 +274,9 @@ pub(crate) fn saved_view_item(
     label: String,
     index: usize,
     selected: bool,
-) -> Div {
+) -> Stateful<Div> {
     div()
+        .id(("agenda-saved-view", index))
         .h(px(36.))
         .px_3()
         .flex()
@@ -276,6 +289,8 @@ pub(crate) fn saved_view_item(
         .text_size(px(12.))
         .text_color(gpui::rgb(if selected { 0x6632bd } else { 0x555960 }))
         .cursor_pointer()
+        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .active(|style| style.opacity(0.72))
         .child(
             svg()
                 .data(super::super::icon::agenda_icon(
@@ -306,7 +321,7 @@ pub(crate) fn sidebar_item(
     count: usize,
     selected: bool,
     compact: bool,
-) -> Div {
+) -> Stateful<Div> {
     let count_badge = badge(count.to_string()).when(compact, |badge| {
         badge
             .absolute()
@@ -317,6 +332,7 @@ pub(crate) fn sidebar_item(
             .text_size(px(9.))
     });
     div()
+        .id(format!("agenda-sidebar-item-{label}"))
         .relative()
         .h(px(39.0))
         .px_3()
@@ -331,6 +347,9 @@ pub(crate) fn sidebar_item(
             item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
         })
+        .cursor_pointer()
+        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .active(|style| style.opacity(0.72))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
                 this.dispatch_agenda_intent(

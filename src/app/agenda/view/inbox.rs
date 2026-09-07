@@ -24,6 +24,13 @@ pub(super) fn button(
         .text_color(rgb(if primary { 0xffffff } else { 0x454950 }))
         .text_size(px(11.))
         .cursor_pointer()
+        .hover(move |style| {
+            if primary {
+                style.bg(rgb(0x6835b5)).border_color(rgb(0x6835b5))
+            } else {
+                style.bg(rgb(0xf3f3f5)).border_color(rgb(0xcfd1d5))
+            }
+        })
         .child(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             let intent = intent.clone();
@@ -42,24 +49,11 @@ pub(crate) fn inbox_view(
         .items_center()
         .justify_between()
         .child(
-            div()
-                .child(
-                    div()
-                        .text_size(px(20.))
-                        .font_weight(gpui::FontWeight::BOLD)
-                        .child(language.text("agenda.inbox")),
-                )
-                .child(
-                    div()
-                        .mt_1()
-                        .text_size(px(10.))
-                        .text_color(rgb(0x858990))
-                        .child(
-                            language
-                                .text("agenda.items_pending")
-                                .replace("{count}", &tasks.len().to_string()),
-                        ),
-                ),
+            div().text_size(px(11.)).text_color(rgb(0x858990)).child(
+                language
+                    .text("agenda.items_pending")
+                    .replace("{count}", &tasks.len().to_string()),
+            ),
         )
         .child(button(
             workspace.clone(),
@@ -219,29 +213,11 @@ pub(crate) fn inbox_view(
             .into_any_element()
     } else {
         div()
-            .mt_5()
+            .mt_4()
             .flex_1()
             .min_h_0()
             .id("inbox-list-scroll")
             .overflow_y_scroll()
-            .child(
-                div()
-                    .h(px(34.))
-                    .px_4()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .text_size(px(10.))
-                    .text_color(rgb(0x858990))
-                    .child(div().w(px(18.)))
-                    .child(div().w(px(110.)).child(language.text("agenda.source")))
-                    .child(div().w(px(88.)).child(language.text("agenda.captured")))
-                    .child(div().w(px(80.)).child(language.text("agenda.scheduled")))
-                    .child(div().w(px(72.)).child(language.text("agenda.status")))
-                    .child(div().w(px(38.)).child(language.text("agenda.flag")))
-                    .child(div().flex_1().child(language.text("agenda.task")))
-                    .child(div().w(px(120.)).child(language.text("agenda.tags"))),
-            )
             .child(
                 div()
                     .rounded(px(9.))
@@ -252,93 +228,85 @@ pub(crate) fn inbox_view(
                         let open = workspace.clone();
                         let key = task.key;
                         div()
-                            .min_h(px(62.))
+                            .id(format!(
+                                "agenda-inbox-task-{}-{}-{}",
+                                key.file.0, key.local, key.shard_generation
+                            ))
+                            .min_h(px(72.))
                             .px_4()
                             .flex()
                             .items_center()
-                            .gap_3()
+                            .gap_4()
                             .border_t_1()
                             .border_color(rgb(0xeeeeef))
                             .bg(rgb(0xffffff))
                             .cursor_pointer()
+                            .hover(|style| style.bg(rgb(0xf6f6f7)))
                             .child(
                                 div()
-                                    .size(px(9.))
-                                    .rounded_full()
+                                    .size(px(24.))
+                                    .flex_none()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(6.))
                                     .border_1()
-                                    .border_color(rgb(0xb8bcc3)),
+                                    .border_color(rgb(0xc9ccd1))
+                                    .text_color(rgb(0x8d9299))
+                                    .text_size(px(12.))
+                                    .child("✓"),
                             )
                             .child(
                                 div()
-                                    .w(px(110.))
-                                    .text_size(px(11.))
-                                    .text_color(rgb(0x585d65))
+                                    .flex_1()
+                                    .min_w_0()
                                     .child(
-                                        task.source
-                                            .path
-                                            .file_name()
-                                            .and_then(|v| v.to_str())
-                                            .unwrap_or("")
-                                            .to_owned(),
+                                        div()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .text_size(px(12.))
+                                            .font_weight(gpui::FontWeight::SEMIBOLD)
+                                            .text_color(rgb(0x2f3339))
+                                            .child(task.title.to_string()),
+                                    )
+                                    .child(
+                                        div()
+                                            .mt_1()
+                                            .overflow_hidden()
+                                            .whitespace_nowrap()
+                                            .text_ellipsis()
+                                            .text_size(px(10.))
+                                            .text_color(rgb(0x858990))
+                                            .child(format!(
+                                                "{} · {} · {}",
+                                                task.source
+                                                    .path
+                                                    .file_name()
+                                                    .and_then(|v| v.to_str())
+                                                    .unwrap_or(""),
+                                                language.text("agenda.unprocessed"),
+                                                language.text("agenda.not_scheduled")
+                                            )),
                                     ),
                             )
                             .child(
                                 div()
-                                    .w(px(88.))
+                                    .w(px(90.))
+                                    .flex_none()
+                                    .text_right()
                                     .text_size(px(10.))
                                     .text_color(rgb(0x8a8e95))
                                     .child(language.text("agenda.just_now")),
                             )
                             .child(
                                 div()
-                                    .w(px(80.))
-                                    .text_size(px(10.))
-                                    .text_color(rgb(0x8a8e95))
-                                    .child(language.text("agenda.not_scheduled")),
-                            )
-                            .child(
-                                div()
-                                    .w(px(72.))
-                                    .h(px(25.))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(px(6.))
-                                    .bg(rgb(0xf0edf5))
-                                    .text_color(rgb(0x754b82))
-                                    .text_size(px(10.))
-                                    .child(language.text("agenda.unprocessed")),
-                            )
-                            .child(
-                                div()
-                                    .w(px(38.))
+                                    .w(px(18.))
+                                    .flex_none()
+                                    .text_color(rgb(0xa5a8ae))
                                     .text_size(px(16.))
-                                    .text_color(rgb(0xa0a3a9))
-                                    .child("☆"),
+                                    .child("›"),
                             )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .whitespace_nowrap()
-                                    .text_ellipsis()
-                                    .text_size(px(12.))
-                                    .font_weight(gpui::FontWeight::SEMIBOLD)
-                                    .child(task.title.to_string()),
-                            )
-                            .child(div().w(px(120.)).flex().gap_1().children(
-                                task.effective_tags.iter().take(2).map(|tag| {
-                                    div()
-                                        .px_2()
-                                        .py_1()
-                                        .rounded_full()
-                                        .bg(rgb(0xf3edf7))
-                                        .text_color(rgb(0x754b82))
-                                        .text_size(px(9.))
-                                        .child(tag.to_string())
-                                }),
-                            ))
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 open.update(cx, |this, cx| {
                                     this.dispatch_agenda_intent(UiIntent::OpenRefile(key), cx)

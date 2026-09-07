@@ -39,7 +39,7 @@ impl Render for CalendarDrag {
     }
 }
 
-fn draggable_task(child: Div, row: &AgendaRow, index: usize) -> Stateful<Div> {
+fn draggable_task(child: impl gpui::IntoElement, row: &AgendaRow, index: usize) -> Stateful<Div> {
     let drag = CalendarDrag {
         index,
         title: row.title.clone(),
@@ -109,9 +109,10 @@ fn tone(row: &AgendaRow) -> (u32, u32) {
     }
 }
 
-fn task_chip(workspace: Entity<WorkspaceWindow>, row: &AgendaRow, index: usize) -> Div {
+fn task_chip(workspace: Entity<WorkspaceWindow>, row: &AgendaRow, index: usize) -> Stateful<Div> {
     let (background, foreground) = tone(row);
     div()
+        .id(("calendar-task", index))
         .min_h(px(36.))
         .p_2()
         .rounded(px(5.))
@@ -119,6 +120,8 @@ fn task_chip(workspace: Entity<WorkspaceWindow>, row: &AgendaRow, index: usize) 
         .text_color(rgb(foreground))
         .text_size(px(10.))
         .cursor_pointer()
+        .hover(|style| style.opacity(0.84).shadow_sm())
+        .active(|style| style.opacity(0.68))
         .overflow_hidden()
         .child(
             div()
@@ -485,12 +488,15 @@ pub(crate) fn agenda_calendar(
                         .text_color(rgb(0x979aa0))
                         .child(
                             div()
+                                .id("calendar-toggle-all-day")
                                 .h(px(30.))
                                 .px_2()
                                 .flex()
                                 .items_center()
                                 .rounded(px(6.))
                                 .cursor_pointer()
+                                .hover(|style| style.bg(rgb(0xeeeeF1)))
+                                .active(|style| style.opacity(0.72))
                                 .text_color(rgb(0x62666d))
                                 .child(if all_day {
                                     language.text("agenda.collapse_all_day")
