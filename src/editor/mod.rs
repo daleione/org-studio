@@ -6,8 +6,10 @@ mod layout_map;
 mod minimap;
 mod minimap_media;
 mod org_commands;
+mod read_only;
 mod syntax;
 
+pub(crate) use read_only::LineHighlights;
 pub(crate) use syntax::EditorSyntaxService;
 
 use std::{
@@ -80,6 +82,12 @@ actions!(
 #[action(namespace = semantic_editor, no_json)]
 pub struct RunSourceBlockAt {
     pub(crate) source_offset: ByteOffset,
+}
+
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = semantic_editor, no_json)]
+pub(crate) struct ActivateReadOnlyLine {
+    pub(crate) line: u64,
 }
 
 const LINE_HEIGHT: f32 = 22.0;
@@ -294,6 +302,7 @@ impl EditorFoldAnimation {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ShapeKey {
+    pub(super) generated_line: Option<u64>,
     pub(super) text: SharedString,
     pub(super) font_size_bits: u32,
     pub(super) wrap_width_bits: u32,
@@ -404,6 +413,7 @@ impl EditorFrameBenchmark {
 }
 
 pub struct SemanticEditor {
+    generated_highlights: Option<Vec<LineHighlights>>,
     session: Entity<DocumentSession>,
     focus_handle: FocusHandle,
     selection: Selection,
@@ -757,6 +767,7 @@ impl SemanticEditor {
         display_map.configure(initial_snapshot.len_lines(), 1.0);
         Self {
             session,
+            generated_highlights: None,
             focus_handle: cx.focus_handle(),
             selection: Selection::default(),
             selection_revision: initial_snapshot.revision(),

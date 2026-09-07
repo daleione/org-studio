@@ -89,6 +89,7 @@ pub enum SaveAckError {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SaveStartError {
+    ReadOnly,
     AlreadySaving,
     Conflict,
 }
@@ -189,6 +190,7 @@ impl PreparedReload {
 /// Views and workers receive immutable snapshots. Reload and save results carry an explicit
 /// document identity and revision so delayed background work cannot mutate a newer document.
 pub struct DocumentSession {
+    read_only: bool,
     path: PathBuf,
     buffer: DocumentBuffer,
     saved_revision: Revision,
@@ -218,6 +220,7 @@ impl DocumentSession {
         let metadata = FileMetadata::from_loaded(&path, &bytes);
         let buffer = DocumentBuffer::from_utf8(bytes)?;
         Ok(Self {
+            read_only: false,
             path,
             saved_revision: buffer.revision(),
             buffer,
@@ -228,6 +231,35 @@ impl DocumentSession {
                 save_state: SaveState::Idle,
             }),
         })
+    }
+
+    /// A generated buffer is never a save target and has no user edit history.
+    pub(crate) fn read_only_text(text: String) -> Self {
+        let mut session = Self::from_utf8(PathBuf::from("*Generated*"), text.into_bytes())
+            .expect("String is valid UTF-8");
+        session.read_only = true;
+        session
+    }
+
+    pub(crate) fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub(crate) fn replace_read_only_text(&mut self, text: String, cx: &mut Context<Self>) {
+        assert!(self.read_only);
+        let delta = self
+            .buffer
+            .commit(EditTransaction::new(
+                self.revision(),
+                vec![TextEdit::new(
+                    ByteRange::new(0, self.snapshot().len_bytes()),
+                    text,
+                )],
+            ))
+            .expect("whole-buffer replacement is valid");
+        self.saved_revision = self.revision();
+        self.history.clear();
+        self.emit_edited(delta, cx);
     }
 
     pub fn id(&self) -> DocumentId {
@@ -285,6 +317,9 @@ impl DocumentSession {
         transaction: EditTransaction,
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
+        if self.read_only {
+            return Err(EditError::ReadOnly);
+        }
         let delta = self.buffer.commit(transaction)?;
         self.note_edit();
         self.history.clear_redo();
@@ -300,6 +335,9 @@ impl DocumentSession {
         edit: DocumentCommand,
         cx: &mut Context<Self>,
     ) -> Result<RevisionDelta, EditError> {
+        if self.read_only {
+            return Err(EditError::ReadOnly);
+        }
         let snapshot = self.buffer.snapshot();
         let mut forward = edit.transaction.edits.clone();
         forward.sort_by_key(|text_edit| text_edit.range.start);
@@ -325,6 +363,9 @@ impl DocumentSession {
         after: Selection,
         origin: EditOrigin,
     ) -> Result<(), EditError> {
+        if self.read_only {
+            return Err(EditError::ReadOnly);
+        }
         if self.revision() != expected_revision {
             return Err(EditError::StaleRevision {
                 expected: self.revision(),
@@ -337,6 +378,9 @@ impl DocumentSession {
     }
 
     pub fn undo(&mut self, cx: &mut Context<Self>) -> Result<HistoryOutcome, EditError> {
+        if self.read_only {
+            return Err(EditError::ReadOnly);
+        }
         let Some((transactions, selection)) = self.history.prepare_undo(self.revision())? else {
             return Ok(HistoryOutcome::Empty);
         };
@@ -350,6 +394,9 @@ impl DocumentSession {
     }
 
     pub fn redo(&mut self, cx: &mut Context<Self>) -> Result<HistoryOutcome, EditError> {
+        if self.read_only {
+            return Err(EditError::ReadOnly);
+        }
         let Some((transactions, selection)) = self.history.prepare_redo(self.revision())? else {
             return Ok(HistoryOutcome::Empty);
         };
@@ -381,6 +428,9 @@ impl DocumentSession {
     }
 
     pub fn save_request(&self, target: Option<PathBuf>) -> Result<SaveRequest, SaveStartError> {
+        if self.read_only {
+            return Err(SaveStartError::ReadOnly);
+        }
         if !matches!(self.file.save_state, SaveState::Idle) {
             return Err(SaveStartError::AlreadySaving);
         }
@@ -442,6 +492,9 @@ impl DocumentSession {
     }
 
     pub fn begin_force_save(&mut self) -> Result<SaveRequest, SaveStartError> {
+        if self.read_only {
+            return Err(SaveStartError::ReadOnly);
+        }
         if !matches!(self.file.save_state, SaveState::Idle) {
             return Err(SaveStartError::AlreadySaving);
         }

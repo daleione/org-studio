@@ -147,5 +147,6 @@
   "agenda.saving": "Saving…",
   "agenda.list_view": "List",
   "agenda.calendar_view": "Calendar",
-  "agenda.text_view": "Text view"
+  "agenda.text_view": "Text view",
+  "agenda.task_location_changed": "Task location changed; refresh Agenda and try again"
 }

@@ -280,6 +280,7 @@ impl Element for EditorElement {
         });
         let digits = snapshot.len_lines().max(1).ilog10() + 1;
         let editor_font_size = self.editor.read(cx).font_size_px();
+        let generated = self.editor.read(cx).generated_highlights.is_some();
         let gutter_width = digits as f32 * editor_font_size * 0.6 + GUTTER_PADDING * 2.0;
         let minimap_width = if self.editor.read(cx).minimap.visible {
             self.editor.read(cx).minimap.width
@@ -514,7 +515,10 @@ impl Element for EditorElement {
                     1.0
                 };
             let fallback_style;
-            let line_style = if let Some(style) = style_snapshot.line(line_number) {
+            let line_style = if generated {
+                fallback_style = syntax::EditorLineStyle::pending_fallback(source_content_range);
+                &fallback_style
+            } else if let Some(style) = style_snapshot.line(line_number) {
                 style
             } else {
                 debug_assert!(styles_pending);
@@ -550,16 +554,23 @@ impl Element for EditorElement {
                 strikethrough: None,
             };
             let marked_display = local_marked(marked, content_range, &display);
-            let runs = syntax::runs(
-                editor.session.read(cx).path(),
-                &text,
-                base_run,
-                line_style,
-                marked_display.clone(),
-                theme,
-            );
+            let runs = if let Some(highlights) = editor.generated_highlights.as_ref() {
+                highlights.get(line_number as usize).map_or_else(
+                    || vec![base_run.clone()],
+                    |highlights| super::read_only::highlighted_runs(base_run.clone(), highlights),
+                )
+            } else {
+                syntax::runs(
+                    editor.session.read(cx).path(),
+                    &text,
+                    base_run,
+                    line_style,
+                    marked_display.clone(),
+                    theme,
+                )
+            };
             let effective_wrap_width = editor.display_map.soft_wrap().then_some(px(row_wrap_width));
-            let shape_key = shape_key(
+            let mut shape_key = shape_key(
                 &text,
                 px(f32::from(font_size) * metrics.font_scale),
                 marked_display,
@@ -567,6 +578,8 @@ impl Element for EditorElement {
                 line_style.id.cache_key(),
                 line_style.code_language.clone(),
             );
+            // Equal text can carry different faces on different agenda dates.
+            shape_key.generated_line = generated.then_some(line_number);
             let layout = editor
                 .shape_cache
                 .get(&shape_key)
@@ -1386,6 +1399,7 @@ fn shape_key(
     code_language: Option<Arc<str>>,
 ) -> ShapeKey {
     ShapeKey {
+        generated_line: None,
         text: text.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
         wrap_width_bits: wrap_width.map_or(0, |width| f32::from(width).to_bits()),

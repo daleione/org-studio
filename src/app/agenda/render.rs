@@ -535,13 +535,12 @@ impl super::AgendaHost {
                                             (
                                                 _,
                                                 super::state::AgendaProjection::Source,
-                                                Some(result),
+                                                Some(_),
                                             ) => div()
                                                 .flex_1()
                                                 .min_h_0()
-                                                .id("agenda-source-scroll")
-                                                .overflow_y_scroll()
-                                                .child(super::view::agenda_text(&result))
+                                                .overflow_hidden()
+                                                .children(self.text_editor.clone())
                                                 .into_any_element(),
                                             (_, _, None) => super::component::empty_state(
                                                 language.text("agenda.configure"),

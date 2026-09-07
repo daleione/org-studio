@@ -14,7 +14,9 @@ mod text;
 mod workflow;
 
 pub(crate) use clock::ClockStore;
-pub(crate) use command::{AgendaCommand, AgendaEditError, TimestampTarget, prepare_edit};
+pub(crate) use command::{
+    AgendaCommand, AgendaEditError, TimestampTarget, prepare_edit, resolve_heading,
+};
 pub(crate) use config::{AgendaConfig, AgendaConfigStore};
 pub(crate) use habit::{HabitStats, habit_stats};
 pub(crate) use index::{AgendaIndex, AgendaIndexSnapshot, FileAgendaShard};

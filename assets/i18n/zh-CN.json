@@ -147,5 +147,6 @@
   "agenda.saving": "正在保存…",
   "agenda.list_view": "列表",
   "agenda.calendar_view": "日历",
-  "agenda.text_view": "文本视图"
+  "agenda.text_view": "文本视图",
+  "agenda.task_location_changed": "任务位置已改变，请刷新日程后重试"
 }

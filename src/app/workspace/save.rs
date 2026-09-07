@@ -10,6 +10,11 @@ use crate::{
 
 impl WorkspaceWindow {
     pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.content_route, crate::app::ContentRoute::Agenda)
+            && self.agenda.state.projection == crate::app::agenda::state::AgendaProjection::Source
+        {
+            return;
+        }
         self.save_document_then(None, window, cx);
     }
 
@@ -23,12 +28,17 @@ impl WorkspaceWindow {
             return;
         }
         match self.start_save(None, false, transition.clone(), window, cx) {
-            Ok(()) | Err(SaveStartError::AlreadySaving) => {}
+            Ok(()) | Err(SaveStartError::AlreadySaving | SaveStartError::ReadOnly) => {}
             Err(SaveStartError::Conflict) => self.prompt_conflict_save(transition, window, cx),
         }
     }
 
     pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if matches!(self.content_route, crate::app::ContentRoute::Agenda)
+            && self.agenda.state.projection == crate::app::agenda::state::AgendaProjection::Source
+        {
+            return;
+        }
         self.save_document_as_then(None, window, cx);
     }
 

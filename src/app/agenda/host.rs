@@ -11,6 +11,10 @@ use super::state::AgendaViewState;
 pub(crate) struct AgendaHost {
     pub(super) language: crate::i18n::Language,
     pub(crate) search_input: Option<gpui::Entity<super::search::AgendaSearch>>,
+    pub(crate) text_editor: Option<gpui::Entity<crate::editor::SemanticEditor>>,
+    pub(crate) text_targets: Vec<Option<crate::agenda::TaskKey>>,
+    pub(super) pending_text_task: Option<crate::agenda::TaskRecord>,
+    pub(super) text_generation: Option<(u64, crate::i18n::Language, jiff::civil::Date)>,
     pub(super) index: AgendaIndex,
     pub(super) result: Option<Arc<AgendaResultSnapshot>>,
     pub(super) navigation_result: Option<Arc<AgendaResultSnapshot>>,
@@ -34,6 +38,10 @@ impl AgendaHost {
         let mut host = Self {
             language: crate::i18n::Language::system(),
             search_input: None,
+            text_editor: None,
+            text_targets: Vec::new(),
+            pending_text_task: None,
+            text_generation: None,
             index: AgendaIndex::default(),
             result: None,
             navigation_result: None,

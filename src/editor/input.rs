@@ -178,6 +178,9 @@ impl EntityInputHandler for SemanticEditor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_read_only(cx) {
+            return;
+        }
         let (range, target_utf16) = if let Some(range_utf16) = range_utf16 {
             let Some(range) = self.byte_range_from_utf16(range_utf16.clone(), cx) else {
                 return;
@@ -227,6 +230,9 @@ impl EntityInputHandler for SemanticEditor {
         _: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.is_read_only(cx) {
+            return;
+        }
         let (range, target_utf16) = if let Some(range_utf16) = range_utf16 {
             let Some(range) = self.byte_range_from_utf16(range_utf16.clone(), cx) else {
                 return;

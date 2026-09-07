@@ -149,6 +149,13 @@ impl Render for WorkspaceWindow {
                 }),
             )
             .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
+            .on_action(cx.listener(
+                |this, action: &crate::editor::ActivateReadOnlyLine, window, cx| {
+                    if matches!(this.content_route, crate::app::ContentRoute::Agenda) {
+                        this.open_agenda_text_line(action.line, window, cx);
+                    }
+                },
+            ))
             .on_action(cx.listener(|this, _: &OpenDocument, window, cx| {
                 this.dispatch_command(OPEN_DOCUMENT_COMMAND, window, cx)
             }))

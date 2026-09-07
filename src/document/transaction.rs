@@ -41,6 +41,7 @@ impl EditTransaction {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EditError {
+    ReadOnly,
     InvalidUtf8 {
         valid_up_to: usize,
     },
@@ -59,6 +60,7 @@ pub enum EditError {
 impl std::fmt::Display for EditError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::ReadOnly => formatter.write_str("buffer is read-only"),
             Self::InvalidUtf8 { valid_up_to } => {
                 write!(formatter, "file is not valid UTF-8 near byte {valid_up_to}")
             }

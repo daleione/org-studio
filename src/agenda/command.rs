@@ -230,7 +230,7 @@ fn validate_version(session: &DocumentSession, task: &TaskRecord) -> Result<(), 
     }
 }
 
-fn resolve_heading(
+pub(crate) fn resolve_heading(
     session: &DocumentSession,
     task: &TaskRecord,
 ) -> Result<crate::org_semantic::OrgHeading, AgendaEditError> {

@@ -10,6 +10,7 @@ mod runtime;
 mod search;
 pub(crate) mod state;
 mod style;
+mod text_buffer;
 mod view;
 mod worker;
 

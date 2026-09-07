@@ -226,6 +226,8 @@ impl WorkspaceWindow {
         }
         self.agenda.language = self.language;
         self.sync_agenda_document(cx);
+        self.reveal_agenda_text_target(cx);
+        self.sync_agenda_text_buffer(cx);
         if self.agenda.runtime.pump.is_some() {
             return;
         }

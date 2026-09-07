@@ -19,6 +19,9 @@ impl SemanticEditor {
         history_before: Selection,
         cx: &mut Context<Self>,
     ) {
+        if self.is_read_only(cx) {
+            return;
+        }
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         let range = self.selection.range();
@@ -49,6 +52,9 @@ impl SemanticEditor {
     }
 
     fn delete_backward(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) {
+            return;
+        }
         let history_before = self.selection;
         if self.selection.is_empty() {
             let snapshot = self.snapshot(cx);
@@ -70,6 +76,9 @@ impl SemanticEditor {
     }
 
     fn delete_forward(&mut self, _: &DeleteForward, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) {
+            return;
+        }
         let history_before = self.selection;
         if self.selection.is_empty() {
             let snapshot = self.snapshot(cx);
@@ -307,12 +316,24 @@ impl SemanticEditor {
         cx.notify();
     }
 
-    fn newline(&mut self, _: &Newline, _: &mut Window, cx: &mut Context<Self>) {
+    fn newline(&mut self, _: &Newline, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) {
+            window.dispatch_action(
+                Box::new(ActivateReadOnlyLine {
+                    line: self.selected_line(cx),
+                }),
+                cx,
+            );
+            return;
+        }
         let newline = self.session.read(cx).newline_sequence();
         self.replace_selection(newline, EditOrigin::Newline, cx);
     }
 
     fn insert_tab(&mut self, _: &InsertTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) {
+            return;
+        }
         let snapshot = self.snapshot(cx);
         let path = self.session.read(cx).path().to_path_buf();
         let headings = crate::document::DocumentFormat::detect(&path)
@@ -527,6 +548,9 @@ impl SemanticEditor {
     }
 
     fn shift_tab(&mut self, _: &ShiftTab, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) {
+            return;
+        }
         let snapshot = self.snapshot(cx);
         let path = self.session.read(cx).path().to_path_buf();
         let headings = crate::document::DocumentFormat::detect(&path)
@@ -1482,6 +1506,7 @@ impl Render for SemanticEditor {
             .overflow_hidden()
             .bg(rgb(current_theme().background))
             .font_family(super::EDITOR_FONT_FAMILY)
+            .font_weight(gpui::FontWeight::NORMAL)
             .text_size(px(self.font_size_px()))
             .line_height(px(self.base_line_height()))
             .cursor(gpui::CursorStyle::IBeam)

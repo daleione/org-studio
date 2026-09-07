@@ -527,7 +527,9 @@ impl WorkspaceWindow {
         }
         if matches!(self.content_route, ContentRoute::Agenda) {
             let key = event.keystroke.key.as_str();
-            if event.keystroke.modifiers.platform && key.eq_ignore_ascii_case("k") {
+            if event.keystroke.modifiers.platform
+                && (key.eq_ignore_ascii_case("k") || key.eq_ignore_ascii_case("f"))
+            {
                 self.agenda.state.search_expanded = true;
                 cx.notify();
                 if let Some(input) = &self.agenda.search_input {
@@ -543,6 +545,15 @@ impl WorkspaceWindow {
                 .as_ref()
                 .is_some_and(|input| input.read(cx).focus.is_focused(window))
             {
+                return;
+            }
+            if self.agenda.state.projection == crate::app::agenda::state::AgendaProjection::Source
+                && self.agenda.state.overlay == crate::app::agenda::state::AgendaOverlay::None
+                && self.agenda.text_editor.as_ref().is_some_and(|editor| {
+                    gpui::Focusable::focus_handle(editor.read(cx), cx).is_focused(window)
+                })
+            {
+                // Let the embedded editor own navigation, selection and clipboard keys.
                 return;
             }
             if key.eq_ignore_ascii_case("q")

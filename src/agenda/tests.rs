@@ -214,8 +214,51 @@ fn text_projection_aligns_unicode_categories_by_display_width() {
         index.replace(fixture_shard()),
         &AgendaQuery::builtin(BuiltinQuery::Today, Date::new(2026, 9, 5).unwrap()),
     );
-    let text = format_agenda_text(&result);
-    assert!(text.contains("work: NEXT"));
+    let lines = format_agenda_text(&result, "Scheduled", "Deadline");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.text.contains("work:") && &line.text[line.todo.clone()] == "NEXT")
+    );
+}
+
+#[test]
+fn text_projection_preserves_org_prefixes_ranges_and_unicode_alignment() {
+    let mut index = AgendaIndex::default();
+    let mut result = QueryEngine::default().execute(
+        index.replace(fixture_shard()),
+        &AgendaQuery::builtin(BuiltinQuery::Today, Date::new(2026, 9, 5).unwrap()),
+    );
+    let mut row = result.rows[0].clone();
+    row.category = Some(Arc::from("工作"));
+    row.title = Arc::from("发布说明");
+    row.todo = Arc::from("TODO");
+    row.priority = Some('A');
+    row.tags = Arc::from([Arc::from("发布")]);
+    row.time = Some("10:00".parse().unwrap());
+    row.end_time = Some("11:30".parse().unwrap());
+    row.end_date = row.date;
+    row.date_kind = Some(AgendaDateKind::Scheduled);
+    let mut other = row.clone();
+    other.category = Some(Arc::from("work"));
+    result.rows = Arc::from([row, other]);
+    let lines = format_agenda_text(&result, "Scheduled", "Deadline");
+    for line in &lines {
+        assert!(
+            line.text
+                .contains("10:00-11:30. Scheduled: TODO [#A] 发布说明")
+        );
+        assert_eq!(&line.text[line.todo.clone()], "TODO");
+        assert_eq!(&line.text[line.priority.clone().unwrap()], "[#A]");
+        assert_eq!(&line.text[line.tags.clone().unwrap()], ":发布:");
+    }
+    let column = |line: &super::text::AgendaTextLine| {
+        unicode_width::UnicodeWidthStr::width(&line.text[..line.todo.start])
+    };
+    assert_eq!(column(&lines[0]), column(&lines[1]));
+    let chinese = format_agenda_text(&result, "计划", "截止");
+    assert!(chinese[0].text.contains("计划: TODO"));
+    assert_eq!(&chinese[0].text[chinese[0].todo.clone()], "TODO");
 }
 
 #[test]

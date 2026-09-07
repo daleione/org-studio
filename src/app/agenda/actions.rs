@@ -86,6 +86,12 @@ impl WorkspaceWindow {
                 if self.agenda.state.projection != projection {
                     self.agenda.state.projection = projection;
                     self.agenda.requery();
+                    if projection == super::state::AgendaProjection::Source {
+                        self.sync_agenda_text_buffer(cx);
+                        if let Some(editor) = &self.agenda.text_editor {
+                            editor.update(cx, |editor, cx| editor.request_focus(cx));
+                        }
+                    }
                     if projection != super::state::AgendaProjection::List {
                         self.agenda.state.sheet = super::state::AgendaSheet::None;
                     }
