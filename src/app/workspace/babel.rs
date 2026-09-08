@@ -7,6 +7,22 @@ use crate::{
 };
 
 impl WorkspaceWindow {
+    pub(crate) fn execute_org_context_command(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(
+            self.document_workspace.active_surface(),
+            PaneSurface::Editor
+        ) && let Some(editor) = self.editor(self.document_workspace.active_pane)
+            && editor.update(cx, |editor, cx| editor.align_table_at_selection(cx))
+        {
+            return;
+        }
+        self.execute_source_block(window, cx);
+    }
+
     pub(crate) fn execute_source_block(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !matches!(
             self.document_workspace.active_surface(),

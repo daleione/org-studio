@@ -17,6 +17,7 @@ mod outline;
 mod revision;
 mod selection;
 mod session;
+pub(crate) mod table;
 mod transaction;
 mod undo;
 

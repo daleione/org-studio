@@ -146,7 +146,100 @@ pub(super) struct HitRow {
     pub(super) line_height: Pixels,
     pub(super) display: layout_map::DisplayLineText,
     pub(super) layout: Arc<WrappedLine>,
+    pub(super) table_layout: Option<Arc<TableVisualLayout>>,
     pub(super) inline_image_preview: bool,
+}
+
+impl HitRow {
+    pub(super) fn visual_width(&self) -> Pixels {
+        self.table_layout
+            .as_ref()
+            .map_or_else(|| self.layout.width(), |layout| layout.width)
+    }
+
+    pub(super) fn position_for_display_index(&self, index: usize) -> Option<Point<Pixels>> {
+        self.table_layout.as_ref().map_or_else(
+            || self.layout.position_for_index(index, self.line_height),
+            |layout| Some(gpui::point(layout.x_for_index(index), Pixels::ZERO)),
+        )
+    }
+
+    pub(super) fn closest_display_index(&self, position: Point<Pixels>) -> usize {
+        self.table_layout.as_ref().map_or_else(
+            || {
+                self.layout
+                    .closest_index_for_position(position, self.line_height)
+                    .unwrap_or_else(|index| index)
+            },
+            |layout| layout.closest_index_for_x(position.x),
+        )
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct TableVisualFragment {
+    pub(super) display_range: Range<usize>,
+    pub(super) x: Pixels,
+    pub(super) layout: Arc<gpui::ShapedLine>,
+}
+
+#[derive(Clone)]
+pub(super) struct TableVisualLayout {
+    pub(super) fragments: Arc<[TableVisualFragment]>,
+    pub(super) width: Pixels,
+    pub(super) len: usize,
+}
+
+impl TableVisualLayout {
+    pub(super) fn x_for_index(&self, index: usize) -> Pixels {
+        let index = index.min(self.len);
+        if let Some(fragment) = self
+            .fragments
+            .iter()
+            .find(|fragment| fragment.display_range.start == index)
+        {
+            return fragment.x;
+        }
+        if let Some(fragment) = self.fragments.iter().find(|fragment| {
+            fragment.display_range.start < index && index < fragment.display_range.end
+        }) {
+            return fragment.x
+                + fragment
+                    .layout
+                    .x_for_index(index - fragment.display_range.start);
+        }
+        self.fragments.last().map_or(Pixels::ZERO, |fragment| {
+            fragment.x + fragment.layout.width()
+        })
+    }
+
+    pub(super) fn closest_index_for_x(&self, x: Pixels) -> usize {
+        let Some(first) = self.fragments.first() else {
+            return 0;
+        };
+        if x <= first.x {
+            return first.display_range.start;
+        }
+        for (index, fragment) in self.fragments.iter().enumerate() {
+            let right = fragment.x + fragment.layout.width();
+            if x <= right {
+                return fragment.display_range.start
+                    + fragment.layout.closest_index_for_x(x - fragment.x);
+            }
+            if let Some(next) = self.fragments.get(index + 1)
+                && x < next.x
+            {
+                return fragment.display_range.end;
+            }
+        }
+        self.len
+    }
+}
+
+#[derive(Default)]
+struct TableGeometryCache {
+    revision: Option<Revision>,
+    columns: HashMap<(u64, crate::document::DocumentFormat), Option<Arc<[usize]>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -436,6 +529,7 @@ pub struct SemanticEditor {
     syntax_service: Arc<syntax::EditorSyntaxService>,
     layout_anchor: Option<RevisionRange>,
     shape_cache: HashMap<ShapeKey, Arc<WrappedLine>>,
+    table_geometry_cache: RefCell<TableGeometryCache>,
     scroll_y: f32,
     scroll_x: f32,
     vertical_goal_x: Option<f32>,
@@ -790,6 +884,7 @@ impl SemanticEditor {
             syntax_service,
             layout_anchor: None,
             shape_cache: HashMap::with_capacity(128),
+            table_geometry_cache: RefCell::new(TableGeometryCache::default()),
             scroll_y: 0.0,
             scroll_x: 0.0,
             vertical_goal_x: None,
@@ -849,6 +944,28 @@ impl SemanticEditor {
 
     pub(super) fn base_line_height(&self) -> f32 {
         LINE_HEIGHT * self.content_font_size.scale()
+    }
+
+    pub(super) fn aligned_table_column_widths(
+        &self,
+        snapshot: &DocumentSnapshot,
+        line: LineIndex,
+        format: crate::document::DocumentFormat,
+    ) -> Option<Arc<[usize]>> {
+        let start = org_commands::table_start(snapshot, line.0, format)?;
+        let revision = snapshot.revision();
+        let mut cache = self.table_geometry_cache.borrow_mut();
+        if cache.revision != Some(revision) {
+            cache.revision = Some(revision);
+            cache.columns.clear();
+        }
+        if let Some(columns) = cache.columns.get(&(start, format)) {
+            return columns.clone();
+        }
+        let columns = org_commands::aligned_table_column_widths(snapshot, start, format)
+            .map(Arc::<[usize]>::from);
+        cache.columns.insert((start, format), columns.clone());
+        columns
     }
 
     pub(crate) fn set_content_font_size(
@@ -1922,7 +2039,12 @@ mod tests {
                 editor.selection.head(),
             )
             .unwrap();
-            editor.align_table_from_context(&snapshot, &context, 1, cx);
+            editor.align_table_from_context(
+                &snapshot,
+                &context,
+                org_commands::TableNavigation::NextCell,
+                cx,
+            );
         });
         assert_eq!(session.read_with(cx, |session, _| session.revision().0), 1);
         session.update(cx, |session, cx| {
@@ -1938,6 +2060,201 @@ mod tests {
             }),
             original
         );
+    }
+
+    #[gpui::test]
+    fn mixed_width_table_pixel_alignment_is_derived_from_canonical_source(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(init);
+        let source = concat!(
+            "| 官方语法 | 状态 |\n",
+            "|--+--|\n",
+            "| Entities | 支持 |\n",
+            "\n",
+            "| 官方语法 | 状态 |\n",
+            "|----------+------|\n",
+            "| Entities | 支持 |\n",
+        );
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.as_bytes().to_vec())
+                .unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            for line in 0..3 {
+                assert!(
+                    editor
+                        .hit_rows
+                        .iter()
+                        .find(|row| row.line.0 == line)
+                        .unwrap()
+                        .table_layout
+                        .is_none(),
+                    "a malformed table must stay unaligned on open"
+                );
+            }
+            for line in 4..7 {
+                assert!(
+                    editor
+                        .hit_rows
+                        .iter()
+                        .find(|row| row.line.0 == line)
+                        .unwrap()
+                        .table_layout
+                        .is_some(),
+                    "a canonical table must recover pixel alignment on open"
+                );
+            }
+        });
+        editor.update(cx, |editor, cx| {
+            editor.selection = Selection::caret(ByteOffset(2));
+            editor.sync_selection_utf16(&editor.snapshot(cx));
+            assert!(editor.align_table_at_selection(cx));
+        });
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let anchors = editor
+                .hit_rows
+                .iter()
+                .filter(|row| row.line.0 < 3)
+                .map(|row| {
+                    let table = row
+                        .table_layout
+                        .as_ref()
+                        .expect("Org table rows use the shared pixel layout");
+                    table
+                        .fragments
+                        .iter()
+                        .filter_map(|fragment| {
+                            matches!(&row.display.text[fragment.display_range.clone()], "|" | "+")
+                                .then_some(f32::from(fragment.x))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(anchors.len(), 3);
+            assert_eq!(anchors[0], anchors[1]);
+            assert_eq!(anchors[1], anchors[2]);
+
+            let header = &editor.hit_rows[0];
+            let second_pipe = header.display.text.match_indices('|').nth(1).unwrap().0;
+            let x = header
+                .table_layout
+                .as_ref()
+                .unwrap()
+                .x_for_index(second_pipe);
+            assert_eq!(
+                header.table_layout.as_ref().unwrap().closest_index_for_x(x),
+                second_pipe
+            );
+        });
+
+        editor.update(cx, |editor, cx| {
+            editor.replace_selection("X", EditOrigin::Typing, cx);
+        });
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert!(
+                editor
+                    .hit_rows
+                    .iter()
+                    .find(|row| row.line.0 == 0)
+                    .unwrap()
+                    .table_layout
+                    .is_none(),
+                "making a table noncanonical must disable pixel alignment"
+            );
+            assert!(
+                editor
+                    .hit_rows
+                    .iter()
+                    .find(|row| row.line.0 == 4)
+                    .unwrap()
+                    .table_layout
+                    .is_some(),
+                "editing one table must not change another canonical table"
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn canonical_markdown_table_uses_pixel_alignment_and_ignores_inline_pipes(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        cx.update(init);
+        let source = "| 名     | `a|b` |\n| :----- | ----: |\n| longer | x     |\n";
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.md"), source.as_bytes().to_vec())
+                .unwrap()
+        });
+        let (editor, cx) = cx.add_window_view(move |_, cx| SemanticEditor::new(session, cx));
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let anchors = editor
+                .hit_rows
+                .iter()
+                .take(3)
+                .map(|row| {
+                    row.table_layout
+                        .as_ref()
+                        .expect("canonical Markdown rows use pixel alignment")
+                        .fragments
+                        .iter()
+                        .filter_map(|fragment| {
+                            (&row.display.text[fragment.display_range.clone()] == "|")
+                                .then_some(f32::from(fragment.x))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(anchors.len(), 3);
+            assert!(anchors.iter().all(|row| row.len() == 3));
+            assert_eq!(anchors[0], anchors[1]);
+            assert_eq!(anchors[1], anchors[2]);
+        });
+    }
+
+    #[gpui::test]
+    fn soft_wrap_wraps_wide_tables_without_scrolling_short_tables(cx: &mut gpui::TestAppContext) {
+        cx.update(init);
+        let source = format!("| short | value |\n\n| {} | value |\n", "wide".repeat(200));
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let (editor, cx) = cx.add_window_view(move |_, cx| SemanticEditor::new(session, cx));
+        cx.run_until_parked();
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let short = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line == LineIndex(0))
+                .unwrap();
+            let wide = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line == LineIndex(2))
+                .unwrap();
+            assert!(short.table_layout.is_some());
+            assert!(wide.table_layout.is_none());
+            assert!(!wide.layout.wrap_boundaries().is_empty());
+        });
+        editor.update(cx, |editor, cx| {
+            editor.scroll(-120.0, 0.0, cx);
+            assert_eq!(editor.scroll_x, 0.0);
+        });
     }
 
     #[gpui::test]

@@ -18,7 +18,7 @@ use crate::{
 #[cfg(feature = "benchmarks")]
 use super::FrameBenchmarkAction;
 use super::{
-    HitRow, SemanticEditor, ShapeKey,
+    HitRow, SemanticEditor, ShapeKey, TableVisualFragment, TableVisualLayout,
     layout_map::EditorLayoutMap,
     minimap_media::{
         MinimapImagePaint, geometry as editor_minimap_media_geometry,
@@ -155,6 +155,106 @@ struct SourceRunButtonPaint {
     hitbox: Hitbox,
     accent: u32,
     icon: ShapedLine,
+}
+
+fn slice_text_runs(runs: &[TextRun], range: Range<usize>) -> Vec<TextRun> {
+    let mut sliced = Vec::new();
+    let mut offset = 0usize;
+    for run in runs {
+        let run_range = offset..offset + run.len;
+        let start = run_range.start.max(range.start);
+        let end = run_range.end.min(range.end);
+        if start < end {
+            let mut run = run.clone();
+            run.len = end - start;
+            sliced.push(run);
+        }
+        offset = run_range.end;
+        if offset >= range.end {
+            break;
+        }
+    }
+    sliced
+}
+
+fn table_visual_layout(
+    text: &gpui::SharedString,
+    runs: &[TextRun],
+    font_size: Pixels,
+    columns: &[usize],
+    format: crate::document::DocumentFormat,
+    text_system: &gpui::WindowTextSystem,
+) -> Option<Arc<TableVisualLayout>> {
+    let delimiters = crate::document::table::delimiter_offsets(text, format)
+        .into_iter()
+        .map(|start| start..start + 1)
+        .collect::<Vec<_>>();
+    if delimiters.len() < 2 || columns.is_empty() {
+        return None;
+    }
+
+    let mut base = runs.first()?.clone();
+    base.len = 1;
+    let space: gpui::SharedString = " ".into();
+    let space_advance = text_system
+        .shape_line(space, font_size, std::slice::from_ref(&base), None)
+        .width();
+    let mut fragments = Vec::with_capacity(delimiters.len() * 2 + 1);
+    let shape_fragment = |range: Range<usize>, x: Pixels| -> Option<TableVisualFragment> {
+        if range.is_empty() {
+            return None;
+        }
+        let fragment_text: gpui::SharedString = text[range.clone()].to_owned().into();
+        let fragment_runs = slice_text_runs(runs, range.clone());
+        (!fragment_runs.is_empty()).then(|| TableVisualFragment {
+            display_range: range,
+            x,
+            layout: Arc::new(text_system.shape_line(
+                fragment_text,
+                font_size,
+                &fragment_runs,
+                None,
+            )),
+        })
+    };
+
+    let first = delimiters.first()?.clone();
+    let indent = shape_fragment(0..first.start, Pixels::ZERO);
+    let mut delimiter_x = indent
+        .as_ref()
+        .map_or(Pixels::ZERO, |fragment| fragment.layout.width());
+    if let Some(indent) = indent {
+        fragments.push(indent);
+    }
+
+    for (column, delimiter_range) in delimiters.iter().enumerate() {
+        let delimiter = shape_fragment(delimiter_range.clone(), delimiter_x)?;
+        let delimiter_width = delimiter.layout.width();
+        fragments.push(delimiter);
+
+        let segment_end = delimiters
+            .get(column + 1)
+            .map_or(text.len(), |next| next.start);
+        if let Some(segment) = shape_fragment(
+            delimiter_range.end..segment_end,
+            delimiter_x + delimiter_width,
+        ) {
+            fragments.push(segment);
+        }
+        if delimiters.get(column + 1).is_some() {
+            let logical_width = columns.get(column).copied().unwrap_or(1).saturating_add(2) as f32;
+            delimiter_x += delimiter_width + space_advance * logical_width;
+        }
+    }
+
+    let width = fragments.iter().fold(Pixels::ZERO, |width, fragment| {
+        width.max(fragment.x + fragment.layout.width())
+    });
+    Some(Arc::new(TableVisualLayout {
+        fragments: fragments.into(),
+        width,
+        len: text.len(),
+    }))
 }
 
 fn animated_paint_lines(
@@ -444,6 +544,7 @@ impl Element for EditorElement {
             .unwrap_or_else(|| (Arc::from([]), 1.0));
         let paint_lines = animated_paint_lines(&editor.display_map, visible_lines, &fold_ranges);
         let editor_path = editor.session.read(cx).path().to_path_buf();
+        let document_format = crate::document::DocumentFormat::from_path(&editor_path);
         let style_query = syntax::SparseEditorStyleSnapshot::query_lines(
             &editor_path,
             &snapshot,
@@ -525,6 +626,9 @@ impl Element for EditorElement {
                 fallback_style = syntax::EditorLineStyle::pending_fallback(source_content_range);
                 &fallback_style
             };
+            let table_columns = (line_style.id == syntax::EditorStyleId::Table)
+                .then(|| editor.aligned_table_column_widths(&snapshot, line, document_format))
+                .flatten();
             let text_inset = editor_block_text_inset(line_style.block.as_ref());
             let row_text_origin_x = text_origin_x + px(text_inset);
             let row_wrap_width = if text_inset > 0.0 {
@@ -569,10 +673,27 @@ impl Element for EditorElement {
                     theme,
                 )
             };
-            let effective_wrap_width = editor.display_map.soft_wrap().then_some(px(row_wrap_width));
+            let shaped_font_size = px(f32::from(font_size) * metrics.font_scale);
+            let table_layout = table_columns
+                .as_ref()
+                .and_then(|columns| {
+                    table_visual_layout(
+                        &text,
+                        &runs,
+                        shaped_font_size,
+                        columns,
+                        document_format,
+                        window.text_system(),
+                    )
+                })
+                .filter(|layout| {
+                    !editor.display_map.soft_wrap() || f32::from(layout.width) <= row_wrap_width
+                });
+            let effective_wrap_width = (table_layout.is_none() && editor.display_map.soft_wrap())
+                .then_some(px(row_wrap_width));
             let mut shape_key = shape_key(
                 &text,
-                px(f32::from(font_size) * metrics.font_scale),
+                shaped_font_size,
                 marked_display,
                 effective_wrap_width,
                 line_style.id.cache_key(),
@@ -587,13 +708,7 @@ impl Element for EditorElement {
                 .unwrap_or_else(|| {
                     window
                         .text_system()
-                        .shape_text(
-                            text,
-                            px(f32::from(font_size) * metrics.font_scale),
-                            &runs,
-                            effective_wrap_width,
-                            None,
-                        )
+                        .shape_text(text, shaped_font_size, &runs, effective_wrap_width, None)
                         .ok()
                         .and_then(|lines| lines.into_iter().next())
                         .map(Arc::new)
@@ -676,6 +791,7 @@ impl Element for EditorElement {
                 line_height: px(metrics.line_height),
                 display,
                 layout,
+                table_layout,
                 inline_image_preview: inline_image.is_some(),
             };
 
@@ -736,10 +852,7 @@ impl Element for EditorElement {
                     .saturating_sub(content_range.start.0)
                     .min(hit.layout.len() as u64) as usize;
                 let local = hit.display.source_to_display(source_local);
-                let position = hit
-                    .layout
-                    .position_for_index(local, px(metrics.line_height))
-                    .unwrap_or_default();
+                let position = hit.position_for_display_index(local).unwrap_or_default();
                 caret = Some(fill(
                     Bounds::new(
                         point(
@@ -819,7 +932,7 @@ impl Element for EditorElement {
             .filter(|row| row.block.is_some())
             .map(|row| {
                 row.hit.text_origin_x
-                    + row.hit.layout.width()
+                    + row.hit.visual_width()
                     + px(BLOCK_TEXT_RIGHT_PADDING + BLOCK_RIGHT_INSET)
             })
             .fold(block_minimum_right, |right, candidate| right.max(candidate));
@@ -1163,6 +1276,17 @@ impl Element for EditorElement {
                                     0,
                                     false,
                                 );
+                            } else if let Some(table) = &row.hit.table_layout {
+                                for fragment in table.fragments.iter() {
+                                    let _ = fragment.layout.paint(
+                                        point(row.hit.text_origin_x + fragment.x, row.hit.origin_y),
+                                        row.hit.line_height,
+                                        TextAlign::Left,
+                                        None,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             } else {
                                 let _ = row.hit.layout.paint(
                                     point(row.hit.text_origin_x, row.hit.origin_y),
@@ -1794,6 +1918,8 @@ fn schedule_minimap_layout_preparation(
             .iter()
             .copied()
             .collect::<std::collections::HashMap<_, _>>();
+        let mut aligned_tables = std::collections::HashMap::<u64, Option<Arc<[usize]>>>::new();
+        let document_format = crate::document::DocumentFormat::from_path(&request.key.path);
 
         for chunk_start in (0..line_count).step_by(YIELD_LINE_INTERVAL as usize) {
             if cancellation_epoch.load(std::sync::atomic::Ordering::Acquire) != epoch {
@@ -1894,15 +2020,46 @@ fn schedule_minimap_layout_preparation(
                         None,
                         &request.theme,
                     );
-                    let effective_wrap_width = request.key.soft_wrap.then_some(px(row_wrap_width));
+                    let table_columns = (line_style.id == syntax::EditorStyleId::Table)
+                        .then(|| {
+                            super::org_commands::table_start(
+                                &request.snapshot,
+                                line_number,
+                                document_format,
+                            )
+                        })
+                        .flatten()
+                        .and_then(|start| {
+                            aligned_tables
+                                .entry(start)
+                                .or_insert_with(|| {
+                                    super::org_commands::aligned_table_column_widths(
+                                        &request.snapshot,
+                                        start,
+                                        document_format,
+                                    )
+                                    .map(Arc::<[usize]>::from)
+                                })
+                                .clone()
+                        });
+                    let shaped_font_size = px(f32::from(request.font_size) * metrics.font_scale);
+                    let table_fits = table_columns
+                        .as_ref()
+                        .and_then(|columns| {
+                            table_visual_layout(
+                                &text,
+                                &runs,
+                                shaped_font_size,
+                                columns,
+                                document_format,
+                                &text_system,
+                            )
+                        })
+                        .is_some_and(|layout| f32::from(layout.width) <= row_wrap_width);
+                    let effective_wrap_width =
+                        (request.key.soft_wrap && !table_fits).then_some(px(row_wrap_width));
                     let wrapped = text_system
-                        .shape_text(
-                            text,
-                            px(f32::from(request.font_size) * metrics.font_scale),
-                            &runs,
-                            effective_wrap_width,
-                            None,
-                        )
+                        .shape_text(text, shaped_font_size, &runs, effective_wrap_width, None)
                         .ok()
                         .and_then(|lines| lines.into_iter().next())
                         .unwrap_or_default();
@@ -2126,6 +2283,7 @@ fn schedule_minimap_raster(
                 });
             }
         }
+        let document_format = crate::document::DocumentFormat::from_path(&request.path);
         let rows = request
             .raster_lines
             .iter()
@@ -2140,6 +2298,7 @@ fn schedule_minimap_raster(
                     );
                 };
                 let line = source.line;
+                let complete_source_line = source.text_range == Some((0, None));
                 let mut text = request
                     .snapshot
                     .line_content_range(LineIndex(line))
@@ -2163,13 +2322,26 @@ fn schedule_minimap_raster(
                 let spans = line_style
                     .map(|style| syntax::semantic_spans(&request.path, &text, style))
                     .unwrap_or_default();
-                minimap_text_row(
+                let mut row = minimap_text_row(
                     text,
                     line_style,
                     spans,
                     &mut rich_span_budget,
                     &request.theme,
-                )
+                );
+                row.table = if complete_source_line {
+                    line_style
+                        .filter(|style| style.id == syntax::EditorStyleId::Table)
+                        .and_then(|_| {
+                            super::minimap::TableRowGeometry::from_source(
+                                &row.text,
+                                document_format,
+                            )
+                        })
+                } else {
+                    None
+                };
+                row
             })
             .collect::<Vec<_>>();
         if rich_span_budget.degraded_rows() > 0 {
@@ -2328,6 +2500,7 @@ fn minimap_text_row(
         block_background: block.map(|_| theme.code_background),
         block_accent: block.map(|block| editor_block_accent(&block.kind, theme)),
         block_edge: block.map(|block| block.edge),
+        table: None,
     }
 }
 
@@ -2608,13 +2781,9 @@ fn push_selection_quads(
     wrap_width: Pixels,
 ) {
     let line_height = hit.line_height;
-    let start_position = hit
-        .layout
-        .position_for_index(start, line_height)
-        .unwrap_or_default();
+    let start_position = hit.position_for_display_index(start).unwrap_or_default();
     let end_position = hit
-        .layout
-        .position_for_index(end, line_height)
+        .position_for_display_index(end)
         .unwrap_or(start_position);
     let line_height_px = f32::from(line_height).max(1.0);
     let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;

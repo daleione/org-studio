@@ -684,6 +684,8 @@ fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> Edit
                 EditorStyleId::Quote
             } else if trimmed.starts_with("<!--") {
                 EditorStyleId::Comment
+            } else if trimmed.starts_with('|') {
+                EditorStyleId::Table
             } else if is_list_line(trimmed) {
                 EditorStyleId::List
             } else {
@@ -1603,6 +1605,37 @@ mod tests {
             todo,
             metrics: metrics_for(id),
         }
+    }
+
+    #[test]
+    fn markdown_pipe_rows_have_table_source_style_outside_fences() {
+        let mut context = CodeContext::default();
+        assert_eq!(
+            classify_line(Language::Markdown, "| Name | Value |", &mut context),
+            EditorStyleId::Table
+        );
+        assert_eq!(
+            classify_line(Language::Markdown, "```md", &mut context),
+            EditorStyleId::CodeBoundary
+        );
+        assert_eq!(
+            classify_line(Language::Markdown, "| literal | row |", &mut context),
+            EditorStyleId::Code
+        );
+    }
+
+    #[test]
+    fn long_markdown_table_rows_keep_their_source_style() {
+        let source = format!("| {} | value |\n", "a".repeat(5_000));
+        let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let styles = EditorStyleSnapshot::for_lines(
+            Path::new("a.md"),
+            &snapshot,
+            0..1,
+            &EditorSyntaxService::default(),
+        );
+
+        assert_eq!(styles.lines[0].id, EditorStyleId::Table);
     }
 
     #[test]

@@ -59,6 +59,7 @@ pub enum BuiltinCommand {
     ReloadDocument,
     SaveDocument,
     SaveDocumentAs,
+    OrgContextCommand,
     ExecuteSourceBlock,
     ToggleInlineImagePreviews,
     UndoDocument,

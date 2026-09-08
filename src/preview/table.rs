@@ -10,7 +10,7 @@ use unicode_width::UnicodeWidthChar;
 use unicode_width::UnicodeWidthStr;
 
 use crate::{
-    document::{ByteRange, TextSnapshot},
+    document::{ByteRange, TextSnapshot, table as source_table},
     org_syntax::{BlockArena, BlockId, BlockKind},
 };
 
@@ -616,7 +616,7 @@ fn build_table_group(
                 *id,
                 separator,
                 cells,
-                separator.then(|| parse_separator_alignments(&source)),
+                separator.then(|| parse_separator_alignments(&source, format)),
             )
         })
         .collect::<Vec<_>>();
@@ -813,153 +813,34 @@ pub(crate) fn render_table_row(
 }
 
 fn is_separator(source: &str) -> bool {
-    let source = source.trim();
-    source.contains('-')
-        && source
-            .chars()
-            .all(|character| matches!(character, '|' | '+' | '-' | ':' | ' ' | '\t'))
+    source_table::is_separator(source)
 }
 
 fn parse_cells(source: &str, format: DocumentFormat) -> Vec<TableCell> {
-    let trimmed_start = source.len() - source.trim_start().len();
-    let trimmed_end = source.trim_end().len();
-    if trimmed_start >= trimmed_end {
-        return Vec::new();
-    }
-    let mut inner_start = trimmed_start;
-    let mut inner_end = trimmed_end;
-    if source[inner_start..inner_end].starts_with('|') {
-        inner_start += 1;
-    }
-    if source[inner_start..inner_end].ends_with('|') {
-        inner_end -= 1;
-    }
-    let inner = &source[inner_start..inner_end];
-    let separator = is_separator(source);
-    let mut cells = Vec::new();
-    let mut start = 0usize;
-    for (end, delimiter) in cell_delimiters(inner, format, separator) {
-        let raw = &inner[start..end];
-        cells.push(table_cell_from_range(inner_start + start, raw, separator));
-        start = end + delimiter.len_utf8();
-    }
-    cells.push(table_cell_from_range(
-        inner_start + start,
-        &inner[start..],
-        separator,
-    ));
-    cells
+    source_table::parse_line(source, format)
+        .cells
+        .into_iter()
+        .map(|cell| TableCell {
+            text_range: cell.text_range,
+            align_right: cell.align_right,
+        })
+        .collect()
 }
 
-fn cell_delimiters(source: &str, format: DocumentFormat, separator: bool) -> Vec<(usize, char)> {
-    if separator {
-        return source
-            .char_indices()
-            .filter(|(_, ch)| matches!(ch, '+' | '|'))
-            .collect();
-    }
-    let mut delimiters = Vec::new();
-    let mut cursor = 0usize;
-    while cursor < source.len() {
-        let character = source[cursor..]
-            .chars()
-            .next()
-            .expect("cursor stays on a character boundary");
-        if character == '\\' {
-            cursor += character.len_utf8();
-            if cursor < source.len() {
-                cursor += source[cursor..]
-                    .chars()
-                    .next()
-                    .expect("escaped character exists")
-                    .len_utf8();
-            }
-            continue;
-        }
-        let span_end = match format {
-            DocumentFormat::Markdown if character == '`' => markdown_code_span_end(source, cursor),
-            DocumentFormat::Org if matches!(character, '=' | '~') => {
-                org_literal_span_end(source, cursor, character)
-            }
-            _ => None,
-        };
-        if let Some(end) = span_end {
-            cursor = end;
-            continue;
-        }
-        if character == '|' {
-            delimiters.push((cursor, character));
-        }
-        cursor += character.len_utf8();
-    }
-    delimiters
-}
-
-fn markdown_code_span_end(source: &str, start: usize) -> Option<usize> {
-    let ticks = source[start..]
-        .bytes()
-        .take_while(|byte| *byte == b'`')
-        .count();
-    let mut cursor = start + ticks;
-    while cursor < source.len() {
-        let run = source[cursor..]
-            .bytes()
-            .take_while(|byte| *byte == b'`')
-            .count();
-        if run == ticks {
-            return Some(cursor + run);
-        }
-        cursor += if run > 0 {
-            run
-        } else {
-            source[cursor..].chars().next()?.len_utf8()
-        };
-    }
-    None
-}
-
-fn org_literal_span_end(source: &str, start: usize, marker: char) -> Option<usize> {
-    let opener_follows_boundary = start == 0
-        || source[..start]
-            .chars()
-            .next_back()
-            .is_some_and(char::is_whitespace);
-    let content = &source[start + marker.len_utf8()..];
-    if !opener_follows_boundary || content.chars().next().is_none_or(char::is_whitespace) {
-        return None;
-    }
-    content
-        .find(marker)
-        .map(|offset| start + marker.len_utf8() + offset + marker.len_utf8())
-}
-
-fn table_cell_from_range(start: usize, raw: &str, separator: bool) -> TableCell {
-    if separator {
-        return TableCell {
-            text_range: start..start,
-            align_right: false,
-        };
-    }
-    let leading = raw.len() - raw.trim_start().len();
-    let trailing = raw.len() - raw.trim_end().len();
-    TableCell {
-        text_range: start + leading..start + raw.len() - trailing,
-        align_right: leading > trailing,
-    }
-}
-
-fn parse_separator_alignments(source: &str) -> Vec<Alignment> {
-    source
-        .trim()
-        .trim_matches('|')
-        .split(['+', '|'])
-        .map(
-            |raw| match (raw.trim().starts_with(':'), raw.trim().ends_with(':')) {
+fn parse_separator_alignments(source: &str, format: DocumentFormat) -> Vec<Alignment> {
+    source_table::parse_line(source, format)
+        .cells
+        .into_iter()
+        .map(|cell| {
+            match (
+                cell.separator_alignment.left,
+                cell.separator_alignment.right,
+            ) {
                 (true, true) => Alignment::Center,
                 (false, true) => Alignment::Right,
                 _ => Alignment::Left,
-            },
-        )
+            }
+        })
         .collect()
 }
 
@@ -1007,7 +888,8 @@ mod tests {
 
     #[test]
     fn parses_markdown_separator_columns_and_alignment() {
-        let alignments = parse_separator_alignments("| :--- | :---: | ---: |");
+        let alignments =
+            parse_separator_alignments("| :--- | :---: | ---: |", DocumentFormat::Markdown);
         assert_eq!(
             alignments,
             vec![Alignment::Left, Alignment::Center, Alignment::Right]

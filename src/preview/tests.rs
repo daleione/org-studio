@@ -1,8 +1,7 @@
 use super::{
-    EXECUTE_SOURCE_BLOCK_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility,
-    MAX_EAGER_LAYOUT_ROWS, REDO_DOCUMENT_COMMAND, TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND,
-    UNDO_DOCUMENT_COMMAND, accept_generation, dired_command_items, preview_input,
-    should_eagerly_measure_rows,
+    GLOBAL_VISIBILITY_CYCLE_COMMAND, GlobalVisibility, MAX_EAGER_LAYOUT_ROWS, ORG_CONTEXT_COMMAND,
+    REDO_DOCUMENT_COMMAND, TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND, UNDO_DOCUMENT_COMMAND,
+    accept_generation, dired_command_items, preview_input, should_eagerly_measure_rows,
 };
 
 use crate::{
@@ -1885,7 +1884,7 @@ fn shift_tab_dispatches_the_global_visibility_cycle() {
 }
 
 #[test]
-fn control_c_control_c_dispatches_org_babel_execution() {
+fn control_c_control_c_dispatches_the_org_context_command() {
     let (commands, mut keyboard, context) = super::document_input();
     assert_eq!(
         keyboard.route(KeyStroke::new("c", true, false, false, false), context),
@@ -1894,10 +1893,49 @@ fn control_c_control_c_dispatches_org_babel_execution() {
     assert_eq!(
         keyboard.route(KeyStroke::new("c", true, false, false, false), context),
         EmacsOutcome::Command {
-            command: commands.key(EXECUTE_SOURCE_BLOCK_COMMAND).unwrap(),
+            command: commands.key(ORG_CONTEXT_COMMAND).unwrap(),
             prefix: crate::command::PrefixArgument::None,
         }
     );
+}
+
+#[gpui::test]
+fn control_c_control_c_realigns_the_table_at_point(cx: &mut gpui::TestAppContext) {
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let session = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document(
+                    "context-table.org",
+                    "| a|long |\n| wider|b|\n",
+                )),
+                cx,
+            ));
+            let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.request_focus(cx);
+            });
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+            workspace.document_session().unwrap().clone()
+        })
+    });
+
+    cx.simulate_keystrokes("ctrl-c ctrl-c");
+
+    cx.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(
+                snapshot
+                    .line_content_range(crate::document::LineIndex(0))
+                    .unwrap()
+            ),
+            "| a     | long |"
+        );
+        assert_eq!(snapshot.revision().0, 1);
+    });
 }
 
 #[test]

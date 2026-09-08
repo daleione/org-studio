@@ -21,13 +21,13 @@ use super::{
     DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, EXECUTE_SOURCE_BLOCK_COMMAND,
     EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, INCREASE_CONTENT_FONT_SIZE_COMMAND,
     OPEN_AGENDA_COMMAND, OPEN_AGENDA_TEXT_COMMAND, OPEN_DEFAULT_DIRED_COMMAND,
-    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, QUIT_APPLICATION_COMMAND,
-    REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND, RESET_CONTENT_FONT_SIZE_COMMAND,
-    RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
-    SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND, SHOW_HOME_COMMAND,
-    SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND, TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND,
-    TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND, TOGGLE_SOFT_WRAP_COMMAND,
-    UNDO_DOCUMENT_COMMAND,
+    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, ORG_CONTEXT_COMMAND,
+    QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
+    RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND,
+    SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND,
+    SHOW_HOME_COMMAND, SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND,
+    TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
+    TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
 };
 
 #[cfg(test)]
@@ -109,6 +109,23 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in Babel command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: ORG_CONTEXT_COMMAND.into(),
+            aliases: &["org-ctrl-c-ctrl-c"],
+            title: "Org Context Command",
+            description: "Align an Org or Markdown table, or execute the source block at point",
+            command: BuiltinCommand::OrgContextCommand,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::Transaction,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::WriteFileSystem,
+            required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid Org context command");
     builder
         .register_builtin(BuiltinCommandSpec {
             name: TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND.into(),
@@ -641,7 +658,7 @@ pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
         },
         BindingSpec {
             keys: "C-c C-c",
-            behavior: BindingBehavior::Command(EXECUTE_SOURCE_BLOCK_COMMAND),
+            behavior: BindingBehavior::Command(ORG_CONTEXT_COMMAND),
         },
         BindingSpec {
             keys: "C-c C-x C-v",

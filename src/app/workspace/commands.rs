@@ -150,6 +150,9 @@ impl WorkspaceWindow {
                 }
                 self.save_document_as(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::OrgContextCommand) => {
+                self.execute_org_context_command(window, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::ExecuteSourceBlock) => {
                 self.execute_source_block(window, cx)
             }

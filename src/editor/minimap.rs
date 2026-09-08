@@ -11,8 +11,9 @@ use gpui::px;
 use gpui::{Bounds, Font, Pixels, RenderImage};
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
+use unicode_width::UnicodeWidthStr;
 
-use crate::document::{ByteRange, Revision, TextSnapshot};
+use crate::document::{ByteRange, DocumentFormat, Revision, TextSnapshot};
 
 pub(super) const DEFAULT_WIDTH: f32 = 96.0;
 pub(super) const MIN_WIDTH: f32 = 56.0;
@@ -225,6 +226,27 @@ pub(super) struct TextRow {
     pub(super) block_background: Option<u32>,
     pub(super) block_accent: Option<u32>,
     pub(super) block_edge: Option<super::syntax::EditorBlockEdge>,
+    pub(super) table: Option<TableRowGeometry>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TableRowGeometry {
+    cell_widths: Arc<[usize]>,
+    pub(super) format: DocumentFormat,
+}
+
+impl TableRowGeometry {
+    pub(super) fn from_source(text: &str, format: DocumentFormat) -> Option<Self> {
+        let parsed = crate::document::table::parse_line(text, format);
+        (crate::document::table::delimiter_offsets(text, format).len() >= 2).then(|| Self {
+            cell_widths: parsed
+                .cells
+                .iter()
+                .map(|cell| UnicodeWidthStr::width(&text[cell.raw_range.clone()]))
+                .collect(),
+            format,
+        })
+    }
 }
 
 pub(super) struct RasterizedRows {
@@ -347,6 +369,13 @@ pub(super) fn rasterize_text_rows(
         Metrics::new(density.font_px() * scale_factor, physical_line_height),
     );
     buffer.set_wrap(Wrap::None);
+    buffer.set_text(" ", &attrs, Shaping::Advanced, None);
+    buffer.shape_until_scroll(font_system, false);
+    let space_advance = buffer
+        .layout_runs()
+        .next()
+        .map_or(density.font_px() * scale_factor * 0.6, |run| run.line_w)
+        .max(1.0);
     for (row, source) in rows.iter().enumerate() {
         if row.is_multiple_of(32) && epoch.load(Ordering::Relaxed) != expected_epoch {
             return None;
@@ -406,10 +435,6 @@ pub(super) fn rasterize_text_rows(
                 );
             }
         }
-        buffer.set_size(
-            Some(width as f32 - 6.0 * scale_factor),
-            Some(physical_line_height),
-        );
         let base_attrs =
             attrs
                 .clone()
@@ -419,37 +444,136 @@ pub(super) fn rasterize_text_rows(
                 } else {
                     cosmic_text::Style::Normal
                 });
-        if source.spans.is_empty() {
-            buffer.set_text(&source.text, &base_attrs, Shaping::Advanced, None);
-        } else {
-            let rich_text = rich_text_segments(source, &base_attrs);
-            buffer.set_rich_text(rich_text, &base_attrs, Shaping::Advanced, None);
-        }
-        buffer.shape_until_scroll(font_system, false);
         let base = Color::rgb(
             (source.color >> 16) as u8,
             (source.color >> 8) as u8,
             source.color as u8,
         );
         let origin_x = (source.indent * scale_factor).round() as i32;
-        buffer.draw(font_system, swash_cache, base, |x, y, w, h, color| {
-            crate::minimap::paint_text_pixels(
+        if let Some(table) = &source.table {
+            for (range, x_units) in table_fragments(&source.text, table) {
+                let spans = slice_text_spans(&source.spans, &range);
+                draw_minimap_text(
+                    &mut buffer,
+                    font_system,
+                    swash_cache,
+                    &mut pixels,
+                    width,
+                    height,
+                    physical_line_height,
+                    &source.text[range],
+                    &spans,
+                    &base_attrs,
+                    base,
+                    origin_x + (x_units as f32 * space_advance).round() as i32,
+                    origin_y,
+                );
+            }
+        } else {
+            draw_minimap_text(
+                &mut buffer,
+                font_system,
+                swash_cache,
                 &mut pixels,
-                width as usize,
-                height as usize,
-                x + origin_x,
-                y + origin_y,
-                w,
-                h,
-                color,
+                width,
+                height,
+                physical_line_height,
+                &source.text,
+                &source.spans,
+                &base_attrs,
+                base,
+                origin_x,
+                origin_y,
             );
-        });
+        }
     }
     let image = RgbaImage::from_raw(width, height, pixels).expect("valid minimap image dimensions");
     Some(RasterizedRows {
         image: Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(image), 1))),
         rasterizer_lock_wait,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_minimap_text(
+    buffer: &mut cosmic_text::Buffer,
+    font_system: &mut cosmic_text::FontSystem,
+    swash_cache: &mut cosmic_text::SwashCache,
+    pixels: &mut [u8],
+    width: u32,
+    height: u32,
+    line_height: f32,
+    text: &str,
+    spans: &[TextSpan],
+    attrs: &cosmic_text::Attrs<'static>,
+    color: cosmic_text::Color,
+    origin_x: i32,
+    origin_y: i32,
+) {
+    use cosmic_text::Shaping;
+
+    buffer.set_size(Some(width as f32), Some(line_height));
+    if spans.is_empty() {
+        buffer.set_text(text, attrs, Shaping::Advanced, None);
+    } else {
+        buffer.set_rich_text(
+            rich_text_segments(text, spans, attrs),
+            attrs,
+            Shaping::Advanced,
+            None,
+        );
+    }
+    buffer.shape_until_scroll(font_system, false);
+    buffer.draw(font_system, swash_cache, color, |x, y, w, h, color| {
+        crate::minimap::paint_text_pixels(
+            pixels,
+            width as usize,
+            height as usize,
+            x + origin_x,
+            y + origin_y,
+            w,
+            h,
+            color,
+        );
+    });
+}
+
+fn table_fragments(text: &str, table: &TableRowGeometry) -> Vec<(std::ops::Range<usize>, usize)> {
+    let delimiters = crate::document::table::delimiter_offsets(text, table.format);
+    let Some(&first) = delimiters.first() else {
+        return vec![(0..text.len(), 0)];
+    };
+    let mut fragments = Vec::with_capacity(delimiters.len() + usize::from(first > 0));
+    if first > 0 {
+        fragments.push((0..first, 0));
+    }
+    let mut delimiter_x = UnicodeWidthStr::width(&text[..first]);
+    for (column, &start) in delimiters.iter().enumerate() {
+        let end = delimiters.get(column + 1).copied().unwrap_or(text.len());
+        fragments.push((start..end, delimiter_x));
+        if column + 1 < delimiters.len() {
+            delimiter_x += table.cell_widths.get(column).copied().unwrap_or(0) + 1;
+        }
+    }
+    fragments
+}
+
+fn slice_text_spans(spans: &[TextSpan], range: &std::ops::Range<usize>) -> Vec<TextSpan> {
+    spans
+        .iter()
+        .filter_map(|span| {
+            let start = span.bytes.start.max(range.start);
+            let end = span.bytes.end.min(range.end);
+            (start < end).then(|| TextSpan {
+                bytes: start - range.start..end - range.start,
+                color: span.color,
+                weight: span.weight,
+                italic: span.italic,
+                underline: span.underline,
+                strikethrough: span.strikethrough,
+            })
+        })
+        .collect()
 }
 
 fn cosmic_weight(weight: TextWeight) -> cosmic_text::Weight {
@@ -461,13 +585,14 @@ fn cosmic_weight(weight: TextWeight) -> cosmic_text::Weight {
 }
 
 fn rich_text_segments<'a>(
-    row: &'a TextRow,
+    text: &'a str,
+    spans: &[TextSpan],
     base: &cosmic_text::Attrs<'static>,
 ) -> Vec<(&'a str, cosmic_text::Attrs<'static>)> {
     use cosmic_text::{Color, Style, UnderlineStyle};
 
-    let mut boundaries = vec![0, row.text.len()];
-    for span in &row.spans {
+    let mut boundaries = vec![0, text.len()];
+    for span in spans {
         boundaries.extend([span.bytes.start, span.bytes.end]);
     }
     boundaries.sort_unstable();
@@ -480,8 +605,7 @@ fn rich_text_segments<'a>(
                 return None;
             }
             let mut attrs = base.clone();
-            for span in row
-                .spans
+            for span in spans
                 .iter()
                 .filter(|span| span.bytes.start <= range.start && range.start < span.bytes.end)
             {
@@ -505,7 +629,7 @@ fn rich_text_segments<'a>(
                     attrs = attrs.strikethrough();
                 }
             }
-            Some((&row.text[range], attrs))
+            Some((&text[range], attrs))
         })
         .collect()
 }
@@ -1657,6 +1781,33 @@ impl EditorMinimapHost {
 mod tests {
     use super::*;
 
+    fn table_delimiter_columns(text: &str, format: DocumentFormat) -> Vec<usize> {
+        let geometry = TableRowGeometry::from_source(text, format).unwrap();
+        table_fragments(text, &geometry)
+            .into_iter()
+            .filter_map(|(range, column)| {
+                matches!(text.as_bytes().get(range.start), Some(b'|' | b'+')).then_some(column)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn table_fragments_align_mixed_width_rows_in_logical_columns() {
+        assert_eq!(
+            table_delimiter_columns("| English | 中文    |", DocumentFormat::Org),
+            vec![0, 10, 20]
+        );
+        assert_eq!(
+            table_delimiter_columns("| 中文    | English |", DocumentFormat::Org),
+            vec![0, 10, 20]
+        );
+        assert_eq!(
+            table_delimiter_columns("|a| bbbb |", DocumentFormat::Org),
+            vec![0, 2, 9],
+            "an unaligned source row must keep its original logical delimiter positions"
+        );
+    }
+
     fn prepared_layout_key(revision: u64, wrap_width: f32) -> PreparedLayoutKey {
         PreparedLayoutKey {
             revision: Revision(revision),
@@ -1934,9 +2085,10 @@ mod tests {
             block_background: None,
             block_accent: None,
             block_edge: None,
+            table: None,
         };
         let base = cosmic_text::Attrs::new().family(cosmic_text::Family::Monospace);
-        let segments = rich_text_segments(&row, &base);
+        let segments = rich_text_segments(&row.text, &row.spans, &base);
 
         assert_eq!(
             segments.iter().map(|(text, _)| *text).collect::<String>(),

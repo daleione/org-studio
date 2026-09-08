@@ -214,10 +214,7 @@ impl SemanticEditor {
         }) {
             let source_local = (head.0 - row.range.start.0).min(row.range.len()) as usize;
             let display_local = row.display.source_to_display(source_local);
-            if let Some(position) = row
-                .layout
-                .position_for_index(display_local, row.line_height)
-            {
+            if let Some(position) = row.position_for_display_index(display_local) {
                 let goal_x = *self
                     .vertical_goal_x
                     .get_or_insert_with(|| f32::from(position.x));
@@ -328,6 +325,38 @@ impl SemanticEditor {
             }
             return;
         }
+        let snapshot = self.snapshot(cx);
+        let path = self.session.read(cx).path().to_path_buf();
+        let table_candidate = crate::document::DocumentFormat::detect(&path)
+            .and_then(|format| {
+                let line = snapshot.line_index_at(self.selection.head()).ok()?;
+                let range = snapshot.line_content_range(line).ok()?;
+                Some(crate::document::table::is_table_row(
+                    &snapshot.copy_range(range),
+                    format,
+                ))
+            })
+            .unwrap_or(false);
+        if !table_candidate {
+            let newline = self.session.read(cx).newline_sequence();
+            self.replace_selection(newline, EditOrigin::Newline, cx);
+            return;
+        }
+        if let Some(context) =
+            super::org_commands::EditorCommandContext::at(&path, &snapshot, self.selection.head())
+            && matches!(
+                context.kind,
+                super::org_commands::EditorCommandKind::TableCell { .. }
+            )
+        {
+            self.align_table_from_context(
+                &snapshot,
+                &context,
+                super::org_commands::TableNavigation::NextRow,
+                cx,
+            );
+            return;
+        }
         let newline = self.session.read(cx).newline_sequence();
         self.replace_selection(newline, EditOrigin::Newline, cx);
     }
@@ -350,7 +379,12 @@ impl SemanticEditor {
         };
         match context.kind {
             super::org_commands::EditorCommandKind::TableCell { .. } => {
-                self.align_table_from_context(&snapshot, &context, 1, cx)
+                self.align_table_from_context(
+                    &snapshot,
+                    &context,
+                    super::org_commands::TableNavigation::NextCell,
+                    cx,
+                );
             }
             super::org_commands::EditorCommandKind::List => {
                 self.selection = Selection::caret(context.line_range.start);
@@ -567,7 +601,12 @@ impl SemanticEditor {
             context.kind,
             super::org_commands::EditorCommandKind::TableCell { .. }
         ) {
-            self.align_table_from_context(&snapshot, &context, -1, cx);
+            self.align_table_from_context(
+                &snapshot,
+                &context,
+                super::org_commands::TableNavigation::PreviousCell,
+                cx,
+            );
         } else if matches!(context.kind, super::org_commands::EditorCommandKind::NonOrg) {
             self.replace_selection("\t", EditOrigin::Typing, cx);
         } else {
@@ -613,39 +652,62 @@ impl SemanticEditor {
     }
 
     fn align_table(&mut self, _: &AlignTable, _: &mut Window, cx: &mut Context<Self>) {
+        if !self.align_table_at_selection(cx) {
+            self.command_feedback = Some("当前光标不在表格中".into());
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn align_table_at_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        if self.is_read_only(cx) {
+            return false;
+        }
         let snapshot = self.snapshot(cx);
         let path = self.session.read(cx).path().to_path_buf();
-        if let Some(context) =
+        let Some(context) =
             super::org_commands::EditorCommandContext::at(&path, &snapshot, self.selection.head())
-        {
-            if matches!(
-                context.kind,
-                super::org_commands::EditorCommandKind::TableCell { .. }
-            ) {
-                self.align_table_from_context(&snapshot, &context, 0, cx);
-            } else {
-                self.command_feedback = Some("当前光标不在 Org 表格中".into());
-                cx.notify();
-            }
+        else {
+            return false;
+        };
+        if !matches!(
+            context.kind,
+            super::org_commands::EditorCommandKind::TableCell { .. }
+        ) {
+            return false;
         }
+        self.align_table_from_context(
+            &snapshot,
+            &context,
+            super::org_commands::TableNavigation::Stay,
+            cx,
+        )
     }
 
     pub(super) fn align_table_from_context(
         &mut self,
         snapshot: &DocumentSnapshot,
         context: &super::org_commands::EditorCommandContext,
-        cell_delta: isize,
+        navigation: super::org_commands::TableNavigation,
         cx: &mut Context<Self>,
-    ) {
+    ) -> bool {
         let newline = self.session.read(cx).newline_sequence().to_owned();
         let Some(alignment) =
-            super::org_commands::align_table(snapshot, context, &newline, cell_delta)
+            super::org_commands::align_table(snapshot, context, &newline, navigation)
         else {
-            return;
+            return false;
         };
         let before = self.selection;
         let after = Selection::caret(alignment.caret);
         let revision = snapshot.revision();
+        if snapshot.copy_range(alignment.range) == alignment.replacement {
+            self.command_feedback = None;
+            self.selection = after;
+            self.selection_revision = revision;
+            self.sync_selection_utf16(snapshot);
+            self.pending_reveal_caret = true;
+            cx.notify();
+            return true;
+        }
         if self
             .session
             .update(cx, |session, cx| {
@@ -672,6 +734,9 @@ impl SemanticEditor {
             self.hit_rows = Arc::from([]);
             self.pending_reveal_caret = true;
             cx.notify();
+            true
+        } else {
+            false
         }
     }
 
@@ -1263,13 +1328,10 @@ impl SemanticEditor {
                 row.range.end
             };
         }
-        let display = row
-            .layout
-            .closest_index_for_position(
-                gpui::point(position.x - row.text_origin_x, position.y - row.origin_y),
-                row.line_height,
-            )
-            .unwrap_or_else(|index| index);
+        let display = row.closest_display_index(gpui::point(
+            position.x - row.text_origin_x,
+            position.y - row.origin_y,
+        ));
         let local = row.display.display_to_source(display);
         ByteOffset(row.range.start.0 + local.min(row.range.len() as usize) as u64)
     }
@@ -1315,7 +1377,7 @@ impl SemanticEditor {
         let content_right = self
             .hit_rows
             .iter()
-            .map(|row| f32::from(row.text_origin_x) + self.scroll_x + f32::from(row.layout.width()))
+            .map(|row| f32::from(row.text_origin_x) + self.scroll_x + f32::from(row.visual_width()))
             .fold(text_left, f32::max);
         let content_width = (content_right - text_left).max(0.0);
         horizontal_scroll_limit(content_width, available_width)
@@ -1339,8 +1401,7 @@ impl SemanticEditor {
             .and_then(|row| {
                 let local =
                     (self.selection.head().0 - row.range.start.0).min(row.range.len()) as usize;
-                row.layout
-                    .position_for_index(row.display.source_to_display(local), row.line_height)
+                row.position_for_display_index(row.display.source_to_display(local))
                     .map(|position| {
                         (
                             self.scroll_y
@@ -1368,20 +1429,16 @@ impl SemanticEditor {
         if (self.scroll_y - previous_y).abs() > 0.5 {
             self.minimap.note_viewport_changed();
         }
-        if !self.display_map.soft_wrap()
-            && let Some(row) = self.hit_rows.iter().find(|row| {
-                row.line == line
-                    && self.selection.head() >= row.range.start
-                    && self.selection.head() <= row.range.end
-            })
+        if let Some(row) = self.hit_rows.iter().find(|row| {
+            row.line == line
+                && self.selection.head() >= row.range.start
+                && self.selection.head() <= row.range.end
+        }) && !self.display_map.soft_wrap()
         {
             let source_local =
                 (self.selection.head().0 - row.range.start.0).min(row.range.len()) as usize;
             let display_local = row.display.source_to_display(source_local);
-            if let Some(position) = row
-                .layout
-                .position_for_index(display_local, row.line_height)
-            {
+            if let Some(position) = row.position_for_display_index(display_local) {
                 let caret_x = row.text_origin_x + position.x;
                 let text_left = row.text_origin_x + px(self.scroll_x);
                 if caret_x > viewport.right() - px(12.0) {
@@ -1781,6 +1838,145 @@ mod horizontal_scroll_tests {
                 assert_eq!(editor.snapshot(cx).copy_range(ByteRange::new(17, 18)), "\t");
             })
             .unwrap();
+    }
+
+    #[gpui::test]
+    fn table_tab_shift_tab_and_return_realign_and_navigate_cells(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                b"| a| bb|\n|--+---|\n| ccc |d|\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                let text_after_caret = |editor: &SemanticEditor, cx: &gpui::App| {
+                    let snapshot = editor.snapshot(cx);
+                    let caret = editor.selection().head();
+                    let line = snapshot.line_index_at(caret).unwrap();
+                    let range = snapshot.line_content_range(line).unwrap();
+                    snapshot.copy_range(ByteRange::new(caret.0, range.end.0))
+                };
+
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.insert_tab(&InsertTab, window, cx);
+                assert!(text_after_caret(editor, cx).starts_with("bb"));
+
+                editor.shift_tab(&ShiftTab, window, cx);
+                assert!(text_after_caret(editor, cx).starts_with('a'));
+
+                editor.newline(&Newline, window, cx);
+                assert!(text_after_caret(editor, cx).starts_with("ccc"));
+                assert_eq!(editor.snapshot(cx).revision().0, 1);
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn navigating_an_aligned_table_does_not_create_edits(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                b"| alpha | beta  |\n|-------+-------|\n| gamma | delta |\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(3)), cx);
+                assert!(editor.align_table_at_selection(cx));
+                assert_eq!(editor.selection().head(), ByteOffset(3));
+                assert_eq!(editor.snapshot(cx).revision().0, 0);
+                assert!(!editor.session.read(cx).is_dirty());
+
+                editor.insert_tab(&InsertTab, window, cx);
+                let snapshot = editor.snapshot(cx);
+                let caret = editor.selection().head();
+                let line = snapshot.line_index_at(caret).unwrap();
+                let range = snapshot.line_content_range(line).unwrap();
+                assert!(
+                    snapshot
+                        .copy_range(ByteRange::new(caret.0, range.end.0))
+                        .starts_with("beta")
+                );
+                assert_eq!(snapshot.revision().0, 0);
+                assert!(!editor.session.read(cx).is_dirty());
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn markdown_table_tab_realigns_and_navigates_without_losing_separator_markers(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.md"),
+                b"| a| value |\n| :- | -: |\n| longer | x |\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.insert_tab(&InsertTab, window, cx);
+                let snapshot = editor.snapshot(cx);
+                let source = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+                assert!(source.contains("| :----- | ----: |"), "{source}");
+                let caret = editor.selection().head();
+                let line = snapshot.line_index_at(caret).unwrap();
+                let range = snapshot.line_content_range(line).unwrap();
+                assert!(
+                    snapshot
+                        .copy_range(ByteRange::new(caret.0, range.end.0))
+                        .starts_with("value")
+                );
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
+    fn org_context_command_aligns_at_a_table_and_declines_plain_text(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.org"),
+                b"| a|long |\n| wider|b|\n\nplain\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+            assert!(editor.align_table_at_selection(cx));
+            let snapshot = editor.snapshot(cx);
+            assert_eq!(
+                snapshot.copy_range(snapshot.line_content_range(LineIndex(0)).unwrap()),
+                "| a     | long |"
+            );
+
+            let plain = snapshot.line_content_range(LineIndex(3)).unwrap().start;
+            editor.set_selection(Selection::caret(plain), cx);
+            assert!(!editor.align_table_at_selection(cx));
+        });
     }
 
     #[gpui::test]
