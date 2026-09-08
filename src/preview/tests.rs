@@ -2825,7 +2825,8 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             let gap = f32::from(peer.top() - heading.bottom());
-            let expected_gap = animation.segments[0].distance * (1.0 - animation.progress);
+            let eased = crate::motion::FOLD_MOTION.ease(animation.progress);
+            let expected_gap = animation.segments[0].distance * (1.0 - eased);
             assert!(
                 (gap - expected_gap).abs() < 1.0,
                 "gap={gap} expected_gap={expected_gap} progress={}",
@@ -2954,7 +2955,8 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
             assert!((f32::from(shell.top() - heading.bottom())).abs() < 0.01);
             assert!((f32::from(peer.top() - shell.bottom())).abs() < 0.01);
             let gap = f32::from(peer.top() - heading.bottom());
-            let expected_gap = animation.segments[0].distance * animation.progress;
+            let eased = crate::motion::FOLD_MOTION.ease(animation.progress);
+            let expected_gap = animation.segments[0].distance * eased;
             assert!(
                 (gap - expected_gap).abs() < 1.0,
                 "gap={gap} expected_gap={expected_gap} progress={}",
@@ -3100,7 +3102,8 @@ fn measured_fold_travel_renders_through_real_list_animation_frames(cx: &mut gpui
                     .list_state()
                     .bounds_for_item(shell.transition_index)
                     .unwrap();
-                let expected = shell.distance * animation.progress;
+                let eased = crate::motion::FOLD_MOTION.ease(animation.progress);
+                let expected = shell.distance * eased;
                 assert!(
                     (f32::from(bounds.size.height) - expected).abs() < 1.0,
                     "shell {index} height did not share the expansion progress"

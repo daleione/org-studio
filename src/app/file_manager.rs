@@ -655,6 +655,7 @@ impl WorkspaceWindow {
                 viewport_width,
                 self.window_title(cx),
                 window,
+                !cx.reduce_motion(),
             )),
             ContentRoute::AgendaText => div()
                 .size_full()

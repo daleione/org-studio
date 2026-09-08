@@ -8,6 +8,7 @@ use gpui::{ListAlignment, ListState, ScrollHandle, px};
 use crate::agenda::{
     AgendaConfigStore, AgendaQuery, AgendaResultSnapshot, BuiltinQuery, QueryEngine,
 };
+use crate::motion::{Easing, FOLD_MOTION, MotionSpec, Tween};
 
 use super::state::AgendaViewState;
 
@@ -18,23 +19,10 @@ pub(super) struct SidebarResizeSession {
     pub(super) current_width: f32,
 }
 
-pub(super) const SIDEBAR_ANIMATION_DURATION: Duration = Duration::from_millis(180);
+const SIDEBAR_MOTION: MotionSpec =
+    MotionSpec::new(Duration::from_millis(180), Easing::EaseOutCubic);
 const SIDEBAR_SWIPE_AXIS_LOCK_PX: f32 = 8.0;
 const SIDEBAR_SWIPE_THRESHOLD_PX: f32 = 48.0;
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SidebarVisibilityAnimation {
-    started_at: Instant,
-    from: f32,
-    to: f32,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub(super) struct SidebarSectionAnimation {
-    started_at: Instant,
-    from: f32,
-    to: f32,
-}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum SidebarSwipeAxis {
@@ -55,11 +43,7 @@ pub(super) struct SidebarSwipeSession {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct SidebarSwipeOutcome {
     pub(super) consumed: bool,
-    pub(super) started_animation: bool,
-}
-
-fn ease_out_cubic(progress: f32) -> f32 {
-    1.0 - (1.0 - progress).powi(3)
+    pub(super) visibility_changed: bool,
 }
 
 fn sidebar_visibility_after_swipe(visible: bool, delta_x: f32) -> Option<bool> {
@@ -73,9 +57,10 @@ fn sidebar_visibility_after_swipe(visible: bool, delta_x: f32) -> Option<bool> {
 }
 
 pub(super) fn expanded_sidebar_width(viewport_width: f32, desired: f32) -> f32 {
-    let maximum = (viewport_width - super::style::MIN_CONTENT_WIDTH)
-        .min(super::style::SIDEBAR_MAX_WIDTH)
-        .max(super::style::SIDEBAR_MIN_WIDTH);
+    let maximum = (viewport_width - super::style::MIN_CONTENT_WIDTH).clamp(
+        super::style::SIDEBAR_MIN_WIDTH,
+        super::style::SIDEBAR_MAX_WIDTH,
+    );
     desired.clamp(super::style::SIDEBAR_MIN_WIDTH, maximum)
 }
 
@@ -111,8 +96,8 @@ pub(crate) struct AgendaHost {
     pub(super) sidebar_visible: bool,
     pub(super) sidebar_width: f32,
     pub(super) sidebar_resize: Option<SidebarResizeSession>,
-    pub(super) sidebar_visibility_animation: Option<SidebarVisibilityAnimation>,
-    pub(super) sidebar_section_animations: [Option<SidebarSectionAnimation>; 4],
+    pub(super) sidebar_visibility_animation: Option<Tween>,
+    pub(super) sidebar_section_animations: [Option<Tween>; 4],
     pub(super) sidebar_swipe: Option<SidebarSwipeSession>,
     pub(super) inspector_scroll: ScrollHandle,
     pub(super) analysis_generation: u64,
@@ -188,18 +173,8 @@ impl AgendaHost {
         let Some(animation) = self.sidebar_visibility_animation else {
             return (if self.sidebar_visible { 1.0 } else { 0.0 }, false);
         };
-        let progress = now
-            .saturating_duration_since(animation.started_at)
-            .as_secs_f32()
-            / SIDEBAR_ANIMATION_DURATION.as_secs_f32();
-        if progress >= 1.0 {
-            return (animation.to, false);
-        }
-        let eased = ease_out_cubic(progress.clamp(0.0, 1.0));
-        (
-            animation.from + (animation.to - animation.from) * eased,
-            true,
-        )
+        let sample = animation.sample(now);
+        (sample.value, sample.active)
     }
 
     pub(super) fn sidebar_section_reveal_at(
@@ -217,18 +192,8 @@ impl AgendaHost {
         else {
             return (if expanded { 1.0 } else { 0.0 }, false);
         };
-        let progress = now
-            .saturating_duration_since(animation.started_at)
-            .as_secs_f32()
-            / crate::fold_animation::FOLD_ANIMATION_DURATION.as_secs_f32();
-        if progress >= 1.0 {
-            return (animation.to, false);
-        }
-        let eased = crate::fold_animation::ease_out_cubic(progress);
-        (
-            animation.from + (animation.to - animation.from) * eased,
-            true,
-        )
+        let sample = animation.sample(now);
+        (sample.value, sample.active)
     }
 
     pub(super) fn toggle_sidebar_section(
@@ -245,26 +210,24 @@ impl AgendaHost {
             super::state::SidebarSection::Tags => self.state.tags_expanded,
             super::state::SidebarSection::Sources => self.state.sources_expanded,
         };
-        self.sidebar_section_animations[sidebar_section_index(section)] =
-            animate.then_some(SidebarSectionAnimation {
-                started_at: now,
-                from,
-                to: if to { 1.0 } else { 0.0 },
-            });
+        self.sidebar_section_animations[sidebar_section_index(section)] = animate.then_some(
+            Tween::new(now, from, if to { 1.0 } else { 0.0 }, FOLD_MOTION),
+        );
     }
 
-    fn set_sidebar_visible(&mut self, visible: bool, now: Instant) -> bool {
+    fn set_sidebar_visible(&mut self, visible: bool, now: Instant, animate: bool) -> bool {
         if self.sidebar_visible == visible {
             return false;
         }
         let from = self.sidebar_reveal_at(now).0;
         self.sidebar_visible = visible;
         self.sidebar_resize = None;
-        self.sidebar_visibility_animation = Some(SidebarVisibilityAnimation {
-            started_at: now,
+        self.sidebar_visibility_animation = animate.then_some(Tween::new(
+            now,
             from,
-            to: if visible { 1.0 } else { 0.0 },
-        });
+            if visible { 1.0 } else { 0.0 },
+            SIDEBAR_MOTION,
+        ));
         true
     }
 
@@ -274,6 +237,7 @@ impl AgendaHost {
         delta_y: f32,
         phase: gpui::TouchPhase,
         now: Instant,
+        animate: bool,
     ) -> SidebarSwipeOutcome {
         if matches!(phase, gpui::TouchPhase::Started) {
             self.sidebar_swipe = Some(SidebarSwipeSession::default());
@@ -294,7 +258,7 @@ impl AgendaHost {
 
         let mut outcome = SidebarSwipeOutcome {
             consumed: swipe.axis == SidebarSwipeAxis::Horizontal,
-            started_animation: false,
+            visibility_changed: false,
         };
         if outcome.consumed
             && !swipe.triggered
@@ -302,7 +266,7 @@ impl AgendaHost {
                 sidebar_visibility_after_swipe(self.sidebar_visible, swipe.delta_x)
         {
             swipe.triggered = true;
-            outcome.started_animation = self.set_sidebar_visible(visible, now);
+            outcome.visibility_changed = self.set_sidebar_visible(visible, now, animate);
         }
 
         if matches!(phase, gpui::TouchPhase::Ended) {
@@ -716,22 +680,22 @@ mod tests {
     fn horizontal_trackpad_swipes_hide_and_show_the_sidebar_once() {
         let now = Instant::now();
         let mut host = AgendaHost::new();
-        let started = host.handle_sidebar_swipe(-10., 1., gpui::TouchPhase::Started, now);
+        let started = host.handle_sidebar_swipe(-10., 1., gpui::TouchPhase::Started, now, true);
         assert!(started.consumed);
-        assert!(!started.started_animation);
+        assert!(!started.visibility_changed);
 
-        let hidden = host.handle_sidebar_swipe(-40., 1., gpui::TouchPhase::Moved, now);
+        let hidden = host.handle_sidebar_swipe(-40., 1., gpui::TouchPhase::Moved, now, true);
         assert!(hidden.consumed);
-        assert!(hidden.started_animation);
+        assert!(hidden.visibility_changed);
         assert!(!host.sidebar_visible);
 
-        let repeated = host.handle_sidebar_swipe(-60., 0., gpui::TouchPhase::Moved, now);
-        assert!(!repeated.started_animation);
-        host.handle_sidebar_swipe(0., 0., gpui::TouchPhase::Ended, now);
+        let repeated = host.handle_sidebar_swipe(-60., 0., gpui::TouchPhase::Moved, now, true);
+        assert!(!repeated.visibility_changed);
+        host.handle_sidebar_swipe(0., 0., gpui::TouchPhase::Ended, now, true);
 
-        host.handle_sidebar_swipe(10., 1., gpui::TouchPhase::Started, now);
-        let shown = host.handle_sidebar_swipe(40., 1., gpui::TouchPhase::Moved, now);
-        assert!(shown.started_animation);
+        host.handle_sidebar_swipe(10., 1., gpui::TouchPhase::Started, now, true);
+        let shown = host.handle_sidebar_swipe(40., 1., gpui::TouchPhase::Moved, now, true);
+        assert!(shown.visibility_changed);
         assert!(host.sidebar_visible);
     }
 
@@ -739,7 +703,7 @@ mod tests {
     fn vertical_trackpad_scroll_does_not_toggle_or_get_consumed() {
         let now = Instant::now();
         let mut host = AgendaHost::new();
-        let outcome = host.handle_sidebar_swipe(-10., -40., gpui::TouchPhase::Started, now);
+        let outcome = host.handle_sidebar_swipe(-10., -40., gpui::TouchPhase::Started, now, true);
         assert_eq!(outcome, SidebarSwipeOutcome::default());
         assert!(host.sidebar_visible);
     }
@@ -748,15 +712,15 @@ mod tests {
     fn sidebar_visibility_uses_a_smooth_bounded_animation() {
         let started_at = Instant::now();
         let mut host = AgendaHost::new();
-        assert!(host.set_sidebar_visible(false, started_at));
+        assert!(host.set_sidebar_visible(false, started_at, true));
         assert_eq!(host.sidebar_reveal_at(started_at), (1.0, true));
 
         let halfway = host
-            .sidebar_reveal_at(started_at + SIDEBAR_ANIMATION_DURATION / 2)
+            .sidebar_reveal_at(started_at + SIDEBAR_MOTION.duration() / 2)
             .0;
         assert!(halfway > 0.0 && halfway < 1.0);
         assert_eq!(
-            host.sidebar_reveal_at(started_at + SIDEBAR_ANIMATION_DURATION),
+            host.sidebar_reveal_at(started_at + SIDEBAR_MOTION.duration()),
             (0.0, false)
         );
     }
@@ -775,7 +739,7 @@ mod tests {
             (1.0, true)
         );
 
-        let halfway_at = started_at + crate::fold_animation::FOLD_ANIMATION_DURATION / 2;
+        let halfway_at = started_at + FOLD_MOTION.duration() / 2;
         let halfway = host.sidebar_section_reveal_at(section, halfway_at).0;
         assert!(halfway > 0.0 && halfway < 1.0);
 
@@ -784,10 +748,7 @@ mod tests {
         let reversed_from = host.sidebar_section_reveal_at(section, halfway_at).0;
         assert!((reversed_from - halfway).abs() < f32::EPSILON);
         assert_eq!(
-            host.sidebar_section_reveal_at(
-                section,
-                halfway_at + crate::fold_animation::FOLD_ANIMATION_DURATION,
-            ),
+            host.sidebar_section_reveal_at(section, halfway_at + FOLD_MOTION.duration()),
             (1.0, false)
         );
     }
@@ -802,6 +763,20 @@ mod tests {
 
         assert!(!host.state.tags_expanded);
         assert_eq!(host.sidebar_section_reveal_at(section, now), (0.0, false));
+    }
+
+    #[test]
+    fn sidebar_visibility_respects_reduced_motion() {
+        let now = Instant::now();
+        let mut host = AgendaHost::new();
+
+        host.handle_sidebar_swipe(-10., 1., gpui::TouchPhase::Started, now, false);
+        let hidden = host.handle_sidebar_swipe(-40., 1., gpui::TouchPhase::Moved, now, false);
+
+        assert!(hidden.visibility_changed);
+        assert!(!host.sidebar_visible);
+        assert!(host.sidebar_visibility_animation.is_none());
+        assert_eq!(host.sidebar_reveal_at(now), (0.0, false));
     }
 
     #[test]

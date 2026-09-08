@@ -289,7 +289,7 @@ struct EditorFoldAnimation {
 
 impl EditorFoldAnimation {
     fn scale(&self) -> f32 {
-        let eased = crate::fold_animation::ease_out_cubic(self.progress);
+        let eased = crate::motion::FOLD_MOTION.ease(self.progress);
         if self.collapsing { 1.0 - eased } else { eased }
     }
 

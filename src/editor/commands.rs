@@ -1,5 +1,5 @@
 use super::*;
-use crate::fold_animation::FOLD_ANIMATION_DURATION;
+use crate::motion::FOLD_MOTION;
 
 impl SemanticEditor {
     pub(super) fn replace_selection(
@@ -528,9 +528,7 @@ impl SemanticEditor {
                 this.schedule_fold_animation_frame(revision, window, cx);
                 return;
             };
-            animation.progress = (started_at.elapsed().as_secs_f32()
-                / FOLD_ANIMATION_DURATION.as_secs_f32())
-            .clamp(0.0, 1.0);
+            animation.progress = FOLD_MOTION.sample(started_at, Instant::now()).progress;
             let complete = animation.progress >= 1.0;
             this.stabilize_fold_animation_anchor();
             cx.notify();
@@ -1691,7 +1689,7 @@ mod horizontal_scroll_tests {
         let root = window.entity(cx).unwrap();
         root.update(cx, |editor, _| {
             editor.fold_animation.as_mut().unwrap().started_at =
-                Some(Instant::now() - FOLD_ANIMATION_DURATION / 2);
+                Some(Instant::now() - FOLD_MOTION.duration() / 2);
         });
         let simulate_frame = |cx: &mut gpui::TestAppContext| {
             cx.update(|cx| {
@@ -1705,7 +1703,7 @@ mod horizontal_scroll_tests {
         cx.run_until_parked();
         root.update(cx, |editor, _| {
             editor.fold_animation.as_mut().unwrap().started_at =
-                Some(Instant::now() - FOLD_ANIMATION_DURATION);
+                Some(Instant::now() - FOLD_MOTION.duration());
         });
         assert!(simulate_frame(cx) > 0);
         cx.run_until_parked();

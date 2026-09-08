@@ -15,6 +15,7 @@ impl super::AgendaHost {
         viewport_width: f32,
         window_title: String,
         window: &Window,
+        motion_enabled: bool,
     ) -> gpui::Div {
         let language = self.language;
         let full_sidebar_width = super::host::expanded_sidebar_width(
@@ -75,14 +76,24 @@ impl super::AgendaHost {
             .iter()
             .map(|view| view.name.clone())
             .collect::<Vec<_>>();
-        let smart_views_height = stacked_height(6, 39., 4.);
+        let smart_views_height = stacked_height(
+            6,
+            super::style::SIDEBAR_ITEM_HEIGHT,
+            super::style::SIDEBAR_ITEM_GAP,
+        );
         let saved_views_height = if saved_view_names.is_empty() {
-            36.
+            super::style::SIDEBAR_SAVED_VIEW_HEIGHT
         } else {
-            stacked_height(saved_view_names.len(), 36., 4.)
+            stacked_height(
+                saved_view_names.len(),
+                super::style::SIDEBAR_SAVED_VIEW_HEIGHT,
+                super::style::SIDEBAR_ITEM_GAP,
+            )
         };
-        let tags_height = stacked_height(tag_counts.len(), 35., 0.);
-        let sources_height = stacked_height(source_counts.len(), 32., 0.) + 16.;
+        let tags_height = stacked_height(tag_counts.len(), super::style::SIDEBAR_TAG_HEIGHT, 0.);
+        let sources_height =
+            stacked_height(source_counts.len(), super::style::SIDEBAR_SOURCE_HEIGHT, 0.)
+                + super::style::SIDEBAR_SOURCE_BOTTOM_PADDING;
         let sidebar_content = div()
             .w_full()
             .flex_none()
@@ -123,7 +134,7 @@ impl super::AgendaHost {
                                     .justify_center()
                                     .rounded(px(6.))
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(gpui::rgb(0xeeeeF1)))
+                                    .hover(|style| style.bg(gpui::rgb(0xeeeef1)))
                                     .child(
                                         gpui::svg()
                                             .data(super::icon::agenda_icon(
@@ -493,15 +504,16 @@ impl super::AgendaHost {
             .when(task_columns.tags, |h| {
                 h.child(TaskColumns::cell(TaskColumns::TAGS).child(language.text("agenda.tags")))
             });
-        let toolbar = super::component::agenda_toolbar(
-            workspace.clone(),
-            &self.state,
+        let toolbar = super::component::agenda_toolbar(super::component::AgendaToolbarProps {
+            workspace: workspace.clone(),
+            state: &self.state,
             language,
-            viewport_width,
-            sidebar_width + resize_handle_width,
+            window_width: viewport_width,
+            main_content_offset: sidebar_width + resize_handle_width,
             window_title,
-            self.search_input.clone(),
-        );
+            search: self.search_input.clone(),
+            motion_enabled,
+        });
         let gesture_workspace = workspace.clone();
         div()
             .size_full()
@@ -520,8 +532,9 @@ impl super::AgendaHost {
                         f32::from(delta.y),
                         event.touch_phase,
                         Instant::now(),
+                        motion_enabled,
                     );
-                    if outcome.started_animation {
+                    if outcome.visibility_changed {
                         cx.notify();
                     }
                     outcome

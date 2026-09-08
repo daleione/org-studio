@@ -285,6 +285,7 @@ fn render_fold_shell(
 }
 
 fn fold_shell_geometry(direction: FoldDirection, delta: f32, distance: f32) -> (f32, f32) {
+    let delta = crate::motion::FOLD_MOTION.ease(delta);
     match direction {
         FoldDirection::Collapse => (distance * (1.0 - delta), -distance * delta),
         FoldDirection::Expand => (distance * delta, -distance * (1.0 - delta)),
@@ -1256,14 +1257,15 @@ mod animation_tests {
     use super::{FoldDirection, fold_shell_geometry, reading_marker_width};
 
     #[test]
-    fn shell_height_and_body_offset_share_one_linear_progress() {
+    fn shell_height_and_body_offset_share_one_eased_progress() {
         assert_eq!(
             fold_shell_geometry(FoldDirection::Collapse, 0.0, 96.0),
             (96.0, 0.0)
         );
+        let halfway = crate::motion::FOLD_MOTION.ease(0.5);
         assert_eq!(
             fold_shell_geometry(FoldDirection::Collapse, 0.5, 96.0),
-            (48.0, -48.0)
+            (96.0 * (1.0 - halfway), -96.0 * halfway)
         );
         assert_eq!(
             fold_shell_geometry(FoldDirection::Expand, 0.0, 96.0),
@@ -1271,7 +1273,7 @@ mod animation_tests {
         );
         assert_eq!(
             fold_shell_geometry(FoldDirection::Expand, 0.5, 96.0),
-            (48.0, -48.0)
+            (96.0 * halfway, -96.0 * (1.0 - halfway))
         );
         assert_eq!(
             fold_shell_geometry(FoldDirection::Expand, 1.0, 96.0),

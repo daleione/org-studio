@@ -8,12 +8,11 @@ use gpui::{Context, EventEmitter, ListOffset, ListState, ScrollHandle, Window, p
 
 use super::{
     BlockId, CopyFeedbackState, DerivedEvent, DocumentFormat, FoldMeasurement, FoldTransition,
-    FoldTransitionInput, FoldTransitionPlan, GlobalVisibility, LOCAL_FOLD_ANIMATION_DURATION,
-    ListAlignment, LocalCycleProjection, LocalVisibility, PendingPreviewAction,
-    PreviewActionVisualState, PreviewSnapshot, accept_generation, changed_range,
-    cycle_markdown_subtree_visibility, cycle_org_subtree_visibility, global_markdown_visibility,
-    global_org_visibility, minimap, should_eagerly_measure_rows, visible_markdown_row_indices,
-    visible_row_indices,
+    FoldTransitionInput, FoldTransitionPlan, GlobalVisibility, ListAlignment, LocalCycleProjection,
+    LocalVisibility, PendingPreviewAction, PreviewActionVisualState, PreviewSnapshot,
+    accept_generation, changed_range, cycle_markdown_subtree_visibility,
+    cycle_org_subtree_visibility, global_markdown_visibility, global_org_visibility, minimap,
+    should_eagerly_measure_rows, visible_markdown_row_indices, visible_row_indices,
 };
 
 /// Owns all state whose lifetime and invalidation are local to one rendered document.
@@ -973,9 +972,9 @@ impl ReadingPreviewPanel {
                 this.schedule_fold_animation_frame(revision, window, cx);
                 return;
             };
-            let progress = (started_at.elapsed().as_secs_f32()
-                / LOCAL_FOLD_ANIMATION_DURATION.as_secs_f32())
-            .clamp(0.0, 1.0);
+            let progress = crate::motion::FOLD_MOTION
+                .sample(started_at, Instant::now())
+                .progress;
             animation.progress = progress;
             for shell in animation.segments.iter() {
                 this.list_state

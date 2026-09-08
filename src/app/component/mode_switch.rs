@@ -11,6 +11,7 @@ pub(crate) struct ModeSwitch {
     id: SharedString,
     selected_index: usize,
     item_width: Pixels,
+    motion_enabled: bool,
 }
 
 impl ModeSwitch {
@@ -23,7 +24,13 @@ impl ModeSwitch {
             id: id.into(),
             selected_index,
             item_width,
+            motion_enabled: true,
         }
+    }
+
+    pub(crate) fn motion_enabled(mut self, enabled: bool) -> Self {
+        self.motion_enabled = enabled;
+        self
     }
 
     pub(crate) fn item<E>(
@@ -78,24 +85,28 @@ impl ModeSwitch {
             let animation_id = self.id.clone();
             let indicator_selector = format!("{}-indicator", self.id);
             let indicator_left = indicator_left(self.selected_index, self.item_width);
-            control = control.child(
-                div()
-                    .debug_selector(move || indicator_selector.clone())
-                    .absolute()
-                    .top(px(2.))
-                    .w(self.item_width)
-                    .h(px(26.))
-                    .rounded(px(6.))
-                    .bg(rgb(0xffffff))
-                    .shadow_sm()
-                    .with_spring(
+            let indicator = div()
+                .debug_selector(move || indicator_selector.clone())
+                .absolute()
+                .top(px(2.))
+                .w(self.item_width)
+                .h(px(26.))
+                .rounded(px(6.))
+                .bg(rgb(0xffffff))
+                .shadow_sm();
+            control = if self.motion_enabled {
+                control.child(
+                    indicator.with_spring(
                         animation_id,
                         SpringAnimation::new(MODE_SWITCH_SPRING)
                             .to(indicator_left)
                             .with_epsilon(0.1),
                         |indicator, left| indicator.left(left),
                     ),
-            );
+                )
+            } else {
+                control.child(indicator.left(indicator_left))
+            };
         }
 
         control.children(items)
@@ -128,6 +139,12 @@ mod tests {
         assert_eq!(indicator_left(0, item_width), px(2.));
         assert_eq!(indicator_left(1, item_width), px(46.));
         assert_eq!(indicator_left(2, item_width), px(90.));
+    }
+
+    #[test]
+    fn motion_can_be_disabled_for_accessibility() {
+        let control = ModeSwitch::new("test", 0, px(44.)).motion_enabled(false);
+        assert!(!control.motion_enabled);
     }
 
     #[test]

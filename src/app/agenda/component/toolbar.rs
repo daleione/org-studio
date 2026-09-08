@@ -10,6 +10,17 @@ use gpui::{
     Div, Entity, MouseButton, Stateful, StatefulInteractiveElement, div, prelude::*, px, rgb,
 };
 
+pub(crate) struct AgendaToolbarProps<'a> {
+    pub(crate) workspace: Entity<WorkspaceWindow>,
+    pub(crate) state: &'a AgendaViewState,
+    pub(crate) language: Language,
+    pub(crate) window_width: f32,
+    pub(crate) main_content_offset: f32,
+    pub(crate) window_title: String,
+    pub(crate) search: Option<Entity<super::super::search::AgendaSearch>>,
+    pub(crate) motion_enabled: bool,
+}
+
 fn button(
     workspace: Entity<WorkspaceWindow>,
     label: impl Into<String>,
@@ -85,15 +96,16 @@ mod tests {
         struct Harness(Entity<WorkspaceWindow>);
         impl Render for Harness {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div().w(px(250.)).child(agenda_toolbar(
-                    self.0.clone(),
-                    &AgendaViewState::default(),
-                    Language::Chinese,
-                    250.,
-                    0.,
-                    "tasks.org".to_owned(),
-                    None,
-                ))
+                div().w(px(250.)).child(agenda_toolbar(AgendaToolbarProps {
+                    workspace: self.0.clone(),
+                    state: &AgendaViewState::default(),
+                    language: Language::Chinese,
+                    window_width: 250.,
+                    main_content_offset: 0.,
+                    window_title: "tasks.org".to_owned(),
+                    search: None,
+                    motion_enabled: true,
+                }))
             }
         }
         let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
@@ -157,15 +169,16 @@ mod tests {
         struct Harness(Entity<WorkspaceWindow>);
         impl Render for Harness {
             fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div().w(px(1000.)).child(agenda_toolbar(
-                    self.0.clone(),
-                    &AgendaViewState::default(),
-                    Language::Chinese,
-                    1000.,
-                    0.,
-                    "tasks.org".to_owned(),
-                    None,
-                ))
+                div().w(px(1000.)).child(agenda_toolbar(AgendaToolbarProps {
+                    workspace: self.0.clone(),
+                    state: &AgendaViewState::default(),
+                    language: Language::Chinese,
+                    window_width: 1000.,
+                    main_content_offset: 0.,
+                    window_title: "tasks.org".to_owned(),
+                    search: None,
+                    motion_enabled: true,
+                }))
             }
         }
         let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
@@ -180,15 +193,17 @@ mod tests {
     }
 }
 
-pub(crate) fn agenda_toolbar(
-    workspace: Entity<WorkspaceWindow>,
-    state: &AgendaViewState,
-    language: Language,
-    window_width: f32,
-    main_content_offset: f32,
-    window_title: String,
-    search: Option<Entity<super::super::search::AgendaSearch>>,
-) -> Div {
+pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
+    let AgendaToolbarProps {
+        workspace,
+        state,
+        language,
+        window_width,
+        main_content_offset,
+        window_title,
+        search,
+        motion_enabled,
+    } = props;
     let narrow = window_width < 900.;
     let today = jiff::Zoned::now().date();
     let date_browsing = state.browses_dates();
@@ -258,6 +273,7 @@ pub(crate) fn agenda_toolbar(
                     workspace.clone(),
                     state.projection,
                     date_browsing,
+                    motion_enabled,
                 ))
             },
         );
@@ -361,6 +377,7 @@ pub(crate) fn agenda_toolbar(
                     workspace.clone(),
                     language,
                     state.calendar_range,
+                    motion_enabled,
                 )),
         );
     }
@@ -454,6 +471,7 @@ fn calendar_range_switch(
     workspace: Entity<WorkspaceWindow>,
     language: Language,
     selected_range: CalendarRange,
+    motion_enabled: bool,
 ) -> Div {
     let item_width = match language {
         Language::Chinese => px(44.),
@@ -464,7 +482,8 @@ fn calendar_range_switch(
         CalendarRange::Week => 1,
         CalendarRange::Month => 2,
     };
-    let control = ModeSwitch::new("agenda-calendar-range-slider", selected_index, item_width);
+    let control = ModeSwitch::new("agenda-calendar-range-slider", selected_index, item_width)
+        .motion_enabled(motion_enabled);
     control
         .render(
             [
@@ -496,6 +515,7 @@ fn projection_switch(
     workspace: Entity<WorkspaceWindow>,
     projection: AgendaProjection,
     calendar: bool,
+    motion_enabled: bool,
 ) -> Div {
     let item_width = px(36.);
     let options = [
@@ -519,7 +539,8 @@ fn projection_switch(
         .iter()
         .position(|(value, _)| *value == projection)
         .unwrap_or_default();
-    let control = ModeSwitch::new("agenda-projection-slider", selected_index, item_width);
+    let control = ModeSwitch::new("agenda-projection-slider", selected_index, item_width)
+        .motion_enabled(motion_enabled);
     control.render(
         options
             .into_iter()

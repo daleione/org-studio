@@ -141,7 +141,8 @@ pub(crate) const KEY_FEEDBACK_DURATION: Duration = Duration::from_secs(2);
 // genuinely small documents, but never let a file switch turn one UI frame into a full-document
 // layout. Larger documents converge as their visible rows are measured by GPUI's virtual list.
 const MAX_EAGER_LAYOUT_ROWS: usize = 128;
-pub(crate) use crate::fold_animation::FOLD_ANIMATION_DURATION as LOCAL_FOLD_ANIMATION_DURATION;
+#[cfg(test)]
+pub(crate) const LOCAL_FOLD_ANIMATION_DURATION: Duration = crate::motion::FOLD_MOTION.duration();
 
 actions!(
     org_preview,

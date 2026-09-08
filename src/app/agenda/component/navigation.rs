@@ -118,7 +118,7 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
     div()
         .id(format!("agenda-static-sidebar-item-{label}"))
         .relative()
-        .h(px(39.))
+        .h(px(super::super::style::SIDEBAR_ITEM_HEIGHT))
         .px_3()
         .when(compact, |item| item.px_0().justify_center())
         .flex()
@@ -204,7 +204,11 @@ pub(crate) fn sidebar_filter_item(
     };
     div()
         .id(format!("agenda-sidebar-filter-{element_id}"))
-        .min_h(px(if is_source { 32. } else { 35. }))
+        .min_h(px(if is_source {
+            super::super::style::SIDEBAR_SOURCE_HEIGHT
+        } else {
+            super::super::style::SIDEBAR_TAG_HEIGHT
+        }))
         .px_3()
         .flex()
         .items_center()
@@ -315,7 +319,7 @@ pub(crate) fn saved_view_item(
 ) -> Stateful<Div> {
     div()
         .id(("agenda-saved-view", index))
-        .h(px(36.))
+        .h(px(super::super::style::SIDEBAR_SAVED_VIEW_HEIGHT))
         .px_3()
         .flex()
         .items_center()
@@ -371,7 +375,7 @@ pub(crate) fn sidebar_item(
     div()
         .id(format!("agenda-sidebar-item-{label}"))
         .relative()
-        .h(px(39.0))
+        .h(px(super::super::style::SIDEBAR_ITEM_HEIGHT))
         .px_3()
         .when(compact, |item| item.px_0().justify_center())
         .flex()
