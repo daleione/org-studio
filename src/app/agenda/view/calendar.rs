@@ -154,9 +154,11 @@ fn month_view(
     result: &Arc<AgendaResultSnapshot>,
     days: &[Date],
 ) -> gpui::AnyElement {
+    let week_count = days.len().div_ceil(7).max(1) as f32;
     let mut grid = div()
         .flex_1()
         .min_h_0()
+        .min_w_0()
         .flex()
         .flex_wrap()
         .content_start()
@@ -177,8 +179,10 @@ fn month_view(
             .collect();
         let mut cell = div()
             .w(gpui::relative(1. / 7.))
+            .h(gpui::relative(1. / week_count))
             .flex_none()
-            .min_h(px(126.))
+            .min_w_0()
+            .min_h(px(90.))
             .p_2()
             .border_r_1()
             .border_b_1()
@@ -213,6 +217,7 @@ fn time_view(
 ) -> gpui::AnyElement {
     let mut header = div()
         .flex_none()
+        .min_w_0()
         .h(px(72.))
         .flex()
         .border_b_1()
@@ -222,7 +227,7 @@ fn time_view(
         header = header.child(
             div()
                 .flex_1()
-                .min_w(px(100.))
+                .min_w_0()
                 .border_r_1()
                 .border_color(rgb(0xececef))
                 .flex()
@@ -253,6 +258,7 @@ fn time_view(
     let all_day_row = all_day.then(|| {
         let mut row = div()
             .flex_none()
+            .min_w_0()
             .min_h(px(72.))
             .flex()
             .border_b_1()
@@ -274,7 +280,7 @@ fn time_view(
             let drop_date = *date;
             let mut cell = div()
                 .flex_1()
-                .min_w(px(100.))
+                .min_w_0()
                 .p_1()
                 .flex()
                 .flex_col()
@@ -318,27 +324,34 @@ fn time_view(
     });
 
     let mut lanes = HashMap::new();
-    let mut body = div().relative().h(px(702.)).flex_none().flex().child(
-        div()
-            .w(px(58.))
-            .flex_none()
-            .flex()
-            .flex_col()
-            .children((8..21).map(|hour| {
-                div()
-                    .h(px(54.))
-                    .pr_2()
-                    .text_right()
-                    .text_size(px(9.))
-                    .text_color(rgb(0x9a9da3))
-                    .child(format!("{hour:02}:00"))
-            })),
-    );
+    let mut body = div()
+        .relative()
+        .w_full()
+        .min_w_0()
+        .h(px(702.))
+        .flex_none()
+        .flex()
+        .child(
+            div()
+                .w(px(58.))
+                .flex_none()
+                .flex()
+                .flex_col()
+                .children((8..21).map(|hour| {
+                    div()
+                        .h(px(54.))
+                        .pr_2()
+                        .text_right()
+                        .text_size(px(9.))
+                        .text_color(rgb(0x9a9da3))
+                        .child(format!("{hour:02}:00"))
+                })),
+        );
     for (day_index, date) in days.iter().enumerate() {
         let mut track = div()
             .relative()
             .flex_1()
-            .min_w(px(100.))
+            .min_w_0()
             .h(px(702.))
             .border_l_1()
             .border_color(rgb(0xececef));
@@ -430,6 +443,7 @@ fn time_view(
     div()
         .flex_1()
         .min_h_0()
+        .min_w_0()
         .flex()
         .flex_col()
         .child(header)
@@ -465,6 +479,8 @@ pub(crate) fn agenda_calendar(
     let toggle = workspace.clone();
     div()
         .size_full()
+        .min_w_0()
+        .min_h_0()
         .flex()
         .flex_col()
         .bg(rgb(0xffffff))

@@ -54,7 +54,7 @@ impl super::AgendaHost {
         let sidebar_content = div()
             .w_full()
             .flex_none()
-            .pt(px(crate::app::TITLEBAR_HEIGHT + 16.0))
+            .pt(px(16.0))
             .flex()
             .flex_col()
             .child(
@@ -310,19 +310,26 @@ impl super::AgendaHost {
                     }),
                 ))
             });
+        let sidebar_scroll_area = div()
+            .id("agenda-sidebar-scroll")
+            .flex_1()
+            .min_h_0()
+            .overflow_y_scroll()
+            .restrict_scroll_to_axis()
+            .track_scroll(&self.sidebar_scroll)
+            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .child(sidebar_content);
         let sidebar_panel = div()
             .relative()
             .left(px(-(1.0 - sidebar_reveal) * full_sidebar_width))
             .w(px(full_sidebar_width))
             .h_full()
             .min_h_0()
-            .id("agenda-sidebar-scroll")
-            .overflow_y_scroll()
-            .restrict_scroll_to_axis()
-            .track_scroll(&self.sidebar_scroll)
-            .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+            .flex()
+            .flex_col()
             .bg(rgb(super::style::SIDEBAR))
-            .child(sidebar_content);
+            .child(div().h(px(crate::app::TITLEBAR_HEIGHT)).flex_none())
+            .child(sidebar_scroll_area);
         let sidebar = div()
             .flex_none()
             .w(px(sidebar_width))
