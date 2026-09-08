@@ -2,7 +2,10 @@ use super::super::{
     UiIntent,
     state::{AgendaProjection, AgendaViewState, AgendaWorkspace, CalendarRange},
 };
-use crate::{app::WorkspaceWindow, i18n::Language};
+use crate::{
+    app::{WorkspaceWindow, component::ModeSwitch},
+    i18n::Language,
+};
 use gpui::{
     Div, Entity, MouseButton, Stateful, StatefulInteractiveElement, div, prelude::*, px, rgb,
 };
@@ -109,16 +112,27 @@ mod tests {
             assert_eq!(bounds.size.height, px(38.));
             assert!(bounds.right() <= px(250.));
         }
-        for name in [
-            "agenda-toolbar-今天",
-            "agenda-toolbar-日",
-            "agenda-toolbar-周",
-            "agenda-toolbar-月",
-        ] {
-            let bounds = cx.debug_bounds(name).unwrap();
-            assert_eq!(bounds.size.height, px(34.));
-            assert!(bounds.right() <= px(250.), "{name}");
+        let today = cx.debug_bounds("agenda-toolbar-今天").unwrap();
+        assert_eq!(today.size.height, px(34.));
+        assert!(today.right() <= px(250.));
+
+        let range_switch = cx.debug_bounds("agenda-calendar-range-switch").unwrap();
+        assert_eq!(range_switch.size.height, px(30.));
+        assert!(range_switch.right() <= px(250.));
+        let day = cx.debug_bounds("agenda-toolbar-日").unwrap();
+        let week = cx.debug_bounds("agenda-toolbar-周").unwrap();
+        let month = cx.debug_bounds("agenda-toolbar-月").unwrap();
+        for bounds in [day, week, month] {
+            assert_eq!(bounds.size.height, px(26.));
+            assert!(bounds.right() <= px(250.));
         }
+        assert_eq!(day.right(), week.left());
+        assert_eq!(week.right(), month.left());
+        let range_indicator = cx
+            .debug_bounds("agenda-calendar-range-slider-indicator")
+            .unwrap();
+        assert_eq!(range_indicator.size, week.size);
+        assert_eq!(range_indicator.left(), week.left());
         for selector in [
             "agenda-projection-List",
             "agenda-projection-Calendar",
@@ -129,6 +143,12 @@ mod tests {
             assert_eq!(bounds.size.height, px(26.));
             assert!(bounds.right() <= px(250.));
         }
+        let projection_indicator = cx
+            .debug_bounds("agenda-projection-slider-indicator")
+            .unwrap();
+        let list = cx.debug_bounds("agenda-projection-List").unwrap();
+        assert_eq!(projection_indicator.size, list.size);
+        assert_eq!(projection_indicator.left(), list.left());
     }
 
     #[gpui::test]
@@ -337,25 +357,11 @@ pub(crate) fn agenda_toolbar(
                     false,
                     !contains_today,
                 ))
-                .child(
-                    div().flex_none().flex().gap(px(4.)).children(
-                        [
-                            (CalendarRange::Day, "agenda.day"),
-                            (CalendarRange::Week, "agenda.week"),
-                            (CalendarRange::Month, "agenda.month"),
-                        ]
-                        .into_iter()
-                        .map(|(range, key)| {
-                            button(
-                                workspace.clone(),
-                                language.text(key),
-                                UiIntent::SetCalendarRange(range),
-                                state.calendar_range == range,
-                                true,
-                            )
-                        }),
-                    ),
-                ),
+                .child(calendar_range_switch(
+                    workspace.clone(),
+                    language,
+                    state.calendar_range,
+                )),
         );
     }
     if state.date_picker && date_browsing {
@@ -444,12 +450,55 @@ pub(crate) fn agenda_toolbar(
     toolbar
 }
 
+fn calendar_range_switch(
+    workspace: Entity<WorkspaceWindow>,
+    language: Language,
+    selected_range: CalendarRange,
+) -> Div {
+    let item_width = match language {
+        Language::Chinese => px(44.),
+        Language::English => px(56.),
+    };
+    let selected_index = match selected_range {
+        CalendarRange::Day => 0,
+        CalendarRange::Week => 1,
+        CalendarRange::Month => 2,
+    };
+    let control = ModeSwitch::new("agenda-calendar-range-slider", selected_index, item_width);
+    control
+        .render(
+            [
+                (CalendarRange::Day, "agenda.day"),
+                (CalendarRange::Week, "agenda.week"),
+                (CalendarRange::Month, "agenda.month"),
+            ]
+            .into_iter()
+            .enumerate()
+            .map(|(index, (range, key))| {
+                let label = language.text(key);
+                let workspace = workspace.clone();
+                control
+                    .item(index, format!("agenda-calendar-range-{range:?}"), |_| label)
+                    .debug_selector(move || format!("agenda-toolbar-{label}"))
+                    .text_size(px(12.))
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        cx.stop_propagation();
+                        workspace.update(cx, |this, cx| {
+                            this.dispatch_agenda_intent(UiIntent::SetCalendarRange(range), cx)
+                        });
+                    })
+            }),
+        )
+        .debug_selector(|| "agenda-calendar-range-switch".to_owned())
+}
+
 fn projection_switch(
     workspace: Entity<WorkspaceWindow>,
     projection: AgendaProjection,
     calendar: bool,
 ) -> Div {
-    [
+    let item_width = px(36.);
+    let options = [
         (
             AgendaProjection::List,
             "assets/icons/agenda/list-bullets.svg",
@@ -465,53 +514,36 @@ fn projection_switch(
     ]
     .into_iter()
     .filter(|(value, _)| calendar || *value != AgendaProjection::Calendar)
-    .fold(
-        div()
-            .flex_none()
-            .h(px(30.))
-            .p(px(2.))
-            .flex()
-            .items_center()
-            .rounded(px(8.))
-            .border_1()
-            .border_color(rgb(0xdfe0e3))
-            .bg(rgb(0xf4f4f5)),
-        |control, (value, path)| {
-            let selected = value == projection;
-            let workspace = workspace.clone();
-            control.child(
-                div()
-                    .id(format!("agenda-projection-{value:?}"))
-                    .debug_selector(move || format!("agenda-projection-{value:?}"))
-                    .flex_none()
-                    .w(px(36.))
-                    .h(px(26.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .rounded(px(6.))
-                    .cursor_pointer()
-                    .when(selected, |button| button.bg(rgb(0xffffff)).shadow_sm())
-                    .when(!selected, |button| {
-                        button.hover(|style| style.bg(rgb(0xeaeaec)))
-                    })
-                    .when(selected, |button| {
-                        button.hover(|style| style.bg(rgb(0xd8eaff)))
-                    })
-                    .active(|style| style.opacity(0.72))
-                    .child(
-                        gpui::svg()
-                            .data(super::super::icon::agenda_icon(path))
-                            .size(px(16.))
-                            .text_color(rgb(if selected { 0x1688ff } else { 0x34373d })),
+    .collect::<Vec<_>>();
+    let selected_index = options
+        .iter()
+        .position(|(value, _)| *value == projection)
+        .unwrap_or_default();
+    let control = ModeSwitch::new("agenda-projection-slider", selected_index, item_width);
+    control.render(
+        options
+            .into_iter()
+            .enumerate()
+            .map(|(index, (value, path))| {
+                let workspace = workspace.clone();
+                control
+                    .item(
+                        index,
+                        format!("agenda-projection-{value:?}"),
+                        |foreground| {
+                            gpui::svg()
+                                .data(super::super::icon::agenda_icon(path))
+                                .size(px(16.))
+                                .text_color(foreground)
+                        },
                     )
+                    .debug_selector(move || format!("agenda-projection-{value:?}"))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                         workspace.update(cx, |this, cx| {
                             this.dispatch_agenda_intent(UiIntent::SetProjection(value), cx)
                         });
-                    }),
-            )
-        },
+                    })
+            }),
     )
 }

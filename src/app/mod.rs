@@ -25,6 +25,7 @@ use workspace::ScrollBenchmark;
 
 mod agenda;
 mod command_window;
+mod component;
 mod derived;
 mod echo_area;
 pub(crate) mod export_ui;
