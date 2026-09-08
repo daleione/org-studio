@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use crate::{agenda::AgendaEditError, app::WorkspaceWindow};
 
@@ -51,7 +51,8 @@ impl WorkspaceWindow {
         match intent {
             UiIntent::ToggleDayGroup(date) => self.agenda.toggle_day_group(date),
             UiIntent::ToggleSidebarSection(section) => {
-                self.agenda.state.toggle_sidebar_section(section);
+                self.agenda
+                    .toggle_sidebar_section(section, Instant::now(), !cx.reduce_motion());
             }
             UiIntent::ShowSourceContextMenu(file, position) => {
                 self.agenda.state.source_context_menu =

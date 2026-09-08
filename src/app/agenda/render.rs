@@ -4,6 +4,10 @@ use gpui::{
 };
 use std::{collections::BTreeMap, time::Instant};
 
+fn stacked_height(item_count: usize, item_height: f32, gap: f32) -> f32 {
+    item_count as f32 * item_height + item_count.saturating_sub(1) as f32 * gap
+}
+
 impl super::AgendaHost {
     pub(crate) fn render(
         &self,
@@ -19,8 +23,22 @@ impl super::AgendaHost {
                 .map(|resize| resize.current_width)
                 .unwrap_or(self.sidebar_width),
         );
-        let (sidebar_reveal, sidebar_animating) = self.sidebar_reveal_at(Instant::now());
-        if sidebar_animating {
+        let now = Instant::now();
+        let (sidebar_reveal, sidebar_animating) = self.sidebar_reveal_at(now);
+        let (smart_views_reveal, smart_views_animating) =
+            self.sidebar_section_reveal_at(super::state::SidebarSection::SmartViews, now);
+        let (saved_views_reveal, saved_views_animating) =
+            self.sidebar_section_reveal_at(super::state::SidebarSection::SavedViews, now);
+        let (tags_reveal, tags_animating) =
+            self.sidebar_section_reveal_at(super::state::SidebarSection::Tags, now);
+        let (sources_reveal, sources_animating) =
+            self.sidebar_section_reveal_at(super::state::SidebarSection::Sources, now);
+        if sidebar_animating
+            || smart_views_animating
+            || saved_views_animating
+            || tags_animating
+            || sources_animating
+        {
             // GPUI resolves the current view only while rendering. Scheduling this from the
             // scroll-wheel callback panics because that callback runs outside view rendering.
             window.request_animation_frame();
@@ -51,6 +69,20 @@ impl super::AgendaHost {
                 *source_counts.entry((row.source.file, name)).or_default() += 1;
             }
         }
+        let saved_view_names = self
+            .config
+            .saved_views
+            .iter()
+            .map(|view| view.name.clone())
+            .collect::<Vec<_>>();
+        let smart_views_height = stacked_height(6, 39., 4.);
+        let saved_views_height = if saved_view_names.is_empty() {
+            36.
+        } else {
+            stacked_height(saved_view_names.len(), 36., 4.)
+        };
+        let tags_height = stacked_height(tag_counts.len(), 35., 0.);
+        let sources_height = stacked_height(source_counts.len(), 32., 0.) + 16.;
         let sidebar_content = div()
             .w_full()
             .flex_none()
@@ -155,123 +187,131 @@ impl super::AgendaHost {
                     workspace.clone(),
                     language.text("agenda.smart_views"),
                     super::state::SidebarSection::SmartViews,
-                    self.state.smart_views_expanded,
+                    smart_views_reveal,
                 )
                 .mt_3(),
             )
-            .when(self.state.smart_views_expanded, |side| {
-                side.child(
-                    [
-                        (
-                            crate::agenda::BuiltinQuery::Today,
-                            language.text("agenda.today"),
-                            "assets/icons/agenda/phosphor-calendar.svg",
-                            facets.today,
-                        ),
-                        (
-                            crate::agenda::BuiltinQuery::NextSevenDays,
-                            language.text("agenda.next_seven"),
-                            "assets/icons/agenda/calendar.svg",
-                            facets.next_seven_days,
-                        ),
-                        (
-                            crate::agenda::BuiltinQuery::Overdue,
-                            language.text("agenda.overdue"),
-                            "assets/icons/agenda/clock.svg",
-                            facets.overdue,
-                        ),
-                        (
-                            crate::agenda::BuiltinQuery::Next,
-                            language.text("agenda.next"),
-                            "assets/icons/agenda/arrow-circle-right.svg",
-                            facets.next,
-                        ),
-                        (
-                            crate::agenda::BuiltinQuery::Waiting,
-                            language.text("agenda.waiting"),
-                            "assets/icons/agenda/hourglass.svg",
-                            facets.waiting,
-                        ),
-                        (
-                            crate::agenda::BuiltinQuery::Unscheduled,
-                            language.text("agenda.unscheduled"),
-                            "assets/icons/agenda/calendar-slash.svg",
-                            facets.unscheduled,
-                        ),
-                    ]
-                    .into_iter()
-                    .fold(
-                        div().flex_none().px_3().flex().flex_col().gap_1(),
-                        |list, (query, label, icon, count)| {
-                            list.child(super::component::sidebar_item(
-                                workspace.clone(),
-                                query,
-                                label,
-                                icon,
-                                count,
-                                self.state.navigation.as_ref() == label,
-                                false,
-                            ))
-                        },
+            .child(super::component::sidebar_section_body(
+                "smart-views",
+                smart_views_reveal,
+                smart_views_height,
+                [
+                    (
+                        crate::agenda::BuiltinQuery::Today,
+                        language.text("agenda.today"),
+                        "assets/icons/agenda/phosphor-calendar.svg",
+                        facets.today,
                     ),
-                )
-            })
+                    (
+                        crate::agenda::BuiltinQuery::NextSevenDays,
+                        language.text("agenda.next_seven"),
+                        "assets/icons/agenda/calendar.svg",
+                        facets.next_seven_days,
+                    ),
+                    (
+                        crate::agenda::BuiltinQuery::Overdue,
+                        language.text("agenda.overdue"),
+                        "assets/icons/agenda/clock.svg",
+                        facets.overdue,
+                    ),
+                    (
+                        crate::agenda::BuiltinQuery::Next,
+                        language.text("agenda.next"),
+                        "assets/icons/agenda/arrow-circle-right.svg",
+                        facets.next,
+                    ),
+                    (
+                        crate::agenda::BuiltinQuery::Waiting,
+                        language.text("agenda.waiting"),
+                        "assets/icons/agenda/hourglass.svg",
+                        facets.waiting,
+                    ),
+                    (
+                        crate::agenda::BuiltinQuery::Unscheduled,
+                        language.text("agenda.unscheduled"),
+                        "assets/icons/agenda/calendar-slash.svg",
+                        facets.unscheduled,
+                    ),
+                ]
+                .into_iter()
+                .fold(
+                    div().flex_none().px_3().flex().flex_col().gap_1(),
+                    |list, (query, label, icon, count)| {
+                        list.child(super::component::sidebar_item(
+                            workspace.clone(),
+                            query,
+                            label,
+                            icon,
+                            count,
+                            self.state.navigation.as_ref() == label,
+                            false,
+                        ))
+                    },
+                ),
+            ))
             .child(
                 super::component::sidebar_section_header(
                     workspace.clone(),
                     language.text("agenda.saved_views"),
                     super::state::SidebarSection::SavedViews,
-                    self.state.saved_views_expanded,
+                    saved_views_reveal,
                 )
                 .mt_4(),
             )
-            .when(self.state.saved_views_expanded, |side| {
-                let names = self
-                    .config
-                    .saved_views
-                    .iter()
-                    .map(|view| view.name.clone())
-                    .collect::<Vec<_>>();
-                side.child(
-                    div()
-                        .flex_none()
-                        .px_3()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .when(names.is_empty(), |list| {
-                            list.child(
-                                div()
-                                    .px_3()
-                                    .py_2()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(0x9a9da3))
-                                    .child(language.text("agenda.no_saved_views")),
-                            )
-                        })
-                        .children(names.into_iter().enumerate().map(|(index, name)| {
-                            let selected = self.state.navigation.as_ref() == name;
-                            super::component::saved_view_item(
-                                workspace.clone(),
-                                name,
-                                index,
-                                selected,
-                            )
-                        })),
-                )
-            })
+            .child(super::component::sidebar_section_body(
+                "saved-views",
+                saved_views_reveal,
+                saved_views_height,
+                div()
+                    .flex_none()
+                    .px_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .when(saved_view_names.is_empty(), |list| {
+                        list.child(
+                            div()
+                                .px_3()
+                                .py_2()
+                                .text_size(px(12.))
+                                .text_color(rgb(0x9a9da3))
+                                .child(language.text("agenda.no_saved_views")),
+                        )
+                    })
+                    .children(
+                        saved_view_names
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, name)| {
+                                let selected = self.state.navigation.as_ref() == name;
+                                super::component::saved_view_item(
+                                    workspace.clone(),
+                                    name,
+                                    index,
+                                    selected,
+                                )
+                            }),
+                    ),
+            ))
             .child(
                 super::component::sidebar_section_header(
                     workspace.clone(),
                     language.text("agenda.tags"),
                     super::state::SidebarSection::Tags,
-                    self.state.tags_expanded,
+                    tags_reveal,
                 )
                 .mt_4(),
             )
-            .when(self.state.tags_expanded, |side| {
-                side.child(div().flex_none().px_3().flex().flex_col().children(
-                    tag_counts.iter().map(|(tag, count)| {
+            .child(super::component::sidebar_section_body(
+                "tags",
+                tags_reveal,
+                tags_height,
+                div()
+                    .flex_none()
+                    .px_3()
+                    .flex()
+                    .flex_col()
+                    .children(tag_counts.iter().map(|(tag, count)| {
                         let selected = self.state.tag_filter.as_deref() == Some(tag.as_str());
                         super::component::sidebar_filter_item(
                             workspace.clone(),
@@ -282,20 +322,22 @@ impl super::AgendaHost {
                             selected,
                             false,
                         )
-                    }),
-                ))
-            })
+                    })),
+            ))
             .child(
                 super::component::sidebar_section_header(
                     workspace.clone(),
                     language.text("agenda.source_files"),
                     super::state::SidebarSection::Sources,
-                    self.state.sources_expanded,
+                    sources_reveal,
                 )
                 .mt_4(),
             )
-            .when(self.state.sources_expanded, |side| {
-                side.child(div().flex_none().px_3().pb_4().flex().flex_col().children(
+            .child(super::component::sidebar_section_body(
+                "sources",
+                sources_reveal,
+                sources_height,
+                div().flex_none().px_3().pb_4().flex().flex_col().children(
                     source_counts.iter().map(|((file, name), count)| {
                         let selected = self.state.source_filter == Some(*file);
                         super::component::sidebar_filter_item(
@@ -308,8 +350,8 @@ impl super::AgendaHost {
                             true,
                         )
                     }),
-                ))
-            });
+                ),
+            ));
         let sidebar_scroll_area = div()
             .id("agenda-sidebar-scroll")
             .flex_1()
@@ -751,5 +793,17 @@ impl super::AgendaHost {
                         }),
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::stacked_height;
+
+    #[test]
+    fn stacked_height_accounts_for_rows_and_inter_row_gaps() {
+        assert_eq!(stacked_height(0, 39., 4.), 0.);
+        assert_eq!(stacked_height(1, 39., 4.), 39.);
+        assert_eq!(stacked_height(6, 39., 4.), 254.);
     }
 }

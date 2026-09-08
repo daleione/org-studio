@@ -35,8 +35,9 @@ pub(crate) fn sidebar_section_header(
     workspace: Entity<WorkspaceWindow>,
     label: &'static str,
     section: super::super::state::SidebarSection,
-    expanded: bool,
+    reveal: f32,
 ) -> Stateful<Div> {
+    let reveal = reveal.clamp(0.0, 1.0);
     div()
         .id(format!("agenda-sidebar-section-{label}"))
         .h(px(29.))
@@ -49,7 +50,6 @@ pub(crate) fn sidebar_section_header(
         .cursor_pointer()
         .rounded(px(6.))
         .hover(|style| style.bg(gpui::rgb(0xe2e3e7)))
-        .active(|style| style.opacity(0.72))
         .child(
             svg()
                 .data(&b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M4 2L9 6L4 10Z'/></svg>"[..])
@@ -57,7 +57,7 @@ pub(crate) fn sidebar_section_header(
                 .flex_none()
                 .text_color(gpui::rgb(0x777b82))
                 .with_transformation(gpui::Transformation::rotate(gpui::radians(
-                    if expanded { std::f32::consts::FRAC_PI_2 } else { 0. },
+                    std::f32::consts::FRAC_PI_2 * reveal,
                 ))),
         )
         .child(label)
@@ -69,6 +69,22 @@ pub(crate) fn sidebar_section_header(
                 )
             });
         })
+}
+
+pub(crate) fn sidebar_section_body(
+    id: &'static str,
+    reveal: f32,
+    expanded_height: f32,
+    content: impl IntoElement,
+) -> Div {
+    let reveal = reveal.clamp(0.0, 1.0);
+    div()
+        .debug_selector(move || format!("agenda-sidebar-section-body-{id}"))
+        .w_full()
+        .flex_none()
+        .h(px(expanded_height * reveal))
+        .overflow_hidden()
+        .child(div().relative().top(px(-4. * (1. - reveal))).child(content))
 }
 
 pub(crate) struct StaticSidebarItem {

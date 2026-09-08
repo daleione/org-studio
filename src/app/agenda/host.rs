@@ -29,6 +29,13 @@ pub(super) struct SidebarVisibilityAnimation {
     to: f32,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SidebarSectionAnimation {
+    started_at: Instant,
+    from: f32,
+    to: f32,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 enum SidebarSwipeAxis {
     #[default]
@@ -105,6 +112,7 @@ pub(crate) struct AgendaHost {
     pub(super) sidebar_width: f32,
     pub(super) sidebar_resize: Option<SidebarResizeSession>,
     pub(super) sidebar_visibility_animation: Option<SidebarVisibilityAnimation>,
+    pub(super) sidebar_section_animations: [Option<SidebarSectionAnimation>; 4],
     pub(super) sidebar_swipe: Option<SidebarSwipeSession>,
     pub(super) inspector_scroll: ScrollHandle,
     pub(super) analysis_generation: u64,
@@ -142,6 +150,7 @@ impl AgendaHost {
             sidebar_width: super::style::SIDEBAR_WIDTH,
             sidebar_resize: None,
             sidebar_visibility_animation: None,
+            sidebar_section_animations: [None; 4],
             sidebar_swipe: None,
             inspector_scroll: ScrollHandle::new(),
             analysis_generation: 0,
@@ -191,6 +200,57 @@ impl AgendaHost {
             animation.from + (animation.to - animation.from) * eased,
             true,
         )
+    }
+
+    pub(super) fn sidebar_section_reveal_at(
+        &self,
+        section: super::state::SidebarSection,
+        now: Instant,
+    ) -> (f32, bool) {
+        let expanded = match section {
+            super::state::SidebarSection::SmartViews => self.state.smart_views_expanded,
+            super::state::SidebarSection::SavedViews => self.state.saved_views_expanded,
+            super::state::SidebarSection::Tags => self.state.tags_expanded,
+            super::state::SidebarSection::Sources => self.state.sources_expanded,
+        };
+        let Some(animation) = self.sidebar_section_animations[sidebar_section_index(section)]
+        else {
+            return (if expanded { 1.0 } else { 0.0 }, false);
+        };
+        let progress = now
+            .saturating_duration_since(animation.started_at)
+            .as_secs_f32()
+            / crate::fold_animation::FOLD_ANIMATION_DURATION.as_secs_f32();
+        if progress >= 1.0 {
+            return (animation.to, false);
+        }
+        let eased = crate::fold_animation::ease_out_cubic(progress);
+        (
+            animation.from + (animation.to - animation.from) * eased,
+            true,
+        )
+    }
+
+    pub(super) fn toggle_sidebar_section(
+        &mut self,
+        section: super::state::SidebarSection,
+        now: Instant,
+        animate: bool,
+    ) {
+        let from = self.sidebar_section_reveal_at(section, now).0;
+        self.state.toggle_sidebar_section(section);
+        let to = match section {
+            super::state::SidebarSection::SmartViews => self.state.smart_views_expanded,
+            super::state::SidebarSection::SavedViews => self.state.saved_views_expanded,
+            super::state::SidebarSection::Tags => self.state.tags_expanded,
+            super::state::SidebarSection::Sources => self.state.sources_expanded,
+        };
+        self.sidebar_section_animations[sidebar_section_index(section)] =
+            animate.then_some(SidebarSectionAnimation {
+                started_at: now,
+                from,
+                to: if to { 1.0 } else { 0.0 },
+            });
     }
 
     fn set_sidebar_visible(&mut self, visible: bool, now: Instant) -> bool {
@@ -625,6 +685,15 @@ impl AgendaHost {
     }
 }
 
+fn sidebar_section_index(section: super::state::SidebarSection) -> usize {
+    match section {
+        super::state::SidebarSection::SmartViews => 0,
+        super::state::SidebarSection::SavedViews => 1,
+        super::state::SidebarSection::Tags => 2,
+        super::state::SidebarSection::Sources => 3,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -690,6 +759,49 @@ mod tests {
             host.sidebar_reveal_at(started_at + SIDEBAR_ANIMATION_DURATION),
             (0.0, false)
         );
+    }
+
+    #[test]
+    fn sidebar_section_animation_is_smooth_and_reversible() {
+        let started_at = Instant::now();
+        let mut host = AgendaHost::new();
+        let section = super::super::state::SidebarSection::SmartViews;
+        assert!(host.state.smart_views_expanded);
+
+        host.toggle_sidebar_section(section, started_at, true);
+        assert!(!host.state.smart_views_expanded);
+        assert_eq!(
+            host.sidebar_section_reveal_at(section, started_at),
+            (1.0, true)
+        );
+
+        let halfway_at = started_at + crate::fold_animation::FOLD_ANIMATION_DURATION / 2;
+        let halfway = host.sidebar_section_reveal_at(section, halfway_at).0;
+        assert!(halfway > 0.0 && halfway < 1.0);
+
+        host.toggle_sidebar_section(section, halfway_at, true);
+        assert!(host.state.smart_views_expanded);
+        let reversed_from = host.sidebar_section_reveal_at(section, halfway_at).0;
+        assert!((reversed_from - halfway).abs() < f32::EPSILON);
+        assert_eq!(
+            host.sidebar_section_reveal_at(
+                section,
+                halfway_at + crate::fold_animation::FOLD_ANIMATION_DURATION,
+            ),
+            (1.0, false)
+        );
+    }
+
+    #[test]
+    fn sidebar_section_animation_respects_reduced_motion() {
+        let now = Instant::now();
+        let mut host = AgendaHost::new();
+        let section = super::super::state::SidebarSection::Tags;
+
+        host.toggle_sidebar_section(section, now, false);
+
+        assert!(!host.state.tags_expanded);
+        assert_eq!(host.sidebar_section_reveal_at(section, now), (0.0, false));
     }
 
     #[test]
