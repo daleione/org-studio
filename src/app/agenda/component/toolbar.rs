@@ -87,13 +87,20 @@ mod tests {
                     &AgendaViewState::default(),
                     Language::Chinese,
                     250.,
+                    0.,
+                    "tasks.org".to_owned(),
                     None,
                 ))
             }
         }
         let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
+        let search = cx
+            .debug_bounds("agenda-toolbar-icon-assets/icons/agenda/search.svg")
+            .unwrap();
+        assert_eq!(search.size.width, px(30.));
+        assert_eq!(search.size.height, px(30.));
+        assert!(search.right() <= px(250.));
         for selector in [
-            "agenda-toolbar-icon-assets/icons/agenda/search.svg",
             "agenda-toolbar-icon-assets/icons/agenda/caret-left.svg",
             "agenda-toolbar-icon-assets/icons/agenda/caret-right.svg",
         ] {
@@ -118,10 +125,38 @@ mod tests {
             "agenda-projection-Source",
         ] {
             let bounds = cx.debug_bounds(selector).unwrap();
-            assert_eq!(bounds.size.width, px(40.));
-            assert_eq!(bounds.size.height, px(32.));
+            assert_eq!(bounds.size.width, px(36.));
+            assert_eq!(bounds.size.height, px(26.));
             assert!(bounds.right() <= px(250.));
         }
+    }
+
+    #[gpui::test]
+    fn wide_toolbar_places_search_and_modes_in_the_titlebar(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        struct Harness(Entity<WorkspaceWindow>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(1000.)).child(agenda_toolbar(
+                    self.0.clone(),
+                    &AgendaViewState::default(),
+                    Language::Chinese,
+                    1000.,
+                    0.,
+                    "tasks.org".to_owned(),
+                    None,
+                ))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
+        let actions = cx.debug_bounds("agenda-toolbar-actions").unwrap();
+        let filename = cx.debug_bounds("agenda-titlebar-file-name").unwrap();
+        let title = cx.debug_bounds("agenda-toolbar-title-row").unwrap();
+        assert_eq!(actions.top(), px(4.));
+        assert_eq!(actions.bottom(), px(crate::app::TITLEBAR_HEIGHT - 4.));
+        assert_eq!(filename.left(), px(84.));
+        assert_eq!(filename.bottom(), px(crate::app::TITLEBAR_HEIGHT));
+        assert!(title.top() > actions.bottom());
     }
 }
 
@@ -129,10 +164,12 @@ pub(crate) fn agenda_toolbar(
     workspace: Entity<WorkspaceWindow>,
     state: &AgendaViewState,
     language: Language,
-    width: f32,
+    window_width: f32,
+    main_content_offset: f32,
+    window_title: String,
     search: Option<Entity<super::super::search::AgendaSearch>>,
 ) -> Div {
-    let narrow = width < 780.;
+    let narrow = window_width < 900.;
     let today = jiff::Zoned::now().date();
     let date_browsing = state.browses_dates();
     let title = match state.workspace {
@@ -150,6 +187,7 @@ pub(crate) fn agenda_toolbar(
         },
     };
     let first = div()
+        .debug_selector(|| "agenda-toolbar-title-row".to_owned())
         .min_w_0()
         .flex()
         .items_center()
@@ -164,20 +202,31 @@ pub(crate) fn agenda_toolbar(
                 .text_size(px(22.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(title),
-        )
+        );
+    let titlebar_actions = div()
+        .debug_selector(|| "agenda-toolbar-actions".to_owned())
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_end()
+        .gap(px(8.))
         .when(!narrow, |row| {
             row.child(
                 super::field(div().children(search.clone()))
                     .w(px(240.))
+                    .h(px(30.))
                     .flex_none(),
             )
         })
         .when(narrow, |row| {
-            row.child(icon(
-                workspace.clone(),
-                "assets/icons/agenda/search.svg",
-                UiIntent::ToggleSearch,
-            ))
+            row.child(
+                icon(
+                    workspace.clone(),
+                    "assets/icons/agenda/search.svg",
+                    UiIntent::ToggleSearch,
+                )
+                .size(px(30.)),
+            )
         })
         .when(
             matches!(
@@ -195,14 +244,35 @@ pub(crate) fn agenda_toolbar(
     let mut toolbar = div()
         .flex_none()
         .min_w_0()
-        .px(px(12.))
-        .py(px(12.))
+        .relative()
+        .px(px(24.))
+        .pt(px(crate::app::TITLEBAR_HEIGHT + 12.0))
+        .pb(px(12.))
         .flex()
         .flex_col()
         .gap(px(10.))
         .bg(rgb(super::super::style::TOOLBAR))
         .border_b_1()
         .border_color(rgb(super::super::style::BORDER))
+        .child(
+            div()
+                .debug_selector(|| "agenda-titlebar-file-name".to_owned())
+                .absolute()
+                .top_0()
+                .left(px(84. - main_content_offset))
+                .w(px(240.))
+                .h(px(crate::app::TITLEBAR_HEIGHT))
+                .flex()
+                .items_center()
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .text_size(px(12.))
+                .font_weight(gpui::FontWeight::MEDIUM)
+                .text_color(rgb(super::super::style::MUTED))
+                .child(window_title),
+        )
+        .child(titlebar_actions.absolute().top(px(4.)).right(px(24.)))
         .child(first)
         .when(
             narrow && (state.search_expanded || !state.search.is_empty()),
@@ -231,6 +301,7 @@ pub(crate) fn agenda_toolbar(
         };
         toolbar = toolbar.child(
             div()
+                .debug_selector(|| "agenda-toolbar-date-row".to_owned())
                 .flex()
                 .flex_wrap()
                 .items_center()
@@ -397,7 +468,7 @@ fn projection_switch(
     .fold(
         div()
             .flex_none()
-            .h(px(38.))
+            .h(px(30.))
             .p(px(2.))
             .flex()
             .items_center()
@@ -413,8 +484,8 @@ fn projection_switch(
                     .id(format!("agenda-projection-{value:?}"))
                     .debug_selector(move || format!("agenda-projection-{value:?}"))
                     .flex_none()
-                    .w(px(40.))
-                    .h(px(32.))
+                    .w(px(36.))
+                    .h(px(26.))
                     .flex()
                     .items_center()
                     .justify_center()

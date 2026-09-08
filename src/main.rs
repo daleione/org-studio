@@ -107,7 +107,7 @@ fn preview_window_options(cx: &mut App) -> WindowOptions {
         display_id: requested_display,
         titlebar: Some(TitlebarOptions {
             title: Some(SharedString::from("Org Studio")),
-            appears_transparent: false,
+            appears_transparent: true,
             ..Default::default()
         }),
         ..Default::default()

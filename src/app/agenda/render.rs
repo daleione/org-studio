@@ -1,16 +1,32 @@
 use crate::app::WorkspaceWindow;
-use gpui::{Entity, ParentElement, Styled, div, prelude::*, px, rgb};
-use std::collections::BTreeMap;
+use gpui::{
+    CursorStyle, Entity, MouseButton, ParentElement, Styled, Window, div, prelude::*, px, rgb,
+};
+use std::{collections::BTreeMap, time::Instant};
 
 impl super::AgendaHost {
     pub(crate) fn render(
         &self,
         workspace: Entity<WorkspaceWindow>,
         viewport_width: f32,
+        window_title: String,
+        window: &Window,
     ) -> gpui::Div {
         let language = self.language;
-        let layout = super::layout::AgendaLayout::for_width(viewport_width);
-        let compact = matches!(layout, super::layout::AgendaLayout::Compact);
+        let full_sidebar_width = super::host::expanded_sidebar_width(
+            viewport_width,
+            self.sidebar_resize
+                .map(|resize| resize.current_width)
+                .unwrap_or(self.sidebar_width),
+        );
+        let (sidebar_reveal, sidebar_animating) = self.sidebar_reveal_at(Instant::now());
+        if sidebar_animating {
+            // GPUI resolves the current view only while rendering. Scheduling this from the
+            // scroll-wheel callback panics because that callback runs outside view rendering.
+            window.request_animation_frame();
+        }
+        let sidebar_width = full_sidebar_width * sidebar_reveal;
+        let resize_handle_width = super::style::SIDEBAR_RESIZE_HANDLE_WIDTH * sidebar_reveal;
         let facets = self
             .page_query
             .result
@@ -38,7 +54,7 @@ impl super::AgendaHost {
         let sidebar_content = div()
             .w_full()
             .flex_none()
-            .pt_4()
+            .pt(px(crate::app::TITLEBAR_HEIGHT + 16.0))
             .flex()
             .flex_col()
             .child(
@@ -59,45 +75,43 @@ impl super::AgendaHost {
                                     icon: "assets/icons/agenda/tray.svg",
                                     count: Some(self.inbox_tasks().len()),
                                     selected: self.state.navigation.as_ref() == "收件箱",
-                                    compact,
+                                    compact: false,
                                     query: crate::agenda::BuiltinQuery::Unscheduled,
                                 },
                             ))
-                            .when(!compact, |row| {
-                                row.child(
-                                    div()
-                                        .id("agenda-open-capture")
-                                        .absolute()
-                                        .right(px(42.))
-                                        .top(px(5.))
-                                        .size(px(29.))
-                                        .flex()
-                                        .items_center()
-                                        .justify_center()
-                                        .rounded(px(6.))
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(gpui::rgb(0xeeeeF1)))
-                                        .child(
-                                            gpui::svg()
-                                                .data(super::icon::agenda_icon(
-                                                    "assets/icons/agenda/plus.svg",
-                                                ))
-                                                .size(px(14.))
-                                                .text_color(rgb(0x555960)),
-                                        )
-                                        .on_mouse_down(gpui::MouseButton::Left, {
-                                            let target = workspace.clone();
-                                            move |_, _, cx| {
-                                                target.update(cx, |this, cx| {
-                                                    this.dispatch_agenda_intent(
-                                                        super::UiIntent::OpenCapture,
-                                                        cx,
-                                                    )
-                                                });
-                                            }
-                                        }),
-                                )
-                            }),
+                            .child(
+                                div()
+                                    .id("agenda-open-capture")
+                                    .absolute()
+                                    .right(px(42.))
+                                    .top(px(5.))
+                                    .size(px(29.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(px(6.))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(gpui::rgb(0xeeeeF1)))
+                                    .child(
+                                        gpui::svg()
+                                            .data(super::icon::agenda_icon(
+                                                "assets/icons/agenda/plus.svg",
+                                            ))
+                                            .size(px(14.))
+                                            .text_color(rgb(0x555960)),
+                                    )
+                                    .on_mouse_down(gpui::MouseButton::Left, {
+                                        let target = workspace.clone();
+                                        move |_, _, cx| {
+                                            target.update(cx, |this, cx| {
+                                                this.dispatch_agenda_intent(
+                                                    super::UiIntent::OpenCapture,
+                                                    cx,
+                                                )
+                                            });
+                                        }
+                                    }),
+                            ),
                     )
                     .child(super::component::static_sidebar_item(
                         super::component::StaticSidebarItem {
@@ -107,7 +121,7 @@ impl super::AgendaHost {
                             icon: "assets/icons/agenda/calendar-dots.svg",
                             count: None,
                             selected: self.state.navigation.as_ref() == "Agenda",
-                            compact,
+                            compact: false,
                             query: crate::agenda::BuiltinQuery::NextSevenDays,
                         },
                     ))
@@ -119,7 +133,7 @@ impl super::AgendaHost {
                             icon: "assets/icons/agenda/check-circle.svg",
                             count: None,
                             selected: self.state.navigation.as_ref() == "Tasks",
-                            compact,
+                            compact: false,
                             query: crate::agenda::BuiltinQuery::Next,
                         },
                     ))
@@ -131,23 +145,21 @@ impl super::AgendaHost {
                             icon: "assets/icons/agenda/tree-structure.svg",
                             count: Some(self.projects().len()),
                             selected: self.state.navigation.as_ref() == "Projects",
-                            compact,
+                            compact: false,
                             query: crate::agenda::BuiltinQuery::Next,
                         },
                     )),
             )
-            .when(!compact, |side| {
-                side.child(
-                    super::component::sidebar_section_header(
-                        workspace.clone(),
-                        language.text("agenda.smart_views"),
-                        super::state::SidebarSection::SmartViews,
-                        self.state.smart_views_expanded,
-                    )
-                    .mt_3(),
+            .child(
+                super::component::sidebar_section_header(
+                    workspace.clone(),
+                    language.text("agenda.smart_views"),
+                    super::state::SidebarSection::SmartViews,
+                    self.state.smart_views_expanded,
                 )
-            })
-            .when(compact || self.state.smart_views_expanded, |side| {
+                .mt_3(),
+            )
+            .when(self.state.smart_views_expanded, |side| {
                 side.child(
                     [
                         (
@@ -198,24 +210,22 @@ impl super::AgendaHost {
                                 icon,
                                 count,
                                 self.state.navigation.as_ref() == label,
-                                compact,
+                                false,
                             ))
                         },
                     ),
                 )
             })
-            .when(!compact, |side| {
-                side.child(
-                    super::component::sidebar_section_header(
-                        workspace.clone(),
-                        language.text("agenda.saved_views"),
-                        super::state::SidebarSection::SavedViews,
-                        self.state.saved_views_expanded,
-                    )
-                    .mt_4(),
+            .child(
+                super::component::sidebar_section_header(
+                    workspace.clone(),
+                    language.text("agenda.saved_views"),
+                    super::state::SidebarSection::SavedViews,
+                    self.state.saved_views_expanded,
                 )
-            })
-            .when(!compact && self.state.saved_views_expanded, |side| {
+                .mt_4(),
+            )
+            .when(self.state.saved_views_expanded, |side| {
                 let names = self
                     .config
                     .saved_views
@@ -250,18 +260,16 @@ impl super::AgendaHost {
                         })),
                 )
             })
-            .when(!compact, |side| {
-                side.child(
-                    super::component::sidebar_section_header(
-                        workspace.clone(),
-                        language.text("agenda.tags"),
-                        super::state::SidebarSection::Tags,
-                        self.state.tags_expanded,
-                    )
-                    .mt_4(),
+            .child(
+                super::component::sidebar_section_header(
+                    workspace.clone(),
+                    language.text("agenda.tags"),
+                    super::state::SidebarSection::Tags,
+                    self.state.tags_expanded,
                 )
-            })
-            .when(!compact && self.state.tags_expanded, |side| {
+                .mt_4(),
+            )
+            .when(self.state.tags_expanded, |side| {
                 side.child(div().flex_none().px_3().flex().flex_col().children(
                     tag_counts.iter().map(|(tag, count)| {
                         let selected = self.state.tag_filter.as_deref() == Some(tag.as_str());
@@ -277,18 +285,16 @@ impl super::AgendaHost {
                     }),
                 ))
             })
-            .when(!compact, |side| {
-                side.child(
-                    super::component::sidebar_section_header(
-                        workspace.clone(),
-                        language.text("agenda.source_files"),
-                        super::state::SidebarSection::Sources,
-                        self.state.sources_expanded,
-                    )
-                    .mt_4(),
+            .child(
+                super::component::sidebar_section_header(
+                    workspace.clone(),
+                    language.text("agenda.source_files"),
+                    super::state::SidebarSection::Sources,
+                    self.state.sources_expanded,
                 )
-            })
-            .when(!compact && self.state.sources_expanded, |side| {
+                .mt_4(),
+            )
+            .when(self.state.sources_expanded, |side| {
                 side.child(div().flex_none().px_3().pb_4().flex().flex_col().children(
                     source_counts.iter().map(|((file, name), count)| {
                         let selected = self.state.source_filter == Some(*file);
@@ -304,13 +310,10 @@ impl super::AgendaHost {
                     }),
                 ))
             });
-        let sidebar = div()
-            .flex_none()
-            .w(px(if compact {
-                70.
-            } else {
-                super::style::SIDEBAR_WIDTH
-            }))
+        let sidebar_panel = div()
+            .relative()
+            .left(px(-(1.0 - sidebar_reveal) * full_sidebar_width))
+            .w(px(full_sidebar_width))
             .h_full()
             .min_h_0()
             .id("agenda-sidebar-scroll")
@@ -319,9 +322,14 @@ impl super::AgendaHost {
             .track_scroll(&self.sidebar_scroll)
             .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
             .bg(rgb(super::style::SIDEBAR))
-            .border_r_1()
-            .border_color(rgb(super::style::BORDER))
             .child(sidebar_content);
+        let sidebar = div()
+            .flex_none()
+            .w(px(sidebar_width))
+            .h_full()
+            .min_h_0()
+            .overflow_hidden()
+            .child(sidebar_panel);
 
         let inspector = (self.state.sheet == super::state::AgendaSheet::Inspector)
             .then(|| {
@@ -389,11 +397,8 @@ impl super::AgendaHost {
 
         use super::component::TaskColumns;
         let list_width = viewport_width
-            - if compact {
-                70.
-            } else {
-                super::style::SIDEBAR_WIDTH
-            }
+            - sidebar_width
+            - resize_handle_width
             - if inspector.is_some() { 360. } else { 0. };
         let task_columns = TaskColumns::for_width(
             list_width,
@@ -404,8 +409,9 @@ impl super::AgendaHost {
                     .any(|entry| !entry.row.tags.is_empty())
             }),
         );
+        let content_gutter = TaskColumns::GUTTER;
         let columns = TaskColumns::row()
-            .mx(px(TaskColumns::GUTTER + 1.))
+            .mx(px(content_gutter + 1.))
             .h(px(super::style::COLUMN_HEADER_HEIGHT))
             .text_color(rgb(super::style::MUTED))
             .text_size(px(11.))
@@ -442,20 +448,39 @@ impl super::AgendaHost {
             workspace.clone(),
             &self.state,
             language,
-            viewport_width
-                - if compact {
-                    70.
-                } else {
-                    super::style::SIDEBAR_WIDTH
-                },
+            viewport_width,
+            sidebar_width + resize_handle_width,
+            window_title,
             self.search_input.clone(),
         );
+        let gesture_workspace = workspace.clone();
         div()
             .size_full()
             .relative()
             .flex()
             .font_family("SF Pro Text")
             .text_color(rgb(super::style::INK))
+            .on_scroll_wheel(move |event, _, cx| {
+                if !event.delta.precise() {
+                    return;
+                }
+                let delta = event.delta.pixel_delta(px(16.0));
+                let outcome = gesture_workspace.update(cx, |this, cx| {
+                    let outcome = this.agenda.handle_sidebar_swipe(
+                        f32::from(delta.x),
+                        f32::from(delta.y),
+                        event.touch_phase,
+                        Instant::now(),
+                    );
+                    if outcome.started_animation {
+                        cx.notify();
+                    }
+                    outcome
+                });
+                if outcome.consumed {
+                    cx.stop_propagation();
+                }
+            })
             .when(self.state.source_context_menu.is_some(), |root| {
                 let workspace = workspace.clone();
                 root.on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
@@ -465,6 +490,39 @@ impl super::AgendaHost {
                 })
             })
             .child(sidebar)
+            .child({
+                let resize_workspace = workspace.clone();
+                div()
+                    .id("agenda-sidebar-resize-handle")
+                    .w(px(resize_handle_width))
+                    .h_full()
+                    .flex_none()
+                    .flex()
+                    .justify_center()
+                    .bg(rgb(super::style::SIDEBAR))
+                    .cursor(CursorStyle::ResizeLeftRight)
+                    .on_mouse_down(MouseButton::Left, move |event, _, cx| {
+                        cx.stop_propagation();
+                        resize_workspace.update(cx, |this, cx| {
+                            if event.click_count >= 2 {
+                                this.agenda.sidebar_width = super::style::SIDEBAR_WIDTH;
+                                this.agenda.sidebar_visible = true;
+                                this.agenda.sidebar_resize = None;
+                                this.agenda.sidebar_visibility_animation = None;
+                            } else {
+                                this.agenda.sidebar_visible = true;
+                                this.agenda.sidebar_visibility_animation = None;
+                                this.agenda.sidebar_resize =
+                                    Some(super::host::SidebarResizeSession {
+                                        start_pointer_x: f32::from(event.position.x),
+                                        start_width: full_sidebar_width,
+                                        current_width: full_sidebar_width,
+                                    });
+                            }
+                            cx.notify();
+                        });
+                    })
+            })
             .child(
                 div()
                     .flex_1()
@@ -537,7 +595,7 @@ impl super::AgendaHost {
                                             ) => div()
                                                 .flex_1()
                                                 .min_h_0()
-                                                .px(px(TaskColumns::GUTTER))
+                                                .px(px(content_gutter))
                                                 .child(super::view::agenda_list(
                                                     language,
                                                     workspace.clone(),
@@ -569,6 +627,15 @@ impl super::AgendaHost {
                                 body.child(inspector.flex_none())
                             }),
                     ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(crate::app::TITLEBAR_HEIGHT))
+                    .left_0()
+                    .right_0()
+                    .h(px(1.))
+                    .bg(rgb(super::style::BORDER)),
             )
             .when_some(
                 {
@@ -631,6 +698,51 @@ impl super::AgendaHost {
                     workspace.clone(),
                     menu,
                 ))
+            })
+            .when(self.sidebar_resize.is_some(), |root| {
+                let move_workspace = workspace.clone();
+                let finish_workspace = workspace.clone();
+                root.child(
+                    div()
+                        .id("agenda-sidebar-resize-overlay")
+                        .absolute()
+                        .top_0()
+                        .right_0()
+                        .bottom_0()
+                        .left_0()
+                        .cursor(CursorStyle::ResizeLeftRight)
+                        .on_mouse_move(move |event, _, cx| {
+                            if !event.dragging() {
+                                return;
+                            }
+                            move_workspace.update(cx, |this, cx| {
+                                let Some(session) = this.agenda.sidebar_resize else {
+                                    return;
+                                };
+                                let width = super::host::resized_sidebar_width(
+                                    viewport_width,
+                                    session,
+                                    f32::from(event.position.x),
+                                );
+                                if session.current_width != width {
+                                    this.agenda.sidebar_resize =
+                                        Some(super::host::SidebarResizeSession {
+                                            current_width: width,
+                                            ..session
+                                        });
+                                    cx.notify();
+                                }
+                            });
+                        })
+                        .on_mouse_up(MouseButton::Left, move |_, _, cx| {
+                            finish_workspace.update(cx, |this, cx| {
+                                if let Some(session) = this.agenda.sidebar_resize.take() {
+                                    this.agenda.sidebar_width = session.current_width;
+                                    cx.notify();
+                                }
+                            });
+                        }),
+                )
             })
     }
 }

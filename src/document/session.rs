@@ -326,6 +326,7 @@ impl DocumentSession {
         }
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn generated_source(&self) -> Option<&GeneratedSource> {
         match &self.backend {
             SessionBackend::Generated { source } => Some(source),

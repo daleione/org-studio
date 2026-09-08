@@ -268,7 +268,12 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .overflow_y_scroll()
                 .restrict_scroll_to_axis()
                 .track_scroll(&props.scroll_handle)
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .on_scroll_wheel(|event, _, cx| {
+                    let delta = event.delta.pixel_delta(px(16.0));
+                    if !event.delta.precise() || delta.y.abs() >= delta.x.abs() {
+                        cx.stop_propagation();
+                    }
+                })
                 .p_5()
                 .flex()
                 .flex_col()

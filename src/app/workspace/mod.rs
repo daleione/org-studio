@@ -849,11 +849,6 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn window_title(&self, cx: &gpui::App) -> String {
-        let generated_title = (self.content_route == ContentRoute::AgendaText)
-            .then_some(self.agenda.text_editor.as_ref())
-            .flatten()
-            .and_then(|editor| editor.read(cx).generated_source(cx))
-            .map(|source| source.display_name.to_string());
         if self.content_route == ContentRoute::FileManager
             && let Some(session) = self.file_manager.session()
         {
@@ -880,12 +875,11 @@ impl WorkspaceWindow {
             WorkspaceLoadState::Ready { document } => Some(document.session.read(cx).path()),
             WorkspaceLoadState::Empty => None,
         };
-        let title = generated_title.unwrap_or_else(|| {
-            path.and_then(|path| path.file_name())
-                .and_then(|name| name.to_str())
-                .unwrap_or("Org Studio")
-                .to_owned()
-        });
+        let title = path
+            .and_then(|path| path.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("Org Studio")
+            .to_owned();
         let Some(session) = self.document_session() else {
             return title;
         };

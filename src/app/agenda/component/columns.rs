@@ -17,7 +17,7 @@ impl TaskColumns {
     pub(crate) const STATUS: f32 = 64.;
     pub(crate) const PRIORITY: f32 = 32.;
     pub(crate) const TAGS: f32 = 112.;
-    pub(crate) const GUTTER: f32 = 12.;
+    pub(crate) const GUTTER: f32 = 24.;
     pub(crate) const GAP: f32 = 8.;
 
     pub(crate) fn plan_width(language: crate::i18n::Language) -> f32 {
@@ -73,7 +73,7 @@ mod tests {
                 - 2. * (TaskColumns::GUTTER + 1. + 12.)
                 - fixed.iter().sum::<f32>()
                 - fixed.len() as f32 * TaskColumns::GAP;
-            assert!(title >= 96., "width={width}, title={title}");
+            assert!(title >= 88., "width={width}, title={title}");
         }
         assert!(!TaskColumns::for_width(1400., false).tags);
     }

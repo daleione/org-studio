@@ -37,6 +37,8 @@ mod split_layout;
 pub(crate) mod status_line;
 mod workspace;
 
+pub(crate) const TITLEBAR_HEIGHT: f32 = 38.0;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PaneSurface {
     #[default]

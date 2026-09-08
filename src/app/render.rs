@@ -124,6 +124,8 @@ impl Render for WorkspaceWindow {
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
         let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda);
+        let agenda_extends_into_titlebar =
+            matches!(self.content_route, crate::app::ContentRoute::Agenda);
         let content_font_size_actions_enabled = self.content_font_size_command_available();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
@@ -221,12 +223,20 @@ impl Render for WorkspaceWindow {
                     .size_full()
                     .flex()
                     .flex_col()
-                    .child(div().flex_1().min_h_0().child(self.workspace_body(
-                        entity.clone(),
-                        command_window_width,
-                        window,
-                        cx,
-                    )))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_h_0()
+                            .when(!agenda_extends_into_titlebar, |body| {
+                                body.pt(px(crate::app::TITLEBAR_HEIGHT))
+                            })
+                            .child(self.workspace_body(
+                                entity.clone(),
+                                command_window_width,
+                                window,
+                                cx,
+                            )),
+                    )
                     .when(show_echo_area, |workspace| {
                         workspace.child(crate::app::echo_area::render_echo_area(
                             echo_message,

@@ -282,10 +282,6 @@ impl SemanticEditor {
         self.session.read(cx).is_read_only()
     }
 
-    pub(crate) fn generated_source(&self, cx: &App) -> Option<crate::document::GeneratedSource> {
-        self.session.read(cx).generated_source().cloned()
-    }
-
     pub(crate) fn selected_line(&self, cx: &App) -> u64 {
         self.snapshot(cx)
             .line_index_at(self.selection.head())

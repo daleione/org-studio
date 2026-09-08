@@ -4,7 +4,6 @@ mod edit;
 mod host;
 mod icon;
 mod intent;
-mod layout;
 mod query_session;
 mod render;
 mod runtime;

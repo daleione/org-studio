@@ -650,9 +650,12 @@ impl WorkspaceWindow {
             return self.body(entity, viewport_width, window, cx);
         }
         let body = match self.content_route {
-            ContentRoute::Agenda => div()
-                .size_full()
-                .child(self.agenda.render(entity.clone(), viewport_width)),
+            ContentRoute::Agenda => div().size_full().child(self.agenda.render(
+                entity.clone(),
+                viewport_width,
+                self.window_title(cx),
+                window,
+            )),
             ContentRoute::AgendaText => div()
                 .size_full()
                 .p(px(12.0))
