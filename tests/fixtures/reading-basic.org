@@ -7,7 +7,7 @@ Paragraph with *bold* and [[https://example.com][link]].
 
 | Name | Score |
 |------+-------|
-| Ada  |    42 |
+| Ada  | 42    |
 
 #+caption: Architecture
 [[file:missing.png]]

@@ -98,8 +98,19 @@ fn parsed_cell(source: &str, raw_range: Range<usize>, separator: bool) -> Parsed
     }
     let leading = raw.len() - raw.trim_start().len();
     let trailing = raw.len() - raw.trim_end().len();
+    let content_start = raw_range.start + leading;
+    let content_end = raw_range.end - trailing;
+    // A cell whose content is entirely whitespace (for example a freshly
+    // appended empty table row) trims down to nothing, which would produce an
+    // inverted range like `9..1`. Callers slice and clamp on this range, so
+    // keep it well-formed: an empty range at the start of the content area.
+    let text_range = if content_start <= content_end {
+        content_start..content_end
+    } else {
+        content_start..content_start
+    };
     ParsedTableCell {
-        text_range: raw_range.start + leading..raw_range.end - trailing,
+        text_range,
         raw_range,
         align_right: leading > trailing,
         separator_alignment: SeparatorAlignment::default(),
@@ -207,5 +218,26 @@ mod tests {
         let parsed = parse_line(org, DocumentFormat::Org);
         assert_eq!(parsed.cells.len(), 2);
         assert_eq!(&org[parsed.cells[1].text_range.clone()], "=x|y= and ~z|w~");
+    }
+
+    #[test]
+    fn whitespace_only_cells_keep_well_formed_empty_text_ranges() {
+        // A freshly appended empty table row contains only padding spaces, so
+        // every cell trims to nothing. The resulting text range must stay
+        // well-formed (`start <= end`); an inverted range like `9..1` made
+        // table navigation panic in `usize::clamp` when tabbing past the last
+        // cell.
+        for row in ["|        |       |", "|  |  |"] {
+            let parsed = parse_line(row, DocumentFormat::Markdown);
+            assert!(!parsed.separator);
+            assert_eq!(parsed.cells.len(), 2);
+            for cell in &parsed.cells {
+                assert!(
+                    cell.text_range.start <= cell.text_range.end,
+                    "inverted text range {cell:?} in {row:?}"
+                );
+                assert_eq!(&row[cell.text_range.clone()], "");
+            }
+        }
     }
 }

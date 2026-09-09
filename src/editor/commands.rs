@@ -2348,6 +2348,41 @@ mod horizontal_scroll_tests {
     }
 
     #[gpui::test]
+    fn tabbing_past_the_last_table_cell_appends_rows_without_crashing(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("test.md"),
+                b"| a | value |\n| :- | -: |\n| longer | x |\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let window = cx.open_window(gpui::size(px(800.0), px(500.0)), |_, cx| {
+            SemanticEditor::new(session, cx)
+        });
+        cx.run_until_parked();
+
+        window
+            .update(cx, |editor, window, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                for _ in 0..20 {
+                    editor.insert_tab(&InsertTab, window, cx);
+                    let snapshot = editor.snapshot(cx);
+                    let caret = editor.selection().head();
+                    let line = snapshot.line_index_at(caret).unwrap();
+                    let range = snapshot.line_content_range(line).unwrap();
+                    let text = snapshot.copy_range(range);
+                    assert!(
+                        text.starts_with('|'),
+                        "caret landed outside the table on {text:?}"
+                    );
+                }
+            })
+            .unwrap();
+    }
+
+    #[gpui::test]
     fn org_context_command_aligns_at_a_table_and_declines_plain_text(
         cx: &mut gpui::TestAppContext,
     ) {
