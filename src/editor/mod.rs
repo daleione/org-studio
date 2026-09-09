@@ -1057,16 +1057,36 @@ impl SemanticEditor {
         width: Option<u16>,
         cx: &mut Context<Self>,
     ) {
-        self.minimap.visible = visible;
-        self.minimap.width = width.map_or(minimap::DEFAULT_WIDTH, |width| {
+        self.set_minimap_presentation(visible, width, if visible { 1.0 } else { 0.0 }, cx);
+    }
+
+    pub(crate) fn set_minimap_presentation(
+        &mut self,
+        visible: bool,
+        width: Option<u16>,
+        reveal: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let width = width.map_or(minimap::DEFAULT_WIDTH, |width| {
             (width as f32).clamp(minimap::MIN_WIDTH, minimap::MAX_WIDTH)
         });
+        let reveal = reveal.clamp(0.0, 1.0);
+        let layout_changed = self.minimap.visible != visible || self.minimap.width != width;
+        let presentation_changed = self.minimap.reveal != reveal;
+        if !layout_changed && !presentation_changed {
+            return;
+        }
+        self.minimap.visible = visible;
+        self.minimap.width = width;
+        self.minimap.reveal = reveal;
         if !visible {
             self.minimap.drag = None;
             self.minimap.resizing = None;
             self.minimap.bounds = None;
         }
-        self.shape_cache.clear();
+        if layout_changed {
+            self.shape_cache.clear();
+        }
         cx.notify();
     }
 
@@ -2307,6 +2327,49 @@ mod tests {
             editor.scroll(-120.0, 0.0, cx);
             assert_eq!(editor.scroll_x, 0.0);
         });
+    }
+
+    #[gpui::test]
+    fn minimap_reveal_frames_keep_editor_wrap_geometry_stable(cx: &mut gpui::TestAppContext) {
+        cx.update(init);
+        let source = "a long line that should wrap while the minimap animates ".repeat(80);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("test.org"), source.into_bytes()).unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
+
+        let mut opening_wrap_widths = Vec::new();
+        for reveal in [0.0, 0.25, 0.75, 1.0] {
+            editor.update(cx, |editor, cx| {
+                editor.set_minimap_presentation(true, None, reveal, cx)
+            });
+            cx.run_until_parked();
+            opening_wrap_widths
+                .push(editor.read_with(cx, |editor, _| editor.display_map.wrap_width().to_bits()));
+        }
+        assert!(
+            opening_wrap_widths
+                .windows(2)
+                .all(|widths| widths[0] == widths[1])
+        );
+
+        let mut closing_wrap_widths = Vec::new();
+        for reveal in [1.0, 0.5, 0.0] {
+            editor.update(cx, |editor, cx| {
+                editor.set_minimap_presentation(false, None, reveal, cx)
+            });
+            cx.run_until_parked();
+            closing_wrap_widths
+                .push(editor.read_with(cx, |editor, _| editor.display_map.wrap_width().to_bits()));
+        }
+        assert!(
+            closing_wrap_widths
+                .windows(2)
+                .all(|widths| widths[0] == widths[1])
+        );
+        assert_ne!(opening_wrap_widths[0], closing_wrap_widths[0]);
     }
 
     #[gpui::test]

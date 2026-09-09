@@ -1301,6 +1301,7 @@ impl EditorMinimapTelemetry {
 
 pub(super) struct EditorMinimapHost {
     pub(super) visible: bool,
+    pub(super) reveal: f32,
     pub(super) width: f32,
     pub(super) bounds: Option<Bounds<Pixels>>,
     pub(super) drag: Option<crate::minimap::DragSession>,
@@ -1327,6 +1328,7 @@ impl Default for EditorMinimapHost {
     fn default() -> Self {
         Self {
             visible: true,
+            reveal: 1.0,
             width: DEFAULT_WIDTH,
             bounds: None,
             drag: None,

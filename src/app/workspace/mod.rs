@@ -27,6 +27,7 @@ pub(crate) use benchmark::ScrollBenchmark;
 struct PaneRenderContext<'a> {
     width: f32,
     minimap_width: f32,
+    minimap_reveal: f32,
     window: &'a Window,
     cx: &'a gpui::App,
 }
@@ -70,7 +71,7 @@ impl WorkspaceWindow {
             .and_then(|value| value.parse().ok())
             .unwrap_or(80.0);
         let (commands, keyboard, key_context) = document_input();
-        let minimap_visible = configured_minimap_visible();
+        let minimap_visible = configured_minimap_visible(preview_settings.minimap_enabled);
         let mut document_workspace = DocumentWorkspaceState::default();
         let benchmark_reading =
             std::env::var("ORG_STUDIO_SCROLL_BENCH_SURFACE").as_deref() == Ok("reading");
@@ -216,6 +217,7 @@ impl WorkspaceWindow {
             split_resize: None,
             soft_wrap: true,
             minimap_visible,
+            minimap_visibility_animation: None,
             minimap_thumb_visibility: crate::settings::initial_minimap_thumb_visibility(
                 preview_settings.minimap_thumb_visibility,
             ),
@@ -414,7 +416,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn save_preview_settings(&self) {
-        crate::settings::WorkspaceSettings {
+        let _settings = crate::settings::WorkspaceSettings {
             split_ratio: self.document_view_preferences.split_ratio,
             language: self.language,
             minimap_enabled: self.minimap_visible,
@@ -423,8 +425,9 @@ impl WorkspaceWindow {
             sidebar_width: self.file_manager.sidebar_width(),
             reading_style: self.reading_style,
             status_line: self.status.settings(),
-        }
-        .save_async();
+        };
+        #[cfg(not(test))]
+        _settings.save_async();
     }
 
     pub fn language(&self) -> crate::i18n::Language {
@@ -513,6 +516,7 @@ impl WorkspaceWindow {
         &self,
         entity: gpui::Entity<Self>,
         editor_width: f32,
+        minimap_reveal: f32,
         window: &Window,
         cx: &gpui::App,
     ) -> gpui::Div {
@@ -536,10 +540,13 @@ impl WorkspaceWindow {
                     self.render_document_layout(
                         previous,
                         entity.clone(),
-                        editor_width,
-                        minimap_width,
-                        window,
-                        cx,
+                        PaneRenderContext {
+                            width: editor_width,
+                            minimap_width,
+                            minimap_reveal,
+                            window,
+                            cx,
+                        },
                     )
                 } else {
                     render_home(
@@ -554,10 +561,13 @@ impl WorkspaceWindow {
             WorkspaceLoadState::Ready { document: ready } => self.render_document_layout(
                 ready,
                 entity.clone(),
-                editor_width,
-                minimap_width,
-                window,
-                cx,
+                PaneRenderContext {
+                    width: editor_width,
+                    minimap_width,
+                    minimap_reveal,
+                    window,
+                    cx,
+                },
             ),
         };
         if self.state.ready().is_some() {
@@ -599,11 +609,15 @@ impl WorkspaceWindow {
         &self,
         ready: &ReadyDocument,
         entity: gpui::Entity<Self>,
-        editor_width: f32,
-        minimap_width: f32,
-        window: &Window,
-        cx: &gpui::App,
+        render: PaneRenderContext<'_>,
     ) -> gpui::Div {
+        let PaneRenderContext {
+            width: editor_width,
+            minimap_width,
+            minimap_reveal,
+            window,
+            cx,
+        } = render;
         if self.document_workspace.is_split() {
             let left_width = self.rendered_left_pane_width(editor_width);
             let right_width = (editor_width - left_width - split_layout::RESIZE_HANDLE_PX).max(0.0);
@@ -618,6 +632,7 @@ impl WorkspaceWindow {
                     PaneRenderContext {
                         width: left_width,
                         minimap_width: minimap::width_for_viewport(left_width, self.minimap_width),
+                        minimap_reveal,
                         window,
                         cx,
                     },
@@ -648,6 +663,7 @@ impl WorkspaceWindow {
                     PaneRenderContext {
                         width: right_width,
                         minimap_width: minimap::width_for_viewport(right_width, self.minimap_width),
+                        minimap_reveal,
                         window,
                         cx,
                     },
@@ -660,6 +676,7 @@ impl WorkspaceWindow {
                 PaneRenderContext {
                     width: editor_width,
                     minimap_width,
+                    minimap_reveal,
                     window,
                     cx,
                 },
@@ -688,9 +705,7 @@ impl WorkspaceWindow {
                 },
                 |editor| div().size_full().child(editor.clone()),
             ),
-            PaneSurface::Reading => {
-                self.render_reading(ready, entity.clone(), pane, render, self.minimap_visible)
-            }
+            PaneSurface::Reading => self.render_reading(ready, entity.clone(), pane, render),
         };
         let Some(snapshot) = self.document_status_snapshot(pane, render.cx) else {
             return div().w(px(render.width)).h_full().min_w_0().child(content);
@@ -735,7 +750,6 @@ impl WorkspaceWindow {
         entity: gpui::Entity<Self>,
         pane: PaneSide,
         render: PaneRenderContext<'_>,
-        minimap_visible: bool,
     ) -> gpui::Div {
         let Some(panel_entity) = ready.readers.get(pane).as_ref() else {
             return div()
@@ -769,7 +783,8 @@ impl WorkspaceWindow {
             panel.render_state(),
             panel_entity.clone(),
             ReadingRenderOptions {
-                minimap_visible,
+                minimap_visible: self.minimap_visible,
+                minimap_reveal: render.minimap_reveal,
                 pane_width: render.width,
                 minimap_width: render.minimap_width,
                 minimap_resize_preview: self.minimap_resize_preview,

@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use gpui::{
     Context, CursorStyle, ExternalPaths, IntoElement, MouseButton, Render, Window, div, prelude::*,
-    px, rgb,
+    px, rgb, svg,
 };
 
 use crate::{
@@ -22,6 +22,100 @@ use crate::{
 
 use super::export_ui::render_export_panel;
 use super::overlays::{dired_help_window, which_key_window};
+
+fn sidebar_icon(color: u32) -> gpui::Svg {
+    svg()
+        .debug_selector(|| "document-titlebar-sidebar-icon".to_owned())
+        .data(include_bytes!("assets/sidebar.svg"))
+        .w(px(19.0))
+        .h(px(16.0))
+        .text_color(rgb(color))
+}
+
+fn minimap_icon(color: u32) -> gpui::Svg {
+    svg()
+        .debug_selector(|| "document-titlebar-minimap-icon".to_owned())
+        .data(include_bytes!("assets/minimap.svg"))
+        .w(px(19.0))
+        .h(px(16.0))
+        .text_color(rgb(color))
+}
+
+fn document_titlebar(
+    workspace: gpui::Entity<WorkspaceWindow>,
+    sidebar_visible: bool,
+    minimap_visible: bool,
+) -> gpui::Div {
+    let theme = current_theme();
+    let sidebar_workspace = workspace.clone();
+    let sidebar_icon_color = if sidebar_visible {
+        theme.foreground
+    } else {
+        theme.quote
+    };
+    let minimap_icon_color = if minimap_visible {
+        theme.foreground
+    } else {
+        theme.quote
+    };
+    div()
+        .debug_selector(|| "document-titlebar".to_owned())
+        .absolute()
+        .top_0()
+        .left_0()
+        .right_0()
+        .h(px(crate::app::TITLEBAR_HEIGHT))
+        .pl(px(crate::app::TITLEBAR_LEADING_INSET))
+        .pr(px(crate::app::TITLEBAR_TRAILING_INSET))
+        .flex()
+        .items_center()
+        .bg(rgb(theme.background))
+        .border_b_1()
+        .border_color(rgb(theme.border))
+        .child(
+            div()
+                .id("document-titlebar-sidebar-toggle")
+                .debug_selector(|| "document-titlebar-sidebar-toggle".to_owned())
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(theme.background_alt))
+                .cursor_pointer()
+                .when(sidebar_visible, |button| {
+                    button.bg(rgb(theme.code_active_background))
+                })
+                .hover(move |style| style.bg(rgb(theme.code_active_background)))
+                .child(sidebar_icon(sidebar_icon_color))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    sidebar_workspace.update(cx, |this, cx| this.toggle_sidebar(cx));
+                }),
+        )
+        .child(div().flex_1())
+        .child(
+            div()
+                .id("document-titlebar-minimap-toggle")
+                .debug_selector(|| "document-titlebar-minimap-toggle".to_owned())
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(theme.background_alt))
+                .cursor_pointer()
+                .when(minimap_visible, |button| {
+                    button.bg(rgb(theme.code_active_background))
+                })
+                .hover(move |style| style.bg(rgb(theme.code_active_background)))
+                .child(minimap_icon(minimap_icon_color))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    workspace.update(cx, |this, cx| this.toggle_minimap(cx));
+                }),
+        )
+}
 
 impl Render for WorkspaceWindow {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -126,6 +220,39 @@ impl Render for WorkspaceWindow {
         let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda);
         let agenda_extends_into_titlebar =
             matches!(self.content_route, crate::app::ContentRoute::Agenda);
+        let show_document_titlebar =
+            matches!(self.content_route, crate::app::ContentRoute::Document)
+                && self.state.ready().is_some();
+        let sidebar_visible = self.file_manager.sidebar_visible();
+        let minimap_visible = self.minimap_visible();
+        let minimap_transitioning = self.minimap_visibility_animation.is_some();
+        let (minimap_reveal, minimap_animating) = self.minimap_reveal_at(Instant::now());
+        if minimap_animating {
+            window.request_animation_frame();
+        } else {
+            self.minimap_visibility_animation = None;
+        }
+        if minimap_transitioning {
+            let editors = self
+                .state
+                .ready()
+                .into_iter()
+                .flat_map(|document| [&document.editors.left, &document.editors.right])
+                .flatten()
+                .cloned()
+                .collect::<Vec<_>>();
+            let minimap_width = self.minimap_width;
+            for editor in editors {
+                editor.update(cx, |editor, cx| {
+                    editor.set_minimap_presentation(
+                        minimap_visible,
+                        minimap_width,
+                        minimap_reveal,
+                        cx,
+                    );
+                });
+            }
+        }
         let content_font_size_actions_enabled = self.content_font_size_command_available();
         let resize_entity = entity.clone();
         let finish_resize_entity = entity.clone();
@@ -218,6 +345,13 @@ impl Render for WorkspaceWindow {
             .on_drop(cx.listener(|this, paths: &ExternalPaths, window, cx| {
                 this.open_dropped_paths(paths, window, cx)
             }))
+            .when(show_document_titlebar, |view| {
+                view.child(document_titlebar(
+                    entity.clone(),
+                    sidebar_visible,
+                    minimap_visible,
+                ))
+            })
             .child(
                 div()
                     .size_full()
@@ -233,6 +367,7 @@ impl Render for WorkspaceWindow {
                             .child(self.workspace_body(
                                 entity.clone(),
                                 command_window_width,
+                                minimap_reveal,
                                 window,
                                 cx,
                             )),
@@ -369,5 +504,66 @@ impl WorkspaceWindow {
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::Modifiers;
+
+    struct TitlebarHarness(gpui::Entity<WorkspaceWindow>);
+
+    impl Render for TitlebarHarness {
+        fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let sidebar_visible = self.0.read(cx).sidebar_visible();
+            let minimap_visible = self.0.read(cx).minimap_visible();
+            document_titlebar(self.0.clone(), sidebar_visible, minimap_visible)
+        }
+    }
+
+    #[gpui::test]
+    fn document_titlebar_places_working_sidebar_and_minimap_controls(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        let workspace_for_view = workspace.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| TitlebarHarness(workspace_for_view));
+
+        let bar = cx
+            .debug_bounds("document-titlebar")
+            .expect("document titlebar should be rendered");
+        let button = cx
+            .debug_bounds("document-titlebar-sidebar-toggle")
+            .expect("sidebar toggle should be rendered");
+        assert_eq!(bar.size.height, px(crate::app::TITLEBAR_HEIGHT));
+        let icon = cx
+            .debug_bounds("document-titlebar-sidebar-icon")
+            .expect("sidebar icon should be rendered");
+        let minimap_button = cx
+            .debug_bounds("document-titlebar-minimap-toggle")
+            .expect("minimap toggle should be rendered");
+        let minimap_icon = cx
+            .debug_bounds("document-titlebar-minimap-icon")
+            .expect("minimap icon should be rendered");
+        assert_eq!(button.size, gpui::size(px(32.0), px(32.0)));
+        assert_eq!(icon.size, gpui::size(px(19.0), px(16.0)));
+        assert_eq!(minimap_button.size, gpui::size(px(32.0), px(32.0)));
+        assert_eq!(minimap_icon.size, gpui::size(px(19.0), px(16.0)));
+        assert_eq!(button.left(), px(crate::app::TITLEBAR_LEADING_INSET));
+        assert!(minimap_button.right() <= bar.right());
+
+        cx.simulate_mouse_move(button.center(), None, Modifiers::default());
+        cx.simulate_click(button.center(), Modifiers::default());
+        assert!(workspace.read_with(cx, |workspace, _| workspace.sidebar_visible()));
+
+        let minimap_was_visible =
+            workspace.read_with(cx, |workspace, _| workspace.minimap_visible());
+        cx.simulate_mouse_move(minimap_button.center(), None, Modifiers::default());
+        cx.simulate_click(minimap_button.center(), Modifiers::default());
+        assert_ne!(
+            workspace.read_with(cx, |workspace, _| workspace.minimap_visible()),
+            minimap_was_visible
+        );
     }
 }

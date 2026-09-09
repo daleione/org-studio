@@ -227,6 +227,7 @@ impl SemanticEditor {
         editor.generated_highlights = Some(highlights);
         editor.display_map.set_soft_wrap(false);
         editor.minimap.visible = false;
+        editor.minimap.reveal = 0.0;
         editor.inline_image_previews = false;
         editor
     }
@@ -243,6 +244,7 @@ impl SemanticEditor {
         editor.generated_highlights = Some(highlights);
         editor.display_map.set_soft_wrap(false);
         editor.minimap.visible = false;
+        editor.minimap.reveal = 0.0;
         editor.inline_image_previews = false;
         editor.activate_read_only_lines = true;
         editor

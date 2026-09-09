@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use gpui::Context;
 
 use crate::app::WorkspaceWindow;
@@ -36,6 +38,21 @@ pub(crate) fn width_from_resize(
 }
 
 impl WorkspaceWindow {
+    pub(crate) fn sidebar_reveal_at(&self, now: Instant) -> (f32, bool) {
+        let Some(animation) = self.file_manager.sidebar_visibility_animation else {
+            return (
+                if self.file_manager.sidebar_visible {
+                    1.0
+                } else {
+                    0.0
+                },
+                false,
+            );
+        };
+        let sample = animation.sample(now);
+        (sample.value, sample.active)
+    }
+
     pub(crate) fn focus_sidebar(&mut self, cx: &mut Context<Self>) {
         if self.file_manager.sidebar_visible && !self.file_manager.sidebar_focused {
             self.file_manager.sidebar_focused = true;
@@ -68,6 +85,7 @@ impl WorkspaceWindow {
         cx: &mut Context<Self>,
     ) {
         let width = self.rendered_sidebar_width(viewport_width);
+        self.file_manager.sidebar_visibility_animation = None;
         self.file_manager.sidebar_resize = Some(ResizeSession {
             start_pointer_x: pointer_x,
             start_width: width,
@@ -136,6 +154,7 @@ impl WorkspaceWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::motion::Tween;
 
     #[test]
     fn sidebar_width_honors_product_and_window_constraints() {
@@ -154,5 +173,28 @@ mod tests {
         };
         assert_eq!(width_from_resize(1_200.0, session, 300.0), 300.0);
         assert_eq!(width_from_resize(1_200.0, session, 100.0), 180.0);
+    }
+
+    #[test]
+    fn sidebar_reveal_animation_is_smooth_and_bounded() {
+        let started_at = Instant::now();
+        let mut workspace = WorkspaceWindow::with_split_layout(false);
+        workspace.file_manager.sidebar_visible = true;
+        workspace.file_manager.sidebar_visibility_animation = Some(Tween::new(
+            started_at,
+            0.0,
+            1.0,
+            super::super::SIDEBAR_MOTION,
+        ));
+
+        assert_eq!(workspace.sidebar_reveal_at(started_at), (0.0, true));
+        let halfway = workspace
+            .sidebar_reveal_at(started_at + super::super::SIDEBAR_MOTION.duration() / 2)
+            .0;
+        assert!(halfway > 0.0 && halfway < 1.0);
+        assert_eq!(
+            workspace.sidebar_reveal_at(started_at + super::super::SIDEBAR_MOTION.duration()),
+            (1.0, false)
+        );
     }
 }

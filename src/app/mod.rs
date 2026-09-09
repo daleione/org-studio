@@ -14,6 +14,7 @@ use gpui::{FocusHandle, Subscription, Task};
 use crate::{
     command::CommandRegistry,
     input::{ContextSet, KeyboardRouter},
+    motion::Tween,
 };
 
 use echo_area::EchoAreaHost;
@@ -39,6 +40,11 @@ pub(crate) mod status_line;
 mod workspace;
 
 pub(crate) const TITLEBAR_HEIGHT: f32 = 38.0;
+#[cfg(target_os = "macos")]
+pub(crate) const TITLEBAR_LEADING_INSET: f32 = 78.0;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const TITLEBAR_LEADING_INSET: f32 = 8.0;
+pub(crate) const TITLEBAR_TRAILING_INSET: f32 = 8.0;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PaneSurface {
@@ -303,6 +309,7 @@ pub struct WorkspaceWindow {
     pub(crate) split_resize: Option<split_layout::ResizeSession>,
     pub(crate) soft_wrap: bool,
     pub(crate) minimap_visible: bool,
+    pub(crate) minimap_visibility_animation: Option<Tween>,
     pub(crate) minimap_thumb_visibility: crate::settings::MinimapThumbVisibility,
     pub(crate) minimap_width: Option<u16>,
     pub(crate) minimap_resize_preview: Option<f32>,

@@ -9,6 +9,7 @@ use gpui::{Context, PathPromptOptions};
 use crate::preview::{WorkspaceReloadedDocument, reload_workspace_document};
 use crate::{
     app::{ContentRoute, PanePair, ReadyDocument, WorkspaceLoadState, WorkspaceWindow},
+    motion::{MINIMAP_MOTION, Tween},
     preview::{
         InitialDocumentLoad, ReadingPreviewPanel, WorkspaceLoadedDocument, accept_generation,
         is_supported_document, load_workspace_document, minimap,
@@ -17,6 +18,14 @@ use crate::{
 use gpui::AppContext;
 
 impl WorkspaceWindow {
+    pub(crate) fn minimap_reveal_at(&self, now: Instant) -> (f32, bool) {
+        let Some(animation) = self.minimap_visibility_animation else {
+            return (if self.minimap_visible { 1.0 } else { 0.0 }, false);
+        };
+        let sample = animation.sample(now);
+        (sample.value, sample.active)
+    }
+
     pub(crate) fn show_home_now(&mut self, cx: &mut Context<Self>) {
         self.suspend_derived_preview();
         self.derived.latest = None;
@@ -752,16 +761,22 @@ impl WorkspaceWindow {
     }
 
     pub fn toggle_minimap(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let from = self.minimap_reveal_at(now).0;
+        let animate = !cx.reduce_motion();
         self.minimap_visible = !self.minimap_visible;
-        if let Some(document) = self.state.ready() {
-            for editor in [&document.editors.left, &document.editors.right]
-                .into_iter()
-                .flatten()
-            {
-                editor.update(cx, |editor, cx| {
-                    editor.set_minimap(self.minimap_visible, self.minimap_width, cx)
-                });
-            }
+        self.minimap_visibility_animation = animate.then_some(Tween::new(
+            now,
+            from,
+            if self.minimap_visible { 1.0 } else { 0.0 },
+            MINIMAP_MOTION,
+        ));
+        if !self.minimap_visible {
+            self.minimap_resize_preview = None;
+            self.cancel_minimap_interaction(cx);
+        }
+        if !animate {
+            self.propagate_editor_minimap_settings(cx);
         }
         if self.minimap_visible {
             cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
@@ -775,6 +790,40 @@ impl WorkspaceWindow {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_is_the_single_source_of_minimap_animation_progress() {
+        let started_at = Instant::now();
+        let mut workspace = WorkspaceWindow::with_split_layout(false);
+        workspace.minimap_visible = false;
+        workspace.minimap_visibility_animation =
+            Some(Tween::new(started_at, 1.0, 0.0, MINIMAP_MOTION));
+
+        assert_eq!(workspace.minimap_reveal_at(started_at), (1.0, true));
+        let halfway = workspace
+            .minimap_reveal_at(started_at + MINIMAP_MOTION.duration() / 2)
+            .0;
+        assert!(halfway > 0.0 && halfway < 1.0);
+        assert_eq!(
+            workspace.minimap_reveal_at(started_at + MINIMAP_MOTION.duration()),
+            (0.0, false)
+        );
+    }
+
+    #[gpui::test]
+    fn minimap_toggle_finishes_immediately_when_motion_is_reduced(cx: &mut gpui::TestAppContext) {
+        cx.update(|cx| cx.set_reduce_motion(true));
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+
+        workspace.update(cx, |workspace, cx| {
+            workspace.minimap_visible = true;
+            workspace.minimap_visibility_animation = None;
+            workspace.toggle_minimap(cx);
+            assert!(!workspace.minimap_visible);
+            assert!(workspace.minimap_visibility_animation.is_none());
+            assert_eq!(workspace.minimap_reveal_at(Instant::now()), (0.0, false));
+        });
+    }
 
     #[gpui::test]
     fn opening_a_document_always_restores_soft_wrap(cx: &mut gpui::TestAppContext) {

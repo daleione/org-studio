@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::{Duration, Instant, SystemTime},
 };
 
 use gpui::{
@@ -15,6 +15,7 @@ use crate::{
     file_manager::{
         ConflictPolicy, DiredSession, EntryKind, Mark, OperationPlan, scan_directory_cancellable,
     },
+    motion::{Easing, MotionSpec, Tween},
     navigation::{NavigationCause, SelectionIntent, TransactionId, ViewRevision},
     preview::dired_command_items,
     theme::current_theme,
@@ -50,6 +51,9 @@ enum DiredRowSurface {
     Sidebar,
 }
 
+const SIDEBAR_MOTION: MotionSpec =
+    MotionSpec::new(Duration::from_millis(170), Easing::EaseOutCubic);
+
 pub(crate) struct FileManagerHost {
     watch_task: Option<gpui::Task<()>>,
     watch_request: u64,
@@ -59,6 +63,7 @@ pub(crate) struct FileManagerHost {
     sidebar_focused: bool,
     sidebar_width: u16,
     sidebar_resize: Option<sidebar::ResizeSession>,
+    sidebar_visibility_animation: Option<Tween>,
     session: Option<DiredSession>,
     status: Option<super::DiredStatus>,
     task: Option<gpui::Task<()>>,
@@ -87,6 +92,7 @@ impl FileManagerHost {
             sidebar_focused: false,
             sidebar_width: crate::settings::initial_sidebar_width(sidebar_width),
             sidebar_resize: None,
+            sidebar_visibility_animation: None,
             session: None,
             status: None,
             task: None,
@@ -439,7 +445,21 @@ impl WorkspaceWindow {
     }
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        let now = Instant::now();
+        let from = self.sidebar_reveal_at(now).0;
         self.file_manager.sidebar_visible = !self.file_manager.sidebar_visible;
+        self.file_manager.sidebar_resize = None;
+        self.file_manager.sidebar_visibility_animation =
+            (!cx.reduce_motion()).then_some(Tween::new(
+                now,
+                from,
+                if self.file_manager.sidebar_visible {
+                    1.0
+                } else {
+                    0.0
+                },
+                SIDEBAR_MOTION,
+            ));
         if self.file_manager.sidebar_visible {
             if let Some(path) = self
                 .document_path(cx)
@@ -641,13 +661,22 @@ impl WorkspaceWindow {
         &self,
         entity: Entity<Self>,
         viewport_width: f32,
+        minimap_reveal: f32,
         window: &Window,
         cx: &gpui::App,
     ) -> gpui::Div {
         if matches!(self.state, WorkspaceLoadState::Empty)
             && self.content_route == ContentRoute::Document
         {
-            return self.body(entity, viewport_width, window, cx);
+            return self.body(entity, viewport_width, minimap_reveal, window, cx);
+        }
+        let (sidebar_reveal, sidebar_animating) = if self.content_route == ContentRoute::Document {
+            self.sidebar_reveal_at(Instant::now())
+        } else {
+            (0.0, false)
+        };
+        if sidebar_animating {
+            window.request_animation_frame();
         }
         let body = match self.content_route {
             ContentRoute::Agenda => div().size_full().child(self.agenda.render(
@@ -666,20 +695,33 @@ impl WorkspaceWindow {
             ContentRoute::FileManager => {
                 self.full_page_file_manager(entity.clone(), viewport_width, window, cx)
             }
-            ContentRoute::Document if self.file_manager.sidebar_visible => {
-                let sidebar_width = self.rendered_sidebar_width(viewport_width);
-                let editor_width = (viewport_width - sidebar_width - sidebar::RESIZE_HANDLE_PX)
+            ContentRoute::Document if sidebar_reveal > 0.0 => {
+                let full_sidebar_width = self.rendered_sidebar_width(viewport_width);
+                let sidebar_width = full_sidebar_width * sidebar_reveal;
+                let resize_handle_width = sidebar::RESIZE_HANDLE_PX * sidebar_reveal;
+                let editor_width = (viewport_width - sidebar_width - resize_handle_width)
                     .max(sidebar::MIN_DOCUMENT_WIDTH_PX);
                 let resize_entity = entity.clone();
                 let document_entity = entity.clone();
                 div()
                     .size_full()
                     .flex()
-                    .child(self.file_sidebar(entity.clone(), sidebar_width, cx))
+                    .child(
+                        div()
+                            .flex_none()
+                            .w(px(sidebar_width))
+                            .h_full()
+                            .overflow_hidden()
+                            .child(
+                                self.file_sidebar(entity.clone(), full_sidebar_width, cx)
+                                    .relative()
+                                    .left(px(-(1.0 - sidebar_reveal) * full_sidebar_width)),
+                            ),
+                    )
                     .child(
                         div()
                             .id("file-sidebar-resize-handle")
-                            .w(px(sidebar::RESIZE_HANDLE_PX))
+                            .w(px(resize_handle_width))
                             .h_full()
                             .flex_none()
                             .flex()
@@ -711,10 +753,18 @@ impl WorkspaceWindow {
                                     this.focus_document(cx);
                                 });
                             })
-                            .child(self.body(entity.clone(), editor_width, window, cx)),
+                            .child(self.body(
+                                entity.clone(),
+                                editor_width,
+                                minimap_reveal,
+                                window,
+                                cx,
+                            )),
                     )
             }
-            ContentRoute::Document => self.body(entity.clone(), viewport_width, window, cx),
+            ContentRoute::Document => {
+                self.body(entity.clone(), viewport_width, minimap_reveal, window, cx)
+            }
         };
         body.relative()
             .when_some(self.file_manager.context_menu, |body, menu| {

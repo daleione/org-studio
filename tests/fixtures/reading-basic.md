@@ -6,8 +6,8 @@ Paragraph with **bold** and [link](https://example.com).
 - [x] done
 
 | Name | Score |
-| :--- | ---: |
-| Ada  | 42 |
+| :--- | ----: |
+| Ada  | 42    |
 
 > Quoted text
 

@@ -172,8 +172,7 @@ pub fn preload_initial_document(path: PathBuf, cx: &App) -> InitialDocumentLoad 
     }
 }
 
-pub(crate) fn configured_minimap_visible() -> bool {
-    let preview_settings = crate::settings::WorkspaceSettings::load();
+pub(crate) fn configured_minimap_visible(fallback: bool) -> bool {
     std::env::var("ORG_STUDIO_MINIMAP")
         .ok()
         .and_then(|value| match value.as_str() {
@@ -181,7 +180,7 @@ pub(crate) fn configured_minimap_visible() -> bool {
             "0" | "false" | "off" => Some(false),
             _ => None,
         })
-        .unwrap_or(preview_settings.minimap_enabled)
+        .unwrap_or(fallback)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

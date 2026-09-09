@@ -92,6 +92,16 @@ pub(crate) struct TweenSample {
 
 pub(crate) const FOLD_MOTION: MotionSpec =
     MotionSpec::new(Duration::from_millis(160), Easing::EaseOutCubic);
+pub(crate) const MINIMAP_MOTION: MotionSpec =
+    MotionSpec::new(Duration::from_millis(170), Easing::EaseOutCubic);
+
+/// Returns the space reserved by layout and the currently revealed visual width.
+/// Layout follows the target state so an animated panel does not reflow content every frame.
+pub(crate) fn sliding_panel_widths(width: f32, visible: bool, reveal: f32) -> (f32, f32) {
+    let width = width.max(0.0);
+    let layout_width = if visible { width } else { 0.0 };
+    (layout_width, width * reveal.clamp(0.0, 1.0))
+}
 
 #[cfg(test)]
 mod tests {
@@ -137,5 +147,16 @@ mod tests {
                 active: false,
             }
         );
+    }
+
+    #[test]
+    fn sliding_panel_animation_does_not_change_layout_width() {
+        let opening = [0.0, 0.25, 0.75, 1.0].map(|reveal| sliding_panel_widths(96.0, true, reveal));
+        assert!(opening.iter().all(|(layout, _)| *layout == 96.0));
+        assert_eq!(opening.map(|(_, visual)| visual), [0.0, 24.0, 72.0, 96.0]);
+
+        let closing = [1.0, 0.5, 0.0].map(|reveal| sliding_panel_widths(96.0, false, reveal));
+        assert!(closing.iter().all(|(layout, _)| *layout == 0.0));
+        assert_eq!(closing.map(|(_, visual)| visual), [96.0, 48.0, 0.0]);
     }
 }

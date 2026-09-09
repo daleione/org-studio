@@ -382,12 +382,21 @@ impl Element for EditorElement {
         let editor_font_size = self.editor.read(cx).font_size_px();
         let generated = self.editor.read(cx).generated_highlights.is_some();
         let gutter_width = digits as f32 * editor_font_size * 0.6 + GUTTER_PADDING * 2.0;
-        let minimap_width = if self.editor.read(cx).minimap.visible {
-            self.editor.read(cx).minimap.width
-        } else {
-            0.0
+        let (minimap_full_width, minimap_visible, minimap_reveal) = {
+            let editor = self.editor.read(cx);
+            (
+                editor.minimap.width,
+                editor.minimap.visible,
+                editor.minimap.reveal,
+            )
         };
-        let wrap_width = (f32::from(bounds.size.width) - gutter_width - minimap_width).max(1.0);
+        let (minimap_layout_width, minimap_visual_width) = crate::motion::sliding_panel_widths(
+            minimap_full_width,
+            minimap_visible,
+            minimap_reveal,
+        );
+        let wrap_width =
+            (f32::from(bounds.size.width) - gutter_width - minimap_layout_width).max(1.0);
         self.editor.update(cx, |editor, _| {
             let viewport_height = f32::from(bounds.size.height);
             let was_at_end = scroll_is_at_end(
@@ -586,8 +595,15 @@ impl Element for EditorElement {
         let mut caret = None;
         let mut next_y = first_line_y;
         let minimap_bounds = Bounds::new(
-            point(bounds.right() - px(minimap_width), bounds.top()),
-            size(px(minimap_width), bounds.size.height),
+            point(bounds.right() - px(minimap_visual_width), bounds.top()),
+            size(
+                px(if minimap_visual_width > 0.0 {
+                    minimap_full_width
+                } else {
+                    0.0
+                }),
+                bounds.size.height,
+            ),
         );
 
         for line_number in paint_lines {
@@ -932,7 +948,7 @@ impl Element for EditorElement {
             schedule_minimap_layout_preparation(self.editor.clone(), request, cx);
         }
         let viewport_text_left = bounds.left() + px(gutter_width);
-        let viewport_text_right = bounds.right() - px(minimap_width);
+        let viewport_text_right = bounds.right() - px(minimap_layout_width);
         let (block_left, block_minimum_right) = editor_block_horizontal_bounds(
             viewport_text_left,
             viewport_text_right,
@@ -1358,10 +1374,11 @@ impl Element for EditorElement {
         let _benchmark = self.editor.update(cx, |editor, cx| {
             let viewport_changed = editor.viewport != Some(bounds);
             editor.viewport = Some(bounds);
-            editor.minimap.bounds = editor.minimap.visible.then_some(Bounds::new(
-                point(bounds.right() - px(editor.minimap.width), bounds.top()),
-                size(px(editor.minimap.width), bounds.size.height),
-            ));
+            editor.minimap.bounds = (editor.minimap.visible && editor.minimap.reveal >= 1.0)
+                .then_some(Bounds::new(
+                    point(bounds.right() - px(editor.minimap.width), bounds.top()),
+                    size(px(editor.minimap.width), bounds.size.height),
+                ));
             editor.hit_rows = hits;
             editor.source_run_buttons = source_run_button_hits;
             if editor.display_map.soft_wrap() {
@@ -1556,7 +1573,7 @@ fn build_minimap(
     theme: &crate::theme::Theme,
 ) -> (MinimapPaint, Option<MinimapRasterRequest>) {
     editor.minimap.note_semantics_pending(semantics_pending);
-    if !editor.minimap.visible || f32::from(bounds.size.width) <= 0.0 {
+    if f32::from(bounds.size.width) <= 0.0 {
         return (
             MinimapPaint {
                 bounds,

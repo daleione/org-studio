@@ -19,6 +19,7 @@ use gpui::{list, prelude::*};
 
 pub(crate) struct ReadingRenderOptions {
     pub(crate) minimap_visible: bool,
+    pub(crate) minimap_reveal: f32,
     pub(crate) pane_width: f32,
     pub(crate) minimap_width: f32,
     pub(crate) minimap_resize_preview: Option<f32>,
@@ -51,6 +52,7 @@ pub(crate) fn render_reading_document(
     } = state;
     let ReadingRenderOptions {
         minimap_visible,
+        minimap_reveal,
         pane_width,
         minimap_width,
         minimap_resize_preview,
@@ -61,6 +63,9 @@ pub(crate) fn render_reading_document(
         dispatch_action,
         change_minimap_width,
     } = options;
+    let (minimap_layout_width, minimap_visual_width) =
+        crate::motion::sliding_panel_widths(minimap_width, minimap_visible, minimap_reveal);
+    let minimap_interactive = minimap_visible && minimap_reveal >= 1.0;
     let palette = style.palette;
     let reading_display_map = document.display_map.clone();
     let minimap_list_state = list_state.clone();
@@ -103,7 +108,8 @@ pub(crate) fn render_reading_document(
         })
         .child(
             div()
-                .flex_1()
+                .flex_none()
+                .w(px((pane_width - minimap_layout_width).max(0.0)))
                 .min_w_0()
                 .h_full()
                 .flex()
@@ -116,10 +122,8 @@ pub(crate) fn render_reading_document(
                     let fold_animation = fold_animation.clone();
                     let interaction = interaction.clone();
                     list(list_state, move |index, _window, _cx| {
-                        let available_width = {
-                            let minimap = if minimap_visible { minimap_width } else { 0.0 };
-                            reading_content_width(pane_width, minimap, style)
-                        };
+                        let available_width =
+                            { reading_content_width(pane_width, minimap_layout_width, style) };
                         if let Some(animation) = fold_animation.as_ref()
                             && let Some(shell) = animation.segment_at(index)
                         {
@@ -201,31 +205,58 @@ pub(crate) fn render_reading_document(
                 }),
         )
         .when_some(
-            minimap_visible.then_some(reading_display_map).flatten(),
+            (minimap_visual_width > 0.0)
+                .then_some(reading_display_map)
+                .flatten(),
             |layout, display_map| {
-                layout.child(minimap::render(
-                    document.clone(),
-                    display_map,
-                    minimap_state.clone(),
-                    minimap_rows.clone(),
-                    fold_markers.clone(),
-                    minimap_list_state,
-                    pane_width,
-                    minimap_width,
-                    minimap_thumb_visibility,
-                    generation,
-                    geometry_revision,
-                    zoom,
-                    style,
-                    allow_minimap_refinement,
-                    opened_at,
-                    move |_source_target, offset, window, cx| {
-                        minimap_entity.update(cx, |this, cx| {
-                            this.seek_minimap(geometry_revision, offset, window, cx);
-                        });
-                    },
-                    move |change, _, cx| change_minimap_width(change, cx),
-                ))
+                layout.child(
+                    div()
+                        .absolute()
+                        .right_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(px(minimap_visual_width))
+                        .overflow_hidden()
+                        .child(minimap::render(
+                            document.clone(),
+                            display_map,
+                            minimap_state.clone(),
+                            minimap_rows.clone(),
+                            fold_markers.clone(),
+                            minimap_list_state,
+                            pane_width,
+                            minimap_width,
+                            minimap_thumb_visibility,
+                            generation,
+                            geometry_revision,
+                            zoom,
+                            style,
+                            allow_minimap_refinement,
+                            opened_at,
+                            move |_source_target, offset, window, cx| {
+                                minimap_entity.update(cx, |this, cx| {
+                                    this.seek_minimap(geometry_revision, offset, window, cx);
+                                });
+                            },
+                            move |change, _, cx| change_minimap_width(change, cx),
+                        ))
+                        .when(!minimap_interactive, |minimap| {
+                            minimap.child(
+                                div()
+                                    .absolute()
+                                    .top_0()
+                                    .right_0()
+                                    .bottom_0()
+                                    .left_0()
+                                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| {
+                                        cx.stop_propagation();
+                                    })
+                                    .on_scroll_wheel(|_, _, cx| {
+                                        cx.stop_propagation();
+                                    }),
+                            )
+                        }),
+                )
             },
         )
         .when_some(minimap_resize_preview, |layout, width| {
