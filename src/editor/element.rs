@@ -5,9 +5,9 @@ use std::{ops::Range, sync::Arc};
 
 use gpui::{
     App, BorderStyle, Bounds, ContentMask, Corners, CursorStyle, Edges, Element, ElementId,
-    ElementInputHandler, GlobalElementId, Hitbox, HitboxBehavior, LayoutId, PaintQuad, Pixels,
-    RenderImage, ShapedLine, Style, TextAlign, TextRun, Window, WrappedLine, fill, outline, point,
-    px, quad, relative, rgba, size,
+    ElementInputHandler, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, LayoutId, PaintQuad,
+    Pixels, RenderImage, ShapedLine, Style, TextAlign, TextRun, Window, WrappedLine, fill, outline,
+    point, px, quad, relative, rgba, size,
 };
 
 use crate::{
@@ -530,6 +530,7 @@ impl Element for EditorElement {
             })
             .collect::<std::collections::HashMap<_, _>>();
         let editor = self.editor.read(cx);
+        let editor_focused = editor.focus_handle.is_focused(window);
         let selection = editor.selection;
         let marked = editor.marked.as_ref().map(|range| range.bytes);
         let scroll_y = editor.scroll_y;
@@ -720,10 +721,20 @@ impl Element for EditorElement {
                 layout.wrap_boundaries().len() + 1
             };
             let number: gpui::SharedString = (line_number + 1).to_string().into();
+            let active_gutter = anchor.is_some() && editor_focused;
+            let mut gutter_font = style.font();
+            if active_gutter {
+                gutter_font.weight = FontWeight::SEMIBOLD;
+            }
             let gutter_run = TextRun {
                 len: number.len(),
-                font: style.font(),
-                color: gpui::rgb(theme.foreground_dim).into(),
+                font: gutter_font,
+                color: gpui::rgb(if active_gutter {
+                    theme.link
+                } else {
+                    theme.foreground_dim
+                })
+                .into(),
                 background_color: None,
                 underline: None,
                 strikethrough: None,
