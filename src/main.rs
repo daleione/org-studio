@@ -15,6 +15,7 @@ use org_studio::{
         ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
         UseEnglish, preload_initial_document,
     },
+    window_state,
 };
 
 const DISABLE_INACTIVE_THROTTLE_ENV: &str = "ORG_STUDIO_BENCH_DISABLE_INACTIVE_THROTTLE";
@@ -67,6 +68,16 @@ impl ApplicationController {
                     } else if let Some(path) = path {
                         preview.open(path, cx);
                     }
+                    // Track the window's placement so the next launch reopens
+                    // on the same display instead of always re-centering on
+                    // the primary (menu-bar) display.
+                    cx.observe_window_bounds(window, |_, window, cx| {
+                        window_state::remember(
+                            window.bounds(),
+                            window.display(cx).map(|display| display.id()),
+                        );
+                    })
+                    .detach();
                     preview
                 });
                 window.activate_window();
@@ -94,17 +105,32 @@ fn preview_window_options(cx: &mut App) -> WindowOptions {
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|value| value.is_finite() && *value >= 240.0)
         .unwrap_or(720.0);
-    let bounds = Bounds::centered(
-        requested_display,
-        size(px(window_width), px(window_height)),
-        cx,
-    );
+
+    // Benchmark/determinism overrides win outright and never reuse persisted
+    // placement state.
+    let benchmark_overrides = std::env::var_os("ORG_STUDIO_DISPLAY_INDEX").is_some()
+        || std::env::var_os("ORG_STUDIO_WINDOW_WIDTH").is_some()
+        || std::env::var_os("ORG_STUDIO_WINDOW_HEIGHT").is_some();
+    let (bounds, display_id) = if benchmark_overrides {
+        (
+            Bounds::centered(
+                requested_display,
+                size(px(window_width), px(window_height)),
+                cx,
+            ),
+            requested_display,
+        )
+    } else {
+        window_state::restored_placement(cx, size(px(window_width), px(window_height)))
+    };
+
     let mut options = WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(bounds)),
         // Centered bounds alone are ambiguous when multiple macOS displays share
         // the same logical origin. Preserve the selected display through native
-        // window creation so benchmarks actually run on the requested panel.
-        display_id: requested_display,
+        // window creation so benchmarks run on the requested panel and restored
+        // windows reopen on the display they last lived on.
+        display_id,
         titlebar: Some(TitlebarOptions {
             title: Some(SharedString::from("Org Studio")),
             appears_transparent: true,
@@ -221,6 +247,9 @@ fn main() {
             {
                 controller.main_window = None;
             }
+            // Persist the final placement synchronously so the next launch
+            // (or reopen after this window closed) lands on the same display.
+            window_state::flush();
             if cx.windows().is_empty() {
                 cx.quit();
             }

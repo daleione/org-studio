@@ -23,3 +23,4 @@ mod syntax_highlighting;
 pub mod theme;
 pub mod typography;
 pub mod typst_runtime;
+pub mod window_state;
