@@ -559,7 +559,7 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
 pub(crate) fn document_keymap(commands: &Arc<CommandRegistry>) -> (KeyboardRouter, ContextSet) {
     let contexts = built_in_contexts();
     // Editing remains the primary interaction surface whether the right preview is open or not.
-    let bindings = workspace_bindings();
+    let bindings = source_bindings();
     let active_contexts = vec!["workspace", "editor"];
     let active_context = contexts
         .set(active_contexts.clone())
@@ -580,6 +580,43 @@ pub(crate) fn document_keymap(commands: &Arc<CommandRegistry>) -> (KeyboardRoute
         configuration.enabled_when,
     );
     (keyboard, active_context)
+}
+
+pub(crate) fn source_bindings() -> Vec<BindingSpec<'static>> {
+    let mut bindings = workspace_bindings();
+    bindings.extend(
+        [
+            "C-a",
+            "C-e",
+            "C-f",
+            "C-b",
+            "C-n",
+            "C-p",
+            "M-f",
+            "M-b",
+            "C-d",
+            "C-h",
+            "C-k",
+            "C-w",
+            "M-w",
+            "C-y",
+            "M-d",
+            "M-backspace",
+            "C-o",
+            "C-t",
+            "C-SPC",
+            "C-/",
+            "C-_",
+            "C-v",
+            "M-v",
+        ]
+        .into_iter()
+        .map(|keys| BindingSpec {
+            keys,
+            behavior: BindingBehavior::PassThrough,
+        }),
+    );
+    bindings
 }
 
 pub(crate) fn built_in_contexts() -> crate::input::ContextRegistry {
@@ -880,4 +917,32 @@ pub(crate) fn display_dired_key(key: &str) -> &str {
 
 pub(crate) fn command_count(prefix: PrefixArgument) -> f32 {
     prefix.effective_count().unwrap_or(1).clamp(-1_000, 1_000) as f32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{input::EmacsOutcome, keymap::KeyStroke};
+
+    #[test]
+    fn source_keymap_passes_editor_emacs_keys_and_escape_meta() {
+        let (commands, mut keyboard, context) = document_input();
+        assert!(commands.key(SAVE_DOCUMENT_COMMAND).is_some());
+        assert_eq!(
+            keyboard.route(KeyStroke::parse("C-a").unwrap(), context),
+            EmacsOutcome::PassThrough
+        );
+        assert_eq!(
+            keyboard.route(KeyStroke::parse("M-f").unwrap(), context),
+            EmacsOutcome::PassThrough
+        );
+        assert_eq!(
+            keyboard.route(KeyStroke::parse("escape").unwrap(), context),
+            EmacsOutcome::Pending
+        );
+        assert_eq!(
+            keyboard.route(KeyStroke::parse("f").unwrap(), context),
+            EmacsOutcome::PassThrough
+        );
+    }
 }

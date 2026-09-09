@@ -40,6 +40,7 @@ impl SemanticEditor {
             )
         });
         if result.is_ok() {
+            self.emacs_mark_active = false;
             self.hit_rows = Arc::from([]);
             self.pending_reveal_caret = true;
             self.command_feedback = None;
@@ -140,6 +141,7 @@ impl SemanticEditor {
     ) {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
+        let extend = extend || self.emacs_mark_active;
         let snapshot = self.snapshot(cx);
         let inline_image_edge = self.selection.is_empty().then(|| {
             self.hit_rows
@@ -206,6 +208,7 @@ impl SemanticEditor {
 
     fn move_vertical(&mut self, delta: i64, extend: bool, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        let extend = extend || self.emacs_mark_active;
         let snapshot = self.snapshot(cx);
         let head = self.selection.head();
         let head_line = snapshot.line_index_at(head).ok();
@@ -272,7 +275,12 @@ impl SemanticEditor {
         if let Ok(line) = snapshot.line_index_at(self.selection.head())
             && let Ok(range) = snapshot.line_content_range(line)
         {
-            self.selection = Selection::caret(if end { range.end } else { range.start });
+            let target = if end { range.end } else { range.start };
+            self.selection = if self.emacs_mark_active {
+                self.selection.with_head(target)
+            } else {
+                Selection::caret(target)
+            };
             self.sync_selection_utf16(&snapshot);
             self.reveal_caret(&snapshot);
             cx.notify();
@@ -307,6 +315,7 @@ impl SemanticEditor {
 
     fn select_all(&mut self, _: &SelectAll, _: &mut Window, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.emacs_mark_active = false;
         let snapshot = self.snapshot(cx);
         self.selection = Selection::new(ByteOffset(0), ByteOffset(snapshot.len_bytes()));
         self.sync_selection_utf16(&snapshot);
@@ -911,6 +920,7 @@ impl SemanticEditor {
 
     fn undo(&mut self, _: &Undo, _: &mut Window, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.emacs_mark_active = false;
         if let Ok(HistoryOutcome::Applied(selection)) =
             self.session.update(cx, |session, cx| session.undo(cx))
         {
@@ -926,6 +936,7 @@ impl SemanticEditor {
 
     fn redo(&mut self, _: &Redo, _: &mut Window, cx: &mut Context<Self>) {
         self.finish_composition(cx);
+        self.emacs_mark_active = false;
         if let Ok(HistoryOutcome::Applied(selection)) =
             self.session.update(cx, |session, cx| session.redo(cx))
         {
@@ -964,6 +975,172 @@ impl SemanticEditor {
         }
     }
 
+    fn kill_line(&mut self, _: &KillLine, _: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot(cx);
+        let point = self.selection.head();
+        let Some(range) = snapshot.line_index_at(point).ok().and_then(|line| {
+            let content = snapshot.line_content_range(line).ok()?;
+            let complete = snapshot.line_range(line).ok()?;
+            if point < content.end {
+                Some(ByteRange::new(point.0, content.end.0))
+            } else if point < complete.end {
+                Some(ByteRange::new(point.0, complete.end.0))
+            } else {
+                None
+            }
+        }) else {
+            return;
+        };
+        self.kill_range(&snapshot, range, cx);
+    }
+
+    fn kill_word(&mut self, _: &KillWord, _: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot(cx);
+        let point = self.selection.head();
+        self.kill_range(
+            &snapshot,
+            ByteRange::new(point.0, word_boundary(&snapshot, point, true).0),
+            cx,
+        );
+    }
+
+    fn backward_kill_word(&mut self, _: &BackwardKillWord, _: &mut Window, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot(cx);
+        let point = self.selection.head();
+        self.kill_range(
+            &snapshot,
+            ByteRange::new(word_boundary(&snapshot, point, false).0, point.0),
+            cx,
+        );
+    }
+
+    fn kill_range(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        range: ByteRange,
+        cx: &mut Context<Self>,
+    ) {
+        if range.is_empty() || self.is_read_only(cx) {
+            return;
+        }
+        let history_before = self.selection;
+        cx.write_to_clipboard(ClipboardItem::new_string(snapshot.copy_range(range)));
+        self.selection = Selection::new(range.start, range.end);
+        self.sync_selection_utf16(snapshot);
+        self.replace_selection_recording("", EditOrigin::Cut, history_before, cx);
+    }
+
+    fn open_line(&mut self, _: &OpenLine, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) {
+            return;
+        }
+        self.finish_composition(cx);
+        self.vertical_goal_x = None;
+        self.emacs_mark_active = false;
+        let before = self.selection;
+        let point = before.head();
+        let after = Selection::caret(point);
+        let newline = self.session.read(cx).newline_sequence().to_owned();
+        let revision = self.session.read(cx).revision();
+        let result = self.session.update(cx, |session, cx| {
+            session.edit(
+                DocumentCommand::new(
+                    EditTransaction::new(
+                        revision,
+                        vec![TextEdit::new(ByteRange::new(point.0, point.0), newline)],
+                    ),
+                    before,
+                    after,
+                    EditOrigin::Newline,
+                ),
+                cx,
+            )
+        });
+        if result.is_ok() {
+            self.hit_rows = Arc::from([]);
+            self.pending_reveal_caret = true;
+            self.selection = after;
+            let snapshot = self.snapshot(cx);
+            self.selection_revision = snapshot.revision();
+            self.sync_selection_utf16(&snapshot);
+            cx.notify();
+        }
+    }
+
+    fn transpose_chars(&mut self, _: &TransposeChars, _: &mut Window, cx: &mut Context<Self>) {
+        if self.is_read_only(cx) || !self.selection.is_empty() {
+            return;
+        }
+        let snapshot = self.snapshot(cx);
+        let point = self.selection.head();
+        let Ok(line) = snapshot.line_index_at(point) else {
+            return;
+        };
+        let Ok(line_range) = snapshot.line_content_range(line) else {
+            return;
+        };
+        let (start, middle, end) = if point >= line_range.end {
+            let middle = snapshot.previous_grapheme_boundary(point).unwrap_or(point);
+            let start = snapshot
+                .previous_grapheme_boundary(middle)
+                .unwrap_or(middle);
+            (start, middle, point)
+        } else {
+            if point <= line_range.start {
+                return;
+            }
+            let start = snapshot.previous_grapheme_boundary(point).unwrap_or(point);
+            let end = snapshot.next_grapheme_boundary(point).unwrap_or(point);
+            (start, point, end)
+        };
+        if start == middle || middle == end {
+            return;
+        }
+        let mut replacement = snapshot.copy_range(ByteRange::new(middle.0, end.0));
+        replacement.push_str(&snapshot.copy_range(ByteRange::new(start.0, middle.0)));
+        let history_before = self.selection;
+        self.selection = Selection::new(start, end);
+        self.sync_selection_utf16(&snapshot);
+        self.replace_selection_recording(&replacement, EditOrigin::Other, history_before, cx);
+    }
+
+    fn set_mark(&mut self, _: &SetMark, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition(cx);
+        let point = self.selection.head();
+        self.emacs_mark_active = true;
+        self.selection = Selection::caret(point);
+        let snapshot = self.snapshot(cx);
+        self.sync_selection_utf16(&snapshot);
+        cx.notify();
+    }
+
+    fn keyboard_quit(&mut self, _: &KeyboardQuit, _: &mut Window, cx: &mut Context<Self>) {
+        self.finish_composition(cx);
+        self.emacs_mark_active = false;
+        self.command_feedback = None;
+        self.selection = Selection::caret(self.selection.head());
+        let snapshot = self.snapshot(cx);
+        self.sync_selection_utf16(&snapshot);
+        cx.notify();
+    }
+
+    fn scroll_page_down(&mut self, _: &ScrollPageDown, _: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_page(true, cx);
+    }
+
+    fn scroll_page_up(&mut self, _: &ScrollPageUp, _: &mut Window, cx: &mut Context<Self>) {
+        self.scroll_page(false, cx);
+    }
+
+    fn scroll_page(&mut self, forward: bool, cx: &mut Context<Self>) {
+        let amount = self
+            .viewport
+            .map_or(self.base_line_height() * 10.0, |viewport| {
+                (f32::from(viewport.size.height) - self.base_line_height()).max(1.0)
+            });
+        self.scroll(0.0, if forward { -amount } else { amount }, cx);
+    }
+
     fn on_mouse_down(
         &mut self,
         event: &MouseDownEvent,
@@ -973,6 +1150,7 @@ impl SemanticEditor {
         window.focus(&self.focus_handle, cx);
         self.finish_composition(cx);
         self.vertical_goal_x = None;
+        self.emacs_mark_active = false;
         if let Some(source_offset) = self
             .source_run_buttons
             .iter()
@@ -1598,6 +1776,15 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
+            .on_action(cx.listener(Self::kill_line))
+            .on_action(cx.listener(Self::kill_word))
+            .on_action(cx.listener(Self::backward_kill_word))
+            .on_action(cx.listener(Self::open_line))
+            .on_action(cx.listener(Self::transpose_chars))
+            .on_action(cx.listener(Self::set_mark))
+            .on_action(cx.listener(Self::keyboard_quit))
+            .on_action(cx.listener(Self::scroll_page_down))
+            .on_action(cx.listener(Self::scroll_page_up))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .on_mouse_move(cx.listener(Self::on_mouse_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_mouse_up))
@@ -1662,6 +1849,133 @@ mod horizontal_scroll_tests {
         let scroll = fold_anchor_scroll_y(900.0, 22.0, 190.0, 200.0, 930.0);
         assert_eq!(scroll, 722.0);
         assert_eq!(900.0 - scroll, 178.0);
+    }
+
+    #[gpui::test]
+    fn emacs_keys_move_mark_kill_and_yank(cx: &mut gpui::TestAppContext) {
+        cx.update(super::super::init);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("emacs.org"),
+                b"alpha beta\nsecond\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view.clone(), cx));
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(2)), cx)
+        });
+        cx.simulate_keystrokes("ctrl-e");
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selection.head()),
+            ByteOffset(10)
+        );
+        cx.simulate_keystrokes("ctrl-a alt-f");
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selection.head()),
+            ByteOffset(5)
+        );
+        cx.simulate_keystrokes("alt-f");
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selection.head()),
+            ByteOffset(10)
+        );
+        cx.simulate_keystrokes("ctrl-a escape f");
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selection.head()),
+            ByteOffset(5)
+        );
+
+        cx.simulate_keystrokes("ctrl-a ctrl-space ctrl-f ctrl-f");
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selection.range()),
+            ByteRange::new(0, 2)
+        );
+        cx.simulate_keystrokes("ctrl-w");
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "al");
+        assert_eq!(
+            session.read_with(cx, |session, _| {
+                let snapshot = session.snapshot();
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+            }),
+            "pha beta\nsecond\n"
+        );
+        cx.simulate_keystrokes("ctrl-y");
+        assert_eq!(
+            session.read_with(cx, |session, _| {
+                let snapshot = session.snapshot();
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+            }),
+            "alpha beta\nsecond\n"
+        );
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(0)), cx)
+        });
+        cx.simulate_keystrokes("ctrl-space ctrl-f ctrl-g");
+        assert!(editor.read_with(cx, |editor, _| editor.selection.is_empty()));
+        assert!(!editor.read_with(cx, |editor, _| editor.emacs_mark_active));
+    }
+
+    #[gpui::test]
+    fn emacs_editing_keys_kill_open_and_transpose(cx: &mut gpui::TestAppContext) {
+        cx.update(super::super::init);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("emacs.org"),
+                b"ab cd\nnext\n".to_vec(),
+            )
+            .unwrap()
+        });
+        let session_for_view = session.clone();
+        let (editor, cx) =
+            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view.clone(), cx));
+        cx.run_until_parked();
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(1)), cx)
+        });
+        cx.simulate_keystrokes("ctrl-t");
+        assert_eq!(
+            session.read_with(cx, |session, _| {
+                let snapshot = session.snapshot();
+                snapshot.copy_range(snapshot.line_content_range(LineIndex(0)).unwrap())
+            }),
+            "ba cd"
+        );
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(2)), cx)
+        });
+        cx.simulate_keystrokes("ctrl-o");
+        assert_eq!(
+            editor.read_with(cx, |editor, _| editor.selection.head()),
+            ByteOffset(2)
+        );
+        assert_eq!(
+            session.read_with(cx, |session, _| {
+                let snapshot = session.snapshot();
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+            }),
+            "ba\n cd\nnext\n"
+        );
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(0)), cx)
+        });
+        cx.simulate_keystrokes("ctrl-k");
+        assert_eq!(cx.read_from_clipboard().unwrap().text().unwrap(), "ba");
+        assert_eq!(
+            session.read_with(cx, |session, _| {
+                let snapshot = session.snapshot();
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+            }),
+            "\n cd\nnext\n"
+        );
     }
 
     #[gpui::test]

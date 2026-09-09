@@ -75,6 +75,15 @@ actions!(
         Copy,
         Cut,
         Paste,
+        KillLine,
+        KillWord,
+        BackwardKillWord,
+        OpenLine,
+        TransposeChars,
+        SetMark,
+        KeyboardQuit,
+        ScrollPageDown,
+        ScrollPageUp,
         RunSourceBlock,
         ToggleInlineImagePreviews
     ]
@@ -127,6 +136,36 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("cmd-c", Copy, Some("SemanticEditor")),
         KeyBinding::new("cmd-x", Cut, Some("SemanticEditor")),
         KeyBinding::new("cmd-v", Paste, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-a", MoveLineStart, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-e", MoveLineEnd, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-f", MoveRight, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-b", MoveLeft, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-n", MoveDown, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-p", MoveUp, Some("SemanticEditor")),
+        KeyBinding::new("alt-f", MoveWordRight, Some("SemanticEditor")),
+        KeyBinding::new("alt-b", MoveWordLeft, Some("SemanticEditor")),
+        KeyBinding::new("escape f", MoveWordRight, Some("SemanticEditor")),
+        KeyBinding::new("escape b", MoveWordLeft, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-d", DeleteForward, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-h", Backspace, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-k", KillLine, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-w", Cut, Some("SemanticEditor")),
+        KeyBinding::new("alt-w", Copy, Some("SemanticEditor")),
+        KeyBinding::new("escape w", Copy, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-y", Paste, Some("SemanticEditor")),
+        KeyBinding::new("alt-d", KillWord, Some("SemanticEditor")),
+        KeyBinding::new("escape d", KillWord, Some("SemanticEditor")),
+        KeyBinding::new("alt-backspace", BackwardKillWord, Some("SemanticEditor")),
+        KeyBinding::new("escape backspace", BackwardKillWord, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-o", OpenLine, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-t", TransposeChars, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-space", SetMark, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-g", KeyboardQuit, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-/", Undo, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-_", Undo, Some("SemanticEditor")),
+        KeyBinding::new("ctrl-v", ScrollPageDown, Some("SemanticEditor")),
+        KeyBinding::new("alt-v", ScrollPageUp, Some("SemanticEditor")),
+        KeyBinding::new("escape v", ScrollPageUp, Some("SemanticEditor")),
         KeyBinding::new(
             "ctrl-c ctrl-x ctrl-v",
             ToggleInlineImagePreviews,
@@ -533,6 +572,7 @@ pub struct SemanticEditor {
     scroll_y: f32,
     scroll_x: f32,
     vertical_goal_x: Option<f32>,
+    emacs_mark_active: bool,
     viewport: Option<Bounds<Pixels>>,
     hit_rows: Arc<[HitRow]>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
@@ -888,6 +928,7 @@ impl SemanticEditor {
             scroll_y: 0.0,
             scroll_x: 0.0,
             vertical_goal_x: None,
+            emacs_mark_active: false,
             viewport: None,
             hit_rows: Arc::from([]),
             source_run_buttons: Arc::from([]),
@@ -1050,6 +1091,7 @@ impl SemanticEditor {
     pub fn set_selection(&mut self, selection: Selection, cx: &mut Context<Self>) {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
+        self.emacs_mark_active = false;
         let snapshot = self.snapshot(cx);
         self.selection = selection.clamp(&snapshot);
         self.selection_revision = snapshot.revision();
@@ -1350,6 +1392,7 @@ fn word_boundary(snapshot: &DocumentSnapshot, offset: ByteOffset, forward: bool)
         if forward {
             let candidate = text
                 .split_word_bound_indices()
+                .filter(|(_, segment)| word_segment(segment))
                 .map(|(segment_start, segment)| segment_start + segment.len())
                 .find(|boundary| *boundary > local)
                 .unwrap_or(text.len());
@@ -1359,6 +1402,7 @@ fn word_boundary(snapshot: &DocumentSnapshot, offset: ByteOffset, forward: bool)
         } else {
             let candidate = text
                 .split_word_bound_indices()
+                .filter(|(_, segment)| word_segment(segment))
                 .map(|(segment_start, _)| segment_start)
                 .take_while(|boundary| *boundary < local)
                 .last()
@@ -1369,6 +1413,12 @@ fn word_boundary(snapshot: &DocumentSnapshot, offset: ByteOffset, forward: bool)
         }
         radius = radius.saturating_mul(2);
     }
+}
+
+fn word_segment(segment: &str) -> bool {
+    segment
+        .chars()
+        .any(|character| character.is_alphanumeric() || character == '_')
 }
 
 #[cfg(test)]

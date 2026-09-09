@@ -14,7 +14,7 @@ use crate::{
     keymap::KeyStroke,
     preview::{
         KEY_FEEDBACK_DURATION, PreviewStyleId, built_in_contexts, command_count, dired_bindings,
-        preview_bindings, preview_style, workspace_bindings,
+        preview_bindings, preview_style, source_bindings,
     },
 };
 
@@ -774,6 +774,16 @@ impl WorkspaceWindow {
             return;
         }
         let modifiers = event.keystroke.modifiers;
+        let editor_surface = matches!(
+            self.document_workspace.active_surface(),
+            crate::app::PaneSurface::Editor
+        );
+        let editor_escape_prefix = editor_surface
+            && event.keystroke.key == "escape"
+            && !modifiers.control
+            && !modifiers.alt
+            && !modifiers.shift
+            && !modifiers.platform;
         let stroke = KeyStroke::new(
             event.keystroke.key.as_str(),
             modifiers.control,
@@ -802,6 +812,11 @@ impl WorkspaceWindow {
             EmacsOutcome::Command { command, prefix } => {
                 cx.stop_propagation();
                 self.dispatch_command_key(command, prefix, window, cx);
+            }
+            EmacsOutcome::Pending if editor_escape_prefix => {}
+            EmacsOutcome::Cancelled if editor_surface => {
+                cx.stop_propagation();
+                window.dispatch_action(Box::new(crate::editor::KeyboardQuit), cx);
             }
             EmacsOutcome::Pending | EmacsOutcome::Disabled | EmacsOutcome::Cancelled => {
                 cx.stop_propagation();
@@ -845,7 +860,7 @@ impl WorkspaceWindow {
         let active_contexts = vec!["workspace", "editor"];
         let Ok(configuration) = compile_input_profile(
             generation,
-            &workspace_bindings(),
+            &source_bindings(),
             &self.commands,
             &contexts,
             &active_contexts,
