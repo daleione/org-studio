@@ -41,10 +41,29 @@ fn minimap_icon(color: u32) -> gpui::Svg {
         .text_color(rgb(color))
 }
 
+fn export_icon(color: u32) -> gpui::Svg {
+    svg()
+        .debug_selector(|| "document-titlebar-export-icon".to_owned())
+        .data(include_bytes!("assets/export.svg"))
+        .w(px(19.0))
+        .h(px(16.0))
+        .text_color(rgb(color))
+}
+
+fn agenda_icon(color: u32) -> gpui::Svg {
+    svg()
+        .debug_selector(|| "document-titlebar-agenda-icon".to_owned())
+        .data(include_bytes!("assets/agenda.svg"))
+        .w(px(19.0))
+        .h(px(16.0))
+        .text_color(rgb(color))
+}
+
 fn document_titlebar(
     workspace: gpui::Entity<WorkspaceWindow>,
     sidebar_visible: bool,
     minimap_visible: bool,
+    export_open: bool,
 ) -> gpui::Div {
     let theme = current_theme();
     let sidebar_workspace = workspace.clone();
@@ -58,6 +77,14 @@ fn document_titlebar(
     } else {
         theme.quote
     };
+    let export_workspace = workspace.clone();
+    let export_icon_color = if export_open {
+        theme.foreground
+    } else {
+        theme.quote
+    };
+    let agenda_workspace = workspace.clone();
+    let agenda_icon_color = theme.foreground;
     div()
         .debug_selector(|| "document-titlebar".to_owned())
         .absolute()
@@ -93,7 +120,46 @@ fn document_titlebar(
                     sidebar_workspace.update(cx, |this, cx| this.toggle_sidebar(cx));
                 }),
         )
+        .child(
+            div()
+                .id("document-titlebar-agenda-toggle")
+                .debug_selector(|| "document-titlebar-agenda-toggle".to_owned())
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(theme.background_alt))
+                .cursor_pointer()
+                .hover(move |style| style.bg(rgb(theme.code_active_background)))
+                .child(agenda_icon(agenda_icon_color))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    agenda_workspace.update(cx, |this, cx| this.open_agenda(cx));
+                }),
+        )
         .child(div().flex_1())
+        .child(
+            div()
+                .id("document-titlebar-export-toggle")
+                .debug_selector(|| "document-titlebar-export-toggle".to_owned())
+                .size(px(32.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .bg(rgb(theme.background_alt))
+                .cursor_pointer()
+                .when(export_open, |button| {
+                    button.bg(rgb(theme.code_active_background))
+                })
+                .hover(move |style| style.bg(rgb(theme.code_active_background)))
+                .child(export_icon(export_icon_color))
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    export_workspace.update(cx, |this, cx| this.show_export_panel(cx));
+                }),
+        )
         .child(
             div()
                 .id("document-titlebar-minimap-toggle")
@@ -218,8 +284,9 @@ impl Render for WorkspaceWindow {
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
         let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda);
-        let agenda_extends_into_titlebar =
-            matches!(self.content_route, crate::app::ContentRoute::Agenda);
+        // The agenda route draws its own toolbar into the titlebar row, so it
+        // does not reserve space for a separate titlebar.
+        let show_agenda = matches!(self.content_route, crate::app::ContentRoute::Agenda);
         let show_document_titlebar =
             matches!(self.content_route, crate::app::ContentRoute::Document)
                 && self.state.ready().is_some();
@@ -350,6 +417,7 @@ impl Render for WorkspaceWindow {
                     entity.clone(),
                     sidebar_visible,
                     minimap_visible,
+                    self.export.is_open(),
                 ))
             })
             .child(
@@ -361,7 +429,7 @@ impl Render for WorkspaceWindow {
                         div()
                             .flex_1()
                             .min_h_0()
-                            .when(!agenda_extends_into_titlebar, |body| {
+                            .when(!show_agenda, |body| {
                                 body.pt(px(crate::app::TITLEBAR_HEIGHT))
                             })
                             .child(self.workspace_body(
@@ -518,7 +586,13 @@ mod tests {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let sidebar_visible = self.0.read(cx).sidebar_visible();
             let minimap_visible = self.0.read(cx).minimap_visible();
-            document_titlebar(self.0.clone(), sidebar_visible, minimap_visible)
+            let export_open = self.0.read(cx).export.is_open();
+            document_titlebar(
+                self.0.clone(),
+                sidebar_visible,
+                minimap_visible,
+                export_open,
+            )
         }
     }
 
@@ -546,11 +620,35 @@ mod tests {
         let minimap_icon = cx
             .debug_bounds("document-titlebar-minimap-icon")
             .expect("minimap icon should be rendered");
+        let export_button = cx
+            .debug_bounds("document-titlebar-export-toggle")
+            .expect("export toggle should be rendered");
+        let export_icon = cx
+            .debug_bounds("document-titlebar-export-icon")
+            .expect("export icon should be rendered");
+        let agenda_button = cx
+            .debug_bounds("document-titlebar-agenda-toggle")
+            .expect("agenda toggle should be rendered");
+        let agenda_icon = cx
+            .debug_bounds("document-titlebar-agenda-icon")
+            .expect("agenda icon should be rendered");
         assert_eq!(button.size, gpui::size(px(32.0), px(32.0)));
         assert_eq!(icon.size, gpui::size(px(19.0), px(16.0)));
         assert_eq!(minimap_button.size, gpui::size(px(32.0), px(32.0)));
         assert_eq!(minimap_icon.size, gpui::size(px(19.0), px(16.0)));
+        assert_eq!(export_button.size, gpui::size(px(32.0), px(32.0)));
+        assert_eq!(export_icon.size, gpui::size(px(19.0), px(16.0)));
+        assert_eq!(agenda_button.size, gpui::size(px(32.0), px(32.0)));
+        assert_eq!(agenda_icon.size, gpui::size(px(19.0), px(16.0)));
         assert_eq!(button.left(), px(crate::app::TITLEBAR_LEADING_INSET));
+        assert!(
+            button.right() <= agenda_button.left(),
+            "agenda toggle must sit to the right of the sidebar toggle"
+        );
+        assert!(
+            export_button.right() <= minimap_button.left(),
+            "export toggle must sit to the left of the minimap toggle"
+        );
         assert!(minimap_button.right() <= bar.right());
 
         cx.simulate_mouse_move(button.center(), None, Modifiers::default());
@@ -564,6 +662,54 @@ mod tests {
         assert_ne!(
             workspace.read_with(cx, |workspace, _| workspace.minimap_visible()),
             minimap_was_visible
+        );
+    }
+
+    #[gpui::test]
+    fn titlebar_export_toggle_opens_the_export_panel(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        let path =
+            std::env::temp_dir().join(format!("org-studio-titlebar-{}.md", std::process::id()));
+        std::fs::write(&path, "# Title\n").unwrap();
+        let loaded = crate::preview::load_document(path.clone()).unwrap();
+        let _ = std::fs::remove_file(&path);
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(0, Ok(loaded), cx));
+        });
+
+        let workspace_for_view = workspace.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| TitlebarHarness(workspace_for_view));
+
+        let export_button = cx
+            .debug_bounds("document-titlebar-export-toggle")
+            .expect("export toggle should be rendered");
+        assert!(
+            !workspace.read_with(cx, |workspace, _| workspace.export.is_open()),
+            "export panel starts closed"
+        );
+        cx.simulate_mouse_move(export_button.center(), None, Modifiers::default());
+        cx.simulate_click(export_button.center(), Modifiers::default());
+        assert!(
+            workspace.read_with(cx, |workspace, _| workspace.export.is_open()),
+            "clicking the titlebar export toggle must open the export panel"
+        );
+    }
+
+    #[gpui::test]
+    fn titlebar_agenda_toggle_opens_the_agenda_route(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        let workspace_for_view = workspace.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| TitlebarHarness(workspace_for_view));
+
+        let agenda_button = cx
+            .debug_bounds("document-titlebar-agenda-toggle")
+            .expect("agenda toggle should be rendered");
+        cx.simulate_mouse_move(agenda_button.center(), None, Modifiers::default());
+        cx.simulate_click(agenda_button.center(), Modifiers::default());
+        assert_eq!(
+            workspace.read_with(cx, |workspace, _| workspace.content_route),
+            crate::app::ContentRoute::Agenda,
+            "clicking the titlebar agenda toggle must enter the agenda route"
         );
     }
 }

@@ -71,6 +71,15 @@ impl WorkspaceWindow {
         );
     }
 
+    pub(crate) fn open_agenda(&mut self, cx: &mut Context<Self>) {
+        self.agenda.text_query.hide();
+        self.agenda.text_view.hide();
+        self.content_route = ContentRoute::Agenda;
+        self.agenda.requery();
+        self.focus_workspace_on_render = true;
+        cx.notify();
+    }
+
     pub(crate) fn execute_command(
         &mut self,
         implementation: CommandImplementation,
@@ -92,14 +101,7 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ShowHome) => {
                 self.request_home(window, cx)
             }
-            CommandImplementation::Builtin(BuiltinCommand::OpenAgenda) => {
-                self.agenda.text_query.hide();
-                self.agenda.text_view.hide();
-                self.content_route = ContentRoute::Agenda;
-                self.agenda.requery();
-                self.focus_workspace_on_render = true;
-                cx.notify();
-            }
+            CommandImplementation::Builtin(BuiltinCommand::OpenAgenda) => self.open_agenda(cx),
             CommandImplementation::Builtin(BuiltinCommand::OpenAgendaText) => {
                 if !self.agenda_text_open {
                     self.agenda_text_return = Some(self.content_route);
@@ -613,11 +615,8 @@ impl WorkspaceWindow {
             if key.eq_ignore_ascii_case("q")
                 && self.agenda.state.overlay == crate::app::agenda::state::AgendaOverlay::None
             {
-                self.content_route = ContentRoute::Document;
-                self.install_document_keymap();
-                self.focus_workspace_on_render = true;
+                self.return_to_document(cx);
                 cx.stop_propagation();
-                cx.notify();
                 return;
             }
             if event.keystroke.modifiers.platform && key.eq_ignore_ascii_case("n") {

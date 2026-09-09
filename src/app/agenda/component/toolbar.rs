@@ -7,7 +7,7 @@ use crate::{
     i18n::Language,
 };
 use gpui::{
-    Div, Entity, MouseButton, Stateful, StatefulInteractiveElement, div, prelude::*, px, rgb,
+    Div, Entity, MouseButton, Stateful, StatefulInteractiveElement, div, prelude::*, px, rgb, svg,
 };
 
 pub(crate) struct AgendaToolbarProps<'a> {
@@ -85,10 +85,40 @@ fn icon(workspace: Entity<WorkspaceWindow>, path: &'static str, intent: UiIntent
         .on_mouse_down(MouseButton::Right, |_, _, cx| cx.stop_propagation())
 }
 
+/// Compact edit button beside the traffic lights that returns from the
+/// agenda to the document surface, mirroring the `q` key binding.
+fn edit_icon_button(workspace: Entity<WorkspaceWindow>) -> Stateful<Div> {
+    div()
+        .id("agenda-titlebar-edit-toggle")
+        .debug_selector(|| "agenda-titlebar-edit-toggle".to_owned())
+        .size(px(26.))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(super::super::style::BORDER))
+        .bg(rgb(super::super::style::TOOLBAR))
+        .cursor_pointer()
+        .hover(move |style| style.bg(rgb(0xe9eaed)).border_color(rgb(0xbfc2c8)))
+        .active(|style| style.opacity(0.72))
+        .child(
+            svg()
+                .debug_selector(|| "agenda-titlebar-edit-icon".to_owned())
+                .data(include_bytes!("../../assets/edit.svg"))
+                .size(px(14.))
+                .text_color(rgb(super::super::style::INK)),
+        )
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            workspace.update(cx, |this, cx| this.return_to_document(cx));
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{Context, Render, Window};
+    use gpui::{Context, Modifiers, Render, Window};
 
     #[gpui::test]
     fn narrow_toolbar_preserves_control_geometry(cx: &mut gpui::TestAppContext) {
@@ -183,13 +213,61 @@ mod tests {
         }
         let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
         let actions = cx.debug_bounds("agenda-toolbar-actions").unwrap();
+        let file_row = cx.debug_bounds("agenda-titlebar-file-row").unwrap();
+        let edit_button = cx.debug_bounds("agenda-titlebar-edit-toggle").unwrap();
         let filename = cx.debug_bounds("agenda-titlebar-file-name").unwrap();
         let title = cx.debug_bounds("agenda-toolbar-title-row").unwrap();
         assert_eq!(actions.top(), px(4.));
         assert_eq!(actions.bottom(), px(crate::app::TITLEBAR_HEIGHT - 4.));
-        assert_eq!(filename.left(), px(84.));
+        assert_eq!(file_row.left(), px(84.));
+        assert_eq!(edit_button.left(), px(84.));
+        assert!(
+            filename.left() >= edit_button.right(),
+            "the file name must sit to the right of the edit button"
+        );
         assert_eq!(filename.bottom(), px(crate::app::TITLEBAR_HEIGHT));
         assert!(title.top() > actions.bottom());
+    }
+
+    #[gpui::test]
+    fn toolbar_edit_button_returns_to_the_document(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        workspace.update(cx, |workspace, cx| workspace.open_agenda(cx));
+        struct Harness(Entity<WorkspaceWindow>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(900.)).child(agenda_toolbar(AgendaToolbarProps {
+                    workspace: self.0.clone(),
+                    state: &AgendaViewState::default(),
+                    language: Language::Chinese,
+                    window_width: 900.,
+                    main_content_offset: 0.,
+                    window_title: "tasks.org".to_owned(),
+                    search: None,
+                    motion_enabled: true,
+                }))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace.clone()));
+        let edit_button = cx
+            .debug_bounds("agenda-titlebar-edit-toggle")
+            .expect("edit toggle should be rendered in the agenda toolbar");
+        let edit_icon = cx
+            .debug_bounds("agenda-titlebar-edit-icon")
+            .expect("edit icon should be rendered");
+        assert_eq!(edit_button.size, gpui::size(px(26.), px(26.)));
+        assert_eq!(edit_icon.size, gpui::size(px(14.), px(14.)));
+        assert!(
+            edit_icon.left() >= edit_button.left() && edit_icon.right() <= edit_button.right(),
+            "edit icon must stay inside its button"
+        );
+        cx.simulate_mouse_move(edit_button.center(), None, Modifiers::default());
+        cx.simulate_click(edit_button.center(), Modifiers::default());
+        assert_eq!(
+            workspace.read_with(cx, |workspace, _| workspace.content_route),
+            crate::app::ContentRoute::Document,
+            "clicking the agenda toolbar edit button must return to the document route"
+        );
     }
 }
 
@@ -292,21 +370,30 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
         .border_color(rgb(super::super::style::BORDER))
         .child(
             div()
-                .debug_selector(|| "agenda-titlebar-file-name".to_owned())
+                .debug_selector(|| "agenda-titlebar-file-row".to_owned())
                 .absolute()
                 .top_0()
                 .left(px(84. - main_content_offset))
-                .w(px(240.))
                 .h(px(crate::app::TITLEBAR_HEIGHT))
                 .flex()
                 .items_center()
-                .overflow_hidden()
-                .whitespace_nowrap()
-                .text_ellipsis()
-                .text_size(px(12.))
-                .font_weight(gpui::FontWeight::MEDIUM)
-                .text_color(rgb(super::super::style::MUTED))
-                .child(window_title),
+                .gap(px(8.))
+                .child(edit_icon_button(workspace.clone()))
+                .child(
+                    div()
+                        .debug_selector(|| "agenda-titlebar-file-name".to_owned())
+                        .w(px(240.))
+                        .h(px(crate::app::TITLEBAR_HEIGHT))
+                        .flex()
+                        .items_center()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .text_size(px(12.))
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .text_color(rgb(super::super::style::MUTED))
+                        .child(window_title),
+                ),
         )
         .child(titlebar_actions.absolute().top(px(4.)).right(px(24.)))
         .child(first)
