@@ -1901,7 +1901,10 @@ fn control_c_control_c_dispatches_the_org_context_command() {
 
 #[gpui::test]
 fn control_c_control_c_realigns_the_table_at_point(cx: &mut gpui::TestAppContext) {
-    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let (workspace, cx) = cx.add_window_view(|_, cx| {
+        crate::editor::init(cx);
+        WorkspaceWindow::with_split_layout(false)
+    });
     let session = cx.update(|window, cx| {
         workspace.update(cx, |workspace, cx| {
             assert!(workspace.apply_load_result(
@@ -1935,6 +1938,182 @@ fn control_c_control_c_realigns_the_table_at_point(cx: &mut gpui::TestAppContext
             "| a     | long |"
         );
         assert_eq!(snapshot.revision().0, 1);
+    });
+}
+
+#[gpui::test]
+fn ctrl_x_ctrl_b_with_the_editor_focused_goes_home_without_moving_the_cursor(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (workspace, cx) = cx.add_window_view(|_, cx| {
+        crate::editor::init(cx);
+        WorkspaceWindow::with_split_layout(false)
+    });
+    let session = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document("probe.md", "| a | value |\n")),
+                cx,
+            ));
+            let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.request_focus(cx);
+            });
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+            workspace.document_session().unwrap().clone()
+        })
+    });
+
+    cx.simulate_keystrokes("ctrl-x ctrl-b");
+
+    cx.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(crate::document::ByteRange::new(0, snapshot.len_bytes())),
+            "| a | value |\n",
+            "the completing Ctrl-B must not edit or move through the document"
+        );
+    });
+    workspace.update(cx, |workspace, _| {
+        assert!(
+            matches!(workspace.state, WorkspaceLoadState::Empty),
+            "Ctrl-X Ctrl-B should reach the Home command, not the line-editing binding"
+        );
+    });
+}
+
+#[gpui::test]
+fn escape_cancels_a_pending_prefix_and_restores_editor_focus(cx: &mut gpui::TestAppContext) {
+    let (workspace, cx) = cx.add_window_view(|_, cx| {
+        crate::editor::init(cx);
+        WorkspaceWindow::with_split_layout(false)
+    });
+    let session = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document("probe.md", "| a | value |\n")),
+                cx,
+            ));
+            let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.request_focus(cx);
+            });
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+            workspace.document_session().unwrap().clone()
+        })
+    });
+
+    cx.simulate_keystrokes("ctrl-x escape");
+
+    cx.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(crate::document::ByteRange::new(0, snapshot.len_bytes())),
+            "| a | value |\n",
+            "Escape must cancel the prefix without editing the document"
+        );
+    });
+    workspace.update(cx, |workspace, _| {
+        assert!(
+            matches!(workspace.state, WorkspaceLoadState::Ready { .. }),
+            "Escape must not navigate away from the document"
+        );
+    });
+    cx.update(|window, cx| {
+        let editor = workspace
+            .read(cx)
+            .editor(crate::app::PaneSide::Left)
+            .unwrap();
+        let editor_handle = editor.update(cx, |editor, cx| editor.focus_handle(cx));
+        assert_eq!(
+            window.focused(cx),
+            Some(editor_handle),
+            "focus must return to the editor after Escape cancels the prefix"
+        );
+    });
+}
+
+#[gpui::test]
+fn keys_while_a_prefix_is_pending_never_edit_the_document(cx: &mut gpui::TestAppContext) {
+    let (workspace, cx) = cx.add_window_view(|_, cx| {
+        crate::editor::init(cx);
+        WorkspaceWindow::with_split_layout(false)
+    });
+    let session = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document("probe.md", "| a | value |\n")),
+                cx,
+            ));
+            let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.request_focus(cx);
+            });
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+            workspace.document_session().unwrap().clone()
+        })
+    });
+
+    cx.simulate_keystrokes("ctrl-x a");
+
+    cx.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(crate::document::ByteRange::new(0, snapshot.len_bytes())),
+            "| a | value |\n",
+            "an unresolved key while the prefix is pending must not type into the document"
+        );
+        assert_eq!(snapshot.revision().0, 0);
+    });
+}
+
+#[gpui::test]
+fn editor_ctrl_b_still_moves_the_cursor_when_no_prefix_is_pending(cx: &mut gpui::TestAppContext) {
+    let (workspace, cx) = cx.add_window_view(|_, cx| {
+        crate::editor::init(cx);
+        WorkspaceWindow::with_split_layout(false)
+    });
+    let session = cx.update(|window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert!(workspace.apply_load_result(
+                0,
+                Ok(loaded_document("probe.md", "| a | value |\n")),
+                cx,
+            ));
+            let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.set_selection(Selection::caret(ByteOffset(2)), cx);
+                editor.request_focus(cx);
+            });
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+            workspace.document_session().unwrap().clone()
+        })
+    });
+
+    cx.simulate_keystrokes("ctrl-b");
+
+    cx.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(crate::document::ByteRange::new(0, snapshot.len_bytes())),
+            "| a | value |\n"
+        );
+    });
+    workspace.update(cx, |workspace, cx| {
+        let editor = workspace.editor(crate::app::PaneSide::Left).unwrap();
+        editor.update(cx, |editor, _| {
+            assert_ne!(
+                editor.selection().head(),
+                ByteOffset(2),
+                "Ctrl-B alone must keep moving the cursor (line editing stays intact)"
+            );
+        });
     });
 }
 

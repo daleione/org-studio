@@ -262,6 +262,12 @@ pub struct WorkspaceWindow {
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) focus_workspace_on_render: bool,
     pub(crate) focus_lost_subscription: Option<Subscription>,
+    /// Focus to restore when a pending key prefix (e.g. `C-x`) completes or is
+    /// cancelled. While the prefix is capturing, the window is focused on the
+    /// workspace root instead of the editor, so the editor's GPUI bindings
+    /// (line-editing keys like `C-b`) cannot swallow the chord's completing
+    /// stroke before the custom emacs router sees it.
+    pub(crate) key_focus_restore: Option<KeyFocusRestore>,
     pub(crate) commands: Arc<CommandRegistry>,
     pub(crate) keyboard: KeyboardRouter,
     pub(crate) key_context: ContextSet,
@@ -315,6 +321,15 @@ pub struct WorkspaceWindow {
     pub(crate) minimap_resize_preview: Option<f32>,
     pub(crate) reading_style: crate::preview::PreviewStyleId,
     pub(crate) status: StatusLineHost,
+}
+
+/// Focus and document state captured when a key prefix starts capturing, used
+/// to restore the editor's focus once the prefix completes.
+#[derive(Clone)]
+pub(crate) struct KeyFocusRestore {
+    pub(crate) handle: FocusHandle,
+    pub(crate) session: Option<gpui::EntityId>,
+    pub(crate) route: ContentRoute,
 }
 
 #[derive(Default)]

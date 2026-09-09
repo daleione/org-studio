@@ -5,7 +5,7 @@ use gpui::{ClipboardItem, Context, KeyDownEvent, Window};
 
 use crate::document::TextSnapshot;
 use crate::{
-    app::{ContentRoute, SurfaceAnchor, WorkspaceWindow},
+    app::{ContentRoute, KeyFocusRestore, SurfaceAnchor, WorkspaceWindow},
     command::{
         BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
         InvocationOrigin, PrefixArgument,
@@ -812,17 +812,87 @@ impl WorkspaceWindow {
             EmacsOutcome::Command { command, prefix } => {
                 cx.stop_propagation();
                 self.dispatch_command_key(command, prefix, window, cx);
+                // Restore after the command ran, so the state check sees the
+                // post-command session/route (e.g. Home drops the session).
+                self.restore_key_focus_after_command(window, cx);
             }
             EmacsOutcome::Pending if editor_escape_prefix => {}
             EmacsOutcome::Cancelled if editor_surface => {
                 cx.stop_propagation();
+                self.restore_key_focus(window, cx);
                 window.dispatch_action(Box::new(crate::editor::KeyboardQuit), cx);
             }
-            EmacsOutcome::Pending | EmacsOutcome::Disabled | EmacsOutcome::Cancelled => {
+            EmacsOutcome::Pending => {
                 cx.stop_propagation();
+                self.move_key_focus_to_command_area(window, cx);
             }
-            EmacsOutcome::Undefined if has_feedback => cx.stop_propagation(),
-            EmacsOutcome::PassThrough | EmacsOutcome::Undefined => {}
+            EmacsOutcome::Disabled | EmacsOutcome::Cancelled => {
+                cx.stop_propagation();
+                self.restore_key_focus(window, cx);
+            }
+            EmacsOutcome::Undefined if has_feedback => {
+                cx.stop_propagation();
+                self.restore_key_focus(window, cx);
+            }
+            EmacsOutcome::PassThrough | EmacsOutcome::Undefined => {
+                self.restore_key_focus(window, cx);
+            }
+        }
+    }
+
+    /// While a key prefix is capturing (for example `C-x`), move focus to the
+    /// workspace root so the editor's GPUI bindings (`C-b`, `C-f`, `C-d`, …)
+    /// no longer intercept the stroke that completes the chord. The editor is
+    /// not editable during the wait, matching the "focus is on the key area"
+    /// model.
+    fn move_key_focus_to_command_area(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.key_focus_restore.is_some() {
+            return;
+        }
+        let Some(handle) = window.focused(cx) else {
+            return;
+        };
+        self.key_focus_restore = Some(KeyFocusRestore {
+            handle,
+            session: self.document_session().map(|session| session.entity_id()),
+            route: self.content_route,
+        });
+        let target = self
+            .focus_handle
+            .get_or_insert_with(|| cx.focus_handle())
+            .clone();
+        window.focus(&target, cx);
+    }
+
+    /// Restores the pre-prefix focus, but only when nothing else claimed focus
+    /// while the prefix was pending (commands that switch surfaces focus their
+    /// own content and must keep it).
+    fn restore_key_focus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(restore) = self.key_focus_restore.take() else {
+            return;
+        };
+        let still_on_workspace_root = window.focused(cx).is_some_and(|current| {
+            self.focus_handle
+                .as_ref()
+                .is_some_and(|root| current == *root)
+        });
+        if still_on_workspace_root {
+            window.focus(&restore.handle, cx);
+        }
+    }
+
+    /// Command variant of [`Self::restore_key_focus`]: additionally refuses to
+    /// restore when the command replaced the document session or switched the
+    /// route, since the captured focus then belongs to stale content.
+    fn restore_key_focus_after_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let unchanged = self.key_focus_restore.as_ref().is_some_and(|restore| {
+            self.content_route == restore.route
+                && self.document_session().map(|session| session.entity_id()) == restore.session
+        });
+        if unchanged {
+            self.restore_key_focus(window, cx);
+        } else {
+            self.key_focus_restore = None;
         }
     }
 

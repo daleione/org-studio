@@ -42,7 +42,14 @@ impl EmacsGrammar {
             self.cancel();
             return EmacsOutcome::Cancelled;
         }
-        if !self.pending.is_pending() && stroke.key() == "escape" && !stroke.control() {
+        // A bare Escape exits any pending key state (chord prefix, prefix
+        // argument, or a meta wait) just like `C-g`, and otherwise starts a
+        // meta-prefix wait for the next stroke.
+        if stroke.key() == "escape" && !stroke.control() {
+            if self.is_capturing() {
+                self.cancel();
+                return EmacsOutcome::Cancelled;
+            }
             self.escape_meta = true;
             return EmacsOutcome::Pending;
         }
@@ -216,6 +223,37 @@ mod tests {
         assert_eq!(
             grammar.feed(KeyStroke::parse("C-g").unwrap(), &interner),
             EmacsOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn escape_cancels_pending_state_like_control_g() {
+        let (mut grammar, interner, _) = grammar();
+        grammar.feed(KeyStroke::parse("C-x").unwrap(), &interner);
+        assert_eq!(
+            grammar.feed(KeyStroke::parse("escape").unwrap(), &interner),
+            EmacsOutcome::Cancelled
+        );
+        grammar.feed(KeyStroke::parse("C-u").unwrap(), &interner);
+        assert_eq!(
+            grammar.feed(KeyStroke::parse("escape").unwrap(), &interner),
+            EmacsOutcome::Cancelled
+        );
+    }
+
+    #[test]
+    fn escape_still_starts_a_meta_wait_when_idle() {
+        let (mut grammar, interner, command) = grammar();
+        assert_eq!(
+            grammar.feed(KeyStroke::parse("escape").unwrap(), &interner),
+            EmacsOutcome::Pending
+        );
+        assert_eq!(
+            grammar.feed(KeyStroke::parse("f").unwrap(), &interner),
+            EmacsOutcome::Command {
+                command,
+                prefix: PrefixArgument::None
+            }
         );
     }
 
