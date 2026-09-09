@@ -166,6 +166,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-v", ScrollPageDown, Some("SemanticEditor")),
         KeyBinding::new("alt-v", ScrollPageUp, Some("SemanticEditor")),
         KeyBinding::new("escape v", ScrollPageUp, Some("SemanticEditor")),
+        KeyBinding::new("pagedown", ScrollPageDown, Some("SemanticEditor")),
+        KeyBinding::new("pageup", ScrollPageUp, Some("SemanticEditor")),
         KeyBinding::new(
             "ctrl-c ctrl-x ctrl-v",
             ToggleInlineImagePreviews,

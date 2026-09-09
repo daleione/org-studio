@@ -1133,12 +1133,55 @@ impl SemanticEditor {
     }
 
     fn scroll_page(&mut self, forward: bool, cx: &mut Context<Self>) {
-        let amount = self
-            .viewport
-            .map_or(self.base_line_height() * 10.0, |viewport| {
-                (f32::from(viewport.size.height) - self.base_line_height()).max(1.0)
-            });
-        self.scroll(0.0, if forward { -amount } else { amount }, cx);
+        self.finish_composition(cx);
+        self.vertical_goal_x = None;
+        let Some(viewport) = self.viewport else {
+            return;
+        };
+        let viewport_height = f32::from(viewport.size.height);
+        let amount = (viewport_height - self.base_line_height()).max(1.0);
+        let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
+        let previous_scroll = self.scroll_y;
+        self.scroll_y = if forward {
+            self.scroll_y + amount
+        } else {
+            self.scroll_y - amount
+        }
+        .clamp(0.0, max_scroll);
+
+        let snapshot = self.snapshot(cx);
+        let point = self.selection.head();
+        if let Ok(line) = snapshot.line_index_at(point) {
+            let caret_top = self.animated_line_start_y(line.0);
+            let caret_bottom = caret_top
+                + self
+                    .animated_line_height_px(line.0)
+                    .min(self.base_line_height());
+            if caret_bottom <= self.scroll_y || caret_top >= self.scroll_y + viewport_height {
+                let target_y = if forward {
+                    self.scroll_y + 0.5
+                } else {
+                    self.scroll_y + viewport_height - self.base_line_height()
+                };
+                let target_line = self.animated_line_at_y(target_y.max(0.0));
+                let column = snapshot
+                    .line_and_column_at(point)
+                    .map_or(0, |(_, column)| column);
+                if let Ok(target) = snapshot.byte_at_line_column(LineIndex(target_line), column) {
+                    self.selection = if self.emacs_mark_active {
+                        self.selection.with_head(target)
+                    } else {
+                        Selection::caret(target)
+                    };
+                    self.sync_selection_utf16(&snapshot);
+                }
+            }
+        }
+        let scroll_delta = self.scroll_y - previous_scroll;
+        if scroll_delta.abs() > 0.5 {
+            self.minimap.note_viewport_scrolled(scroll_delta);
+        }
+        cx.notify();
     }
 
     fn on_mouse_down(
@@ -1919,6 +1962,45 @@ mod horizontal_scroll_tests {
         cx.simulate_keystrokes("ctrl-space ctrl-f ctrl-g");
         assert!(editor.read_with(cx, |editor, _| editor.selection.is_empty()));
         assert!(!editor.read_with(cx, |editor, _| editor.emacs_mark_active));
+    }
+
+    #[gpui::test]
+    fn page_commands_scroll_and_keep_the_caret_visible(cx: &mut gpui::TestAppContext) {
+        cx.update(super::super::init);
+        let source = (0..100)
+            .map(|line| format!("line {line}\n"))
+            .collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(std::path::PathBuf::from("pages.org"), source.into_bytes())
+                .unwrap()
+        });
+        let (editor, cx) = cx.add_window_view(move |_, cx| SemanticEditor::new(session, cx));
+        cx.run_until_parked();
+        editor.update(cx, |editor, _| {
+            editor.viewport = Some(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(800.0), px(220.0)),
+            ));
+        });
+
+        cx.simulate_keystrokes("ctrl-v");
+        let (scroll_y, caret_line) = editor.read_with(cx, |editor, cx| {
+            let line = editor
+                .snapshot(cx)
+                .line_index_at(editor.selection.head())
+                .unwrap();
+            (editor.scroll_y, line.0)
+        });
+        assert!(scroll_y > 0.0);
+        assert!(caret_line > 0);
+
+        cx.simulate_keystrokes("alt-v");
+        assert_eq!(editor.read_with(cx, |editor, _| editor.scroll_y), 0.0);
+
+        cx.simulate_keystrokes("pagedown");
+        assert!(editor.read_with(cx, |editor, _| editor.scroll_y) > 0.0);
+        cx.simulate_keystrokes("pageup");
+        assert_eq!(editor.read_with(cx, |editor, _| editor.scroll_y), 0.0);
     }
 
     #[gpui::test]
