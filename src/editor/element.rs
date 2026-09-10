@@ -708,12 +708,17 @@ impl Element for EditorElement {
                 });
             let effective_wrap_width = (table_layout.is_none() && editor.display_map.soft_wrap())
                 .then_some(px(row_wrap_width));
+            let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
             let mut shape_key = shape_key(
                 &text,
                 shaped_font_size,
                 marked_display,
                 effective_wrap_width,
-                line_style.id.cache_key(),
+                if fence_backticks.is_some() {
+                    28 // Markdown fence glyph placement has its own cached layout.
+                } else {
+                    line_style.id.cache_key()
+                },
                 line_style.code_language.clone(),
             );
             // Equal text can carry different faces on different agenda dates.
@@ -728,7 +733,12 @@ impl Element for EditorElement {
                         .shape_text(text, shaped_font_size, &runs, effective_wrap_width, None)
                         .ok()
                         .and_then(|lines| lines.into_iter().next())
-                        .map(Arc::new)
+                        .map(|mut line| {
+                            if let Some(range) = fence_backticks {
+                                lower_fence_backticks(&mut line, range, shaped_font_size * 0.30);
+                            }
+                            Arc::new(line)
+                        })
                         .unwrap_or_else(|| Arc::new(WrappedLine::default()))
                 });
             let visual_rows = if inline_image_source.is_some() {
@@ -1540,6 +1550,47 @@ fn stabilized_scroll_y(
     } else {
         anchored.clamp(0.0, max_scroll)
     }
+}
+
+// Keep source bytes and all horizontal/caret geometry intact. Only the glyphs
+// of a Markdown backtick boundary receive an optical vertical adjustment.
+fn markdown_fence_backticks(
+    text: &str,
+    block: Option<&syntax::EditorBlockDecoration>,
+) -> Option<Range<usize>> {
+    let block = block?;
+    if block.kind != syntax::EditorBlockKind::MarkdownFence
+        || block.edge == syntax::EditorBlockEdge::Body
+    {
+        return None;
+    }
+    let trimmed = text.trim_start();
+    let start = text.len() - trimmed.len();
+    let count = trimmed.bytes().take_while(|byte| *byte == b'`').count();
+    (count >= 3).then_some(start..start + count)
+}
+
+fn lower_fence_backticks(line: &mut WrappedLine, range: Range<usize>, offset: Pixels) {
+    let source = &line.unwrapped_layout;
+    let mut runs = source.runs.clone();
+    for glyph in runs.iter_mut().flat_map(|run| &mut run.glyphs) {
+        if range.contains(&glyph.index) {
+            glyph.position.y += offset;
+        }
+    }
+    let layout = gpui::WrappedLineLayout {
+        unwrapped_layout: Arc::new(gpui::LineLayout {
+            font_size: source.font_size,
+            width: source.width,
+            ascent: source.ascent,
+            descent: source.descent,
+            runs,
+            len: source.len,
+        }),
+        wrap_boundaries: line.wrap_boundaries.clone(),
+        wrap_width: line.wrap_width,
+    };
+    *std::ops::DerefMut::deref_mut(line) = Arc::new(layout);
 }
 
 fn shape_key(
