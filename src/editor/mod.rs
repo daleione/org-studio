@@ -581,6 +581,8 @@ pub struct SemanticEditor {
     inline_image_preview_overrides: HashMap<u64, bool>,
     inline_image_cache: RefCell<InlineImageCache>,
     inline_image_line_dimensions: RefCell<HashMap<u64, (u64, u32, u32)>>,
+    caret_blink: Option<(Selection, Revision, Instant)>,
+    caret_blink_task: Option<Task<()>>,
     pending_reveal_caret: bool,
     is_selecting: bool,
     drag_position: Option<Point<Pixels>>,
@@ -943,6 +945,8 @@ impl SemanticEditor {
             inline_image_preview_overrides: HashMap::new(),
             inline_image_cache: RefCell::new(InlineImageCache::default()),
             inline_image_line_dimensions: RefCell::new(HashMap::new()),
+            caret_blink: None,
+            caret_blink_task: None,
             pending_reveal_caret: false,
             is_selecting: false,
             drag_position: None,
@@ -1144,6 +1148,41 @@ impl SemanticEditor {
             }
             Err(_) => self.clear_source_run_feedback(),
         }
+    }
+
+    fn caret_opacity(&mut self, visible: bool, cx: &mut Context<Self>) -> f32 {
+        if !visible || self.marked.is_some() {
+            self.caret_blink = None;
+            self.caret_blink_task = None;
+            return 1.0;
+        }
+        let now = Instant::now();
+        if self.caret_blink.is_none_or(|(selection, revision, _)| {
+            selection != self.selection || revision != self.selection_revision
+        }) {
+            self.caret_blink = Some((self.selection, self.selection_revision, now));
+            self.caret_blink_task = None;
+        }
+        let elapsed = now.duration_since(self.caret_blink.unwrap().2).as_millis() % 1160;
+        let (alpha, delay_ms) = match elapsed {
+            0..500 => (1.0, 500 - elapsed),
+            500..680 => (1.0 - (elapsed - 500) as f32 / 180.0, 30),
+            680..980 => (0.0, 980 - elapsed),
+            _ => ((elapsed - 980) as f32 / 180.0, 30),
+        };
+        if self.caret_blink_task.is_none() {
+            let delay = cx
+                .background_executor()
+                .timer(Duration::from_millis(delay_ms as u64));
+            self.caret_blink_task = Some(cx.spawn(async move |this, cx| {
+                delay.await;
+                let _ = this.update(cx, |this, cx| {
+                    this.caret_blink_task = None;
+                    cx.notify();
+                });
+            }));
+        }
+        alpha
     }
 
     pub(crate) fn show_source_run_feedback(

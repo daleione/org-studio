@@ -869,13 +869,16 @@ impl Element for EditorElement {
                 } else {
                     image.bounds.right() + px(1.0)
                 };
-                caret = Some(fill(
-                    Bounds::new(
-                        point(caret_x, image.bounds.top() + px(1.0)),
-                        size(px(1.5), (image.bounds.size.height - px(2.0)).max(px(1.0))),
-                    ),
-                    gpui::rgb(theme.foreground),
-                ));
+                caret = Some(
+                    fill(
+                        Bounds::new(
+                            point(caret_x, image.bounds.top() + px(1.0)),
+                            size(px(4.0), (image.bounds.size.height - px(2.0)).max(px(1.0))),
+                        ),
+                        gpui::rgb(theme.foreground),
+                    )
+                    .corner_radii(px(0.8)),
+                );
             } else if inline_image.is_none()
                 && anchor.is_some()
                 && selection.is_empty()
@@ -890,16 +893,19 @@ impl Element for EditorElement {
                     .min(hit.layout.len() as u64) as usize;
                 let local = hit.display.source_to_display(source_local);
                 let position = hit.position_for_display_index(local).unwrap_or_default();
-                caret = Some(fill(
-                    Bounds::new(
-                        point(
-                            row_text_origin_x + position.x,
-                            origin_y + position.y + px(2.0),
+                caret = Some(
+                    fill(
+                        Bounds::new(
+                            point(
+                                row_text_origin_x + position.x,
+                                origin_y + position.y + px(2.0),
+                            ),
+                            size(px(4.0), px((metrics.line_height - 4.0).max(1.0))),
                         ),
-                        size(px(1.5), px((metrics.line_height - 4.0).max(1.0))),
-                    ),
-                    gpui::rgb(theme.foreground),
-                ));
+                        gpui::rgb(theme.foreground),
+                    )
+                    .corner_radii(px(0.8)),
+                );
             }
             rows.push(PaintRow {
                 hit,
@@ -1093,6 +1099,10 @@ impl Element for EditorElement {
         cx: &mut App,
     ) {
         let focus_handle = self.editor.read(cx).focus_handle.clone();
+        let caret_visible = focus_handle.is_focused(window) && state.caret.is_some();
+        let caret_opacity = self
+            .editor
+            .update(cx, |editor, cx| editor.caret_opacity(caret_visible, cx));
         window.handle_input(
             &focus_handle,
             ElementInputHandler::new(bounds, self.editor.clone()),
@@ -1352,8 +1362,9 @@ impl Element for EditorElement {
                         }
                     }
                     if focus_handle.is_focused(window)
-                        && let Some(caret) = state.caret.take()
+                        && let Some(mut caret) = state.caret.take()
                     {
+                        caret.background = caret.background.opacity(caret_opacity);
                         window.paint_quad(caret);
                     }
                 },
@@ -3002,6 +3013,27 @@ mod tests {
             folded_display_text("* Heading".to_owned(), false),
             "* Heading"
         );
+    }
+
+    #[gpui::test]
+    fn caret_blink_resets_on_movement_and_stops_when_hidden(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(Path::new("caret.md").to_path_buf(), b"hello".to_vec())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+        editor.update(cx, |editor, cx| {
+            assert_eq!(editor.caret_opacity(true, cx), 1.0);
+            assert!(editor.caret_blink_task.is_some());
+            editor.caret_blink.as_mut().unwrap().2 =
+                std::time::Instant::now() - std::time::Duration::from_millis(800);
+            assert_eq!(editor.caret_opacity(true, cx), 0.0);
+            editor.selection = super::super::Selection::caret(crate::document::ByteOffset(1));
+            assert_eq!(editor.caret_opacity(true, cx), 1.0);
+            editor.caret_opacity(false, cx);
+            assert!(editor.caret_blink.is_none());
+            assert!(editor.caret_blink_task.is_none());
+        });
     }
 
     #[gpui::test]
