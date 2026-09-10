@@ -141,6 +141,7 @@ impl WorkspaceWindow {
             }
         })?;
         let revision = request.revision();
+        self.save.feedback_task = None;
         self.save.status = Some(SaveStatus::Saving);
         self.save.interaction = SaveInteraction::Saving(transition);
         self.set_document_notice(None);
@@ -155,6 +156,35 @@ impl WorkspaceWindow {
         }));
         cx.notify();
         Ok(())
+    }
+
+    pub(crate) fn show_save_success(
+        &mut self,
+        document: crate::document::DocumentId,
+        revision: crate::document::Revision,
+        cx: &mut Context<Self>,
+    ) {
+        let at = std::time::Instant::now();
+        self.save.status = Some(SaveStatus::Success {
+            document,
+            revision,
+            at,
+        });
+        let delay = cx
+            .background_executor()
+            .timer(std::time::Duration::from_secs(3));
+        self.save.feedback_task = Some(cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                let still_current = matches!(this.save.status,
+                    Some(SaveStatus::Success { at: current, .. }) if current == at);
+                if still_current {
+                    this.save.status = None;
+                    cx.notify();
+                }
+            });
+        }));
+        cx.notify();
     }
 
     fn apply_save_result(
@@ -187,7 +217,7 @@ impl WorkspaceWindow {
                             self.save.status = Some(SaveStatus::Error(message.clone()));
                             self.set_document_notice(Some(message));
                         } else {
-                            self.save.status = None;
+                            self.show_save_success(session.read(cx).id(), revision, cx);
                             self.set_document_notice(None);
                             if let Some(transition) = transition {
                                 self.complete_transition(transition, false, window, cx);

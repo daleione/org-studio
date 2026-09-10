@@ -5,7 +5,7 @@ use gpui::{Context, Entity, MouseButton, Task, div, prelude::*, px, rgb};
 use super::{WorkspaceLoadState, WorkspaceWindow};
 use crate::theme::current_theme;
 
-pub(crate) const ECHO_AREA_HEIGHT: f32 = 26.0;
+pub(crate) const ECHO_AREA_HEIGHT: f32 = 36.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EchoTone {
@@ -130,6 +130,8 @@ impl WorkspaceWindow {
 pub(crate) fn render_echo_area(
     message: Option<EchoMessage>,
     entity: Entity<WorkspaceWindow>,
+    pending_keys: Option<&str>,
+    language: crate::i18n::Language,
 ) -> gpui::AnyElement {
     let theme = current_theme();
     let dismiss_entity = entity;
@@ -145,22 +147,17 @@ pub(crate) fn render_echo_area(
         .overflow_hidden()
         .border_t_1()
         .border_color(rgb(theme.border))
-        .bg(rgb(theme.background))
+        .bg(rgb(0xf7faff))
+        .font_family(".SystemUIFont")
         .text_size(px(11.0))
-        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-            dismiss_entity.update(cx, |this, cx| {
-                if this.dismiss_echo_message() {
-                    cx.notify();
-                }
-            });
-        })
         .when_some(message, |area, message| {
             let (icon, color) = match message.tone {
-                EchoTone::Working => ("◌", theme.heading[0]),
+                EchoTone::Working => ("ⓘ", 0x3477bb),
                 EchoTone::Success => ("✓", theme.heading[2]),
                 EchoTone::Warning => ("!", theme.heading[1]),
                 EchoTone::Error => ("×", 0xb23a63),
             };
+            let is_prefix = pending_keys == Some(message.text.as_ref());
             area.child(
                 div()
                     .w(px(14.0))
@@ -171,13 +168,53 @@ pub(crate) fn render_echo_area(
             )
             .child(
                 div()
+                    .when(is_prefix, |label| {
+                        label
+                            .px(px(7.0))
+                            .py(px(2.0))
+                            .rounded(px(6.0))
+                            .bg(rgb(0xe9eef5))
+                    })
                     .min_w_0()
-                    .flex_1()
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .text_color(rgb(theme.foreground))
                     .child(message.text.to_string()),
+            )
+            .child(
+                div()
+                    .flex_1()
+                    .text_color(rgb(0x8391a6))
+                    .when(is_prefix, |hint| {
+                        hint.child(match language {
+                            crate::i18n::Language::Chinese => "（按下组合键…）",
+                            crate::i18n::Language::English => "(waiting for next key…)",
+                        })
+                    }),
+            )
+            .child(
+                div()
+                    .id("echo-dismiss")
+                    .px(px(7.0))
+                    .rounded(px(5.0))
+                    .cursor_pointer()
+                    .text_color(rgb(0x8391a6))
+                    .hover(|style| style.bg(rgb(0xe9eef5)))
+                    .child("×")
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        cx.stop_propagation();
+                        dismiss_entity.update(cx, |this, cx| {
+                            this.dismiss_echo_message();
+                            if is_prefix {
+                                this.keyboard.cancel();
+                                this.keyboard.dismiss_status();
+                                this.cancel_key_feedback();
+                                this.cancel_which_key(cx);
+                            }
+                            cx.notify();
+                        });
+                    }),
             )
         })
         .into_any_element()

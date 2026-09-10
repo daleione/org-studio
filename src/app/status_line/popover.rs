@@ -27,6 +27,7 @@ pub(crate) fn render_status_popover(
     let content = popover.content;
     let close_entity = entity.clone();
     let title = match &content {
+        StatusPopoverContent::Outline { .. } => segment_title(StatusSegment::Outline, language),
         StatusPopoverContent::ReadingStyle => match language {
             Language::Chinese => "阅读主题",
             Language::English => "Reading Theme",
@@ -76,16 +77,98 @@ pub(crate) fn render_status_popover(
                         }),
                 ),
         );
-    panel = if matches!(content, StatusPopoverContent::ReadingStyle) {
+    panel = if matches!(content, StatusPopoverContent::Outline { .. }) {
+        panel
+            .left(px(8.0))
+            .w(px(286.0_f32.min((pane_width - 16.0).max(1.0))))
+    } else if matches!(content, StatusPopoverContent::ReadingStyle) {
         panel
             .left(px(
                 reading_style_anchor_left.min((pane_width - 128.0).max(8.0))
             ))
             .w(px(190.0_f32.min((pane_width - 16.0).max(1.0))))
     } else {
-        panel.right(px(12.0)).w(px(286.0))
+        panel
+            .right(px(8.0))
+            .w(px(286.0_f32.min((pane_width - 16.0).max(1.0))))
     };
     match content {
+        StatusPopoverContent::Outline { document, entries } => {
+            let mut list = div()
+                .id("status-outline-list")
+                .max_h(px(280.0))
+                .overflow_y_scroll();
+            for (index, (title, source)) in entries.iter().enumerate() {
+                let source = *source;
+                let row_entity = entity.clone();
+                list = list.child(
+                    div()
+                        .id(("status-outline-heading", index))
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .cursor_pointer()
+                        .hover(|style| style.bg(rgb(theme.background_alt)))
+                        .child(super::breadcrumb(title, false))
+                        .on_click(move |_, _, cx| {
+                            row_entity.update(cx, |this, cx| {
+                                let mapped = this.document_session().and_then(|session| {
+                                    let session = session.read(cx);
+                                    (session.id() == document)
+                                        .then(|| session.map_range_to_current(source).ok())
+                                        .flatten()
+                                });
+                                if let Some(mapped) = mapped {
+                                    let side = super::pane_side_for_status(pane);
+                                    match this.document_workspace.surface(side) {
+                                        crate::app::PaneSurface::Editor => {
+                                            if let Some(editor) = this.editor(side) {
+                                                editor.update(cx, |editor, cx| {
+                                                    editor.set_selection(
+                                                        crate::document::Selection::caret(
+                                                            mapped.range.start,
+                                                        ),
+                                                        cx,
+                                                    );
+                                                    editor.scroll_to_source_offset(
+                                                        mapped.range.start,
+                                                        cx,
+                                                    );
+                                                });
+                                            }
+                                        }
+                                        crate::app::PaneSurface::Reading => {
+                                            if this.latest_preview_is_current(cx)
+                                                && let Some(panel) = this.reading_panel_for(side)
+                                            {
+                                                panel.update(cx, |panel, _| {
+                                                    panel
+                                                        .scroll_to_source_offset(mapped.range.start)
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                                this.status.popover = None;
+                                cx.notify();
+                            })
+                        }),
+                );
+            }
+            if entries.is_empty() {
+                list = list.child(
+                    div()
+                        .px(px(12.0))
+                        .py(px(8.0))
+                        .text_color(rgb(theme.foreground_dim))
+                        .child(match language {
+                            Language::Chinese => "此文档暂无标题",
+                            Language::English => "No headings in this document",
+                        }),
+                );
+            }
+            panel = panel.child(list);
+        }
+
         StatusPopoverContent::ReadingStyle => {
             let selected = snapshot.and_then(|snapshot| snapshot.reading_style);
             for style_id in crate::preview::PreviewStyleId::ALL {

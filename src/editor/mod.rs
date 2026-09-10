@@ -1266,6 +1266,21 @@ impl SemanticEditor {
         self.inline_image_cache.borrow().resource_generation
     }
 
+    pub(crate) fn current_outline(&self, offset: ByteOffset, cx: &App) -> Option<Arc<str>> {
+        let snapshot = self.snapshot(cx);
+        let index = self
+            .folds
+            .heading_index(self.session.read(cx).path(), &snapshot);
+        index.outline_at(&snapshot, offset)
+    }
+
+    pub(crate) fn outline_entries(&self, cx: &App) -> Vec<(Arc<str>, RevisionRange)> {
+        let snapshot = self.snapshot(cx);
+        self.folds
+            .heading_index(self.session.read(cx).path(), &snapshot)
+            .outline_entries(&snapshot)
+    }
+
     pub(crate) fn status(&self, cx: &App) -> SemanticEditorStatus {
         let snapshot = self.snapshot(cx);
         let (line, column) = snapshot

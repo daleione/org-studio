@@ -85,25 +85,11 @@ impl WorkspaceWindow {
             bytes: status.bytes,
         };
         let outline = ready
-            .readers
+            .editors
             .get(pane_side)
-            .as_ref()
-            .or_else(|| ready.readers.get(pane_side.other()).as_ref())
-            .and_then(|panel| {
-                let panel = panel.read(cx);
-                let preview = panel.document();
-                let session = ready.session.read(cx);
-                (preview.document_id == session.id()
-                    && preview.revision == session.revision()
-                    && preview.path == session.path())
-                .then(|| {
-                    preview
-                        .projection
-                        .visual_row_for_source_offset(status.caret_offset)
-                        .and_then(|row| current_outline(preview, row))
-                })
-                .flatten()
-            });
+            .as_ref()?
+            .read(cx)
+            .current_outline(status.caret_offset, cx);
         Some(StatusLineSnapshot {
             pane,
             language: self.language,
@@ -288,11 +274,39 @@ impl WorkspaceWindow {
                 },
             });
         }
-        if let Some(SaveStatus::Error(message)) = &self.save.status {
-            return Some(StatusMessage {
-                text: message.clone(),
-                tone: StatusTone::Error,
-            });
+        match &self.save.status {
+            Some(SaveStatus::Error(message)) => {
+                return Some(StatusMessage {
+                    text: message.clone(),
+                    tone: StatusTone::Error,
+                });
+            }
+            Some(SaveStatus::Saving) => {
+                return Some(StatusMessage {
+                    text: match self.language {
+                        Language::Chinese => "正在保存…",
+                        Language::English => "Saving…",
+                    }
+                    .into(),
+                    tone: StatusTone::Working,
+                });
+            }
+            Some(SaveStatus::Success {
+                document, revision, ..
+            }) if session.is_some_and(|session| {
+                session.id() == *document && session.revision() == *revision && !session.is_dirty()
+            }) =>
+            {
+                return Some(StatusMessage {
+                    text: match self.language {
+                        Language::Chinese => "保存成功",
+                        Language::English => "Saved",
+                    }
+                    .into(),
+                    tone: StatusTone::Success,
+                });
+            }
+            _ => {}
         }
         None
     }

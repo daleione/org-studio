@@ -70,7 +70,10 @@ impl StatusLineSnapshot {
         match segment {
             StatusSegment::Mode | StatusSegment::More => true,
             StatusSegment::ReadingStyle => self.reading_style.is_some(),
-            StatusSegment::Outline => self.outline.is_some(),
+            StatusSegment::Outline => {
+                self.outline.is_some()
+                    || matches!(self.host, StatusHost::Editor | StatusHost::Reading)
+            }
             StatusSegment::Position => self.position.is_some(),
             StatusSegment::Progress => self.progress.is_some(),
             StatusSegment::Statistics => self.statistics.is_some(),
@@ -162,6 +165,10 @@ pub(crate) struct StatusPopover {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum StatusPopoverContent {
+    Outline {
+        document: crate::document::DocumentId,
+        entries: Arc<[(Arc<str>, crate::document::RevisionRange)]>,
+    },
     ReadingStyle,
     Info(StatusSegment),
     Overflow(Arc<[StatusSegment]>),
@@ -174,12 +181,13 @@ pub(crate) struct StatusLayoutKey {
     pub settings: StatusLineSettings,
     pub host: StatusHost,
     pub surface: crate::app::PaneSurface,
-    pub reading_style: Option<PreviewStyleId>,
+    pub reading_style: bool,
     pub language: Language,
     pub outline: bool,
-    pub position_reserve: Option<String>,
+    pub position: bool,
     pub progress: bool,
-    pub statistics: Option<Arc<str>>,
+    pub statistics: bool,
+    pub document_statistics: bool,
     pub format: Option<DocumentFormat>,
 }
 

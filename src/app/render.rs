@@ -454,6 +454,8 @@ impl Render for WorkspaceWindow {
                         workspace.child(crate::app::echo_area::render_echo_area(
                             echo_message,
                             entity.clone(),
+                            self.keyboard.pending_keys(),
+                            self.language,
                         ))
                     }),
             )

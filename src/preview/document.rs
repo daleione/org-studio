@@ -31,6 +31,23 @@ pub struct PreviewSnapshot {
     pub(crate) update: DerivedUpdate,
 }
 
+impl PreviewSnapshot {
+    /// Collect on demand when opening navigation, not during status repainting.
+    pub(crate) fn outline_entries(&self) -> Vec<(Arc<str>, RevisionRange)> {
+        (0..self.projection.row_count())
+            .filter_map(|index| {
+                let visual = self.projection.rows.get(index)?;
+                if !matches!(visual.kind, super::projection::VisualRowKind::Heading(_)) {
+                    return None;
+                }
+                let row = self.projection.source_row(index)?;
+                let title = self.outline_paths.get(row.block_id as usize)?.clone()?;
+                Some((title, row.content))
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum DerivedUpdate {
     Full,

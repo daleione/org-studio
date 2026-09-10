@@ -18,6 +18,8 @@ use crate::{
 };
 
 mod host;
+mod icons;
+use icons::{StatusIcon, status_icon};
 mod model;
 mod popover;
 #[cfg(test)]
@@ -61,27 +63,39 @@ impl StatusLineHost {
     }
 }
 
-pub(crate) const STATUS_LINE_HEIGHT: f32 = 30.0;
+pub(crate) const STATUS_LINE_HEIGHT: f32 = 38.0;
 const OUTLINE_FULL_RESERVE: f32 = 260.0;
 const OUTLINE_COMPACT_WIDTH: f32 = 150.0;
-const POSITION_FULL_CHROME: f32 = 40.0;
-const POSITION_COMPACT_CHROME: f32 = 24.0;
-const PROGRESS_FULL_CHROME: f32 = 42.0;
-const PROGRESS_COMPACT_CHROME: f32 = 24.0;
-const READING_STYLE_CHROME: f32 = 24.0;
+// Fixed slots are shared by layout budgeting and rendering. Values never resize them.
+const MODE_FULL_WIDTH: f32 = 86.0;
+const MODE_COMPACT_WIDTH: f32 = 41.0;
+const STYLE_FULL_WIDTH: f32 = 90.0;
+const STYLE_COMPACT_WIDTH: f32 = 50.0;
+const POSITION_FULL_WIDTH: f32 = 88.0;
+const POSITION_COMPACT_WIDTH: f32 = 44.0;
+const PROGRESS_MARGIN: f32 = 8.0;
+const PROGRESS_FULL_WIDTH: f32 = 68.0;
+const PROGRESS_COMPACT_WIDTH: f32 = 44.0;
+const STATISTICS_FULL_WIDTH: f32 = 308.0;
+const STATISTICS_COMPACT_WIDTH: f32 = 90.0;
+const FORMAT_WIDTH: f32 = 64.0;
+const MORE_WIDTH: f32 = 36.0;
 
 // Status colors deliberately stay independent from document syntax colors. A status should
 // communicate state consistently even when the active theme uses red for its first heading.
-const STATUS_CLEAN: u32 = 0x2f7049;
-const STATUS_CLEAN_HOVER: u32 = 0x285f3e;
-const STATUS_CLEAN_FOREGROUND: u32 = 0xf4f6fa;
-const STATUS_DIRTY: u32 = 0xd5a24d;
-const STATUS_DIRTY_HOVER: u32 = 0xc49342;
-const STATUS_DIRTY_FOREGROUND: u32 = 0x3f2d16;
-const STATUS_WORKING_TEXT: u32 = 0x6f718f;
-const STATUS_SUCCESS_TEXT: u32 = 0x557b61;
+const STATUS_CLEAN: u32 = 0x079e70;
+const STATUS_CLEAN_HOVER: u32 = 0xeaf3f8;
+const STATUS_CLEAN_FOREGROUND: u32 = 0x34445b;
+const STATUS_DIRTY: u32 = 0xf5b718;
+const STATUS_DIRTY_HOVER: u32 = 0xeaf3f8;
+const STATUS_DIRTY_FOREGROUND: u32 = 0x34445b;
+const STATUS_WORKING_TEXT: u32 = 0x627795;
+const STATUS_SUCCESS_TEXT: u32 = 0x079e70;
 const STATUS_ERROR_TEXT: u32 = 0xa14f5d;
-const STATUS_PROGRESS: u32 = 0x5e7f84;
+const STATUS_PROGRESS: u32 = 0x079e70;
+const STATUS_BACKGROUND: u32 = 0xf7faff;
+const STATUS_BORDER: u32 = 0xdce4ee;
+const STATUS_FOREGROUND: u32 = 0x60718c;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ModeColors {
@@ -121,14 +135,13 @@ impl StatusLineSnapshot {
             settings,
             host: self.host,
             surface: self.surface,
-            reading_style: self.reading_style,
+            reading_style: self.reading_style.is_some(),
             language: self.language,
-            outline: self.outline.is_some(),
-            position_reserve: self
-                .position
-                .map(|position| position_reserve_text(position, false, self.language)),
+            outline: self.has_segment(StatusSegment::Outline),
+            position: self.position.is_some(),
             progress: self.progress.is_some(),
-            statistics: self.statistics.clone(),
+            statistics: self.statistics.is_some(),
+            document_statistics: self.document_statistics.is_some(),
             format: self.format,
         }
     }
@@ -160,7 +173,7 @@ impl StatusLineSnapshot {
             } else {
                 Variant::Hidden
             },
-            outline: if settings.outline && self.outline.is_some() {
+            outline: if settings.outline && self.has_segment(StatusSegment::Outline) {
                 Variant::Full
             } else {
                 Variant::Hidden
@@ -194,6 +207,7 @@ impl StatusLineSnapshot {
             // information compacts first; position deliberately survives longest because it is also
             // the stable contract needed by the future editor host.
             for step in [
+                Degrade::CompactStatistics,
                 Degrade::HideFormat,
                 Degrade::CompactOutline,
                 Degrade::CompactProgress,
@@ -201,8 +215,8 @@ impl StatusLineSnapshot {
                 Degrade::CompactMode,
                 Degrade::CompactReadingStyle,
                 Degrade::HideOutline,
-                Degrade::HideStatistics,
                 Degrade::HideProgress,
+                Degrade::HideStatistics,
                 Degrade::HidePosition,
             ] {
                 layout.apply(step);
@@ -225,19 +239,22 @@ impl StatusLineSnapshot {
     }
 
     fn mode_label(&self) -> &'static str {
-        match self.host {
-            StatusHost::Dired => "FILES",
-            StatusHost::Agenda => "AGENDA",
-            StatusHost::Reading | StatusHost::Editor => match self.surface {
-                crate::app::PaneSurface::Editor => "EDITOR",
-                crate::app::PaneSurface::Reading => "READING",
-            },
+        match (self.language, self.host, self.surface) {
+            (Language::Chinese, StatusHost::Dired, _) => "文件",
+            (Language::Chinese, StatusHost::Agenda, _) => "日程",
+            (Language::Chinese, _, crate::app::PaneSurface::Editor) => "编辑",
+            (Language::Chinese, _, crate::app::PaneSurface::Reading) => "阅读",
+            (_, StatusHost::Dired, _) => "Files",
+            (_, StatusHost::Agenda, _) => "Agenda",
+            (_, _, crate::app::PaneSurface::Editor) => "Edit",
+            (_, _, crate::app::PaneSurface::Reading) => "Read",
         }
     }
 }
 
 #[derive(Clone, Copy)]
 enum Degrade {
+    CompactStatistics,
     HideStatistics,
     HideFormat,
     CompactProgress,
@@ -253,6 +270,9 @@ enum Degrade {
 impl StatusLineLayout {
     fn apply(&mut self, step: Degrade) {
         match step {
+            Degrade::CompactStatistics if self.statistics == Variant::Full => {
+                self.statistics = Variant::Compact
+            }
             Degrade::HideStatistics if self.statistics != Variant::Hidden => {
                 self.statistics = Variant::Hidden
             }
@@ -284,27 +304,16 @@ impl StatusLineLayout {
     }
 
     fn width(&self, snapshot: &StatusLineSnapshot, measure: &impl Fn(&str) -> f32) -> f32 {
-        let mode = match self.mode {
-            Variant::Full => measure(snapshot.mode_label()) + 28.0,
-            Variant::Compact => 30.0,
+        let mode = mode_slot_width(self.mode);
+        let reading_style = if snapshot.reading_style.is_some() {
+            style_slot_width(self.reading_style)
+        } else {
+            0.0
+        };
+        let outline = match self.outline {
+            Variant::Full => OUTLINE_FULL_RESERVE,
+            Variant::Compact => OUTLINE_COMPACT_WIDTH,
             Variant::Hidden => 0.0,
-        };
-        let reading_style = match (self.reading_style, snapshot.reading_style) {
-            (Variant::Full, Some(id)) => {
-                measure(preview_style(id).name(snapshot.language)) + READING_STYLE_CHROME
-            }
-            (Variant::Compact, Some(_)) => {
-                measure(match snapshot.language {
-                    Language::Chinese => "样式",
-                    Language::English => "Style",
-                }) + READING_STYLE_CHROME
-            }
-            _ => 0.0,
-        };
-        let outline = match (self.outline, snapshot.outline.as_deref()) {
-            (Variant::Full, Some(_)) => OUTLINE_FULL_RESERVE,
-            (Variant::Compact, Some(_)) => OUTLINE_COMPACT_WIDTH,
-            _ => 0.0,
         };
         let position = match (self.position, snapshot.position) {
             (Variant::Full, Some(value)) => {
@@ -316,20 +325,25 @@ impl StatusLineLayout {
             _ => 0.0,
         };
         let progress = match (self.progress, snapshot.progress) {
-            (Variant::Full, Some(_)) => progress_slot_width(false, measure),
-            (Variant::Compact, Some(_)) => progress_slot_width(true, measure),
+            (Variant::Full, Some(_)) => progress_slot_width(false, measure) + PROGRESS_MARGIN,
+            (Variant::Compact, Some(_)) => progress_slot_width(true, measure) + PROGRESS_MARGIN,
             _ => 0.0,
         };
-        let statistics = match (self.statistics, snapshot.statistics.as_deref()) {
-            (Variant::Full, Some(value)) => measure(value) + 18.0,
-            _ => 0.0,
-        };
-        let format = match (self.format, snapshot.format) {
-            (Variant::Full, Some(value)) => measure(format_label(value)) + 18.0,
-            _ => 0.0,
+        let statistics = statistics_slot_width(snapshot, self.statistics);
+        let format = if self.format == Variant::Full && snapshot.format.is_some() {
+            FORMAT_WIDTH
+        } else {
+            0.0
         };
         // More is mandatory. The flexible center keeps a small hit target even when empty.
-        mode + reading_style + outline + position + progress + statistics + format + 44.0 + 16.0
+        mode + reading_style
+            + outline
+            + position
+            + progress
+            + statistics
+            + format
+            + MORE_WIDTH
+            + 16.0
     }
 
     fn resolved_outline_width(
@@ -347,28 +361,28 @@ impl StatusLineLayout {
         if self.outline == Variant::Compact {
             remaining.min(OUTLINE_COMPACT_WIDTH)
         } else {
-            remaining
+            (remaining - if available >= 700.0 { 110.0 } else { 0.0 }).max(0.0)
         }
     }
 }
 
 #[cfg(test)]
 fn text_width(text: &str) -> f32 {
-    UnicodeWidthStr::width(text) as f32 * 6.15
+    UnicodeWidthStr::width(text) as f32 * 6.5
 }
 
 fn measured_text_width(text: &str, window: &Window) -> f32 {
     let text: SharedString = text.to_owned().into();
     let run = TextRun {
         len: text.len(),
-        font: font("Menlo"),
+        font: font(".SystemUIFont"),
         color: Hsla::default(),
         ..Default::default()
     };
     f32::from(
         window
             .text_system()
-            .shape_line(text, px(10.0), &[run], None)
+            .shape_line(text, px(11.0), &[run], None)
             .width,
     )
 }
@@ -378,13 +392,8 @@ pub(crate) fn reading_style_popover_left(
     layout: &StatusLineLayout,
     window: &Window,
 ) -> f32 {
-    match layout.mode {
-        // Mode margin + padding + dot + gap + measured label, followed by the
-        // small gap before the Reading style selector.
-        Variant::Full => measured_text_width(snapshot.mode_label(), window) + 39.0,
-        Variant::Compact => 29.0,
-        Variant::Hidden => 8.0,
-    }
+    let _ = (snapshot, window);
+    mode_slot_width(layout.mode) + 4.0
 }
 
 fn leaf(path: &str) -> &str {
@@ -434,71 +443,121 @@ fn position_text(position: StatusPosition, compact: bool, language: Language) ->
     }
 }
 
-fn position_reserve_text(position: StatusPosition, compact: bool, language: Language) -> String {
-    let digits = |value: u64| value.max(1).ilog10() as usize + 1;
-    match position {
-        StatusPosition::ReadingSource { total_lines, .. } => {
-            let number = "9".repeat(digits(total_lines));
-            if compact {
-                number
-            } else {
-                match language {
-                    Language::Chinese => format!("源 {number}"),
-                    Language::English => format!("Src {number}"),
-                }
-            }
-        }
-        StatusPosition::EditorCaret { line, column } => {
-            if compact {
-                "9".repeat(digits(line))
-            } else {
-                format!(
-                    "{}:{}",
-                    "9".repeat(digits(line)),
-                    "9".repeat(digits(column))
-                )
-            }
-        }
-        StatusPosition::DiredSelection { total, .. } => {
-            let number = "9".repeat(digits(total as u64));
-            if compact {
-                number
-            } else {
-                format!("{number} / {number}")
-            }
-        }
-        StatusPosition::AgendaSelection { total, .. } => {
-            let number = "9".repeat(digits(total as u64));
-            if compact {
-                number
-            } else {
-                format!("{number} / {number}")
-            }
-        }
+fn mode_slot_width(variant: Variant) -> f32 {
+    match variant {
+        Variant::Full => MODE_FULL_WIDTH,
+        Variant::Compact => MODE_COMPACT_WIDTH,
+        Variant::Hidden => 0.0,
+    }
+}
+
+fn style_slot_width(variant: Variant) -> f32 {
+    match variant {
+        Variant::Full => STYLE_FULL_WIDTH,
+        Variant::Compact => STYLE_COMPACT_WIDTH,
+        Variant::Hidden => 0.0,
+    }
+}
+
+fn statistics_slot_width(snapshot: &StatusLineSnapshot, variant: Variant) -> f32 {
+    match variant {
+        Variant::Hidden => 0.0,
+        Variant::Full if snapshot.document_statistics.is_some() => STATISTICS_FULL_WIDTH,
+        _ => STATISTICS_COMPACT_WIDTH,
     }
 }
 
 fn position_slot_width(
-    position: StatusPosition,
+    _position: StatusPosition,
     compact: bool,
-    language: Language,
-    measure: &impl Fn(&str) -> f32,
+    _language: Language,
+    _measure: &impl Fn(&str) -> f32,
 ) -> f32 {
-    measure(&position_reserve_text(position, compact, language))
-        + if compact {
-            POSITION_COMPACT_CHROME
-        } else {
-            POSITION_FULL_CHROME
-        }
+    if compact {
+        POSITION_COMPACT_WIDTH
+    } else {
+        POSITION_FULL_WIDTH
+    }
 }
 
-fn progress_slot_width(compact: bool, measure: &impl Fn(&str) -> f32) -> f32 {
-    measure("100%")
-        + if compact {
-            PROGRESS_COMPACT_CHROME
-        } else {
-            PROGRESS_FULL_CHROME
+fn progress_slot_width(compact: bool, _measure: &impl Fn(&str) -> f32) -> f32 {
+    if compact {
+        PROGRESS_COMPACT_WIDTH
+    } else {
+        PROGRESS_FULL_WIDTH
+    }
+}
+
+fn statistic_field(icon: StatusIcon, value: String, width: f32) -> gpui::Div {
+    div()
+        .w(px(width))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .min_w_0()
+                .flex()
+                .items_center()
+                .gap(px(5.0))
+                .child(status_icon(icon))
+                .child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(value),
+                ),
+        )
+}
+
+fn breadcrumb(path: &str, compact: bool) -> gpui::Div {
+    let parts: Vec<_> = if compact {
+        vec![leaf(path)]
+    } else {
+        path.split(" / ").collect()
+    };
+    let mut row = div()
+        .min_w_0()
+        .flex_1()
+        .flex()
+        .items_center()
+        .gap(px(4.0))
+        .overflow_hidden();
+    for (index, title) in parts.iter().enumerate() {
+        if index > 0 {
+            row = row.child(
+                gpui::svg()
+                    .data(include_bytes!("assets/status-chevron-right.svg"))
+                    .size(px(14.0))
+                    .flex_none()
+                    .text_color(rgb(STATUS_FOREGROUND)),
+            );
         }
+        row = row.child(
+            div()
+                .min_w_0()
+                .max_w(px(180.0))
+                .overflow_hidden()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                .child((*title).to_owned()),
+        );
+    }
+    row
+}
+
+fn status_value(text: String, width: Option<f32>) -> gpui::Div {
+    div()
+        .min_w_0()
+        .when_some(width, |value, width| value.w(px(width)).flex_none())
+        .when(width.is_none(), |value| value.flex_1())
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_ellipsis()
+        .child(text)
 }
 
 pub(crate) fn render_status_line(
@@ -511,17 +570,21 @@ pub(crate) fn render_status_line(
     let pane_id = snapshot.pane.0;
     let mode_colors = mode_colors(snapshot.dirty);
     let mode = status_button(entity.clone(), pane_id, StatusSegment::Mode)
-        .mx(px(4.0))
-        .my(px(4.0))
-        .h(px(22.0))
+        .mx(px(8.0))
+        .w(px(mode_slot_width(layout.mode) - 16.0))
+        .flex_none()
+        .my(px(5.0))
+        .h(px(28.0))
         .px(px(if layout.mode == Variant::Compact {
             7.0
         } else {
             9.0
         }))
         .gap(px(6.0))
-        .rounded(px(6.0))
-        .bg(rgb(mode_colors.background))
+        .rounded_full()
+        .border_1()
+        .border_color(rgb(STATUS_BORDER))
+        .bg(rgb(STATUS_BACKGROUND))
         .text_color(rgb(mode_colors.foreground))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .hover(move |style| {
@@ -531,9 +594,9 @@ pub(crate) fn render_status_line(
         })
         .child(
             div()
-                .size(px(5.0))
+                .size(px(9.0))
                 .rounded_full()
-                .bg(rgb(mode_colors.foreground)),
+                .bg(rgb(mode_colors.background)),
         )
         .when(layout.mode == Variant::Full, |button| {
             button.child(snapshot.mode_label())
@@ -548,6 +611,7 @@ pub(crate) fn render_status_line(
         .when_some(snapshot.reading_style, |left, style_id| {
             left.child(
                 status_button(entity.clone(), pane_id, StatusSegment::ReadingStyle)
+                    .w(px(style_slot_width(layout.reading_style) - 4.0))
                     .ml(px(2.0))
                     .mr(px(2.0))
                     .my(px(4.0))
@@ -576,26 +640,20 @@ pub(crate) fn render_status_line(
             )
         })
         .when(layout.outline != Variant::Hidden, |left| {
-            match snapshot.outline.as_deref() {
-                Some(outline) => left.child(
-                    status_button(entity.clone(), pane_id, StatusSegment::Outline)
-                        .max_w(px(layout.outline_max_width))
-                        .child("◎")
-                        .child(
-                            div()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .whitespace_nowrap()
-                                .text_ellipsis()
-                                .child(if layout.outline == Variant::Compact {
-                                    leaf(outline).to_owned()
-                                } else {
-                                    outline.to_owned()
-                                }),
-                        ),
-                ),
-                None => left,
-            }
+            let outline = snapshot
+                .outline
+                .as_deref()
+                .unwrap_or(match snapshot.language {
+                    Language::Chinese => "正文",
+                    Language::English => "Body",
+                });
+            left.child(
+                status_button(entity.clone(), pane_id, StatusSegment::Outline)
+                    .w(px(layout.outline_max_width))
+                    .overflow_hidden()
+                    .child(status_icon(StatusIcon::Outline))
+                    .child(breadcrumb(outline, layout.outline == Variant::Compact)),
+            )
         });
 
     let center_color = snapshot
@@ -617,18 +675,54 @@ pub(crate) fn render_status_line(
         .text_ellipsis()
         .text_color(rgb(center_color))
         .when_some(snapshot.transient.as_ref(), |center, message| {
-            center.child(message.text.to_string())
+            center
+                .gap(px(7.0))
+                .child(match message.tone {
+                    StatusTone::Success => "✓",
+                    StatusTone::Working => "◌",
+                    StatusTone::Error => "!",
+                })
+                .child(message.text.to_string())
         });
 
     let mut right = div().h_full().flex().items_center().flex_none();
     if layout.statistics != Variant::Hidden
         && let Some(statistics) = snapshot.statistics.as_deref()
     {
+        let button = status_button(entity.clone(), pane_id, StatusSegment::Statistics)
+            .w(px(statistics_slot_width(snapshot, layout.statistics)))
+            .overflow_hidden()
+            .gap(px(0.0));
         right = right.child(
-            status_button(entity.clone(), pane_id, StatusSegment::Statistics)
-                .child(statistics.to_owned()),
+            if layout.statistics == Variant::Full && snapshot.document_statistics.is_some() {
+                let stats = snapshot.document_statistics.unwrap();
+                button
+                    .child(statistic_field(
+                        StatusIcon::Document,
+                        statistics.to_owned(),
+                        96.0,
+                    ))
+                    .child(status_separator())
+                    .child(statistic_field(
+                        StatusIcon::Lines,
+                        match snapshot.language {
+                            Language::Chinese => format!("{} 行", format_integer(stats.lines)),
+                            Language::English => format!("{} lines", format_integer(stats.lines)),
+                        },
+                        96.0,
+                    ))
+                    .child(status_separator())
+                    .child(statistic_field(
+                        StatusIcon::Storage,
+                        format_byte_count(stats.bytes),
+                        76.0,
+                    ))
+            } else {
+                button.child(status_value(statistics.to_owned(), None))
+            },
         );
     }
+
     if layout.position != Variant::Hidden
         && let Some(position) = snapshot.position
     {
@@ -639,9 +733,27 @@ pub(crate) fn render_status_line(
         right = right.child(
             status_button(entity.clone(), pane_id, StatusSegment::Position)
                 .w(px(slot_width))
+                .justify_center()
                 .overflow_hidden()
-                .when(layout.position == Variant::Full, |button| button.child("⌖"))
-                .child(position_text(position, compact, snapshot.language)),
+                .child(
+                    div()
+                        .min_w_0()
+                        .flex()
+                        .items_center()
+                        .gap(px(5.0))
+                        .when(layout.position == Variant::Full, |group| {
+                            group.child(status_icon(StatusIcon::Position))
+                        })
+                        .child(
+                            div()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .text_ellipsis()
+                                .font_family("Menlo")
+                                .child(position_text(position, compact, snapshot.language)),
+                        ),
+                ),
         );
     }
     if layout.progress != Variant::Hidden
@@ -651,12 +763,17 @@ pub(crate) fn render_status_line(
         let slot_width = progress_slot_width(compact, &|text| measured_text_width(text, window));
         right = right.child(
             status_button(entity.clone(), pane_id, StatusSegment::Progress)
+                .mr(px(PROGRESS_MARGIN))
                 .w(px(slot_width))
+                .rounded_full()
+                .border_1()
+                .border_color(rgb(0xe3f1ed))
+                .text_color(rgb(STATUS_PROGRESS))
                 .overflow_hidden()
                 .when(layout.progress == Variant::Full, |button| {
                     button.child(progress_ring(progress))
                 })
-                .child(format!("{progress}%")),
+                .child(status_value(format!("{progress}%"), None).font_family("Menlo")),
         );
     }
     if layout.format != Variant::Hidden
@@ -664,6 +781,8 @@ pub(crate) fn render_status_line(
     {
         right = right.child(
             status_button(entity.clone(), pane_id, StatusSegment::Format)
+                .w(px(FORMAT_WIDTH))
+                .child(status_icon(StatusIcon::Format))
                 .child(format_label(format)),
         );
     }
@@ -671,18 +790,25 @@ pub(crate) fn render_status_line(
     let more_entity = entity.clone();
     right = right.child(
         status_button(entity.clone(), pane_id, StatusSegment::More)
+            .w(px(MORE_WIDTH))
+            .relative()
+            .rounded_full()
             .child("•••")
             .when(!layout.overflow.is_empty(), |button| {
                 button.child(
                     div()
-                        .min_w(px(14.0))
-                        .h(px(14.0))
+                        .absolute()
+                        .top(px(-3.0))
+                        .right(px(0.0))
+                        .min_w(px(13.0))
+                        .h(px(13.0))
                         .px(px(3.0))
                         .rounded_full()
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(rgb(theme.code_boundary_background))
+                        .bg(rgb(0xe4eaff))
+                        .text_color(rgb(0x4565cd))
                         .text_size(px(8.0))
                         .child(layout.overflow.len().to_string()),
                 )
@@ -712,9 +838,10 @@ pub(crate) fn render_status_line(
         .overflow_hidden()
         .border_t_1()
         .border_color(rgb(theme.border))
-        .bg(rgb(theme.background_alt))
-        .text_color(rgb(theme.foreground_dim))
-        .text_size(px(10.0))
+        .bg(rgb(STATUS_BACKGROUND))
+        .text_color(rgb(STATUS_FOREGROUND))
+        .font_family(".SystemUIFont")
+        .text_size(px(11.0))
         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
             cx.stop_propagation();
             customize_entity.update(cx, |this, cx| {
@@ -740,22 +867,19 @@ fn status_button(
     let button = div()
         .id(format!("status-{pane_id}-segment-{}", segment as usize))
         .debug_selector(|| format!("status-{pane_id}-segment-{}", segment as usize))
-        .h_full()
+        .h(px(26.0))
+        .flex_none()
         .px(px(8.0))
         .flex()
         .items_center()
         .gap(px(5.0))
         .cursor_pointer()
         .border_l_1()
-        .border_color(rgb(theme.border));
+        .border_color(rgb(STATUS_BORDER));
     let button = if segment == StatusSegment::Mode {
         button
     } else {
-        button.hover(|style| {
-            style
-                .bg(rgb(theme.code_boundary_background))
-                .text_color(rgb(theme.foreground))
-        })
+        button.hover(|style| style.bg(rgb(0xeaf0f8)).text_color(rgb(theme.foreground)))
     };
     if segment == StatusSegment::More {
         return button;
@@ -913,6 +1037,33 @@ impl WorkspaceWindow {
                 self.status.popover = None;
                 self.toggle_pane_surface(pane_side_for_status(pane), cx);
             }
+            StatusSegment::Outline if self.content_route == ContentRoute::Document => {
+                let side = pane_side_for_status(pane);
+                let content = self
+                    .state
+                    .ready()
+                    .and_then(|ready| {
+                        let session = ready.session.read(cx);
+                        let entries = if let Some(editor) = ready.editors.get(side).as_ref() {
+                            editor.read(cx).outline_entries(cx)
+                        } else {
+                            let panel = ready.readers.get(side).as_ref()?.read(cx);
+                            let preview = panel.document();
+                            if preview.document_id != session.id()
+                                || preview.revision != session.revision()
+                            {
+                                return None;
+                            }
+                            preview.outline_entries()
+                        };
+                        Some(StatusPopoverContent::Outline {
+                            document: session.id(),
+                            entries: entries.into(),
+                        })
+                    })
+                    .unwrap_or(StatusPopoverContent::Info(segment));
+                self.status.popover = Some(StatusPopover { pane, content });
+            }
             StatusSegment::ReadingStyle => {
                 self.status.popover = Some(StatusPopover {
                     pane,
@@ -982,6 +1133,14 @@ fn format_character_count(characters: u64, language: Language) -> String {
         Language::Chinese => format!("{value} 字"),
         Language::English => format!("{value} chars"),
     }
+}
+
+fn status_separator() -> impl IntoElement {
+    div()
+        .w(px(1.0))
+        .h(px(14.0))
+        .mx(px(5.0))
+        .bg(rgb(STATUS_BORDER))
 }
 
 fn format_byte_count(bytes: u64) -> String {
@@ -1081,9 +1240,9 @@ fn info_text(
         && snapshot.is_some_and(|snapshot| snapshot.host == StatusHost::Editor)
     {
         return match language {
-            Language::Chinese => "当前为编辑界面。位置和进度来自编辑器的实时光标与 viewport；点击可打开或关闭右侧预览。".to_owned(),
+            Language::Chinese => "当前为编辑界面。位置显示光标行列，进度显示滚动位置；点击可立即切换当前面板的编辑或阅读界面。".to_owned(),
             Language::English => {
-                "Editing is active. Position and progress use the editor's live caret and viewport; click to toggle the right preview.".to_owned()
+                "Editing is active. Position uses the caret and progress uses the viewport. Click to switch this pane between editing and reading.".to_owned()
             }
         };
     }
@@ -1181,13 +1340,13 @@ mod tests {
     #[test]
     fn responsive_layout_degrades_without_hiding_mandatory_segments() {
         let settings = StatusLineSettings::default();
-        let wide = snapshot().layout(900.0, settings);
+        let wide = snapshot().layout(1_400.0, settings);
         assert_eq!(wide.mode, Variant::Full);
         assert_eq!(wide.statistics, Variant::Full);
         assert!(wide.overflow.is_empty());
 
         let split = snapshot().layout(430.0, settings);
-        assert_eq!(split.statistics, Variant::Full);
+        assert_eq!(split.statistics, Variant::Compact);
         assert_ne!(split.mode, Variant::Hidden);
         assert_ne!(split.position, Variant::Hidden);
 
@@ -1246,7 +1405,12 @@ mod tests {
                 let layout =
                     self.snapshot
                         .layout_in_window(210.0, StatusLineSettings::default(), window);
-                render_status_line(&self.snapshot, layout, self.app.clone(), window)
+                div().w(px(210.0)).child(render_status_line(
+                    &self.snapshot,
+                    layout,
+                    self.app.clone(),
+                    window,
+                ))
             }
         }
         let (_harness, cx) = cx.add_window_view(|_, _| StatusHarness {
@@ -1256,6 +1420,7 @@ mod tests {
         let bounds = cx
             .debug_bounds("status-7-segment-6")
             .expect("More segment should be painted");
+        assert!(f32::from(bounds.origin.x + bounds.size.width) <= 210.0);
         let center = point(
             bounds.origin.x + bounds.size.width / 2.0,
             bounds.origin.y + bounds.size.height / 2.0,
@@ -1272,7 +1437,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn clicking_a_status_surface_control_only_changes_its_own_pane(cx: &mut gpui::TestAppContext) {
+    fn clicking_a_status_surface_control_immediately_toggles_its_own_pane(
+        cx: &mut gpui::TestAppContext,
+    ) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
         let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_split_layout(false)));
@@ -1310,6 +1477,23 @@ mod tests {
                 app.document_workspace.surface(crate::app::PaneSide::Left),
                 crate::app::PaneSurface::Reading
             );
+            assert_eq!(
+                app.document_workspace.surface(crate::app::PaneSide::Right),
+                crate::app::PaneSurface::Reading
+            );
+            assert!(app.status.popover.is_none());
+        });
+        cx.simulate_click(center, Modifiers::default());
+        cx.update(|_, cx| {
+            let app = app.read(cx);
+            assert_eq!(
+                app.document_workspace.surface(crate::app::PaneSide::Left),
+                crate::app::PaneSurface::Editor
+            );
+            assert_eq!(
+                app.document_workspace.surface(crate::app::PaneSide::Right),
+                crate::app::PaneSurface::Reading
+            );
             assert!(app.status.popover.is_none());
         });
     }
@@ -1338,6 +1522,43 @@ mod tests {
             ),
             "259:4"
         );
+    }
+
+    #[gpui::test]
+    fn editor_outline_is_available_before_reading_and_tracks_edits(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        for (extension, source, expected) in [
+            ("org", "* Parent\n** Child\nbody\n", "Parent / Child"),
+            ("md", "# Parent\n## Child\nbody\n", "Parent / Child"),
+        ] {
+            let path = std::env::temp_dir().join(format!(
+                "status-source-outline-{}.{}",
+                std::process::id(),
+                extension
+            ));
+            std::fs::write(&path, source).unwrap();
+            let loaded = crate::preview::load_workspace_document(path.clone(), false).unwrap();
+            std::fs::remove_file(path).unwrap();
+            let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+            app.update(cx, |app, cx| {
+                app.generation = 1;
+                assert!(app.apply_load_result(1, Ok(loaded), cx));
+                let ready = app.state.ready().unwrap();
+                assert!(ready.readers.left.is_none());
+                assert!(ready.readers.right.is_none());
+                let editor = ready.editors.left.clone().unwrap();
+                editor.update(cx, |editor, cx| editor.set_selection(crate::document::Selection::caret(crate::document::ByteOffset(source.len() as u64)), cx));
+                assert_eq!(app.status_snapshot(cx).unwrap().outline.as_deref(), Some(expected));
+                app.activate_status_segment(DOCUMENT_PANE_ID, StatusSegment::Outline, None, cx);
+                assert!(matches!(&app.status.popover.as_ref().unwrap().content, StatusPopoverContent::Outline { entries, .. } if entries.len() == 2 && entries[1].0.as_ref() == expected));
+                let session = app.document_session().unwrap().clone();
+                session.update(cx, |session, cx| {
+                    let start = source.find("Child").unwrap() as u64;
+                    session.apply_transient_edit(crate::document::EditTransaction::new(session.revision(), vec![crate::document::TextEdit::new(crate::document::ByteRange::new(start, start + 5), "Renamed")]), cx).unwrap();
+                });
+                assert_eq!(app.status_snapshot(cx).unwrap().outline.as_deref(), Some("Parent / Renamed"));
+            });
+        }
     }
 
     #[gpui::test]
@@ -1399,6 +1620,75 @@ mod tests {
         assert!(snapshot.outline.is_none());
     }
 
+    #[gpui::test]
+    fn save_feedback_expires_and_does_not_cover_new_edits(cx: &mut gpui::TestAppContext) {
+        use gpui::AppContext;
+        let path =
+            std::env::temp_dir().join(format!("status-save-feedback-{}.org", std::process::id()));
+        std::fs::write(&path, "hello").unwrap();
+        let loaded = crate::preview::load_document(path.clone()).unwrap();
+        std::fs::remove_file(path).unwrap();
+        let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        app.update(cx, |app, cx| {
+            app.language = Language::Chinese;
+            app.generation = 1;
+            assert!(app.apply_load_result(1, Ok(loaded), cx));
+            let session = app.document_session().unwrap().clone();
+            let (id, revision) = {
+                let session = session.read(cx);
+                (session.id(), session.revision())
+            };
+            assert!(app.status_snapshot(cx).unwrap().transient.is_none());
+            app.show_save_success(id, revision, cx);
+            assert_eq!(
+                app.status_snapshot(cx).unwrap().transient_text(),
+                Some("保存成功")
+            );
+        });
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_secs(3));
+        cx.run_until_parked();
+        app.update(cx, |app, cx| {
+            assert!(app.save.status.is_none());
+            let session = app.document_session().unwrap().clone();
+            let (id, revision) = {
+                let session = session.read(cx);
+                (session.id(), session.revision())
+            };
+            app.show_save_success(id, revision, cx);
+            session.update(cx, |session, cx| {
+                session
+                    .apply_transient_edit(
+                        crate::document::EditTransaction::new(
+                            revision,
+                            vec![crate::document::TextEdit::new(
+                                crate::document::ByteRange::new(0, 0),
+                                "new ",
+                            )],
+                        ),
+                        cx,
+                    )
+                    .unwrap();
+            });
+            assert_ne!(
+                app.status_snapshot(cx).unwrap().transient_text(),
+                Some("保存成功")
+            );
+            app.save.status = Some(crate::app::save::SaveStatus::Error("failed".into()));
+        });
+        cx.run_until_parked();
+        cx.background_executor
+            .advance_clock(std::time::Duration::from_secs(3));
+        cx.run_until_parked();
+        app.update(cx, |app, cx| {
+            assert_eq!(
+                app.status_snapshot(cx).unwrap().transient_text(),
+                Some("failed")
+            )
+        });
+    }
+
     #[test]
     fn reading_progress_tracks_the_source_bottom_line() {
         assert_eq!(reading_progress(0, 100, false), 0);
@@ -1423,28 +1713,121 @@ mod tests {
     }
 
     #[test]
-    fn position_reserves_the_total_line_digit_count() {
-        let first = StatusPosition::ReadingSource {
-            line: 1,
-            total_lines: 999,
-        };
-        let last = StatusPosition::ReadingSource {
-            line: 999,
-            total_lines: 999,
-        };
-        assert_eq!(
-            position_reserve_text(first, false, Language::Chinese),
-            "源 999"
-        );
-        assert_eq!(
-            position_reserve_text(first, false, Language::Chinese),
-            position_reserve_text(last, false, Language::Chinese)
-        );
-        assert_eq!(position_reserve_text(first, true, Language::Chinese), "999");
-        assert_eq!(
-            position_slot_width(first, false, Language::Chinese, &text_width),
-            position_slot_width(last, false, Language::Chinese, &text_width)
-        );
+    fn changing_values_keeps_every_layout_slot_stable() {
+        let mut first = snapshot();
+        first.host = StatusHost::Editor;
+        first.position = Some(StatusPosition::EditorCaret { line: 1, column: 1 });
+        first.outline = None;
+        first.statistics = Some("9 字".into());
+        let mut later = first.clone();
+        later.position = Some(StatusPosition::EditorCaret {
+            line: 102,
+            column: 37,
+        });
+        later.outline = Some("a much longer heading / child".into());
+        later.statistics = Some("999.9k 字".into());
+        later.document_statistics = Some(DocumentStatistics {
+            characters: 999_999,
+            lines: 99_999,
+            bytes: 9_999_999,
+        });
+        later.progress = Some(100);
+        later.transient = Some(StatusMessage {
+            text: "Saved".into(),
+            tone: StatusTone::Success,
+        });
+        for width in [210.0, 430.0, 900.0, 1400.0] {
+            let settings = StatusLineSettings::default();
+            assert_eq!(
+                first.layout_key(width, settings),
+                later.layout_key(width, settings)
+            );
+            let before = first.layout(width, settings);
+            let after = later.layout(width, settings);
+            assert_eq!(before, after);
+            assert_eq!(
+                before.width(&first, &text_width),
+                after.width(&later, &text_width)
+            );
+        }
+    }
+
+    #[gpui::test]
+    fn rendered_slots_do_not_move_when_caret_statistics_or_heading_change(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use gpui::{AppContext, Context, Render};
+        struct Harness {
+            app: Entity<WorkspaceWindow>,
+            snapshot: StatusLineSnapshot,
+            width: f32,
+        }
+        impl Render for Harness {
+            fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let layout = self.snapshot.layout_in_window(
+                    self.width,
+                    StatusLineSettings::default(),
+                    window,
+                );
+                div().w(px(self.width)).child(render_status_line(
+                    &self.snapshot,
+                    layout,
+                    self.app.clone(),
+                    window,
+                ))
+            }
+        }
+        let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        let mut first = snapshot();
+        first.host = StatusHost::Editor;
+        first.position = Some(StatusPosition::EditorCaret { line: 1, column: 1 });
+        first.outline = None;
+        let mut later = first.clone();
+        later.position = Some(StatusPosition::EditorCaret {
+            line: 102,
+            column: 37,
+        });
+        later.statistics = Some("999.9k chars".into());
+        later.document_statistics = Some(DocumentStatistics {
+            characters: 999_999,
+            lines: 123_456,
+            bytes: 12_345_678,
+        });
+        later.outline = Some("a long chapter / an even longer child heading".into());
+        later.progress = Some(100);
+        later.transient = Some(StatusMessage {
+            text: "Saved successfully".into(),
+            tone: StatusTone::Success,
+        });
+        let (harness, cx) = cx.add_window_view(|_, _| Harness {
+            app,
+            snapshot: first.clone(),
+            width: 1400.0,
+        });
+        let selectors = [
+            "status-7-segment-0",
+            "status-7-segment-1",
+            "status-7-segment-2",
+            "status-7-segment-3",
+            "status-7-segment-4",
+            "status-7-segment-5",
+            "status-7-segment-6",
+            "status-7-segment-7",
+        ];
+        for width in [1400.0, 430.0, 210.0] {
+            harness.update(cx, |view, cx| {
+                view.width = width;
+                view.snapshot = first.clone();
+                cx.notify();
+            });
+            let before = selectors.map(|selector| cx.debug_bounds(selector));
+            harness.update(cx, |view, cx| {
+                view.snapshot = later.clone();
+                cx.notify();
+            });
+            let after = selectors.map(|selector| cx.debug_bounds(selector));
+            assert_eq!(before, after, "rendered slots moved at width {width}");
+        }
     }
 
     #[test]

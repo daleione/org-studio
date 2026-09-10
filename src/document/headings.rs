@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crate::org_syntax::{BlockKind, parse};
 
@@ -15,6 +15,7 @@ pub(crate) struct DocumentHeading {
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HeadingIndex {
     headings: Arc<[DocumentHeading]>,
+    paths: OnceLock<Arc<[Arc<str>]>>,
 }
 
 impl HeadingIndex {
@@ -36,7 +37,70 @@ impl HeadingIndex {
         };
         Self {
             headings: headings.into(),
+            paths: OnceLock::new(),
         }
+    }
+
+    // Built lazily from the same revision-cached index used by editor folding.
+    fn paths(&self, snapshot: &DocumentSnapshot) -> Arc<[Arc<str>]> {
+        if let Some(paths) = self.paths.get() {
+            return paths.clone();
+        }
+        let mut stack: Vec<(u16, Arc<str>)> = Vec::new();
+        let mut paths = Vec::with_capacity(self.headings.len());
+        for heading in self.headings.iter() {
+            while stack
+                .last()
+                .is_some_and(|(level, _)| *level >= heading.level)
+            {
+                stack.pop();
+            }
+            let title = snapshot
+                .line_range(super::LineIndex(heading.line))
+                .map(|range| snapshot.copy_range(range))
+                .unwrap_or_default();
+            let title = title.trim().trim_start_matches(['*', '#']).trim();
+            let path: Arc<str> = match stack.last() {
+                Some((_, parent)) => format!("{parent} / {title}").into(),
+                None => title.into(),
+            };
+            stack.push((heading.level, path.clone()));
+            paths.push(path);
+        }
+        let paths: Arc<[Arc<str>]> = paths.into();
+        let _ = self.paths.set(paths.clone());
+        paths
+    }
+
+    pub(crate) fn outline_at(
+        &self,
+        snapshot: &DocumentSnapshot,
+        offset: ByteOffset,
+    ) -> Option<Arc<str>> {
+        let index = self
+            .headings
+            .partition_point(|heading| heading.start <= offset)
+            .checked_sub(1)?;
+        self.paths(snapshot).get(index).cloned()
+    }
+
+    pub(crate) fn outline_entries(
+        &self,
+        snapshot: &DocumentSnapshot,
+    ) -> Vec<(Arc<str>, super::RevisionRange)> {
+        self.paths(snapshot)
+            .iter()
+            .zip(self.headings.iter())
+            .map(|(path, heading)| {
+                (
+                    path.clone(),
+                    super::RevisionRange::new(
+                        snapshot.revision(),
+                        super::ByteRange::new(heading.start.0, heading.start.0),
+                    ),
+                )
+            })
+            .collect()
     }
 
     pub(crate) fn as_slice(&self) -> &[DocumentHeading] {

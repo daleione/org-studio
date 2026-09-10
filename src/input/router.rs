@@ -90,6 +90,10 @@ impl KeyboardRouter {
         self.status.as_deref()
     }
 
+    pub fn pending_keys(&self) -> Option<&str> {
+        (!self.sequence.is_empty()).then(|| self.status()).flatten()
+    }
+
     pub fn dismiss_status(&mut self) -> bool {
         let had_status = self.status.is_some();
         self.clear_status();
@@ -366,7 +370,9 @@ mod tests {
         router.route(KeyStroke::parse("x").unwrap(), preview);
         assert_eq!(router.status(), None);
         router.route(KeyStroke::parse("C-x").unwrap(), preview);
+        assert_eq!(router.pending_keys(), Some("C-x"));
         router.route(KeyStroke::parse("C-z").unwrap(), preview);
+        assert_eq!(router.pending_keys(), None);
         assert_eq!(router.status(), Some("C-x C-z is undefined"));
     }
 
