@@ -16,27 +16,22 @@ use ::typst::{
 
 pub(super) struct SharedResources {
     library: LazyHash<Library>,
-    book: LazyHash<FontBook>,
-    fonts: Vec<Font>,
+    fonts: typst_kit::fonts::FontStore,
     main_id: FileId,
 }
 
 impl SharedResources {
     pub(super) fn new(custom_font_data: &[Vec<u8>]) -> Self {
-        let mut fonts = Vec::with_capacity(20 + custom_font_data.len() * 4);
-        for data in typst_assets::fonts() {
-            add_faces(Bytes::new(data), &mut fonts);
-        }
+        let mut fonts = typst_kit::fonts::FontStore::new();
+        fonts.extend(typst_kit::fonts::system());
         for data in custom_font_data {
-            add_faces(Bytes::new(data.clone()), &mut fonts);
-        }
-        let mut book = FontBook::new();
-        for font in &fonts {
-            book.push(font.info().clone());
+            for font in Font::iter(Bytes::new(data.clone())) {
+                let info = font.info().clone();
+                fonts.push((font, info));
+            }
         }
         Self {
             library: LazyHash::new(Library::builder().build()),
-            book: LazyHash::new(book),
             fonts,
             main_id: FileId::new(RootedPath::new(
                 VirtualRoot::Project,
@@ -47,19 +42,10 @@ impl SharedResources {
 
     pub(super) fn family_names(&self) -> Vec<String> {
         let mut names = std::collections::BTreeSet::new();
-        for font in &self.fonts {
-            names.insert(font.info().family.to_string());
+        for (family, _) in self.fonts.book().families() {
+            names.insert(family.to_string());
         }
         names.into_iter().collect()
-    }
-}
-
-fn add_faces(bytes: Bytes, fonts: &mut Vec<Font>) {
-    for index in 0.. {
-        match Font::new(bytes.clone(), index) {
-            Some(font) => fonts.push(font),
-            None => break,
-        }
     }
 }
 
@@ -133,7 +119,7 @@ impl World for OrgStudioWorld<'_> {
     }
 
     fn book(&self) -> &LazyHash<FontBook> {
-        &self.shared.book
+        self.shared.fonts.book()
     }
 
     fn main(&self) -> FileId {
@@ -161,7 +147,7 @@ impl World for OrgStudioWorld<'_> {
     }
 
     fn font(&self, index: usize) -> Option<Font> {
-        self.shared.fonts.get(index).cloned()
+        self.shared.fonts.font(index)
     }
 
     fn today(&self, _offset: Option<::typst::foundations::Duration>) -> Option<Datetime> {

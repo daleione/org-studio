@@ -208,34 +208,7 @@ fn format_diagnostic(diagnostic: &CompileDiagnostic) -> String {
 
 pub fn shared_engine() -> &'static TypstEngine {
     static ENGINE: OnceLock<TypstEngine> = OnceLock::new();
-    ENGINE.get_or_init(|| TypstEngine::new(&platform_font_data()))
-}
-
-fn platform_font_data() -> Vec<Vec<u8>> {
-    #[cfg(target_os = "macos")]
-    {
-        use std::collections::BTreeSet;
-
-        let mut database = fontdb::Database::new();
-        database.load_system_fonts();
-        let paths = database
-            .faces()
-            .filter_map(|face| match &face.source {
-                fontdb::Source::File(path) | fontdb::Source::SharedFile(path, _) => {
-                    Some(path.clone())
-                }
-                fontdb::Source::Binary(_) => None,
-            })
-            .collect::<BTreeSet<_>>();
-        paths
-            .into_iter()
-            .filter_map(|path| std::fs::read(path).ok())
-            .collect()
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Vec::new()
-    }
+    ENGINE.get_or_init(TypstEngine::default)
 }
 
 #[cfg(test)]
