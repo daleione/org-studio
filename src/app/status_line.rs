@@ -314,11 +314,7 @@ impl StatusLineLayout {
         } else {
             0.0
         };
-        let outline = match self.outline {
-            Variant::Full => OUTLINE_FULL_RESERVE,
-            Variant::Compact => OUTLINE_COMPACT_WIDTH,
-            Variant::Hidden => 0.0,
-        };
+        let outline = self.outline_reserve(snapshot);
         let position = match (self.position, snapshot.position) {
             (Variant::Full, Some(value)) => {
                 position_slot_width(value, false, snapshot.language, measure)
@@ -350,17 +346,32 @@ impl StatusLineLayout {
             + 16.0
     }
 
+    fn outline_reserve(&self, snapshot: &StatusLineSnapshot) -> f32 {
+        let reserve = match self.outline {
+            Variant::Full => OUTLINE_FULL_RESERVE,
+            Variant::Compact => OUTLINE_COMPACT_WIDTH,
+            Variant::Hidden => return 0.0,
+        };
+        // Reading's extra control shares the navigation budget rather than pushing
+        // otherwise identical right-hand controls into a different layout.
+        let style = if snapshot.reading_style.is_some() {
+            style_slot_width(self.reading_style)
+        } else {
+            0.0
+        };
+        (reserve - style).max(0.0)
+    }
+
     fn resolved_outline_width(
         &self,
         snapshot: &StatusLineSnapshot,
         available: f32,
         measure: &impl Fn(&str) -> f32,
     ) -> f32 {
-        let reserved = match self.outline {
-            Variant::Full => OUTLINE_FULL_RESERVE,
-            Variant::Compact => OUTLINE_COMPACT_WIDTH,
-            Variant::Hidden => return 0.0,
-        };
+        if self.outline == Variant::Hidden {
+            return 0.0;
+        }
+        let reserved = self.outline_reserve(snapshot);
         let remaining = (available - (self.width(snapshot, measure) - reserved)).max(0.0);
         if self.outline == Variant::Compact {
             remaining.min(OUTLINE_COMPACT_WIDTH)
@@ -650,9 +661,25 @@ fn render_status_line_content(
         })
         .child(
             div()
+                .relative()
                 .size(px(9.0))
-                .rounded_full()
-                .bg(rgb(mode_colors.background)),
+                .flex_none()
+                .child(
+                    div()
+                        .absolute()
+                        .top(px(-3.5))
+                        .left(px(-3.5))
+                        .size(px(16.0))
+                        .rounded_full()
+                        .bg(gpui::rgba((mode_colors.background << 8) | 0x14)),
+                )
+                .child(
+                    div()
+                        .relative()
+                        .size_full()
+                        .rounded_full()
+                        .bg(rgb(mode_colors.background)),
+                ),
         )
         .when(layout.mode == Variant::Full, |button| {
             button.child(snapshot.mode_label())
@@ -667,18 +694,8 @@ fn render_status_line_content(
         .when_some(snapshot.reading_style, |left, style_id| {
             left.child(
                 status_button(entity.clone(), pane_id, StatusSegment::ReadingStyle)
-                    .w(px(style_slot_width(layout.reading_style) - 4.0))
-                    .ml(px(2.0))
-                    .mr(px(2.0))
-                    .my(px(4.0))
-                    .h(px(22.0))
-                    .px(px(6.0))
-                    .gap(px(4.0))
-                    .rounded(px(6.0))
-                    .border_1()
-                    .border_color(rgb(theme.border))
-                    .bg(rgb(theme.background))
-                    .text_color(rgb(theme.foreground))
+                    .w(px(style_slot_width(layout.reading_style)))
+                    .overflow_hidden()
                     .child(if layout.reading_style == Variant::Compact {
                         match snapshot.language {
                             Language::Chinese => "样式",
@@ -864,10 +881,20 @@ fn render_status_line_content(
     let more_entity = entity.clone();
     right = right.child(
         status_button(entity.clone(), pane_id, StatusSegment::More)
-            .w(px(MORE_WIDTH))
+            .size(px(28.0))
+            .mx(px((MORE_WIDTH - 28.0) / 2.0))
+            .px(px(0.0))
+            .justify_center()
             .relative()
             .rounded_full()
-            .child("•••")
+            .border_1()
+            .child(
+                gpui::svg()
+                    .data(include_bytes!("assets/status-settings.svg"))
+                    .text_color(rgb(STATUS_FOREGROUND))
+                    .size(px(16.0))
+                    .flex_none(),
+            )
             .when(!layout.overflow.is_empty(), |button| {
                 button.child(
                     div()
@@ -918,7 +945,7 @@ fn render_status_line_content(
         .when(floating, |bar| {
             bar.border_1().rounded(px(10.0)).bg(gpui::rgba(0xf7f9fbf5))
         })
-        .border_color(rgb(theme.border))
+        .border_color(rgb(STATUS_BORDER))
         .text_color(rgb(STATUS_FOREGROUND))
         .font_family(".SystemUIFont")
         .text_size(px(11.0))
@@ -2078,6 +2105,34 @@ mod tests {
     }
 
     #[test]
+    fn reading_template_uses_navigation_space_without_changing_common_controls() {
+        let reading = snapshot();
+        let mut editing = reading.clone();
+        editing.host = StatusHost::Editor;
+        editing.surface = crate::app::PaneSurface::Editor;
+        editing.reading_style = None;
+        editing.position = Some(StatusPosition::EditorCaret {
+            line: 259,
+            column: 1,
+        });
+        for width in [700.0, 900.0, 1100.0, 1400.0] {
+            let read = reading.layout(width, StatusLineSettings::default());
+            let edit = editing.layout(width, StatusLineSettings::default());
+            assert_eq!(
+                (read.statistics, read.position, read.progress, read.format),
+                (edit.statistics, edit.position, edit.progress, edit.format),
+                "width {width}"
+            );
+            if read.outline == Variant::Full {
+                assert_eq!(
+                    read.outline_max_width + style_slot_width(read.reading_style),
+                    edit.outline_max_width
+                );
+            }
+        }
+    }
+
+    #[test]
     fn full_outline_uses_available_space_instead_of_the_compact_cap() {
         let mut snapshot = snapshot();
         snapshot.outline = Some(
@@ -2086,7 +2141,7 @@ mod tests {
         let layout = snapshot.layout(1_400.0, StatusLineSettings::default());
         assert_eq!(layout.outline, Variant::Full);
         assert!(layout.outline_max_width > OUTLINE_FULL_RESERVE);
-        let other_slots = layout.width(&snapshot, &text_width) - OUTLINE_FULL_RESERVE;
+        let other_slots = layout.width(&snapshot, &text_width) - layout.outline_reserve(&snapshot);
         assert_eq!(layout.outline_max_width, 1_400.0 - 18.0 - other_slots);
     }
 
