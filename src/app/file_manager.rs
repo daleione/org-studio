@@ -664,6 +664,7 @@ impl WorkspaceWindow {
         minimap_reveal: f32,
         window: &Window,
         cx: &gpui::App,
+        titlebar_inset: f32,
     ) -> gpui::Div {
         if matches!(self.state, WorkspaceLoadState::Empty)
             && self.content_route == ContentRoute::Document
@@ -685,6 +686,7 @@ impl WorkspaceWindow {
                 self.window_title(cx),
                 window,
                 !cx.reduce_motion(),
+                titlebar_inset,
             )),
             ContentRoute::AgendaText => div()
                 .size_full()

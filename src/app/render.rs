@@ -64,6 +64,7 @@ fn document_titlebar(
     sidebar_visible: bool,
     minimap_visible: bool,
     export_open: bool,
+    titlebar_inset: f32,
 ) -> gpui::Div {
     let theme = current_theme();
     let sidebar_workspace = workspace.clone();
@@ -92,7 +93,7 @@ fn document_titlebar(
         .left_0()
         .right_0()
         .h(px(crate::app::TITLEBAR_HEIGHT))
-        .pl(px(crate::app::TITLEBAR_LEADING_INSET))
+        .pl(px(titlebar_inset))
         .pr(px(crate::app::TITLEBAR_TRAILING_INSET))
         .flex()
         .items_center()
@@ -189,6 +190,13 @@ impl Render for WorkspaceWindow {
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
         self.ensure_agenda_runtime(cx);
+        // Fullscreen hides the traffic lights, so the titlebar buttons slide
+        // to the left edge; windowed mode reserves their slot again.
+        let titlebar_inset = if window.is_fullscreen() {
+            0.0
+        } else {
+            crate::app::TITLEBAR_LEADING_INSET
+        };
         if std::mem::take(&mut self.agenda.state.search_focus_pending)
             && let Some(input) = &self.agenda.search_input
         {
@@ -418,6 +426,7 @@ impl Render for WorkspaceWindow {
                     sidebar_visible,
                     minimap_visible,
                     self.export.is_open(),
+                    titlebar_inset,
                 ))
             })
             .child(
@@ -438,6 +447,7 @@ impl Render for WorkspaceWindow {
                                 minimap_reveal,
                                 window,
                                 cx,
+                                titlebar_inset,
                             )),
                     )
                     .when(show_echo_area, |workspace| {
@@ -592,6 +602,7 @@ mod tests {
                 sidebar_visible,
                 minimap_visible,
                 export_open,
+                crate::app::TITLEBAR_LEADING_INSET,
             )
         }
     }

@@ -16,6 +16,7 @@ impl super::AgendaHost {
         window_title: String,
         window: &Window,
         motion_enabled: bool,
+        titlebar_inset: f32,
     ) -> gpui::Div {
         let language = self.language;
         let full_sidebar_width = super::host::expanded_sidebar_width(
@@ -513,6 +514,7 @@ impl super::AgendaHost {
             window_title,
             search: self.search_input.clone(),
             motion_enabled,
+            titlebar_inset,
         });
         let gesture_workspace = workspace.clone();
         div()

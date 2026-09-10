@@ -19,6 +19,9 @@ pub(crate) struct AgendaToolbarProps<'a> {
     pub(crate) window_title: String,
     pub(crate) search: Option<Entity<super::super::search::AgendaSearch>>,
     pub(crate) motion_enabled: bool,
+    /// Left inset of the titlebar row; shrinks while fullscreen hides the
+    /// traffic lights, and grows again when the pointer reveals them.
+    pub(crate) titlebar_inset: f32,
 }
 
 fn button(
@@ -135,6 +138,7 @@ mod tests {
                     window_title: "tasks.org".to_owned(),
                     search: None,
                     motion_enabled: true,
+                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
                 }))
             }
         }
@@ -208,6 +212,7 @@ mod tests {
                     window_title: "tasks.org".to_owned(),
                     search: None,
                     motion_enabled: true,
+                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
                 }))
             }
         }
@@ -245,6 +250,7 @@ mod tests {
                     window_title: "tasks.org".to_owned(),
                     search: None,
                     motion_enabled: true,
+                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
                 }))
             }
         }
@@ -281,6 +287,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
         window_title,
         search,
         motion_enabled,
+        titlebar_inset,
     } = props;
     let narrow = window_width < 900.;
     let today = jiff::Zoned::now().date();
@@ -373,7 +380,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                 .debug_selector(|| "agenda-titlebar-file-row".to_owned())
                 .absolute()
                 .top_0()
-                .left(px(84. - main_content_offset))
+                .left(px(titlebar_inset + 6. - main_content_offset))
                 .h(px(crate::app::TITLEBAR_HEIGHT))
                 .flex()
                 .items_center()
