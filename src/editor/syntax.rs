@@ -2084,31 +2084,47 @@ mod tests {
 
     #[test]
     fn editor_code_runs_use_the_declared_source_language() {
-        let snapshot =
-            DocumentSnapshot::from_utf8(b"#+begin_src rust\nfn main() {}\n#+end_src\n".to_vec())
-                .unwrap();
-        let styles = EditorStyleSnapshot::for_lines(
-            Path::new("a.org"),
-            &snapshot,
-            0..3,
-            &EditorSyntaxService::default(),
-        );
-        let text = snapshot.copy_range(styles.lines[1].source_range);
-        let theme = current_theme();
-        let runs = runs(
-            Path::new("a.org"),
-            &text,
-            base_run(text.len()),
-            &styles.lines[1],
-            None,
-            theme,
-        );
-        let keyword_color: gpui::Hsla = rgb(theme.keyword).into();
-        let function_color: gpui::Hsla = rgb(theme.function).into();
+        for (path, language, source) in [
+            (
+                "a.org",
+                "rust",
+                "#+begin_src rust\nfn main() {}\n#+end_src\n",
+            ),
+            (
+                "a.org",
+                "typst",
+                "#+begin_src typst\n#let message = text(\"你好😀\")\n#+end_src\n",
+            ),
+            (
+                "a.md",
+                "typ",
+                "```typ\n#let message = text(\"你好😀\")\n```\n",
+            ),
+        ] {
+            let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let styles = EditorStyleSnapshot::for_lines(
+                Path::new(path),
+                &snapshot,
+                0..3,
+                &EditorSyntaxService::default(),
+            );
+            let text = snapshot.copy_range(styles.lines[1].source_range);
+            let theme = current_theme();
+            let runs = runs(
+                Path::new(path),
+                &text,
+                base_run(text.len()),
+                &styles.lines[1],
+                None,
+                theme,
+            );
+            let keyword_color: gpui::Hsla = rgb(theme.keyword).into();
+            let function_color: gpui::Hsla = rgb(theme.function).into();
 
-        assert_eq!(styles.lines[1].code_language.as_deref(), Some("rust"));
-        assert!(runs.iter().any(|run| run.color == keyword_color));
-        assert!(runs.iter().any(|run| run.color == function_color));
+            assert_eq!(styles.lines[1].code_language.as_deref(), Some(language));
+            assert!(runs.iter().any(|run| run.color == keyword_color));
+            assert!(runs.iter().any(|run| run.color == function_color));
+        }
     }
 
     #[test]
@@ -2169,7 +2185,7 @@ mod tests {
 
     #[test]
     fn unsupported_code_languages_keep_only_the_code_base_style() {
-        for language in ["typst", "plantuml"] {
+        for language in ["unknown", "plantuml"] {
             let text = "#show: 中文😀\nAlice -> Bob";
             let style = EditorLineStyle {
                 source_range: ByteRange::new(0, text.len() as u64),

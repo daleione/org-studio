@@ -65,6 +65,10 @@ pub(crate) fn highlight_code(
     source: &str,
 ) -> Result<Vec<CodeHighlightSpan>, String> {
     let normalized = language.trim().to_ascii_lowercase();
+    if matches!(normalized.as_str(), "typst" | "typ") {
+        let _highlight = tracing::info_span!("syntax_highlight").entered();
+        return Ok(highlight_typst(source));
+    }
     static CONFIGURATIONS: OnceLock<Mutex<HashMap<String, Arc<HighlightConfiguration>>>> =
         OnceLock::new();
     let lock_wait = tracing::info_span!("highlighter_configuration_lock_wait").entered();
@@ -217,6 +221,68 @@ pub(crate) fn highlight_code(
     highlight_with_configuration(&configuration, source)
 }
 
+/// Typst's native syntax tags avoid compiling its Tree-sitter query on the
+/// rendering thread (~170 ms for the upstream query). The parser is already a
+/// dependency of our Typst renderer and requires no startup prewarming.
+fn highlight_typst(source: &str) -> Vec<CodeHighlightSpan> {
+    use typst::syntax::{LinkedNode, SyntaxKind, Tag, highlight, parse};
+
+    fn visit(
+        node: &LinkedNode<'_>,
+        inherited: Option<CodeHighlightKind>,
+        spans: &mut Vec<CodeHighlightSpan>,
+    ) {
+        let kind = match node.kind() {
+            SyntaxKind::Hash => Some(CodeHighlightKind::Punctuation),
+            SyntaxKind::Bool => Some(CodeHighlightKind::Boolean),
+            _ => highlight(node).and_then(|tag| {
+                Some(match tag {
+                    Tag::Comment => CodeHighlightKind::Comment,
+                    Tag::Punctuation
+                    | Tag::MathDelimiter
+                    | Tag::MathGroupingParens
+                    | Tag::ListMarker => CodeHighlightKind::Punctuation,
+                    Tag::Escape | Tag::String | Tag::Raw | Tag::Link => CodeHighlightKind::String,
+                    Tag::Strong
+                    | Tag::Emph
+                    | Tag::Heading
+                    | Tag::ListTerm
+                    | Tag::Label
+                    | Tag::Ref => CodeHighlightKind::Attribute,
+                    Tag::MathOperator | Tag::Operator => CodeHighlightKind::Operator,
+                    Tag::Keyword => CodeHighlightKind::Keyword,
+                    Tag::Number => CodeHighlightKind::Number,
+                    Tag::Function => CodeHighlightKind::Function,
+                    Tag::Interpolated => CodeHighlightKind::Variable,
+                    Tag::Error => return None,
+                })
+            }),
+        }
+        .or(inherited);
+        // Inherit markup colors, but emit only leaves: consumers require sorted,
+        // non-overlapping UTF-8 byte ranges, even for nested markup and code.
+        if !node.leaf_text().is_empty() {
+            if let Some(kind) = kind {
+                let range = node.range();
+                spans.push(CodeHighlightSpan {
+                    start: range.start,
+                    end: range.end,
+                    kind,
+                });
+            }
+        } else {
+            for child in node.children() {
+                visit(&child, kind, spans);
+            }
+        }
+    }
+
+    let root = parse(source);
+    let mut spans = Vec::new();
+    visit(&LinkedNode::new(&root), None, &mut spans);
+    spans
+}
+
 fn highlight_with_configuration(
     configuration: &HighlightConfiguration,
     source: &str,
@@ -267,4 +333,102 @@ fn code_highlight_kind(name: &str) -> Option<CodeHighlightKind> {
         "parameter" | "variable" => CodeHighlightKind::Variable,
         _ => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typst_highlights_code_math_and_nested_unicode_markup() {
+        let source = "= 标题 *粗体😀*\n#let size = 12pt\n#text(\"你好😀\") // 注释\n$ x^2 $";
+        for language in ["typst", "typ", " Typst "] {
+            let spans = highlight_code(language, source).unwrap();
+            for (text, expected) in [
+                ("标题", CodeHighlightKind::Attribute),
+                ("粗体😀", CodeHighlightKind::Attribute),
+                ("let", CodeHighlightKind::Keyword),
+                ("12pt", CodeHighlightKind::Number),
+                ("text", CodeHighlightKind::Function),
+                ("\"你好😀\"", CodeHighlightKind::String),
+                ("// 注释", CodeHighlightKind::Comment),
+                ("^", CodeHighlightKind::Operator),
+            ] {
+                let start = source.find(text).unwrap();
+                assert!(
+                    spans.iter().any(|span| {
+                        span.start <= start
+                            && span.end >= start + text.len()
+                            && std::mem::discriminant(&span.kind)
+                                == std::mem::discriminant(&expected)
+                    }),
+                    "missing {expected:?} for {text} in {language}"
+                );
+            }
+            assert!(spans.iter().all(|span| span.start < span.end
+                && source.is_char_boundary(span.start)
+                && source.is_char_boundary(span.end)));
+            assert!(spans.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        }
+    }
+
+    #[test]
+    fn typst_accepts_empty_and_unfinished_source() {
+        assert!(highlight_code("typst", "").unwrap().is_empty());
+        let source = "#text(\"未完成😀";
+        let spans = highlight_code("typst", source).unwrap();
+        assert!(!spans.is_empty());
+        assert!(spans.iter().all(|span| span.end <= source.len()
+            && source.is_char_boundary(span.start)
+            && source.is_char_boundary(span.end)));
+    }
+
+    #[test]
+    fn typst_nested_code_overrides_markup_without_comment_colored_hashes() {
+        let source = "= 标题 #text(\"中文😀\")\n#let enabled = true";
+        let spans = highlight_code("typst", source).unwrap();
+        for (token, kind) in [
+            ("标题", CodeHighlightKind::Attribute),
+            ("#", CodeHighlightKind::Punctuation),
+            ("text", CodeHighlightKind::Function),
+            ("\"中文😀\"", CodeHighlightKind::String),
+            ("true", CodeHighlightKind::Boolean),
+        ] {
+            let offset = source.find(token).unwrap();
+            let span = spans
+                .iter()
+                .find(|span| span.start <= offset && offset < span.end)
+                .unwrap();
+            assert_eq!(
+                std::mem::discriminant(&span.kind),
+                std::mem::discriminant(&kind),
+                "{token}"
+            );
+        }
+        assert!(spans.windows(2).all(|pair| pair[0].end <= pair[1].start));
+    }
+
+    /// Run alone with --release --ignored --nocapture to measure a cold call.
+    #[test]
+    #[ignore = "manual cold-start timing; no machine-dependent pass threshold"]
+    fn typst_fixture_highlight_timing() {
+        let fixture = include_str!("../tests/fixtures/preview-basics.org");
+        let source = fixture
+            .split("#+begin_src typst")
+            .nth(1)
+            .unwrap()
+            .split_once('\n')
+            .unwrap()
+            .1
+            .split("#+end_src")
+            .next()
+            .unwrap();
+        for round in 0..3 {
+            let start = std::time::Instant::now();
+            let spans = highlight_code("typst", source).unwrap();
+            let elapsed = start.elapsed();
+            assert!(!spans.is_empty());
+            eprintln!("typst fixture round={round} elapsed={elapsed:?}");
+        }
+    }
 }
