@@ -133,21 +133,43 @@ pub(crate) fn render_echo_area(
     pending_keys: Option<&str>,
     language: crate::i18n::Language,
 ) -> gpui::AnyElement {
+    render_echo_content(message, entity, pending_keys, language, false)
+}
+
+pub(crate) fn render_status_echo(
+    message: EchoMessage,
+    entity: Entity<WorkspaceWindow>,
+    pending_keys: Option<&str>,
+    language: crate::i18n::Language,
+) -> gpui::AnyElement {
+    render_echo_content(Some(message), entity, pending_keys, language, true)
+}
+
+fn render_echo_content(
+    message: Option<EchoMessage>,
+    entity: Entity<WorkspaceWindow>,
+    pending_keys: Option<&str>,
+    language: crate::i18n::Language,
+    inline: bool,
+) -> gpui::AnyElement {
     let theme = current_theme();
     let dismiss_entity = entity;
     div()
         .id("workspace-echo-area")
-        .h(px(ECHO_AREA_HEIGHT))
-        .w_full()
-        .flex_none()
+        .when(!inline, |area| {
+            area.h(px(ECHO_AREA_HEIGHT))
+                .w_full()
+                .flex_none()
+                .border_t_1()
+                .border_color(rgb(theme.border))
+                .bg(rgb(0xf7faff))
+        })
+        .when(inline, |area| area.h_full().flex_1().min_w_0())
         .flex()
         .items_center()
         .gap_2()
         .px_3()
         .overflow_hidden()
-        .border_t_1()
-        .border_color(rgb(theme.border))
-        .bg(rgb(0xf7faff))
         .font_family(".SystemUIFont")
         .text_size(px(11.0))
         .when_some(message, |area, message| {

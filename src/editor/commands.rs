@@ -1640,7 +1640,8 @@ impl SemanticEditor {
             )
         });
         let bottom = top + caret_height;
-        let height = f32::from(viewport.size.height);
+        let height =
+            (f32::from(viewport.size.height) - self.display_map.bottom_overlay_clearance).max(1.0);
         let previous_y = self.scroll_y;
         if top < self.scroll_y {
             self.scroll_y = top;
@@ -1962,6 +1963,33 @@ mod horizontal_scroll_tests {
         cx.simulate_keystrokes("ctrl-space ctrl-f ctrl-g");
         assert!(editor.read_with(cx, |editor, _| editor.selection.is_empty()));
         assert!(!editor.read_with(cx, |editor, _| editor.emacs_mark_active));
+    }
+
+    #[gpui::test]
+    fn floating_toolbar_clearance_keeps_the_final_caret_visible(cx: &mut gpui::TestAppContext) {
+        let source = "line\n".repeat(100);
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                std::path::PathBuf::from("floating.org"),
+                source.into_bytes(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+        editor.update(cx, |editor, cx| {
+            editor.set_bottom_overlay_clearance(66.0);
+            editor.viewport = Some(Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(800.0), px(220.0)),
+            ));
+            let snapshot = editor.snapshot(cx);
+            editor.display_map.configure(snapshot.len_lines(), 740.0);
+            editor.selection = Selection::caret(ByteOffset(snapshot.len_bytes()));
+            editor.reveal_caret(&snapshot);
+            let caret_bottom = editor.display_map.line_start_y(snapshot.len_lines());
+            assert!(caret_bottom - editor.scroll_y <= 220.0 - 66.0 + 0.5);
+            assert!(editor.scroll_y <= editor.display_map.total_height() - 220.0 + 0.5);
+        });
     }
 
     #[gpui::test]

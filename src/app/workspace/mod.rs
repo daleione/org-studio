@@ -275,6 +275,7 @@ impl WorkspaceWindow {
                 cx,
             );
             editor.set_content_font_size(content_font_size, cx);
+            editor.set_bottom_overlay_clearance(crate::app::status_line::FLOATING_STATUS_CLEARANCE);
             editor.set_soft_wrap(soft_wrap, cx);
             editor.set_minimap(minimap_visible, minimap_width, cx);
             editor
@@ -711,10 +712,25 @@ impl WorkspaceWindow {
         let Some(snapshot) = self.document_status_snapshot(pane, render.cx) else {
             return div().w(px(render.width)).h_full().min_w_0().child(content);
         };
-        let layout = self.status_layout(&snapshot, render.width, render.window);
+        let layout = self.status_layout(
+            &snapshot,
+            (render.width - 2.0 * crate::app::status_line::FLOATING_STATUS_INSET).max(1.0),
+            render.window,
+        );
         let style_popover_left =
             crate::app::status_line::reading_style_popover_left(&snapshot, &layout, render.window);
         let status_popover = self.status.popover_for(snapshot.pane);
+        let echo = (pane == self.document_workspace.active_pane)
+            .then(|| self.displayed_echo_message())
+            .flatten()
+            .map(|message| {
+                crate::app::echo_area::render_status_echo(
+                    message,
+                    entity.clone(),
+                    self.keyboard.pending_keys(),
+                    self.language,
+                )
+            });
         div()
             .w(px(render.width))
             .h_full()
@@ -726,11 +742,12 @@ impl WorkspaceWindow {
                 activate_entity.update(cx, |this, cx| this.activate_pane(pane, cx));
             })
             .child(div().flex_1().min_h_0().child(content))
-            .child(crate::app::status_line::render_status_line(
+            .child(crate::app::status_line::render_floating_status_line(
                 &snapshot,
                 layout,
                 entity.clone(),
                 render.window,
+                echo,
             ))
             .when_some(status_popover, |view, popover| {
                 view.child(crate::app::status_line::render_status_popover(
@@ -740,7 +757,7 @@ impl WorkspaceWindow {
                     entity,
                     self.language,
                     render.width,
-                    style_popover_left,
+                    style_popover_left + crate::app::status_line::FLOATING_STATUS_INSET,
                 ))
             })
     }

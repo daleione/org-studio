@@ -24,6 +24,20 @@ pub(crate) fn render_status_popover(
 ) -> gpui::AnyElement {
     let theme = current_theme();
     let pane = popover.pane;
+    let floating = matches!(
+        pane,
+        super::model::DOCUMENT_PANE_ID | super::model::RIGHT_DOCUMENT_PANE_ID
+    );
+    let bottom = if floating {
+        super::FLOATING_STATUS_HEIGHT + super::FLOATING_STATUS_BOTTOM + 8.0
+    } else {
+        STATUS_LINE_HEIGHT + 8.0
+    };
+    let edge = if floating {
+        super::FLOATING_STATUS_INSET
+    } else {
+        8.0
+    };
     let content = popover.content;
     let close_entity = entity.clone();
     let title = match &content {
@@ -44,8 +58,9 @@ pub(crate) fn render_status_popover(
     };
     let mut panel = div()
         .id("status-popover")
+        .occlude()
         .absolute()
-        .bottom(px(STATUS_LINE_HEIGHT + 8.0))
+        .bottom(px(bottom))
         .py(px(7.0))
         .rounded(px(12.0))
         .border_1()
@@ -79,18 +94,18 @@ pub(crate) fn render_status_popover(
         );
     panel = if matches!(content, StatusPopoverContent::Outline { .. }) {
         panel
-            .left(px(8.0))
-            .w(px(286.0_f32.min((pane_width - 16.0).max(1.0))))
+            .left(px(edge))
+            .w(px(286.0_f32.min((pane_width - edge * 2.0).max(1.0))))
     } else if matches!(content, StatusPopoverContent::ReadingStyle) {
         panel
             .left(px(
                 reading_style_anchor_left.min((pane_width - 128.0).max(8.0))
             ))
-            .w(px(190.0_f32.min((pane_width - 16.0).max(1.0))))
+            .w(px(190.0_f32.min((pane_width - edge * 2.0).max(1.0))))
     } else {
         panel
-            .right(px(8.0))
-            .w(px(286.0_f32.min((pane_width - 16.0).max(1.0))))
+            .right(px(edge))
+            .w(px(286.0_f32.min((pane_width - edge * 2.0).max(1.0))))
     };
     match content {
         StatusPopoverContent::Outline { document, entries } => {

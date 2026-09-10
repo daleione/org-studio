@@ -291,7 +291,9 @@ impl Render for WorkspaceWindow {
         let resizing_split = self.split_resize.is_some();
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
-        let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda);
+        let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda)
+            && !(self.content_route == crate::app::ContentRoute::Document
+                && self.state.ready().is_some());
         // The agenda route draws its own toolbar into the titlebar row, so it
         // does not reserve space for a separate titlebar.
         let show_agenda = matches!(self.content_route, crate::app::ContentRoute::Agenda);

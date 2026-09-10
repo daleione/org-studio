@@ -634,6 +634,7 @@ impl SemanticEditor {
 
     pub(super) fn animated_document_height(&self) -> f32 {
         self.animated_line_start_y(self.display_map.line_count())
+            + self.display_map.bottom_overlay_clearance
     }
 
     #[cfg(test)]
@@ -676,6 +677,11 @@ impl SemanticEditor {
             .saturating_add(2)
             .min(snapshot.len_lines());
         first..last.max(first)
+    }
+
+    /// Leaves scrollable space below the final line for a floating pane toolbar.
+    pub(crate) fn set_bottom_overlay_clearance(&mut self, height: f32) {
+        self.display_map.bottom_overlay_clearance = height.max(0.0);
     }
 
     pub fn new(session: Entity<DocumentSession>, cx: &mut Context<Self>) -> Self {

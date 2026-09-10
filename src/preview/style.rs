@@ -374,7 +374,7 @@ const BASE_STYLE: PreviewStyle = PreviewStyle {
         wide_pane_fill: 1.0,
         horizontal_padding: 48.0,
         content_padding_top: 4.0,
-        content_padding_bottom: 8.0,
+        content_padding_bottom: 70.0,
         paragraph_min_height: 24.0,
         block_gap: 20.0,
         table_cell_x: 12.0,

@@ -64,6 +64,10 @@ impl StatusLineHost {
 }
 
 pub(crate) const STATUS_LINE_HEIGHT: f32 = 38.0;
+pub(crate) const FLOATING_STATUS_INSET: f32 = 20.0;
+pub(crate) const FLOATING_STATUS_BOTTOM: f32 = 12.0;
+pub(crate) const FLOATING_STATUS_HEIGHT: f32 = 42.0;
+pub(crate) const FLOATING_STATUS_CLEARANCE: f32 = 66.0;
 const OUTLINE_FULL_RESERVE: f32 = 260.0;
 const OUTLINE_COMPACT_WIDTH: f32 = 150.0;
 // Fixed slots are shared by layout budgeting and rendering. Values never resize them.
@@ -566,6 +570,41 @@ pub(crate) fn render_status_line(
     entity: Entity<WorkspaceWindow>,
     window: &Window,
 ) -> gpui::AnyElement {
+    render_status_line_content(snapshot, layout, entity, window, None, false)
+}
+
+pub(crate) fn render_floating_status_line(
+    snapshot: &StatusLineSnapshot,
+    layout: StatusLineLayout,
+    entity: Entity<WorkspaceWindow>,
+    window: &Window,
+    echo: Option<gpui::AnyElement>,
+) -> gpui::AnyElement {
+    div()
+        .id(format!("pane-{}-floating-status", snapshot.pane.0))
+        .debug_selector(|| "floating-status-line".to_owned())
+        .block_mouse_except_scroll()
+        .absolute()
+        .left(px(FLOATING_STATUS_INSET))
+        .right(px(FLOATING_STATUS_INSET))
+        .bottom(px(FLOATING_STATUS_BOTTOM))
+        .h(px(FLOATING_STATUS_HEIGHT))
+        .rounded(px(10.0))
+        .shadow_lg()
+        .child(render_status_line_content(
+            snapshot, layout, entity, window, echo, true,
+        ))
+        .into_any_element()
+}
+
+fn render_status_line_content(
+    snapshot: &StatusLineSnapshot,
+    layout: StatusLineLayout,
+    entity: Entity<WorkspaceWindow>,
+    window: &Window,
+    echo: Option<gpui::AnyElement>,
+    floating: bool,
+) -> gpui::AnyElement {
     let theme = current_theme();
     let pane_id = snapshot.pane.0;
     let mode_colors = mode_colors(snapshot.dirty);
@@ -639,22 +678,25 @@ pub(crate) fn render_status_line(
                     ),
             )
         })
-        .when(layout.outline != Variant::Hidden, |left| {
-            let outline = snapshot
-                .outline
-                .as_deref()
-                .unwrap_or(match snapshot.language {
-                    Language::Chinese => "正文",
-                    Language::English => "Body",
-                });
-            left.child(
-                status_button(entity.clone(), pane_id, StatusSegment::Outline)
-                    .w(px(layout.outline_max_width))
-                    .overflow_hidden()
-                    .child(status_icon(StatusIcon::Outline))
-                    .child(breadcrumb(outline, layout.outline == Variant::Compact)),
-            )
-        });
+        .when(
+            layout.outline != Variant::Hidden && echo.is_none(),
+            |left| {
+                let outline = snapshot
+                    .outline
+                    .as_deref()
+                    .unwrap_or(match snapshot.language {
+                        Language::Chinese => "正文",
+                        Language::English => "Body",
+                    });
+                left.child(
+                    status_button(entity.clone(), pane_id, StatusSegment::Outline)
+                        .w(px(layout.outline_max_width))
+                        .overflow_hidden()
+                        .child(status_icon(StatusIcon::Outline))
+                        .child(breadcrumb(outline, layout.outline == Variant::Compact)),
+                )
+            },
+        );
 
     let center_color = snapshot
         .transient
@@ -830,15 +872,21 @@ pub(crate) fn render_status_line(
     let customize_entity = entity;
     div()
         .id(format!("pane-{pane_id}-status-line"))
-        .h(px(STATUS_LINE_HEIGHT))
+        .h(px(if floating {
+            FLOATING_STATUS_HEIGHT
+        } else {
+            STATUS_LINE_HEIGHT
+        }))
         .w_full()
         .flex_none()
         .flex()
         .items_center()
         .overflow_hidden()
-        .border_t_1()
+        .when(!floating, |bar| bar.border_t_1().bg(rgb(STATUS_BACKGROUND)))
+        .when(floating, |bar| {
+            bar.border_1().rounded(px(10.0)).bg(gpui::rgba(0xf7f9fbf5))
+        })
         .border_color(rgb(theme.border))
-        .bg(rgb(STATUS_BACKGROUND))
         .text_color(rgb(STATUS_FOREGROUND))
         .font_family(".SystemUIFont")
         .text_size(px(11.0))
@@ -853,7 +901,7 @@ pub(crate) fn render_status_line(
             });
         })
         .child(left)
-        .child(center)
+        .child(echo.unwrap_or_else(|| center.into_any_element()))
         .child(right)
         .into_any_element()
 }
@@ -1396,37 +1444,83 @@ mod tests {
         let app = cx.update(|cx| cx.new(|_| WorkspaceWindow::with_split_layout(true)));
         let snapshot = snapshot();
         let pane = snapshot.pane;
+        let underlying_clicks = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         struct StatusHarness {
             app: Entity<WorkspaceWindow>,
             snapshot: StatusLineSnapshot,
+            underlying_clicks: Arc<std::sync::atomic::AtomicUsize>,
         }
         impl Render for StatusHarness {
             fn render(&mut self, window: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let clicks = self.underlying_clicks.clone();
                 let layout =
                     self.snapshot
                         .layout_in_window(210.0, StatusLineSettings::default(), window);
-                div().w(px(210.0)).child(render_status_line(
-                    &self.snapshot,
-                    layout,
-                    self.app.clone(),
-                    window,
-                ))
+                div()
+                    .relative()
+                    .w(px(250.0))
+                    .h(px(400.0))
+                    .child(
+                        div()
+                            .debug_selector(|| "underlying-pane".to_owned())
+                            .size_full()
+                            .on_mouse_down(MouseButton::Left, move |_, _, _| {
+                                clicks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                            }),
+                    )
+                    .child(render_floating_status_line(
+                        &self.snapshot,
+                        layout,
+                        self.app.clone(),
+                        window,
+                        None,
+                    ))
             }
         }
         let (_harness, cx) = cx.add_window_view(|_, _| StatusHarness {
             app: app.clone(),
             snapshot: snapshot.clone(),
+            underlying_clicks: underlying_clicks.clone(),
         });
+        let pane_bounds = cx.debug_bounds("underlying-pane").unwrap();
+        let floating = cx.debug_bounds("floating-status-line").unwrap();
+        assert_eq!(f32::from(pane_bounds.size.height), 400.0);
+        assert_eq!(f32::from(floating.size.width), 210.0);
+        assert_eq!(f32::from(floating.size.height), FLOATING_STATUS_HEIGHT);
+        assert_eq!(f32::from(floating.origin.x), FLOATING_STATUS_INSET);
+        assert_eq!(
+            f32::from(floating.origin.y),
+            400.0 - FLOATING_STATUS_BOTTOM - FLOATING_STATUS_HEIGHT
+        );
         let bounds = cx
             .debug_bounds("status-7-segment-6")
             .expect("More segment should be painted");
-        assert!(f32::from(bounds.origin.x + bounds.size.width) <= 210.0);
+        assert!(f32::from(bounds.origin.x + bounds.size.width) <= 230.0);
         let center = point(
             bounds.origin.x + bounds.size.width / 2.0,
             bounds.origin.y + bounds.size.height / 2.0,
         );
         cx.simulate_mouse_move(center, None, Modifiers::default());
         cx.simulate_click(center, Modifiers::default());
+
+        assert_eq!(
+            underlying_clicks.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "status button mouse-down must not start a selection underneath"
+        );
+        let blank = point(floating.origin.x + px(4.0), floating.origin.y + px(4.0));
+        cx.simulate_click(blank, Modifiers::default());
+        assert_eq!(
+            underlying_clicks.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the floating bar's padding must also block mouse-down"
+        );
+        cx.simulate_click(point(px(5.0), px(350.0)), Modifiers::default());
+        assert_eq!(
+            underlying_clicks.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the editor outside the floating bar must remain clickable"
+        );
 
         let popover = cx.update(|_, cx| app.read(cx).status.popover.clone().unwrap());
         assert_eq!(popover.pane, pane);

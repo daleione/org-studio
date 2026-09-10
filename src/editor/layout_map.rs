@@ -88,6 +88,7 @@ pub(super) struct VisibleSourceLine {
 #[derive(Clone)]
 pub(super) struct EditorLayoutMap {
     line_height: f32,
+    pub(super) bottom_overlay_clearance: f32,
     max_shaped_line_bytes: usize,
     tab_size: usize,
     soft_wrap: bool,
@@ -103,6 +104,7 @@ impl Default for EditorLayoutMap {
     fn default() -> Self {
         Self {
             line_height: super::LINE_HEIGHT,
+            bottom_overlay_clearance: 0.0,
             max_shaped_line_bytes: DEFAULT_MAX_SHAPED_LINE_BYTES,
             tab_size: DEFAULT_TAB_SIZE,
             soft_wrap: true,
@@ -527,7 +529,7 @@ impl EditorLayoutMap {
     }
 
     pub(super) fn total_height(&self) -> f32 {
-        self.line_start_y(self.line_count)
+        self.line_start_y(self.line_count) + self.bottom_overlay_clearance
     }
 
     pub(super) fn line_at_y(&self, y: f32) -> u64 {
