@@ -3784,3 +3784,26 @@ fn org_parent_and_minimap_share_identical_display_runs() {
         expected_code_layout.padding_bottom
     );
 }
+
+#[test]
+fn outline_entries_preserve_titles_and_deep_levels() {
+    for (extension, text) in [
+        ("org", "* Parent / literal\nbody\n***** Child / detail\n"),
+        ("md", "# Parent / literal\nbody\n##### Child / detail\n"),
+    ] {
+        let path = std::env::temp_dir().join(format!(
+            "outline-levels-{}.{}",
+            std::process::id(),
+            extension
+        ));
+        std::fs::write(&path, text).unwrap();
+        let preview = super::load_document(path.clone()).unwrap().into_preview();
+        std::fs::remove_file(path).unwrap();
+        let entries = preview.outline_entries();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].title.as_ref(), "Parent / literal");
+        assert_eq!(entries[1].title.as_ref(), "Child / detail");
+        assert_eq!(entries[1].level, 5);
+        assert_eq!(entries[1].line, 3);
+    }
+}

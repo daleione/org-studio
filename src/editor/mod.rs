@@ -1280,7 +1280,7 @@ impl SemanticEditor {
         index.outline_at(&snapshot, offset)
     }
 
-    pub(crate) fn outline_entries(&self, cx: &App) -> Vec<(Arc<str>, RevisionRange)> {
+    pub(crate) fn outline_entries(&self, cx: &App) -> Vec<crate::document::OutlineEntry> {
         let snapshot = self.snapshot(cx);
         self.folds
             .heading_index(self.session.read(cx).path(), &snapshot)

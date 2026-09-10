@@ -39,9 +39,13 @@ pub(crate) fn render_status_popover(
         8.0
     };
     let content = popover.content;
+    let is_outline = matches!(content, StatusPopoverContent::Outline { .. });
     let close_entity = entity.clone();
     let title = match &content {
-        StatusPopoverContent::Outline { .. } => segment_title(StatusSegment::Outline, language),
+        StatusPopoverContent::Outline { .. } => match language {
+            Language::Chinese => "大纲",
+            Language::English => "Outline",
+        },
         StatusPopoverContent::ReadingStyle => match language {
             Language::Chinese => "阅读主题",
             Language::English => "Reading Theme",
@@ -68,11 +72,15 @@ pub(crate) fn render_status_popover(
         .bg(rgb(theme.background))
         .shadow_lg()
         .text_size(px(11.0))
+        .when(is_outline, |panel| {
+            panel.rounded(px(14.0)).font_family(".SystemUIFont")
+        })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
                 .h(px(34.0))
                 .px(px(12.0))
+                .when(is_outline, |header| header.px(px(16.0)).text_size(px(13.0)))
                 .flex()
                 .items_center()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -81,6 +89,16 @@ pub(crate) fn render_status_popover(
                     div()
                         .id("status-popover-close")
                         .px(px(6.0))
+                        .when(is_outline, |close| {
+                            close
+                                .size(px(26.0))
+                                .rounded(px(6.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_size(px(17.0))
+                                .hover(|style| style.bg(rgb(theme.background_alt)))
+                        })
                         .cursor_pointer()
                         .text_color(rgb(theme.foreground_dim))
                         .child("×")
@@ -95,7 +113,7 @@ pub(crate) fn render_status_popover(
     panel = if matches!(content, StatusPopoverContent::Outline { .. }) {
         panel
             .left(px(edge))
-            .w(px(286.0_f32.min((pane_width - edge * 2.0).max(1.0))))
+            .w(px(440.0_f32.min((pane_width - edge * 2.0).max(1.0))))
     } else if matches!(content, StatusPopoverContent::ReadingStyle) {
         panel
             .left(px(
@@ -108,22 +126,123 @@ pub(crate) fn render_status_popover(
             .w(px(286.0_f32.min((pane_width - edge * 2.0).max(1.0))))
     };
     match content {
-        StatusPopoverContent::Outline { document, entries } => {
+        StatusPopoverContent::Outline {
+            document,
+            entries,
+            collapsed,
+        } => {
+            let current_line = snapshot
+                .and_then(|value| value.position)
+                .and_then(|position| match position {
+                    super::model::StatusPosition::EditorCaret { line, .. }
+                    | super::model::StatusPosition::ReadingSource { line, .. } => Some(line),
+                    _ => None,
+                });
+            let active =
+                current_line.and_then(|line| entries.iter().rposition(|entry| entry.line <= line));
+            let mut ancestors: Vec<usize> = Vec::new();
             let mut list = div()
                 .id("status-outline-list")
-                .max_h(px(280.0))
+                .max_h(px(430.0))
+                .px(px(8.0))
+                .pt(px(6.0))
+                .border_t_1()
+                .border_color(rgb(theme.border))
                 .overflow_y_scroll();
-            for (index, (title, source)) in entries.iter().enumerate() {
-                let source = *source;
+            for (index, entry) in entries.iter().enumerate() {
+                while ancestors
+                    .last()
+                    .is_some_and(|parent| entries[*parent].level >= entry.level)
+                {
+                    ancestors.pop();
+                }
+                let depth = ancestors.len();
+                let hidden = ancestors.iter().any(|parent| collapsed.contains(parent));
+                ancestors.push(index);
+                if hidden {
+                    continue;
+                }
+                let source = entry.source;
                 let row_entity = entity.clone();
+                let fold_entity = entity.clone();
+                let title = entry.title.clone();
+                let has_children = entries
+                    .get(index + 1)
+                    .is_some_and(|next| next.level > entry.level);
+                let is_collapsed = collapsed.contains(&index);
+                let fold = div()
+                    .id(("status-outline-fold", index))
+                    .debug_selector(move || format!("outline-fold-{index}"))
+                    .w(px(20.0))
+                    .flex_shrink_0()
+                    .py(px(10.0))
+                    .text_size(px(11.0))
+                    .text_color(rgb(theme.foreground_dim))
+                    .child(if has_children {
+                        if is_collapsed { "▸" } else { "▾" }
+                    } else {
+                        ""
+                    })
+                    .when(has_children, |fold| {
+                        fold.cursor_pointer().on_click(move |_, _, cx| {
+                            cx.stop_propagation();
+                            fold_entity.update(cx, |this, cx| {
+                                if let Some(StatusPopover {
+                                    content: StatusPopoverContent::Outline { collapsed, .. },
+                                    ..
+                                }) = &mut this.status.popover
+                                {
+                                    if !collapsed.remove(&index) {
+                                        collapsed.insert(index);
+                                    }
+                                    cx.notify();
+                                }
+                            });
+                        })
+                    });
                 list = list.child(
                     div()
                         .id(("status-outline-heading", index))
-                        .px(px(12.0))
-                        .py(px(8.0))
+                        .debug_selector(move || format!("outline-row-{index}"))
+                        .mt(px(1.0))
+                        .pl(px(4.0 + depth.min(8) as f32 * 14.0))
+                        .pr(px(8.0))
+                        .rounded(px(7.0))
+                        .flex()
+                        .items_start()
                         .cursor_pointer()
+                        .text_color(rgb(theme.foreground))
                         .hover(|style| style.bg(rgb(theme.background_alt)))
-                        .child(super::breadcrumb(title, false))
+                        .when(active == Some(index), |row| {
+                            row.bg(rgb(theme.background_alt))
+                                .text_color(rgb(theme.heading[0]))
+                        })
+                        .tooltip(move |_, cx| cx.new(|_| OutlineTooltip(title.clone())).into())
+                        .child(fold)
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .py(px(9.0))
+                                .text_size(px(13.0))
+                                .line_height(px(20.0))
+                                .line_clamp(2)
+                                .when(depth <= 1, |label| {
+                                    label.font_weight(gpui::FontWeight::MEDIUM)
+                                })
+                                .child(entry.title.to_string()),
+                        )
+                        .child(
+                            div()
+                                .flex_shrink_0()
+                                .min_w(px(25.0))
+                                .ml(px(10.0))
+                                .pt(px(12.0))
+                                .text_right()
+                                .text_size(px(10.0))
+                                .text_color(rgb(theme.foreground_dim))
+                                .child(entry.line.to_string()),
+                        )
                         .on_click(move |_, _, cx| {
                             row_entity.update(cx, |this, cx| {
                                 let mapped = this.document_session().and_then(|session| {
@@ -342,4 +461,27 @@ pub(crate) fn render_status_popover(
         }
     }
     panel.into_any_element()
+}
+
+pub(super) struct OutlineTooltip(pub(super) std::sync::Arc<str>);
+
+impl gpui::Render for OutlineTooltip {
+    fn render(
+        &mut self,
+        _: &mut gpui::Window,
+        _: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let theme = current_theme();
+        div()
+            .max_w(px(460.0))
+            .p(px(10.0))
+            .rounded(px(7.0))
+            .shadow_md()
+            .bg(rgb(theme.background))
+            .border_1()
+            .border_color(rgb(theme.border))
+            .text_color(rgb(theme.foreground))
+            .text_size(px(12.0))
+            .child(self.0.to_string())
+    }
 }

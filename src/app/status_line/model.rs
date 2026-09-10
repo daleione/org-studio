@@ -167,7 +167,8 @@ pub(crate) struct StatusPopover {
 pub(crate) enum StatusPopoverContent {
     Outline {
         document: crate::document::DocumentId,
-        entries: Arc<[(Arc<str>, crate::document::RevisionRange)]>,
+        entries: Arc<[crate::document::OutlineEntry]>,
+        collapsed: std::collections::BTreeSet<usize>,
     },
     ReadingStyle,
     Info(StatusSegment),

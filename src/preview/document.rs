@@ -33,7 +33,7 @@ pub struct PreviewSnapshot {
 
 impl PreviewSnapshot {
     /// Collect on demand when opening navigation, not during status repainting.
-    pub(crate) fn outline_entries(&self) -> Vec<(Arc<str>, RevisionRange)> {
+    pub(crate) fn outline_entries(&self) -> Vec<crate::document::OutlineEntry> {
         (0..self.projection.row_count())
             .filter_map(|index| {
                 let visual = self.projection.rows.get(index)?;
@@ -41,8 +41,27 @@ impl PreviewSnapshot {
                     return None;
                 }
                 let row = self.projection.source_row(index)?;
-                let title = self.outline_paths.get(row.block_id as usize)?.clone()?;
-                Some((title, row.content))
+                let level = match self.format {
+                    DocumentFormat::Org => {
+                        match self.blocks.nodes().get(row.block_id as usize)?.kind {
+                            crate::org_syntax::BlockKind::Heading { level } => level,
+                            _ => return None,
+                        }
+                    }
+                    DocumentFormat::Markdown => {
+                        match self.markdown_blocks.get(row.block_id as usize)?.kind {
+                            markdown::MarkdownKind::Heading { level } => level,
+                            _ => return None,
+                        }
+                    }
+                };
+                let title = self.text.copy_range(row.content.range);
+                Some(crate::document::OutlineEntry {
+                    title: title.trim().trim_start_matches(['*', '#']).trim().into(),
+                    level,
+                    line: self.text.line_of_byte(row.content.range.start) + 1,
+                    source: row.content,
+                })
             })
             .collect()
     }

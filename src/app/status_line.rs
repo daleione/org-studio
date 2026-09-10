@@ -365,7 +365,7 @@ impl StatusLineLayout {
         if self.outline == Variant::Compact {
             remaining.min(OUTLINE_COMPACT_WIDTH)
         } else {
-            (remaining - if available >= 700.0 { 110.0 } else { 0.0 }).max(0.0)
+            remaining
         }
     }
 }
@@ -517,6 +517,24 @@ fn statistic_field(icon: StatusIcon, value: String, width: f32) -> gpui::Div {
         )
 }
 
+fn outline_is_truncated(
+    path: &str,
+    compact: bool,
+    width: f32,
+    measure: impl Fn(&str) -> f32,
+) -> bool {
+    let parts: Vec<_> = if compact {
+        vec![leaf(path)]
+    } else {
+        path.split(" / ").collect()
+    };
+    // Button padding + border + icon + gap; each separator has two gaps.
+    let needed = 37.0
+        + parts.iter().map(|title| measure(title)).sum::<f32>()
+        + parts.len().saturating_sub(1) as f32 * 22.0;
+    needed > width
+}
+
 fn breadcrumb(path: &str, compact: bool) -> gpui::Div {
     let parts: Vec<_> = if compact {
         vec![leaf(path)]
@@ -543,7 +561,6 @@ fn breadcrumb(path: &str, compact: bool) -> gpui::Div {
         row = row.child(
             div()
                 .min_w_0()
-                .max_w(px(180.0))
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
@@ -691,6 +708,21 @@ fn render_status_line_content(
                 left.child(
                     status_button(entity.clone(), pane_id, StatusSegment::Outline)
                         .w(px(layout.outline_max_width))
+                        .when(
+                            outline_is_truncated(
+                                outline,
+                                layout.outline == Variant::Compact,
+                                layout.outline_max_width,
+                                |text| measured_text_width(text, window),
+                            ),
+                            |button| {
+                                let full_path: Arc<str> = outline.into();
+                                button.tooltip(move |_, cx| {
+                                    cx.new(|_| popover::OutlineTooltip(full_path.clone()))
+                                        .into()
+                                })
+                            },
+                        )
                         .overflow_hidden()
                         .child(status_icon(StatusIcon::Outline))
                         .child(breadcrumb(outline, layout.outline == Variant::Compact)),
@@ -1086,6 +1118,18 @@ impl WorkspaceWindow {
                 self.toggle_pane_surface(pane_side_for_status(pane), cx);
             }
             StatusSegment::Outline if self.content_route == ContentRoute::Document => {
+                if self.status.popover.as_ref().is_some_and(|popover| {
+                    popover.pane == pane
+                        && matches!(
+                            popover.content,
+                            StatusPopoverContent::Outline { .. }
+                                | StatusPopoverContent::Info(StatusSegment::Outline)
+                        )
+                }) {
+                    self.status.popover = None;
+                    cx.notify();
+                    return;
+                }
                 let side = pane_side_for_status(pane);
                 let content = self
                     .state
@@ -1107,6 +1151,7 @@ impl WorkspaceWindow {
                         Some(StatusPopoverContent::Outline {
                             document: session.id(),
                             entries: entries.into(),
+                            collapsed: Default::default(),
                         })
                     })
                     .unwrap_or(StatusPopoverContent::Info(segment));
@@ -1438,6 +1483,77 @@ mod tests {
     }
 
     #[gpui::test]
+    fn outline_rows_wrap_and_fold_without_navigating(cx: &mut gpui::TestAppContext) {
+        use crate::document::{DocumentSnapshot, HeadingIndex};
+        use gpui::{AppContext, Context, IntoElement, Modifiers, Render};
+        let text = format!(
+            "* {}\n*** Child / title\n* Sibling\n",
+            "很长的章节标题".repeat(30)
+        );
+        let document = DocumentSnapshot::from_utf8(text.into_bytes()).unwrap();
+        let entries =
+            HeadingIndex::parse(DocumentFormat::Org, &document).outline_entries(&document);
+        let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        app.update(cx, |app, _| {
+            app.status.popover = Some(StatusPopover {
+                pane: DOCUMENT_PANE_ID,
+                content: StatusPopoverContent::Outline {
+                    document: document.document_id(),
+                    entries: entries.into(),
+                    collapsed: Default::default(),
+                },
+            })
+        });
+        struct OutlineHarness {
+            app: Entity<WorkspaceWindow>,
+            _subscription: gpui::Subscription,
+        }
+        impl Render for OutlineHarness {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let popover = self.app.read(cx).status.popover.clone();
+                div()
+                    .relative()
+                    .w(px(500.0))
+                    .h(px(600.0))
+                    .children(popover.map(|popover| {
+                        render_status_popover(
+                            popover,
+                            None,
+                            StatusLineSettings::default(),
+                            self.app.clone(),
+                            Language::Chinese,
+                            500.0,
+                            0.0,
+                        )
+                    }))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, cx| OutlineHarness {
+            app: app.clone(),
+            _subscription: cx.observe(&app, |_, _, cx| cx.notify()),
+        });
+        let parent = cx.debug_bounds("outline-row-0").unwrap();
+        assert!(
+            f32::from(parent.size.height) <= 60.0,
+            "long titles must stay within two lines"
+        );
+        assert!(cx.debug_bounds("outline-row-1").is_some());
+        let fold = cx.debug_bounds("outline-fold-0").unwrap();
+        cx.simulate_click(fold.center(), Modifiers::default());
+        cx.update(|_, cx| {
+            assert!(
+                matches!(&app.read(cx).status.popover.as_ref().unwrap().content,
+            StatusPopoverContent::Outline { collapsed, .. } if collapsed.contains(&0))
+            )
+        });
+        assert!(cx.debug_bounds("outline-row-1").is_none());
+        assert!(cx.debug_bounds("outline-row-2").is_some());
+        let fold = cx.debug_bounds("outline-fold-0").unwrap();
+        cx.simulate_click(fold.center(), Modifiers::default());
+        assert!(cx.debug_bounds("outline-row-1").is_some());
+    }
+
+    #[gpui::test]
     fn clicking_the_rendered_more_segment_opens_its_pane_overflow(cx: &mut gpui::TestAppContext) {
         use gpui::{AppContext, Context, IntoElement, Modifiers, Render, point};
 
@@ -1644,7 +1760,11 @@ mod tests {
                 editor.update(cx, |editor, cx| editor.set_selection(crate::document::Selection::caret(crate::document::ByteOffset(source.len() as u64)), cx));
                 assert_eq!(app.status_snapshot(cx).unwrap().outline.as_deref(), Some(expected));
                 app.activate_status_segment(DOCUMENT_PANE_ID, StatusSegment::Outline, None, cx);
-                assert!(matches!(&app.status.popover.as_ref().unwrap().content, StatusPopoverContent::Outline { entries, .. } if entries.len() == 2 && entries[1].0.as_ref() == expected));
+                assert!(matches!(&app.status.popover.as_ref().unwrap().content, StatusPopoverContent::Outline { entries, .. } if entries.len() == 2 && entries[1].title.as_ref() == "Child" && entries[1].level == 2));
+                app.activate_status_segment(DOCUMENT_PANE_ID, StatusSegment::Outline, None, cx);
+                assert!(app.status.popover.is_none(), "clicking the same outline entry closes it");
+                app.activate_status_segment(DOCUMENT_PANE_ID, StatusSegment::Outline, None, cx);
+                assert!(matches!(app.status.popover.as_ref().map(|popover| &popover.content), Some(StatusPopoverContent::Outline { .. })));
                 let session = app.document_session().unwrap().clone();
                 session.update(cx, |session, cx| {
                     let start = source.find("Child").unwrap() as u64;
@@ -1939,6 +2059,25 @@ mod tests {
     }
 
     #[test]
+    fn outline_tooltip_only_appears_when_visible_titles_are_truncated() {
+        let measure = |text: &str| text.len() as f32 * 10.0;
+        assert!(!outline_is_truncated(
+            "Parent / Child",
+            false,
+            169.0,
+            measure
+        ));
+        assert!(outline_is_truncated(
+            "Parent / Child",
+            false,
+            168.0,
+            measure
+        ));
+        assert!(!outline_is_truncated("Parent / Child", true, 87.0, measure));
+        assert!(outline_is_truncated("Parent / Child", true, 86.0, measure));
+    }
+
+    #[test]
     fn full_outline_uses_available_space_instead_of_the_compact_cap() {
         let mut snapshot = snapshot();
         snapshot.outline = Some(
@@ -1947,6 +2086,8 @@ mod tests {
         let layout = snapshot.layout(1_400.0, StatusLineSettings::default());
         assert_eq!(layout.outline, Variant::Full);
         assert!(layout.outline_max_width > OUTLINE_FULL_RESERVE);
+        let other_slots = layout.width(&snapshot, &text_width) - OUTLINE_FULL_RESERVE;
+        assert_eq!(layout.outline_max_width, 1_400.0 - 18.0 - other_slots);
     }
 
     #[test]

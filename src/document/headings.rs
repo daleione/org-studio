@@ -12,6 +12,14 @@ pub(crate) struct DocumentHeading {
     pub(crate) start: ByteOffset,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct OutlineEntry {
+    pub(crate) title: Arc<str>,
+    pub(crate) level: u16,
+    pub(crate) line: u64,
+    pub(crate) source: super::RevisionRange,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) struct HeadingIndex {
     headings: Arc<[DocumentHeading]>,
@@ -84,21 +92,23 @@ impl HeadingIndex {
         self.paths(snapshot).get(index).cloned()
     }
 
-    pub(crate) fn outline_entries(
-        &self,
-        snapshot: &DocumentSnapshot,
-    ) -> Vec<(Arc<str>, super::RevisionRange)> {
-        self.paths(snapshot)
+    pub(crate) fn outline_entries(&self, snapshot: &DocumentSnapshot) -> Vec<OutlineEntry> {
+        self.headings
             .iter()
-            .zip(self.headings.iter())
-            .map(|(path, heading)| {
-                (
-                    path.clone(),
-                    super::RevisionRange::new(
+            .map(|heading| {
+                let text = snapshot
+                    .line_range(super::LineIndex(heading.line))
+                    .map(|range| snapshot.copy_range(range))
+                    .unwrap_or_default();
+                OutlineEntry {
+                    title: text.trim().trim_start_matches(['*', '#']).trim().into(),
+                    level: heading.level,
+                    line: heading.line + 1,
+                    source: super::RevisionRange::new(
                         snapshot.revision(),
                         super::ByteRange::new(heading.start.0, heading.start.0),
                     ),
-                )
+                }
             })
             .collect()
     }
@@ -151,6 +161,33 @@ fn markdown_headings(snapshot: &DocumentSnapshot) -> Vec<DocumentHeading> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outline_entries_keep_literal_slashes_and_actual_heading_levels() {
+        for (format, text) in [
+            (
+                DocumentFormat::Org,
+                "* Parent / literal\nbody\n*** Child / detail\n",
+            ),
+            (
+                DocumentFormat::Markdown,
+                "# Parent / literal\nbody\n### Child / detail\n",
+            ),
+        ] {
+            let snapshot = DocumentSnapshot::from_utf8(text.as_bytes().to_vec()).unwrap();
+            let index = HeadingIndex::parse(format, &snapshot);
+            let entries = index.outline_entries(&snapshot);
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0].title.as_ref(), "Parent / literal");
+            assert_eq!(entries[1].title.as_ref(), "Child / detail");
+            assert_eq!(entries[1].level, 3);
+            assert_eq!(entries[1].line, 3);
+            assert_eq!(
+                entries[1].source.range.start.0,
+                text.find("body").unwrap() as u64 + 5
+            );
+        }
+    }
 
     #[test]
     fn markdown_heading_index_ignores_fenced_heading_text() {

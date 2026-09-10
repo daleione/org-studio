@@ -28,7 +28,7 @@ pub use file::{
 };
 pub(crate) use file::{TargetExpectation, resolve_symlink_target};
 pub(crate) use format::DocumentFormat;
-pub(crate) use headings::{DocumentHeading, HeadingIndex};
+pub(crate) use headings::{DocumentHeading, HeadingIndex, OutlineEntry};
 pub(crate) use outline::{
     GlobalVisibility, LocalVisibility, OutlineCycleProjection, OutlineHeading,
     cycle_outline_visibility, global_outline_visibility, next_local_visibility,
