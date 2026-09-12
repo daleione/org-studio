@@ -22,6 +22,9 @@ struct ReadingRowContext<'a> {
 
 #[derive(Clone)]
 pub(in crate::preview) struct ReadingInteraction {
+    pub(in crate::preview) document: Arc<crate::preview::PreviewSnapshot>,
+    pub(in crate::preview) search_ranges: Arc<[crate::document::ByteRange]>,
+    pub(in crate::preview) search_current: Option<crate::document::ByteRange>,
     pub(in crate::preview) panel: gpui::Entity<super::ReadingPreviewPanel>,
     dispatch: ReadingActionDispatcher,
     action_states: Arc<

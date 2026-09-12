@@ -4408,6 +4408,7 @@ dependencies = [
  "notify",
  "profiling",
  "pulldown-cmark",
+ "regex-syntax",
  "ropey",
  "roxmltree 0.21.1",
  "rustix 1.1.4",

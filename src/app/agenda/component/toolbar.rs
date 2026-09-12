@@ -17,7 +17,7 @@ pub(crate) struct AgendaToolbarProps<'a> {
     pub(crate) window_width: f32,
     pub(crate) main_content_offset: f32,
     pub(crate) window_title: String,
-    pub(crate) search: Option<Entity<super::super::search::AgendaSearch>>,
+    pub(crate) search: Option<Entity<crate::app::native_input::NativeInput>>,
     pub(crate) motion_enabled: bool,
     /// Left inset of the titlebar row; shrinks while fullscreen hides the
     /// traffic lights, and grows again when the pointer reveals them.

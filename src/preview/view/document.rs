@@ -48,6 +48,8 @@ pub(crate) fn render_reading_document(
         zoom,
         action_states,
         copy_feedback,
+        search_ranges,
+        search_current,
         text_selection,
     } = state;
     let ReadingRenderOptions {
@@ -72,10 +74,13 @@ pub(crate) fn render_reading_document(
     let minimap_entity = panel_entity.clone();
     let allow_minimap_refinement = fold_animation.is_none();
     let interaction = ReadingInteraction {
+        document: document.clone(),
         panel: panel_entity.clone(),
         dispatch: dispatch_action,
         action_states,
         copy_feedback,
+        search_ranges,
+        search_current,
         text_selection,
         row_bounds: None,
     };
@@ -1161,6 +1166,11 @@ pub(crate) fn reading_inline(
         display_row,
         selection,
     )
+    .with_search_ranges(reading_search_ranges(
+        &interaction.search_ranges,
+        interaction.search_current,
+        runs,
+    ))
     .with_text_offset(text_offset)
     .with_row_text_len(row_text_len)
     .with_row_bounds(interaction.row_bounds.clone());
@@ -1281,6 +1291,26 @@ pub(crate) fn reading_fallback(
         .line_height(px(line_height))
         .text_color(rgb(style.palette.foreground))
         .child(content)
+}
+
+pub(in crate::preview) fn reading_search_ranges(
+    matches: &[crate::document::ByteRange],
+    current: Option<crate::document::ByteRange>,
+    runs: &DisplayRuns,
+) -> Vec<(std::ops::Range<usize>, bool)> {
+    let mut result = Vec::new();
+    for (source, display) in runs.source_segments.iter() {
+        let first = matches.partition_point(|r| r.end <= source.start);
+        for range in matches[first..].iter().take_while(|r| r.start < source.end) {
+            let start = range.start.0.max(source.start.0) - source.start.0;
+            let end = range.end.0.min(source.end.0) - source.start.0;
+            result.push((
+                display.start + start as usize..display.start + end as usize,
+                Some(*range) == current,
+            ));
+        }
+    }
+    result
 }
 
 #[cfg(test)]

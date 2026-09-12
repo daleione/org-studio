@@ -7,6 +7,7 @@ mod minimap;
 mod minimap_media;
 mod org_commands;
 mod read_only;
+mod search;
 mod syntax;
 
 pub(crate) use read_only::{
@@ -548,6 +549,9 @@ pub struct SemanticEditor {
     activate_read_only_lines: bool,
     session: Entity<DocumentSession>,
     focus_handle: FocusHandle,
+    search_ranges: Arc<[ByteRange]>,
+    search_current: Option<ByteRange>,
+    search_fold_origin: Option<folding::EditorFoldProjection>,
     selection: Selection,
     selection_revision: Revision,
     selection_utf16: Range<usize>,
@@ -584,6 +588,7 @@ pub struct SemanticEditor {
     caret_blink: Option<(Selection, Revision, Instant)>,
     caret_blink_task: Option<Task<()>>,
     pending_reveal_caret: bool,
+    pending_search_reveal: bool,
     is_selecting: bool,
     drag_position: Option<Point<Pixels>>,
     autoscroll_task: Option<Task<()>>,
@@ -912,6 +917,9 @@ impl SemanticEditor {
             generated_highlights: None,
             activate_read_only_lines: false,
             focus_handle: cx.focus_handle(),
+            search_ranges: Arc::from([]),
+            search_current: None,
+            search_fold_origin: None,
             selection: Selection::default(),
             selection_revision: initial_snapshot.revision(),
             selection_utf16: 0..0,
@@ -948,6 +956,7 @@ impl SemanticEditor {
             caret_blink: None,
             caret_blink_task: None,
             pending_reveal_caret: false,
+            pending_search_reveal: false,
             is_selecting: false,
             drag_position: None,
             autoscroll_task: None,

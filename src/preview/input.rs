@@ -58,6 +58,47 @@ pub(crate) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
 
 pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
+    for (name, title, command) in [
+        (
+            "org-studio.document.find",
+            "Find in Document",
+            BuiltinCommand::FindDocument,
+        ),
+        (
+            "org-studio.document.isearch-forward",
+            "Incremental Search Forward",
+            BuiltinCommand::IsearchForward,
+        ),
+        (
+            "org-studio.document.isearch-backward",
+            "Incremental Search Backward",
+            BuiltinCommand::IsearchBackward,
+        ),
+        (
+            "org-studio.document.query-replace",
+            "Query Replace",
+            BuiltinCommand::QueryReplace,
+        ),
+    ] {
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::RedactArguments,
+            })
+            .expect("search command");
+    }
+
     builder
         .register_builtin(BuiltinCommandSpec {
             name: SAVE_DOCUMENT_COMMAND.into(),

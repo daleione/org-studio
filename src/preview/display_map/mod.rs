@@ -86,6 +86,7 @@ impl RowLayout {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DisplayRuns {
+    pub(crate) source_segments: Arc<[(crate::document::ByteRange, Range<usize>)]>,
     pub(crate) text: SharedString,
     pub(crate) inline_spans: Arc<[InlineSpan]>,
     pub(crate) links: Arc<[InlineLink]>,
@@ -677,6 +678,7 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
     let line = model.source_row(row);
     let kind = model.row_kind(row);
     let source = model.text.copy_range(line.content.range);
+    let raw_source = source.clone();
     let source = source.trim_end_matches(['\r', '\n']);
     let source = match (&model.format, &visual.kind, &kind) {
         (DocumentFormat::Org, _, PreviewLineKind::Heading(_)) => {
@@ -709,6 +711,7 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
             | PreviewLineKind::Caption
             | PreviewLineKind::Quote
     );
+    let mapping_source = source.clone();
     let (text, inline_spans, links): (SharedString, Arc<[InlineSpan]>, Arc<[InlineLink]>) =
         if parse_inline {
             let parsed = parse_document_inline(model.format, &source);
@@ -739,7 +742,15 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
         .and_then(|language| highlight_code(language, &text).ok())
         .unwrap_or_default()
         .into();
+    let source_segments = exact_source_segments(
+        &raw_source,
+        &mapping_source,
+        &text,
+        &inline_spans,
+        line.content.range.start.0,
+    );
     DisplayRuns {
+        source_segments: source_segments.into(),
         text,
         inline_spans,
         links,
@@ -824,6 +835,24 @@ pub(crate) fn slice_display_runs(runs: &DisplayRuns, range: Range<usize>) -> Dis
     let start = range.start.min(runs.text.len());
     let end = range.end.min(runs.text.len()).max(start);
     DisplayRuns {
+        source_segments: runs
+            .source_segments
+            .iter()
+            .filter_map(|(source, display)| {
+                let left = display.start.max(start);
+                let right = display.end.min(end);
+                (left < right).then(|| {
+                    (
+                        crate::document::ByteRange::new(
+                            source.start.0 + (left - display.start) as u64,
+                            source.start.0 + (right - display.start) as u64,
+                        ),
+                        left - start..right - start,
+                    )
+                })
+            })
+            .collect::<Vec<_>>()
+            .into(),
         text: runs.text[start..end].to_owned().into(),
         inline_spans: runs
             .inline_spans
@@ -963,5 +992,127 @@ mod link_tests {
             link_destination(DocumentFormat::Markdown, "<https://example.com>"),
             Some("https://example.com")
         );
+    }
+}
+
+/// Only unchanged text receives an exact mapping. Ambiguous/transformed segments stay unmapped.
+pub(in crate::preview) fn exact_source_segments(
+    raw: &str,
+    source: &str,
+    display: &str,
+    spans: &[InlineSpan],
+    base: u64,
+) -> Vec<(crate::document::ByteRange, Range<usize>)> {
+    let mut positions = raw.match_indices(source);
+    let Some((start, _)) = positions.next() else {
+        return vec![];
+    };
+    if source.is_empty() || positions.next().is_some() {
+        return vec![];
+    }
+    let base = base + start as u64;
+    if source == display {
+        return vec![(
+            crate::document::ByteRange::new(base, base + source.len() as u64),
+            0..display.len(),
+        )];
+    }
+    let mut result = Vec::new();
+    let mut source_cursor = 0;
+    let mut display_cursor = 0;
+    let mut ordered = spans.iter().collect::<Vec<_>>();
+    ordered.sort_by_key(|s| (s.source.start, std::cmp::Reverse(s.source.end)));
+    for span in ordered {
+        if span.source.start < source_cursor || span.range.start < display_cursor {
+            continue;
+        }
+        if let (Some(a), Some(b)) = (
+            source.get(source_cursor..span.source.start),
+            display.get(display_cursor..span.range.start),
+        ) && a == b
+            && !a.is_empty()
+        {
+            result.push((
+                crate::document::ByteRange::new(
+                    base + source_cursor as u64,
+                    base + span.source.start as u64,
+                ),
+                display_cursor..span.range.start,
+            ));
+        }
+        if let (Some(a), Some(b)) = (
+            source.get(span.source.clone()),
+            display.get(span.range.clone()),
+        ) {
+            let offset = if span.kind == InlineKind::Link {
+                if a.starts_with("[[") {
+                    a.rfind("][").map(|n| n + 2).or(Some(2))
+                } else if a.starts_with('[') {
+                    Some(1)
+                } else {
+                    None
+                }
+            } else {
+                let mut hits = a.match_indices(b);
+                let first = hits.next().map(|(i, _)| i);
+                if hits.next().is_none() { first } else { None }
+            };
+            if let Some(offset) = offset
+                && !b.is_empty()
+                && a.get(offset..offset + b.len()) == Some(b)
+            {
+                let from = base + (span.source.start + offset) as u64;
+                result.push((
+                    crate::document::ByteRange::new(from, from + b.len() as u64),
+                    span.range.clone(),
+                ));
+            }
+        }
+        source_cursor = span.source.end;
+        display_cursor = span.range.end;
+    }
+    if source.get(source_cursor..) == display.get(display_cursor..) && source_cursor < source.len()
+    {
+        result.push((
+            crate::document::ByteRange::new(
+                base + source_cursor as u64,
+                base + source.len() as u64,
+            ),
+            display_cursor..display.len(),
+        ));
+    }
+    result
+}
+
+#[cfg(test)]
+mod search_mapping_tests {
+    use super::*;
+    #[test]
+    fn search_mapping_never_marks_hidden_link_target() {
+        let source = "before [[https://target][label]] after";
+        let parsed = crate::org_syntax::inline::parse(source);
+        let segments = exact_source_segments(source, source, &parsed.text, &parsed.spans, 0);
+        let covered = |start: usize| {
+            segments
+                .iter()
+                .any(|(r, _)| r.start.0 <= start as u64 && r.end.0 > start as u64)
+        };
+        assert!(!covered(source.find("target").unwrap()));
+        assert!(covered(source.find("label").unwrap()));
+        for (range, display) in segments {
+            assert_eq!(&source[range.as_usize()], &parsed.text[display]);
+        }
+    }
+    #[test]
+    fn search_mapping_keeps_unicode_bytes_and_omits_markup() {
+        let source = "中文 *强调* 🙂";
+        let parsed = crate::org_syntax::inline::parse(source);
+        let segments = exact_source_segments(source, source, &parsed.text, &parsed.spans, 30);
+        for (range, display) in segments {
+            assert_eq!(
+                &source[(range.start.0 - 30) as usize..(range.end.0 - 30) as usize],
+                &parsed.text[display]
+            );
+        }
     }
 }

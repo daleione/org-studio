@@ -710,6 +710,36 @@ pub(crate) fn render_table_row(
         let cell = projection.cells.get(index);
         let align_right =
             column.alignment == Alignment::Right || cell.is_some_and(TableCell::align_right);
+        let mut search_ranges = Vec::new();
+        if let Some(interaction) = interaction
+            && let Some(cell) = cell
+            && let Some(row) = interaction.document.projection.source_row(row_id)
+        {
+            let raw = cell.text(source);
+            let segments = super::display_map::exact_source_segments(
+                raw,
+                raw,
+                &display.text,
+                &display.spans,
+                row.content.range.start.0 + cell.text_range.start as u64,
+            );
+            for (source, display) in segments {
+                let first = interaction
+                    .search_ranges
+                    .partition_point(|range| range.end <= source.start);
+                for range in interaction.search_ranges[first..]
+                    .iter()
+                    .take_while(|range| range.start < source.end)
+                {
+                    let start = (range.start.0.max(source.start.0) - source.start.0) as usize;
+                    let end = (range.end.0.min(source.end.0) - source.start.0) as usize;
+                    search_ranges.push((
+                        display.start + start..display.start + end,
+                        Some(*range) == interaction.search_current,
+                    ));
+                }
+            }
+        }
         let text: gpui::SharedString = display.text.into();
         let text_len = text.len();
         let styled = styled_inline_runs(text, display.spans.into(), style);
@@ -730,6 +760,7 @@ pub(crate) fn render_table_row(
                 row_id,
                 selection,
             )
+            .with_search_ranges(search_ranges)
             .with_text_offset(text_offset)
             .restrict_drag_to_bounds()
             .into_any_element()

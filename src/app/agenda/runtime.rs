@@ -214,14 +214,13 @@ impl WorkspaceWindow {
 
     pub(crate) fn ensure_agenda_runtime(&mut self, cx: &mut Context<Self>) {
         if self.agenda.search_input.is_none() {
-            let workspace = cx.entity().downgrade();
-            self.agenda.search_input =
-                Some(cx.new(|cx| super::search::AgendaSearch::new(workspace, cx)));
+            self.agenda.search_input = Some(self.create_agenda_search_input(cx));
         }
         if let Some(input) = &self.agenda.search_input {
             input.update(cx, |input, cx| {
                 input.sync(&self.agenda.state.search, cx);
                 if self.agenda.language != self.language {
+                    input.config.placeholder = self.language.text("agenda.search").into();
                     cx.notify();
                 }
             });
@@ -319,4 +318,3 @@ impl WorkspaceWindow {
         }));
     }
 }
-use gpui::AppContext;

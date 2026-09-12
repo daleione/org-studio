@@ -18,6 +18,7 @@ pub mod org_syntax;
 pub mod perf_tracing;
 pub mod preview;
 pub mod recent_documents;
+pub mod search;
 pub mod settings;
 mod syntax_highlighting;
 pub mod theme;

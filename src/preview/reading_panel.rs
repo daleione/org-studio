@@ -19,7 +19,12 @@ use super::{
 ///
 /// The workspace routes commands and owns window-level settings; this entity owns the immutable
 /// derived snapshot plus the virtual-list, fold and minimap presentation state for that snapshot.
+type SearchFoldOrigin = (Arc<Vec<usize>>, Arc<HashSet<BlockId>>);
+
 pub(crate) struct ReadingPreviewPanel {
+    search_ranges: Arc<[crate::document::ByteRange]>,
+    search_current: Option<crate::document::ByteRange>,
+    search_origin: Option<SearchFoldOrigin>,
     document: Arc<PreviewSnapshot>,
     list_state: ListState,
     fold_markers: Arc<HashSet<BlockId>>,
@@ -75,6 +80,8 @@ impl ReadingTextSelection {
 
 #[derive(Clone)]
 pub(crate) struct ReadingRenderState {
+    pub(crate) search_ranges: Arc<[crate::document::ByteRange]>,
+    pub(crate) search_current: Option<crate::document::ByteRange>,
     pub(crate) document: Arc<PreviewSnapshot>,
     pub(crate) minimap_state: Arc<minimap::MinimapState>,
     pub(crate) table_scroll_handles: Arc<HashMap<BlockId, ScrollHandle>>,
@@ -148,12 +155,17 @@ impl ReadingPreviewPanel {
             copy_feedback: None,
             copy_feedback_request: 0,
             copy_feedback_task: None,
+            search_ranges: Arc::from([]),
+            search_current: None,
+            search_origin: None,
             text_selection: ReadingTextSelection::default(),
         }
     }
 
     pub(crate) fn render_state(&self) -> ReadingRenderState {
         ReadingRenderState {
+            search_ranges: self.search_ranges.clone(),
+            search_current: self.search_current,
             document: self.document.clone(),
             minimap_state: self.minimap_state.clone(),
             table_scroll_handles: self.table_scroll_handles.clone(),
@@ -416,6 +428,7 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        self.search_finish(true);
         self.text_selection = ReadingTextSelection::default();
         let source_anchor = self.top_source_anchor();
         let previous_visible_rows = self.visible_rows.clone();
@@ -666,7 +679,7 @@ impl ReadingPreviewPanel {
         }
     }
 
-    fn top_source_anchor(&self) -> Option<(crate::document::ByteOffset, gpui::Pixels)> {
+    pub(crate) fn top_source_anchor(&self) -> Option<(crate::document::ByteOffset, gpui::Pixels)> {
         let scroll_top = self.list_state.logical_scroll_top();
         let item = self
             .list_state
@@ -718,7 +731,7 @@ impl ReadingPreviewPanel {
         true
     }
 
-    fn scroll_to_source_offset_with_offset(
+    pub(crate) fn scroll_to_source_offset_with_offset(
         &mut self,
         offset: crate::document::ByteOffset,
         offset_in_item: gpui::Pixels,
@@ -1244,6 +1257,101 @@ fn closest_block_by_source(
     BlockId::try_from(index).ok()
 }
 
+impl ReadingPreviewPanel {
+    pub(crate) fn search_preview(
+        &mut self,
+        ranges: Arc<[crate::document::ByteRange]>,
+        current: Option<crate::document::ByteRange>,
+    ) {
+        self.search_ranges = ranges;
+        if self.search_current == current {
+            return;
+        }
+        self.discard_fold_animation();
+        let origin = self
+            .search_origin
+            .get_or_insert_with(|| (self.visible_rows.clone(), self.fold_markers.clone()))
+            .clone();
+        let mut rows = origin.0.as_ref().clone();
+        self.fold_markers = origin.1.clone();
+        if let Some(visual) = current.and_then(|r| {
+            self.document
+                .projection
+                .visual_row_for_source_offset(r.start)
+        }) && let Err(index) = rows.binary_search(&visual)
+        {
+            let headings = match self.document.format {
+                DocumentFormat::Org => super::folding::org_heading_rows(
+                    &self.document.projection.rows,
+                    &self.document.blocks,
+                ),
+                DocumentFormat::Markdown => super::folding::markdown_heading_rows(
+                    &self.document.projection.rows,
+                    &self.document.markdown_blocks,
+                ),
+            };
+            let mut path: Vec<&crate::document::OutlineHeading<BlockId>> = Vec::new();
+            for heading in headings
+                .iter()
+                .take_while(|heading| heading.position <= visual)
+            {
+                while path
+                    .last()
+                    .is_some_and(|parent| parent.level >= heading.level)
+                {
+                    path.pop();
+                }
+                path.push(heading);
+            }
+            let mut markers = origin.1.as_ref().clone();
+            for heading in &path {
+                markers.remove(&heading.id);
+            }
+            // Reveal direct text and child headings along the target's ancestor path. Keep
+            // siblings' bodies folded, instead of expanding the entire merged hidden gap.
+            for heading in &path {
+                let next = headings
+                    .iter()
+                    .find(|next| next.position > heading.position)
+                    .map_or(self.document.projection.rows.len(), |next| next.position);
+                rows.extend(heading.position..next);
+                let mut direct_child_level = None;
+                for child in headings
+                    .iter()
+                    .skip_while(|child| child.position <= heading.position)
+                    .take_while(|child| child.level > heading.level)
+                {
+                    if direct_child_level.is_none_or(|level| child.level <= level) {
+                        rows.push(child.position);
+                        direct_child_level = Some(child.level);
+                    }
+                }
+            }
+            if path.is_empty() {
+                rows.insert(index, visual);
+            }
+            rows.sort_unstable();
+            rows.dedup();
+            self.fold_markers = Arc::new(markers);
+        }
+        self.apply_visible_rows(Arc::new(rows));
+        self.search_current = current;
+        if let Some(r) = current {
+            self.scroll_to_source_offset(r.start);
+        }
+    }
+    pub(crate) fn search_finish(&mut self, cancel: bool) {
+        self.search_ranges = Arc::from([]);
+        self.search_current = None;
+        if let Some((rows, markers)) = self.search_origin.take()
+            && cancel
+        {
+            self.fold_markers = markers;
+            self.apply_visible_rows(rows);
+        }
+    }
+}
+
 #[cfg(test)]
 mod text_selection_tests {
     use std::path::PathBuf;
@@ -1257,6 +1365,20 @@ mod text_selection_tests {
             PathBuf::from("selection.md"),
             DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap(),
         )
+    }
+
+    #[test]
+    fn search_reading_reveal_keeps_sibling_bodies_folded_and_cancel_restores() {
+        let source = "# Root\n## Left\nneedle\n## Right\nsibling\n# Other\nother\n";
+        let mut panel = super::ReadingPreviewPanel::new(std::sync::Arc::new(markdown(source)), 80.);
+        panel.apply_visible_rows(std::sync::Arc::new(vec![0, 5]));
+        let start = source.find("needle").unwrap() as u64;
+        let range = crate::document::ByteRange::new(start, start + 6);
+        panel.search_preview(std::sync::Arc::from([range]), Some(range));
+        assert!(panel.visible_rows.contains(&2));
+        assert!(!panel.visible_rows.contains(&4));
+        panel.search_finish(true);
+        assert_eq!(&*panel.visible_rows, &[0, 5]);
     }
 
     #[test]

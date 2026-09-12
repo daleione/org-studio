@@ -32,9 +32,12 @@ mod echo_area;
 pub(crate) mod export_ui;
 mod file_manager;
 mod home;
+mod native_input;
 mod overlays;
 mod render;
 mod save;
+mod search;
+pub use search::FindDocument;
 mod split_layout;
 pub(crate) mod status_line;
 mod workspace;
@@ -258,6 +261,7 @@ impl WorkspaceLoadState {
 }
 
 pub struct WorkspaceWindow {
+    pub(crate) search: search::SearchHost,
     pub(crate) language: crate::i18n::Language,
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) focus_workspace_on_render: bool,

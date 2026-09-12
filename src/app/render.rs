@@ -241,6 +241,7 @@ impl Render for WorkspaceWindow {
                 }
             }));
         }
+        self.search_render_tick(window, cx);
         window.set_window_title(&self.window_title(cx));
         self.schedule_file_manager_presentation(window, cx);
         if self.scroll_benchmark.is_some() && !self.minimap_visible {
@@ -354,7 +355,15 @@ impl Render for WorkspaceWindow {
                     }
                 }),
             )
-            .on_key_down(cx.listener(|this, event, window, cx| this.key_down(event, window, cx)))
+            .on_action(cx.listener(|this, _: &crate::app::FindDocument, _, cx| {
+                this.open_search(false, false, false, cx)
+            }))
+            .capture_key_down(cx.listener(Self::search_capture))
+            .on_key_down(cx.listener(|this, event, window, cx| {
+                if !this.search_is_open() {
+                    this.key_down(event, window, cx);
+                }
+            }))
             .on_action(cx.listener(
                 |this, action: &crate::editor::ActivateReadOnlyLine, window, cx| {
                     this.activate_generated_line(action.line, window, cx);

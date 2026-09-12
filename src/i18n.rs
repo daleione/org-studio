@@ -11,7 +11,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn agenda_translations_have_matching_keys_and_placeholders() {
+    fn agenda_and_search_translations_have_matching_keys_and_placeholders() {
         let english: HashMap<String, String> =
             serde_json::from_str(include_str!("../assets/i18n/en.json")).unwrap();
         let chinese: HashMap<String, String> =
@@ -19,7 +19,7 @@ mod tests {
         let keys = |messages: &HashMap<String, String>| {
             messages
                 .keys()
-                .filter(|key| key.starts_with("agenda."))
+                .filter(|key| key.starts_with("agenda.") || key.starts_with("search."))
                 .cloned()
                 .collect::<std::collections::BTreeSet<_>>()
         };

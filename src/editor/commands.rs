@@ -206,7 +206,7 @@ impl SemanticEditor {
         self.move_vertical(1, true, cx);
     }
 
-    fn move_vertical(&mut self, delta: i64, extend: bool, cx: &mut Context<Self>) {
+    pub(super) fn move_vertical(&mut self, delta: i64, extend: bool, cx: &mut Context<Self>) {
         self.finish_composition(cx);
         let extend = extend || self.emacs_mark_active;
         let snapshot = self.snapshot(cx);

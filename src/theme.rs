@@ -1,5 +1,7 @@
 #[derive(Clone, Copy)]
 pub struct Theme {
+    pub search_current: u32,
+    pub search_match: u32,
     pub background: u32,
     pub background_alt: u32,
     pub foreground: u32,
@@ -41,6 +43,8 @@ pub struct Theme {
 // assets only define the core Org faces, so the remaining editor faces extend
 // the same red/orange/green/blue vocabulary.
 pub static ORG_STUDIO_LIGHT: Theme = Theme {
+    search_current: 0xe6a00088,
+    search_match: 0xe6cc0044,
     background: 0xffffff,
     background_alt: 0xf7f7f8,
     foreground: 0x373942,

@@ -608,24 +608,33 @@ pub(crate) fn render_floating_status_line(
     window: &Window,
     echo: Option<gpui::AnyElement>,
 ) -> gpui::AnyElement {
-    div()
+    floating_status_container(FLOATING_STATUS_HEIGHT)
         .id(format!("pane-{}-floating-status", snapshot.pane.0))
-        .debug_selector(|| "floating-status-line".to_owned())
-        .block_mouse_except_scroll()
-        .absolute()
-        .left(px(FLOATING_STATUS_INSET))
-        .right(px(FLOATING_STATUS_INSET))
-        .bottom(px(FLOATING_STATUS_BOTTOM))
-        .h(px(FLOATING_STATUS_HEIGHT))
-        .rounded(px(10.0))
-        .shadow_lg()
         .child(render_status_line_content(
             snapshot, layout, entity, window, echo, true,
         ))
         .into_any_element()
 }
 
-fn render_status_line_content(
+/// Both status and search occupy the same floating shell and bottom anchor.
+pub(crate) fn floating_status_container(height: f32) -> gpui::Div {
+    div()
+        .debug_selector(|| "floating-status-line".to_owned())
+        .block_mouse_except_scroll()
+        .absolute()
+        .left(px(FLOATING_STATUS_INSET))
+        .right(px(FLOATING_STATUS_INSET))
+        .bottom(px(FLOATING_STATUS_BOTTOM))
+        .h(px(height))
+        .rounded(px(10.0))
+        .border_1()
+        .border_color(rgb(STATUS_BORDER))
+        .bg(gpui::rgba(0xf7f9fbf5))
+        .overflow_hidden()
+        .shadow_lg()
+}
+
+pub(crate) fn render_status_line_content(
     snapshot: &StatusLineSnapshot,
     layout: StatusLineLayout,
     entity: Entity<WorkspaceWindow>,
@@ -932,7 +941,7 @@ fn render_status_line_content(
     div()
         .id(format!("pane-{pane_id}-status-line"))
         .h(px(if floating {
-            FLOATING_STATUS_HEIGHT
+            FLOATING_STATUS_HEIGHT - 2.0
         } else {
             STATUS_LINE_HEIGHT
         }))
@@ -942,9 +951,6 @@ fn render_status_line_content(
         .items_center()
         .overflow_hidden()
         .when(!floating, |bar| bar.border_t_1().bg(rgb(STATUS_BACKGROUND)))
-        .when(floating, |bar| {
-            bar.border_1().rounded(px(10.0)).bg(gpui::rgba(0xf7f9fbf5))
-        })
         .border_color(rgb(STATUS_BORDER))
         .text_color(rgb(STATUS_FOREGROUND))
         .font_family(".SystemUIFont")

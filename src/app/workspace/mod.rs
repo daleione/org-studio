@@ -198,6 +198,7 @@ impl WorkspaceWindow {
             key_feedback_request: 0,
             which_key_items: Arc::new(Vec::new()),
             echo: crate::app::echo_area::EchoAreaHost::default(),
+            search: crate::app::search::SearchHost::default(),
             content_route: if std::env::var_os("ORG_STUDIO_AGENDA_TEXT").is_some() {
                 ContentRoute::AgendaText
             } else if std::env::var_os("ORG_STUDIO_AGENDA").is_some() {
@@ -694,6 +695,7 @@ impl WorkspaceWindow {
         render: PaneRenderContext<'_>,
     ) -> gpui::Div {
         let activate_entity = entity.clone();
+        let search_entity = entity.clone();
         let content = match self.document_workspace.surface(pane) {
             PaneSurface::Editor => ready.editors.get(pane).as_ref().map_or_else(
                 || {
@@ -720,7 +722,7 @@ impl WorkspaceWindow {
         let style_popover_left =
             crate::app::status_line::reading_style_popover_left(&snapshot, &layout, render.window);
         let status_popover = self.status.popover_for(snapshot.pane);
-        let echo = (pane == self.document_workspace.active_pane)
+        let mut echo = (pane == self.document_workspace.active_pane)
             .then(|| self.displayed_echo_message())
             .flatten()
             .map(|message| {
@@ -731,6 +733,16 @@ impl WorkspaceWindow {
                     self.language,
                 )
             });
+        let returning_status = self.search_is_closing(pane).then(|| {
+            crate::app::status_line::render_status_line_content(
+                &snapshot,
+                layout.clone(),
+                entity.clone(),
+                render.window,
+                echo.take(),
+                true,
+            )
+        });
         div()
             .w(px(render.width))
             .h_full()
@@ -741,25 +753,55 @@ impl WorkspaceWindow {
             .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
                 activate_entity.update(cx, |this, cx| this.activate_pane(pane, cx));
             })
-            .child(div().flex_1().min_h_0().child(content))
-            .child(crate::app::status_line::render_floating_status_line(
-                &snapshot,
-                layout,
-                entity.clone(),
-                render.window,
-                echo,
-            ))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .capture_any_mouse_down(move |_, _, cx| {
+                        search_entity.update(cx, |w, cx| {
+                            w.close_search(false, cx);
+                            w.activate_pane(pane, cx);
+                        });
+                    })
+                    .child(content),
+            )
+            .child(
+                self.search_bar(
+                    pane,
+                    entity.clone(),
+                    render.width,
+                    render.cx,
+                    returning_status,
+                )
+                .map(gpui::IntoElement::into_any_element)
+                .unwrap_or_else(|| {
+                    crate::app::status_line::render_floating_status_line(
+                        &snapshot,
+                        layout,
+                        entity.clone(),
+                        render.window,
+                        echo,
+                    )
+                }),
+            )
             .when_some(status_popover, |view, popover| {
                 view.child(crate::app::status_line::render_status_popover(
                     popover,
                     Some(&snapshot),
                     self.status.settings(),
-                    entity,
+                    entity.clone(),
                     self.language,
                     render.width,
                     style_popover_left + crate::app::status_line::FLOATING_STATUS_INSET,
                 ))
             })
+            .children(self.search_options_menu(
+                pane,
+                entity,
+                render.width,
+                render.window,
+                render.cx,
+            ))
     }
 
     fn render_reading(

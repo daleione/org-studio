@@ -36,6 +36,27 @@ pub(super) fn render_code_row(
             display_row,
             selection,
         )
+        .with_search_ranges(if role.is_boundary() {
+            Vec::new()
+        } else {
+            interaction
+                .document
+                .display_map
+                .as_ref()
+                .map(|map| {
+                    let runs = map.runs(display_row);
+                    if runs.text == text {
+                        super::document::reading_search_ranges(
+                            &interaction.search_ranges,
+                            interaction.search_current,
+                            &runs,
+                        )
+                    } else {
+                        Vec::new()
+                    }
+                })
+                .unwrap_or_default()
+        })
         .with_row_bounds(interaction.row_bounds.clone())
         .into_any_element()
     } else {

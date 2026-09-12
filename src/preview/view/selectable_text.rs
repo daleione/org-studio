@@ -111,6 +111,7 @@ pub(in crate::preview) struct SelectableReadingText {
     row_bounds: Option<ReadingRowBounds>,
     minimum_height: Option<f32>,
     selection: Option<(Range<usize>, bool)>,
+    search_ranges: Vec<(Range<usize>, bool)>,
     clickable_ranges: Vec<Range<usize>>,
     click_listener: Option<ClickListener>,
 }
@@ -134,9 +135,18 @@ impl SelectableReadingText {
             row_bounds: None,
             minimum_height: None,
             selection,
+            search_ranges: Vec::new(),
             clickable_ranges: Vec::new(),
             click_listener: None,
         }
+    }
+
+    pub(in crate::preview) fn with_search_ranges(
+        mut self,
+        ranges: Vec<(Range<usize>, bool)>,
+    ) -> Self {
+        self.search_ranges = ranges;
+        self
     }
 
     pub(in crate::preview) fn with_text_offset(mut self, text_offset: usize) -> Self {
@@ -363,6 +373,9 @@ impl Element for SelectableReadingText {
             window,
             cx,
         );
+        for (range, current) in &self.search_ranges {
+            paint_search(&layout, text_bounds, range.clone(), false, window, *current);
+        }
         // StyledText paints inline-code and other semantic backgrounds as part of its own paint
         // pass. Paint the translucent selection afterwards so those backgrounds cannot hide it.
         if let Some((range, include_newline)) = self.selection.as_ref() {
@@ -470,6 +483,77 @@ fn paint_selection(
         window.paint_quad(fill(
             Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
             rgba(0x3a81c34a),
+        ));
+    }
+}
+
+fn paint_search(
+    layout: &gpui::TextLayout,
+    bounds: Bounds<Pixels>,
+    range: Range<usize>,
+    include_newline: bool,
+    window: &mut Window,
+    current: bool,
+) {
+    if range.start > range.end || range.end > layout.len() {
+        return;
+    }
+    if range.is_empty() {
+        if !include_newline {
+            return;
+        }
+        let position = layout
+            .position_for_index(range.start)
+            .unwrap_or(bounds.origin);
+        let height = layout.line_height().min(bounds.size.height).max(px(1.0));
+        window.paint_quad(fill(
+            Bounds::from_corners(position, point(position.x + px(8.0), position.y + height)),
+            rgba(if current {
+                crate::theme::current_theme().search_current
+            } else {
+                crate::theme::current_theme().search_match
+            }),
+        ));
+        return;
+    }
+    let Some(start) = layout.position_for_index(range.start) else {
+        return;
+    };
+    let Some(end) = layout.position_for_index(range.end) else {
+        return;
+    };
+    let line_height = f32::from(layout.line_height()).max(1.0);
+    let first_line = ((f32::from(start.y - bounds.top())) / line_height)
+        .round()
+        .max(0.0) as usize;
+    let last_line = ((f32::from(end.y - bounds.top())) / line_height)
+        .round()
+        .max(0.0) as usize;
+    for line in first_line..=last_line {
+        let left = if line == first_line {
+            start.x
+        } else {
+            bounds.left()
+        };
+        let mut right = if line == last_line {
+            end.x
+        } else {
+            bounds.right()
+        };
+        if include_newline && line == last_line {
+            right = (right + px(8.0)).min(bounds.right() + px(8.0));
+        }
+        if right <= left {
+            continue;
+        }
+        let top = bounds.top() + px(line as f32 * line_height);
+        window.paint_quad(fill(
+            Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
+            rgba(if current {
+                crate::theme::current_theme().search_current
+            } else {
+                crate::theme::current_theme().search_match
+            }),
         ));
     }
 }

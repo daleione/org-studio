@@ -77,7 +77,8 @@ pub(super) fn resized_sidebar_width(
 
 pub(crate) struct AgendaHost {
     pub(super) language: crate::i18n::Language,
-    pub(crate) search_input: Option<gpui::Entity<super::search::AgendaSearch>>,
+    pub(crate) search_input: Option<gpui::Entity<crate::app::native_input::NativeInput>>,
+    pub(super) search_input_subscription: Option<gpui::Subscription>,
     pub(crate) text_editor: Option<gpui::Entity<crate::editor::SemanticEditor>>,
     pub(crate) text_view: crate::editor::GeneratedTextView<crate::agenda::AgendaPlacementRef>,
     pub(super) text_projection_version: Option<u64>,
@@ -121,6 +122,7 @@ impl AgendaHost {
         let mut host = Self {
             language: crate::i18n::Language::system(),
             search_input: None,
+            search_input_subscription: None,
             text_editor: None,
             text_view: Default::default(),
             text_projection_version: None,

@@ -95,6 +95,18 @@ impl WorkspaceWindow {
             panel.update(cx, |panel, _| panel.reset_cycle_continuation());
         }
         match implementation {
+            CommandImplementation::Builtin(BuiltinCommand::FindDocument) => {
+                self.open_search(false, false, false, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::IsearchForward) => {
+                self.open_search(true, false, false, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::IsearchBackward) => {
+                self.open_search(true, true, false, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::QueryReplace) => {
+                self.open_search(false, false, true, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => {
                 self.choose_file(window, cx)
             }
@@ -415,6 +427,7 @@ impl WorkspaceWindow {
             }
             return;
         }
+        self.close_search(false, cx);
         let previous = self.document_workspace.active_pane;
         if matches!(
             self.document_workspace.surface(previous),
@@ -440,6 +453,7 @@ impl WorkspaceWindow {
         surface: crate::app::PaneSurface,
         cx: &mut Context<Self>,
     ) {
+        self.close_search(false, cx);
         let pane = self.document_workspace.active_pane;
         let previous_surface = self.document_workspace.surface(pane);
         if matches!(surface, crate::app::PaneSurface::Reading)

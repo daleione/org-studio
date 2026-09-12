@@ -321,6 +321,8 @@ fn app_menus() -> Vec<Menu> {
             MenuItem::action("Paste", Paste),
             MenuItem::separator(),
             MenuItem::action("Select All", SelectAll),
+            MenuItem::separator(),
+            MenuItem::action("Find…", org_studio::app::FindDocument),
         ]),
         Menu::new("View").items([
             MenuItem::action("Editor", ShowEditor),

@@ -52,6 +52,10 @@ impl CommandKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinCommand {
+    FindDocument,
+    IsearchForward,
+    IsearchBackward,
+    QueryReplace,
     OpenDocument,
     ShowHome,
     OpenAgenda,

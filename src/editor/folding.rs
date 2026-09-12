@@ -187,6 +187,15 @@ impl EditorFoldState {
         path: &Path,
         snapshot: &DocumentSnapshot,
     ) -> EditorFoldProjection {
+        self.projection_revealing(path, snapshot, None)
+    }
+
+    pub(super) fn projection_revealing(
+        &self,
+        path: &Path,
+        snapshot: &DocumentSnapshot,
+        reveal: Option<std::ops::Range<u64>>,
+    ) -> EditorFoldProjection {
         if self.global == GlobalVisibility::All
             && self.headings.is_empty()
             && self.blocks.is_empty()
@@ -265,6 +274,10 @@ impl EditorFoldState {
                     markers.insert(region.start_line);
                 }
             }
+        }
+        if let Some(reveal) = reveal {
+            // Remove containing folds before merging, preserving unrelated nested folds.
+            hidden.retain(|range| range.end <= reveal.start || range.start >= reveal.end);
         }
         hidden.sort_by_key(|range| range.start);
         let hidden_ranges = merge(hidden);
@@ -537,6 +550,32 @@ fn merge(ranges: Vec<std::ops::Range<u64>>) -> Vec<std::ops::Range<u64>> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn search_reveal_preserves_nested_sibling_folds() {
+        let snapshot = crate::document::DocumentSnapshot::from_utf8(
+            b"* Root\n** Left\nneedle\n** Right\nsibling\n".to_vec(),
+        )
+        .unwrap();
+        let path = std::path::Path::new("search.org");
+        let mut folds = super::EditorFoldState::default();
+        folds.toggle_heading(path, &snapshot, 3);
+        folds.toggle_heading(path, &snapshot, 0);
+        let original = folds.projection(path, &snapshot);
+        let revealed = folds.projection_revealing(path, &snapshot, Some(2..3));
+        assert!(
+            !revealed
+                .hidden_ranges
+                .iter()
+                .any(|range| range.contains(&2))
+        );
+        assert!(
+            revealed
+                .hidden_ranges
+                .iter()
+                .any(|range| range.contains(&4))
+        );
+        assert_eq!(folds.projection(path, &snapshot), original);
+    }
     use super::*;
     use crate::document::{ByteRange, DocumentBuffer, EditTransaction, TextEdit};
 

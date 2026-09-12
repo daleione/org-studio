@@ -74,7 +74,10 @@ pub(super) fn cycle_markdown_subtree_visibility(
     )
 }
 
-fn org_heading_rows(rows: &VisualRowTree, blocks: &BlockArena) -> Vec<OutlineHeading<BlockId>> {
+pub(super) fn org_heading_rows(
+    rows: &VisualRowTree,
+    blocks: &BlockArena,
+) -> Vec<OutlineHeading<BlockId>> {
     rows.iter()
         .enumerate()
         .filter_map(|(index, row)| {
@@ -91,7 +94,7 @@ fn org_heading_rows(rows: &VisualRowTree, blocks: &BlockArena) -> Vec<OutlineHea
         .collect()
 }
 
-fn markdown_heading_rows(
+pub(super) fn markdown_heading_rows(
     rows: &VisualRowTree,
     blocks: &[MarkdownBlock],
 ) -> Vec<OutlineHeading<BlockId>> {

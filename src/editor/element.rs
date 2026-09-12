@@ -832,6 +832,36 @@ impl Element for EditorElement {
                 inline_image_preview: inline_image.is_some(),
             };
 
+            let first = editor
+                .search_ranges
+                .partition_point(|r| r.end <= full_range.start);
+            for range in editor.search_ranges[first..]
+                .iter()
+                .take_while(|r| r.start < full_range.end)
+            {
+                let start = range
+                    .start
+                    .0
+                    .max(content_range.start.0)
+                    .saturating_sub(content_range.start.0)
+                    .min(content_range.len()) as usize;
+                let end = range
+                    .end
+                    .0
+                    .min(content_range.end.0)
+                    .saturating_sub(content_range.start.0)
+                    .min(content_range.len()) as usize;
+                if start < end && inline_image.is_none() {
+                    push_search_quads(
+                        &mut selection_quads,
+                        &hit,
+                        hit.display.source_to_display(start),
+                        hit.display.source_to_display(end),
+                        px(row_wrap_width),
+                        Some(*range) == editor.search_current,
+                    );
+                }
+            }
             let selected = selection.range();
             let selected_start = selected.start.0.max(full_range.start.0);
             let selected_end = selected.end.0.min(full_range.end.0);
@@ -1469,6 +1499,7 @@ impl Element for EditorElement {
                 editor.pending_reveal_caret = !has_exact_row;
                 editor.reveal_caret(&snapshot);
             }
+            let search_revealed = editor.reveal_pending_search(&snapshot);
             let final_anchor_line = editor.animated_line_at_y(editor.scroll_y);
             editor.layout_anchor = snapshot
                 .line_content_range(LineIndex(final_anchor_line))
@@ -1479,7 +1510,12 @@ impl Element for EditorElement {
                         ByteRange::new(range.start.0, range.start.0),
                     )
                 });
-            if viewport_changed || layout_changed || scroll_settled || pending_reveal {
+            if viewport_changed
+                || layout_changed
+                || scroll_settled
+                || pending_reveal
+                || search_revealed
+            {
                 cx.notify();
             }
             #[cfg(feature = "benchmarks")]
@@ -2905,6 +2941,56 @@ fn push_selection_quads(
                     ),
                 ),
                 rgba(0x3f78f24a),
+            ));
+        }
+    }
+}
+
+fn push_search_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    start: usize,
+    end: usize,
+    wrap_width: Pixels,
+    current: bool,
+) {
+    let line_height = hit.line_height;
+    let start_position = hit.position_for_display_index(start).unwrap_or_default();
+    let end_position = hit
+        .position_for_display_index(end)
+        .unwrap_or(start_position);
+    let line_height_px = f32::from(line_height).max(1.0);
+    let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
+    let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;
+    for row in first_row..=last_row {
+        let left = if row == first_row {
+            start_position.x
+        } else {
+            Pixels::ZERO
+        };
+        let right = if row == last_row {
+            end_position.x
+        } else {
+            wrap_width
+        };
+
+        if right > left {
+            quads.push(fill(
+                Bounds::from_corners(
+                    point(
+                        hit.text_origin_x + left,
+                        hit.origin_y + px(row as f32 * line_height_px),
+                    ),
+                    point(
+                        hit.text_origin_x + right,
+                        hit.origin_y + px((row + 1) as f32 * line_height_px),
+                    ),
+                ),
+                rgba(if current {
+                    crate::theme::current_theme().search_current
+                } else {
+                    crate::theme::current_theme().search_match
+                }),
             ));
         }
     }
