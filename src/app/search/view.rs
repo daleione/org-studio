@@ -106,6 +106,13 @@ impl WorkspaceWindow {
         cx: &gpui::App,
         status_content: Option<gpui::AnyElement>,
     ) -> Option<gpui::Div> {
+        if !self
+            .status
+            .shell
+            .owns(crate::app::status_line::shell::ShellKind::Search, pane)
+        {
+            return None;
+        }
         let presentation = self
             .search
             .presentation
@@ -120,7 +127,7 @@ impl WorkspaceWindow {
         let interactive = session.is_some();
         let pane_width = width;
         let width = (width - 2. * FLOATING_STATUS_INSET).max(1.);
-        let shape = presentation.motion.sample(width, Instant::now()).0;
+        let shape = self.status.shell.motion.sample(width, Instant::now()).0;
         let rendered_width = shape.width;
         let height = shape.height;
         let inset = (pane_width - rendered_width) / 2.;
@@ -452,14 +459,20 @@ impl WorkspaceWindow {
         window: &Window,
         cx: &gpui::App,
     ) -> Option<gpui::Div> {
+        if !self
+            .status
+            .shell
+            .owns(crate::app::status_line::shell::ShellKind::Search, pane)
+        {
+            return None;
+        }
         let s = self
             .search
             .session
             .as_ref()
             .filter(|s| s.pane == pane && s.more_open)?;
         let bar_width = (width - 2. * FLOATING_STATUS_INSET).max(1.);
-        let p = self.search.presentation.as_ref()?;
-        let shape = p.motion.sample(bar_width, Instant::now()).0;
+        let shape = self.status.shell.motion.sample(bar_width, Instant::now()).0;
         let inset = (width - shape.width) / 2.;
         let height = shape.height;
         let has_selection = s.surface == PaneSurface::Editor

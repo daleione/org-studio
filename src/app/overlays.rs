@@ -37,22 +37,3 @@ pub(super) fn dired_help_window(
     }
     .render(available_width)
 }
-
-pub(super) fn which_key_window(
-    items: Arc<Vec<(Arc<str>, Arc<str>)>>,
-    available_width: f32,
-) -> gpui::Div {
-    use command_window::{CommandGroup, CommandWindow};
-
-    let columns = items.len().clamp(1, 6);
-    CommandWindow {
-        title: Arc::from("Available Commands"),
-        close: None,
-        groups: vec![CommandGroup {
-            title: Arc::from("COMMANDS"),
-            max_columns: columns,
-            items: items.as_ref().clone(),
-        }],
-    }
-    .render(available_width)
-}

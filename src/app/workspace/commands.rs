@@ -1,5 +1,4 @@
 use gpui::{ListOffset, px};
-use std::{sync::Arc, time::Duration};
 
 use gpui::{ClipboardItem, Context, KeyDownEvent, Window};
 
@@ -38,7 +37,9 @@ impl WorkspaceWindow {
         // Only ordinary editing uses this interceptor to bypass the Escape/Meta prefix.
         if window.root::<Self>().flatten().is_some_and(|workspace| {
             let workspace = workspace.read(cx);
-            workspace.search_is_open() || workspace.buffers.panel.is_some()
+            workspace.search_is_open()
+                || workspace.buffers.panel.is_some()
+                || workspace.keyboard.pending_keys().is_some()
         }) {
             return;
         }
@@ -52,6 +53,9 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.keyboard.pending_keys().is_some() {
+            self.cancel_prefix_input(window, cx);
+        }
         let prepared = CommandDispatcher::prepare(
             &self.commands,
             name,
@@ -374,6 +378,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn show_split(&mut self, cx: &mut Context<Self>) {
+        self.end_prefix(cx);
         if let Some((source, target)) = self.document_workspace.enter_split() {
             let inherited = *self.content_font_sizes.get(source);
             *self.content_font_sizes.get_mut(target) = inherited;
@@ -495,6 +500,7 @@ impl WorkspaceWindow {
         surface: crate::app::PaneSurface,
         cx: &mut Context<Self>,
     ) {
+        self.end_prefix(cx);
         self.close_search(false, cx);
         let pane = self.document_workspace.active_pane;
         let previous_surface = self.document_workspace.surface(pane);
@@ -637,7 +643,9 @@ impl WorkspaceWindow {
             }
             return;
         }
-        if matches!(self.content_route, ContentRoute::Agenda) {
+        if matches!(self.content_route, ContentRoute::Agenda)
+            && self.keyboard.pending_keys().is_none()
+        {
             let key = event.keystroke.key.as_str();
             if event.keystroke.modifiers.platform
                 && (key.eq_ignore_ascii_case("k") || key.eq_ignore_ascii_case("f"))
@@ -829,16 +837,6 @@ impl WorkspaceWindow {
             return;
         }
         let modifiers = event.keystroke.modifiers;
-        let editor_surface = matches!(
-            self.document_workspace.active_surface(),
-            crate::app::PaneSurface::Editor
-        );
-        let editor_escape_prefix = editor_surface
-            && event.keystroke.key == "escape"
-            && !modifiers.control
-            && !modifiers.alt
-            && !modifiers.shift
-            && !modifiers.platform;
         let stroke = KeyStroke::new(
             event.keystroke.key.as_str(),
             modifiers.control,
@@ -846,6 +844,25 @@ impl WorkspaceWindow {
             modifiers.shift,
             modifiers.platform,
         );
+        self.route_stroke(stroke, window, cx);
+    }
+
+    pub(crate) fn route_stroke(
+        &mut self,
+        stroke: KeyStroke,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let editor_surface = matches!(
+            self.document_workspace.active_surface(),
+            crate::app::PaneSurface::Editor
+        );
+        let editor_escape_prefix = editor_surface
+            && stroke.key() == "escape"
+            && !stroke.control()
+            && !stroke.meta()
+            && !stroke.shift()
+            && !stroke.command();
         let previous_status = self.keyboard.status().map(str::to_owned);
         let outcome = self.keyboard.route(stroke, self.key_context);
         let has_feedback = self.keyboard.status().is_some();
@@ -939,7 +956,11 @@ impl WorkspaceWindow {
     /// Command variant of [`Self::restore_key_focus`]: additionally refuses to
     /// restore when the command replaced the document session or switched the
     /// route, since the captured focus then belongs to stale content.
-    fn restore_key_focus_after_command(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn restore_key_focus_after_command(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let unchanged = self.key_focus_restore.as_ref().is_some_and(|restore| {
             self.content_route == restore.route
                 && self.document_session().map(|session| session.entity_id()) == restore.session
@@ -1037,53 +1058,10 @@ impl WorkspaceWindow {
         self.keyboard.replace_configuration(configuration);
     }
 
-    pub(crate) fn schedule_which_key(&mut self, cx: &mut Context<Self>) {
-        self.which_key_request = self.which_key_request.wrapping_add(1);
-        let request = self.which_key_request;
-        self.file_manager.set_help_visible(false);
-        self.which_key_items = Arc::new(Vec::new());
-        let delay = cx.background_executor().timer(Duration::from_millis(400));
-        self.which_key_task = Some(cx.spawn(async move |this, cx| {
-            delay.await;
-            let _ = this.update(cx, |this, cx| {
-                if this.which_key_request != request || this.keyboard.status().is_none() {
-                    return;
-                }
-                let items = this
-                    .keyboard
-                    .which_key_candidates()
-                    .into_iter()
-                    .take(24)
-                    .map(|candidate| {
-                        let title: Arc<str> = if candidate.disabled {
-                            Arc::from("Disabled")
-                        } else if let Some(command) = candidate.command {
-                            this.commands
-                                .descriptor(command)
-                                .map(|descriptor| descriptor.title.clone())
-                                .unwrap_or_else(|| Arc::from("Unknown command"))
-                        } else if candidate.is_prefix {
-                            Arc::from("Prefix")
-                        } else {
-                            Arc::from("Pass through")
-                        };
-                        (candidate.key, title)
-                    })
-                    .collect();
-                this.which_key_items = Arc::new(items);
-                cx.notify();
-            });
-        }));
-    }
-
-    pub(crate) fn cancel_which_key(&mut self, cx: &mut Context<Self>) {
-        self.which_key_request = self.which_key_request.wrapping_add(1);
-        self.which_key_task = None;
-        if !self.which_key_items.is_empty() || self.file_manager.help_visible() {
-            self.which_key_items = Arc::new(Vec::new());
-            self.file_manager.set_help_visible(false);
-            cx.notify();
-        }
+    pub(crate) fn cancel_prefix_input(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.end_prefix(cx);
+        self.restore_key_focus(window, cx);
+        cx.notify();
     }
 
     pub(crate) fn schedule_key_feedback_clear(&mut self, cx: &mut Context<Self>) {

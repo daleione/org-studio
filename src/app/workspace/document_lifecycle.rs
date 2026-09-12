@@ -27,6 +27,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn show_home_now(&mut self, cx: &mut Context<Self>) {
+        self.end_prefix(cx);
         self.close_search(false, cx);
         if let Some(document) = self.state.take_ready() {
             self.park_document(document);
@@ -51,6 +52,7 @@ impl WorkspaceWindow {
         self.file_manager.reset_for_document();
         self.stop_dired_directory_watch();
         self.install_document_keymap();
+        self.focus_workspace_on_render = true;
         cx.notify();
     }
 

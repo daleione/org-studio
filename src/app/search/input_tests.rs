@@ -8,6 +8,48 @@ use gpui::{Modifiers, prelude::*, px};
 use std::sync::Arc;
 
 #[gpui::test]
+fn cancelling_a_prefix_restores_search_input_and_query(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| w.create_buffer("notes.org".into(), None, cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-f");
+    cx.simulate_keystrokes("a b");
+    cx.run_until_parked();
+    let search = cx.debug_bounds("floating-status-line").unwrap();
+    cx.simulate_keystrokes("ctrl-x");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(401));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("prefix-hint-items").is_some());
+    cx.simulate_keystrokes("ctrl-g");
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("floating-status-line").unwrap(), search);
+    cx.simulate_keystrokes("c");
+    w.update(cx, |w, cx| {
+        assert!(!w.prefix_hint_visible());
+        assert_eq!(
+            w.search.session.as_ref().unwrap().input.read(cx).text,
+            "abc"
+        );
+        assert!(!w.document_session().unwrap().read(cx).is_dirty());
+    });
+    cx.simulate_keystrokes("escape ctrl-x");
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(401));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("prefix-hint-items").is_some());
+    cx.simulate_keystrokes("cmd-f");
+    cx.run_until_parked();
+    w.update(cx, |w, _| {
+        assert!(w.search_is_open());
+        assert!(!w.prefix_hint_visible());
+        assert!(w.keyboard.pending_keys().is_none());
+    });
+}
+
+#[gpui::test]
 fn escape_closes_transient_inputs_before_leaving_fullscreen(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     cx.update(|cx| {
@@ -412,15 +454,22 @@ fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppCon
         w.close_search(false, cx);
         let p = w.search.presentation.as_mut().unwrap();
         let available = p.available_width;
-        let current = p.motion.sample(available, std::time::Instant::now()).0;
+        let current = w
+            .status
+            .shell
+            .motion
+            .sample(available, std::time::Instant::now())
+            .0;
         let midway = super::geometry::ShellShape {
             width: (480. + available) / 2.,
             content_opacity: 0.5,
             ..current
         };
-        p.motion
+        w.status
+            .shell
+            .motion
             .update(midway, available, std::time::Instant::now(), false);
-        p.motion.update(
+        w.status.shell.motion.update(
             super::geometry::ShellShape::status(available),
             available,
             std::time::Instant::now() + std::time::Duration::from_secs(60),
@@ -436,7 +485,7 @@ fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppCon
     workspace.update(cx, |w, cx| {
         assert!(!w.search_is_open());
         let p = w.search.presentation.as_mut().unwrap();
-        p.motion.update(
+        w.status.shell.motion.update(
             super::geometry::ShellShape::status(p.available_width),
             p.available_width,
             std::time::Instant::now(),

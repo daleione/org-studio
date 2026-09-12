@@ -779,6 +779,14 @@ pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
             behavior: BindingBehavior::Command(OPEN_DOCUMENT_COMMAND),
         },
         BindingSpec {
+            keys: "C-x C-s",
+            behavior: BindingBehavior::Command(SAVE_DOCUMENT_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-x C-w",
+            behavior: BindingBehavior::Command(SAVE_DOCUMENT_AS_COMMAND),
+        },
+        BindingSpec {
             keys: "C-x C-b",
             behavior: BindingBehavior::Command("switch-to-buffer"),
         },

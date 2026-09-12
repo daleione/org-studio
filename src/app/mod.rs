@@ -38,6 +38,7 @@ mod menus;
 mod native_input;
 pub use menus::application_menus;
 mod overlays;
+mod prefix_hint;
 mod render;
 mod save;
 mod search;
@@ -308,11 +309,9 @@ pub struct WorkspaceWindow {
     pub(crate) opened_at: Option<Instant>,
     pub(crate) first_frame_scheduled: Option<u64>,
     pub(crate) scroll_benchmark: Option<ScrollBenchmark>,
-    pub(crate) which_key_task: Option<Task<()>>,
-    pub(crate) which_key_request: u64,
+    pub(crate) prefix_hint: prefix_hint::PrefixHint,
     pub(crate) key_feedback_task: Option<Task<()>>,
     pub(crate) key_feedback_request: u64,
-    pub(crate) which_key_items: Arc<Vec<(Arc<str>, Arc<str>)>>,
     pub(crate) content_route: ContentRoute,
     /// Route restored when the independently mounted generated result is closed.  The document
     /// itself remains in `state`, so this record never owns or resurrects a replaced session.

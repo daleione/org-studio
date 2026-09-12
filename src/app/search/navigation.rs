@@ -127,10 +127,6 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn search_render_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.buffers.panel.is_some() {
-            return;
-        }
-        self.search_presentation_tick(window, cx);
         let Some(s) = &self.search.session else {
             return;
         };
@@ -178,7 +174,12 @@ impl WorkspaceWindow {
         }
         let s = self.search.session.as_mut().unwrap();
         let animating = self.search.presentation.as_ref().is_some_and(|p| {
-            let shape = p.motion.sample(p.available_width, Instant::now()).0;
+            let shape = self
+                .status
+                .shell
+                .motion
+                .sample(p.available_width, Instant::now())
+                .0;
             let target = if s.mode.replacing() {
                 super::geometry::BarLayout::new(p.available_width, self.language).replacement_height
             } else {
@@ -210,11 +211,19 @@ impl WorkspaceWindow {
                 cx.notify();
             }
         });
-        if std::mem::take(&mut s.focus_pending) {
+        let owns_shell = self
+            .status
+            .shell
+            .owns(crate::app::status_line::shell::ShellKind::Search, s.pane);
+        if owns_shell && std::mem::take(&mut s.focus_pending) {
             let focus = s.input.read(cx).focus.clone();
             window.focus(&focus, cx);
         }
-        if !animating && std::mem::take(&mut s.replacement_focus_pending) && s.mode.replacing() {
+        if owns_shell
+            && !animating
+            && std::mem::take(&mut s.replacement_focus_pending)
+            && s.mode.replacing()
+        {
             let focus = s.replacement_input.read(cx).focus.clone();
             window.focus(&focus, cx);
         }
@@ -222,7 +231,12 @@ impl WorkspaceWindow {
         let clearance = self.search.presentation.as_ref().map_or(
             crate::app::status_line::FLOATING_STATUS_CLEARANCE,
             |p| {
-                p.motion.sample(p.available_width, Instant::now()).0.height
+                self.status
+                    .shell
+                    .motion
+                    .sample(p.available_width, Instant::now())
+                    .0
+                    .height
                     + crate::app::status_line::FLOATING_STATUS_BOTTOM
                     + 12.
             },

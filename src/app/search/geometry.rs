@@ -52,7 +52,9 @@ pub(super) fn content_width(
         .clamp(480., 960.)
         .min(available.max(1.))
 }
-pub(super) use crate::app::status_line::shell::{ShellMotion, ShellShape};
+#[cfg(test)]
+use crate::app::status_line::shell::ShellMotion;
+pub(super) use crate::app::status_line::shell::ShellShape;
 
 #[cfg(test)]
 mod tests {

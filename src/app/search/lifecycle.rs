@@ -10,10 +10,6 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 impl WorkspaceWindow {
     pub(crate) fn focus_search_input(&mut self, cx: &mut Context<Self>) {
-        if let Some(p) = &mut self.search.presentation {
-            p.motion = std::mem::take(&mut self.buffers.motion);
-            self.buffers.returning = false;
-        }
         if let Some(session) = &mut self.search.session {
             session.focus_pending = true;
             cx.notify();
@@ -38,6 +34,7 @@ impl WorkspaceWindow {
         if self.content_route != ContentRoute::Document {
             return;
         }
+        self.end_prefix(cx);
         if self.search.session.is_some() {
             self.search_key(
                 "f",
@@ -351,12 +348,6 @@ impl WorkspaceWindow {
             if !cx.reduce_motion() && presentation.available_width > 0. {
                 presentation.phase =
                     PresentationPhase::Returning(s.bar_snapshot(self.language, cx));
-                presentation.motion.update(
-                    super::geometry::ShellShape::status(presentation.available_width),
-                    presentation.available_width,
-                    std::time::Instant::now(),
-                    true,
-                );
             } else {
                 self.search.presentation = None;
             }

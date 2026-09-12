@@ -61,6 +61,7 @@ impl WorkspaceWindow {
         if self.buffers.review().is_some() {
             return;
         }
+        self.end_prefix(cx);
         self.close_search(false, cx);
         self.dismiss_buffer_panel(cx);
         let entries = self

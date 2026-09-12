@@ -44,11 +44,9 @@ impl WorkspaceWindow {
         if self.buffer_busy() {
             return;
         }
+        self.end_prefix(cx);
         self.dismiss_buffer_panel(cx);
         let return_search = self.search_is_open();
-        if return_search && let Some(p) = &mut self.search.presentation {
-            self.buffers.motion = std::mem::take(&mut p.motion);
-        }
         self.status.dismiss_popover();
         self.buffers.cycle.clear();
         self.buffers.pane = self.document_workspace.active_pane;
@@ -317,30 +315,22 @@ impl WorkspaceWindow {
                 focus.focus(window, cx);
             }
         }
+    }
+
+    pub(crate) fn buffer_shell_request(
+        &mut self,
+        window: &Window,
+    ) -> Option<crate::app::status_line::shell::ShellRequest> {
         if self.buffers.panel.is_none() && !self.buffers.returning {
-            return;
+            return None;
         }
         let viewport = f32::from(window.viewport_size().width);
-        let document_width = if self.file_manager.sidebar_visible() {
-            viewport
-                - self.rendered_sidebar_width(viewport)
-                - crate::app::file_manager::sidebar::RESIZE_HANDLE_PX
-        } else {
-            viewport
-        };
         let has_document = self.content_route == crate::app::ContentRoute::Document
             && self.state.ready().is_some();
         let pane_width = if !has_document {
             viewport
-        } else if self.document_workspace.is_split() {
-            let left = self.rendered_left_pane_width(document_width);
-            if self.buffers.pane == crate::app::PaneSide::Left {
-                left
-            } else {
-                document_width - left - crate::app::split_layout::RESIZE_HANDLE_PX
-            }
         } else {
-            document_width
+            self.document_pane_width(viewport, self.buffers.pane)
         };
         let available = (pane_width - 2. * crate::app::status_line::FLOATING_STATUS_INSET).max(1.);
         self.buffers.available = available;
@@ -360,15 +350,13 @@ impl WorkspaceWindow {
         } else {
             crate::app::status_line::shell::ShellShape::status(available)
         };
-        let now = std::time::Instant::now();
-        self.buffers
-            .motion
-            .update(target, available, now, !cx.reduce_motion());
-        if self.buffers.motion.sample(available, now).1 {
-            cx.on_next_frame(window, |_, _, cx| cx.notify());
-        } else if self.buffers.returning {
-            self.buffers.returning = false;
-        }
+        Some(crate::app::status_line::shell::ShellRequest {
+            kind: crate::app::status_line::shell::ShellKind::Buffers,
+            pane: self.buffers.pane,
+            target,
+            available,
+            returning: self.buffers.returning,
+        })
     }
 
     fn refresh_file_candidates(&mut self, cx: &mut Context<Self>) {

@@ -20,7 +20,7 @@ use crate::{
 };
 
 use super::export_ui::render_export_panel;
-use super::overlays::{dired_help_window, which_key_window};
+use super::overlays::dired_help_window;
 
 fn sidebar_icon(color: u32) -> gpui::Svg {
     svg()
@@ -226,6 +226,9 @@ impl Render for WorkspaceWindow {
                 handle
             })
             .clone();
+        if self.keyboard.pending_keys().is_none() {
+            self.restore_key_focus_after_command(window, cx);
+        }
         if self.focus_workspace_on_render {
             self.focus_workspace_on_render = false;
             window.focus(&focus_handle, cx);
@@ -240,8 +243,9 @@ impl Render for WorkspaceWindow {
                 }
             }));
         }
-        self.search_render_tick(window, cx);
         self.buffer_tick(window, cx);
+        self.status_shell_tick(window, cx);
+        self.search_render_tick(window, cx);
         window.set_window_title(&self.window_title(cx));
         self.schedule_file_manager_presentation(window, cx);
         if self.scroll_benchmark.is_some() && !self.minimap_visible {
@@ -296,14 +300,14 @@ impl Render for WorkspaceWindow {
         }
         let entity = cx.entity();
         let echo_message = self.displayed_echo_message();
-        let which_key_items = self.which_key_items.clone();
         let dired_help_visible = self.file_manager.help_visible();
         let command_window_width = f32::from(window.viewport_size().width);
         let resizing_sidebar = self.file_manager.is_resizing_sidebar();
         let resizing_split = self.split_resize.is_some();
         let export_panel = self.export.panel().cloned();
         let export_status = self.export.status().cloned();
-        let show_echo_area = !matches!(self.content_route, crate::app::ContentRoute::Agenda)
+        let show_echo_area = !self.prefix_hint_visible()
+            && !matches!(self.content_route, crate::app::ContentRoute::Agenda)
             && !(self.content_route == crate::app::ContentRoute::Document
                 && self.state.ready().is_some());
         // The agenda route draws its own toolbar into the titlebar row, so it
@@ -370,6 +374,15 @@ impl Render for WorkspaceWindow {
                 this.open_search(false, false, false, cx)
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                let m = event.keystroke.modifiers;
+                if this.keyboard.pending_keys().is_some()
+                    && ((event.keystroke.key == "escape" && m == gpui::Modifiers::default())
+                        || (event.keystroke.key == "g" && m.control && !m.alt && !m.platform))
+                {
+                    this.cancel_prefix_input(window, cx);
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.search_is_open()
                     && !this.search_input_composing(cx)
                     && this.buffers.panel.is_none()
@@ -532,15 +545,26 @@ impl Render for WorkspaceWindow {
             .when(
                 (self.content_route != crate::app::ContentRoute::Document
                     || self.state.ready().is_none())
-                    && (self.buffers.panel.is_some() || self.buffers.returning),
+                    && (self.prefix_hint_visible()
+                        || self.buffers.panel.is_some()
+                        || self.buffers.returning),
                 |view| {
-                    view.children(self.buffer_panel(
-                        self.buffers.pane,
-                        entity.clone(),
-                        command_window_width,
-                        None,
-                        cx,
-                    ))
+                    if self.prefix_hint_visible() {
+                        view.children(self.prefix_hint_panel(
+                            self.document_workspace.active_pane,
+                            command_window_width,
+                            None,
+                            entity.clone(),
+                        ))
+                    } else {
+                        view.children(self.buffer_panel(
+                            self.buffers.pane,
+                            entity.clone(),
+                            command_window_width,
+                            None,
+                            cx,
+                        ))
+                    }
                 },
             )
             .when(resizing_sidebar, |view| {
@@ -593,12 +617,11 @@ impl Render for WorkspaceWindow {
                         }),
                 )
             })
-            .when(!which_key_items.is_empty(), |view| {
-                view.child(if dired_help_visible {
-                    dired_help_window(which_key_items.clone(), command_window_width)
-                } else {
-                    which_key_window(which_key_items.clone(), command_window_width)
-                })
+            .when(dired_help_visible, |view| {
+                view.child(dired_help_window(
+                    std::sync::Arc::new(crate::preview::dired_command_items(&self.commands)),
+                    command_window_width,
+                ))
             })
             .when_some(export_panel, |view, panel| {
                 view.child(render_export_panel(

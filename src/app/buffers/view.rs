@@ -30,12 +30,17 @@ impl WorkspaceWindow {
         status: Option<AnyElement>,
         cx: &App,
     ) -> Option<AnyElement> {
-        if pane != self.buffers.pane || self.buffers.panel.is_none() && !self.buffers.returning {
+        if !self
+            .status
+            .shell
+            .owns(crate::app::status_line::shell::ShellKind::Buffers, pane)
+        {
             return None;
         }
         let available = (width - 2. * crate::app::status_line::FLOATING_STATUS_INSET).max(1.);
         let (shape, _) = self
-            .buffers
+            .status
+            .shell
             .motion
             .sample(available, std::time::Instant::now());
         let body = match &self.buffers.panel {

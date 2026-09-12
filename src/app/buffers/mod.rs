@@ -43,7 +43,6 @@ pub(crate) struct ParkedDocument {
 pub(crate) struct BufferHost {
     parked: Vec<ParkedDocument>,
     pub(crate) panel: Option<Panel>,
-    pub(crate) motion: crate::app::status_line::shell::ShellMotion,
     pub(crate) returning: bool,
     pub(crate) focus_pending: bool,
     pub(crate) pane: crate::app::PaneSide,

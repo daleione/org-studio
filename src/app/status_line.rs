@@ -30,6 +30,7 @@ pub(crate) use model::{CachedStatusLayout, StatusLineLayout, StatusLineSnapshot,
 pub(crate) use popover::render_status_popover;
 
 pub(crate) struct StatusLineHost {
+    pub(crate) shell: shell::ShellHost,
     settings: StatusLineSettings,
     popover: Option<StatusPopover>,
     layout_cache: std::cell::RefCell<std::collections::HashMap<PaneId, CachedStatusLayout>>,
@@ -38,6 +39,7 @@ pub(crate) struct StatusLineHost {
 impl StatusLineHost {
     pub(crate) fn new(settings: StatusLineSettings) -> Self {
         Self {
+            shell: Default::default(),
             settings,
             popover: None,
             layout_cache: std::cell::RefCell::new(std::collections::HashMap::new()),

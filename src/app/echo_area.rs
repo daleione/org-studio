@@ -224,15 +224,12 @@ fn render_echo_content(
                     .text_color(rgb(0x8391a6))
                     .hover(|style| style.bg(rgb(0xe9eef5)))
                     .child("×")
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();
                         dismiss_entity.update(cx, |this, cx| {
                             this.dismiss_echo_message();
                             if is_prefix {
-                                this.keyboard.cancel();
-                                this.keyboard.dismiss_status();
-                                this.cancel_key_feedback();
-                                this.cancel_which_key(cx);
+                                this.cancel_prefix_input(window, cx);
                             }
                             cx.notify();
                         });

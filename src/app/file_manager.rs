@@ -17,7 +17,6 @@ use crate::{
     },
     motion::{Easing, MotionSpec, Tween},
     navigation::{NavigationCause, SelectionIntent, TransactionId, ViewRevision},
-    preview::dired_command_items,
     theme::current_theme,
 };
 
@@ -445,6 +444,7 @@ impl WorkspaceWindow {
     }
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.end_prefix(cx);
         let now = Instant::now();
         let from = self.sidebar_reveal_at(now).0;
         self.file_manager.sidebar_visible = !self.file_manager.sidebar_visible;
@@ -651,8 +651,7 @@ impl WorkspaceWindow {
         }
     }
     pub(crate) fn show_dired_shortcuts(&mut self, cx: &mut Context<Self>) {
-        self.which_key_request = self.which_key_request.wrapping_add(1);
-        self.which_key_items = Arc::new(dired_command_items(&self.commands));
+        self.end_prefix(cx);
         self.file_manager.help_visible = true;
         cx.notify();
     }

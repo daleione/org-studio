@@ -192,11 +192,9 @@ impl WorkspaceWindow {
                         resize_to_wide: true,
                     }
                 }),
-            which_key_task: None,
-            which_key_request: 0,
+            prefix_hint: Default::default(),
             key_feedback_task: None,
             key_feedback_request: 0,
-            which_key_items: Arc::new(Vec::new()),
             echo: crate::app::echo_area::EchoAreaHost::default(),
             search: crate::app::search::SearchHost::default(),
             buffers: crate::app::buffers::BufferHost::default(),
@@ -689,6 +687,26 @@ impl WorkspaceWindow {
         }
     }
 
+    pub(crate) fn document_pane_width(&self, viewport: f32, pane: PaneSide) -> f32 {
+        let width = if self.file_manager.sidebar_visible() {
+            (viewport
+                - self.rendered_sidebar_width(viewport)
+                - crate::app::file_manager::sidebar::RESIZE_HANDLE_PX)
+                .max(crate::app::file_manager::sidebar::MIN_DOCUMENT_WIDTH_PX)
+        } else {
+            viewport
+        };
+        if self.document_workspace.is_split() {
+            let left = self.rendered_left_pane_width(width);
+            match pane {
+                PaneSide::Left => left,
+                PaneSide::Right => (width - left - split_layout::RESIZE_HANDLE_PX).max(0.),
+            }
+        } else {
+            width
+        }
+    }
+
     fn render_pane_content(
         &self,
         ready: &ReadyDocument,
@@ -738,19 +756,23 @@ impl WorkspaceWindow {
                     self.language,
                 )
             });
-        let buffer_panel =
-            self.buffers.pane == pane && (self.buffers.panel.is_some() || self.buffers.returning);
-        let returning_status = (self.search_is_closing(pane) || buffer_panel).then(|| {
-            crate::app::status_line::render_status_line_content(
-                &snapshot,
-                layout.clone(),
-                entity.clone(),
-                render.window,
-                echo.take(),
-                true,
-                Some(buffer_count),
-            )
-        });
+        let buffer_panel = self
+            .status
+            .shell
+            .owns(crate::app::status_line::shell::ShellKind::Buffers, pane);
+        let prefix_panel = self.prefix_hint_on(pane);
+        let returning_status =
+            (self.search_is_closing(pane) || buffer_panel || prefix_panel).then(|| {
+                crate::app::status_line::render_status_line_content(
+                    &snapshot,
+                    layout.clone(),
+                    entity.clone(),
+                    render.window,
+                    echo.take(),
+                    true,
+                    Some(buffer_count),
+                )
+            });
         div()
             .w(px(render.width))
             .h_full()
@@ -765,8 +787,11 @@ impl WorkspaceWindow {
                 div()
                     .flex_1()
                     .min_h_0()
-                    .capture_any_mouse_down(move |_, _, cx| {
+                    .capture_any_mouse_down(move |_, window, cx| {
                         search_entity.update(cx, |w, cx| {
+                            if w.keyboard.pending_keys().is_some() {
+                                w.cancel_prefix_input(window, cx);
+                            }
                             if matches!(
                                 w.buffers.panel,
                                 Some(crate::app::buffers::Panel::Review(_))
@@ -784,7 +809,10 @@ impl WorkspaceWindow {
                     })
                     .child(content),
             )
-            .child(if buffer_panel {
+            .child(if prefix_panel {
+                self.prefix_hint_panel(pane, render.width, returning_status, entity.clone())
+                    .unwrap()
+            } else if buffer_panel {
                 self.buffer_panel(
                     pane,
                     entity.clone(),

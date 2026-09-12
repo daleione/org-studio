@@ -1,14 +1,14 @@
 use super::{
-    geometry::{BarLayout, ShellMotion, ShellShape},
+    geometry::{BarLayout, ShellShape},
     session::Session,
 };
+use crate::app::status_line::shell::{ShellKind, ShellRequest};
 use crate::{
     app::{PaneSide, PaneSurface},
     document::DocumentId,
     search::Completion,
 };
 use gpui::{Context, Window};
-use std::time::Instant;
 
 /// Plain display data. A returning shell holds no inputs, subscriptions, tasks or results.
 #[derive(Clone)]
@@ -39,7 +39,6 @@ pub(crate) struct Presentation {
     pub surface: PaneSurface,
     pub document: DocumentId,
     pub available_width: f32,
-    pub motion: ShellMotion,
     pub(super) phase: PresentationPhase,
 }
 impl Presentation {
@@ -49,7 +48,6 @@ impl Presentation {
             surface,
             document,
             available_width: 0.,
-            motion: ShellMotion::default(),
             phase: PresentationPhase::Search,
         }
     }
@@ -157,10 +155,24 @@ impl Session {
 }
 
 impl crate::app::WorkspaceWindow {
-    pub(super) fn search_presentation_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(p) = &self.search.presentation else {
-            return;
-        };
+    pub(crate) fn finish_search_return(&mut self, retained: bool) {
+        if !retained
+            && self
+                .search
+                .presentation
+                .as_ref()
+                .is_some_and(|p| p.returning())
+        {
+            self.search.presentation = None;
+        }
+    }
+
+    pub(crate) fn search_shell_request(
+        &mut self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<ShellRequest> {
+        let p = self.search.presentation.as_ref()?;
         let valid = self.content_route == crate::app::ContentRoute::Document
             && p.pane == self.document_workspace.active_pane
             && p.surface == self.document_workspace.surface(p.pane)
@@ -169,26 +181,10 @@ impl crate::app::WorkspaceWindow {
                 .is_some_and(|d| d.read(cx).id() == p.document);
         if !valid {
             self.search.presentation = None;
-            return;
+            return None;
         }
         let viewport = f32::from(window.viewport_size().width);
-        let document_width = if self.file_manager.sidebar_visible() {
-            viewport
-                - self.rendered_sidebar_width(viewport)
-                - crate::app::file_manager::sidebar::RESIZE_HANDLE_PX
-        } else {
-            viewport
-        };
-        let pane_width = if self.document_workspace.is_split() {
-            let left = self.rendered_left_pane_width(document_width);
-            if p.pane == PaneSide::Left {
-                left
-            } else {
-                document_width - left - crate::app::split_layout::RESIZE_HANDLE_PX
-            }
-        } else {
-            document_width
-        };
+        let pane_width = self.document_pane_width(viewport, p.pane);
         let available = (pane_width - 2. * crate::app::status_line::FLOATING_STATUS_INSET).max(1.);
         let target = self.search.session.as_ref().map_or_else(
             || ShellShape::status(available),
@@ -203,14 +199,13 @@ impl crate::app::WorkspaceWindow {
             },
         );
         let p = self.search.presentation.as_mut().unwrap();
-        let now = Instant::now();
         p.available_width = available;
-        p.motion.update(target, available, now, !cx.reduce_motion());
-        let (_, active) = p.motion.sample(available, now);
-        if active {
-            cx.on_next_frame(window, |_, _, cx| cx.notify());
-        } else if p.returning() {
-            self.search.presentation = None;
-        }
+        Some(ShellRequest {
+            kind: ShellKind::Search,
+            pane: p.pane,
+            target,
+            available,
+            returning: p.returning(),
+        })
     }
 }
