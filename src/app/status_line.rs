@@ -637,7 +637,8 @@ pub(crate) fn floating_status_container(height: f32) -> gpui::Div {
 }
 
 pub(crate) fn buffer_status_width(count: usize) -> f32 {
-    (count.to_string().len() as f32 * 7.0 + 20.0).max(40.0)
+    // Icon, gap, button padding and outer spacing; reserve two digits by default.
+    count.to_string().len().max(2) as f32 * 7.0 + 42.0
 }
 
 pub(crate) fn render_buffer_status_trigger(
@@ -660,20 +661,28 @@ pub(crate) fn render_buffer_status_trigger(
             div()
                 .id("buffer-status-trigger")
                 .debug_selector(|| "buffer-status-trigger".to_owned())
-                .h(px(26.0))
-                .min_w(px(26.0))
+                .h(px(28.0))
+                .w(px(buffer_status_width(count) - 8.0))
                 .px(px(6.0))
                 .flex()
                 .items_center()
                 .justify_center()
+                .gap(px(5.0))
                 .rounded(px(5.0))
-                .bg(rgb(0xe9eef5))
                 .text_size(px(11.0))
                 .text_color(rgb(STATUS_FOREGROUND))
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(0xdfe8f5)))
+                .hover(|s| s.bg(rgb(0xeaf0f8)).text_color(rgb(0x5278b5)))
+                .active(|s| s.bg(rgb(0xdfe9f8)).text_color(rgb(0x4977cf)))
                 .tooltip(move |_, cx| cx.new(|_| popover::OutlineTooltip(title.clone())).into())
-                .child(count.to_string())
+                .child(
+                    gpui::svg()
+                        .data(include_bytes!("assets/status-documents.svg"))
+                        .text_color(rgb(STATUS_FOREGROUND))
+                        .size(px(16.0))
+                        .flex_none(),
+                )
+                .child(div().font_family("Menlo").child(count.to_string()))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
                     entity.update(cx, |w, cx| {

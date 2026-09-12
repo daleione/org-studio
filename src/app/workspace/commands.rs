@@ -19,6 +19,33 @@ use crate::{
 };
 
 impl WorkspaceWindow {
+    pub fn intercept_fullscreen_escape(
+        event: &gpui::KeystrokeEvent,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        let modifiers = event.keystroke.modifiers;
+        if !window.is_fullscreen()
+            || event.keystroke.key != "escape"
+            || modifiers.control
+            || modifiers.alt
+            || modifiers.shift
+            || modifiers.platform
+        {
+            return;
+        }
+        // Transient inputs must receive Escape themselves, including IME cancellation.
+        // Only ordinary editing uses this interceptor to bypass the Escape/Meta prefix.
+        if window.root::<Self>().flatten().is_some_and(|workspace| {
+            let workspace = workspace.read(cx);
+            workspace.search_is_open() || workspace.buffers.panel.is_some()
+        }) {
+            return;
+        }
+        window.toggle_fullscreen();
+        cx.stop_propagation();
+    }
+
     pub(crate) fn dispatch_command(
         &mut self,
         name: &str,

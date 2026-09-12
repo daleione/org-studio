@@ -45,6 +45,7 @@ impl WorkspaceWindow {
         };
         Some(
             crate::app::status_line::floating_status_container(shape.height)
+                .occlude()
                 .when(status.is_none(), |shell| {
                     shell.opacity(shape.content_opacity)
                 })

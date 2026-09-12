@@ -226,22 +226,8 @@ fn main() {
         cx.set_menus(org_studio::app::application_menus(
             org_studio::settings::WorkspaceSettings::load().language,
         ));
-        // Leave fullscreen with Escape. Registered as a keystroke interceptor so
-        // it fires before any editor binding (Escape is a binding prefix there)
-        // and before the emacs router consumes the key.
-        cx.intercept_keystrokes(|event, window, cx| {
-            if window.is_fullscreen()
-                && event.keystroke.key == "escape"
-                && !event.keystroke.modifiers.control
-                && !event.keystroke.modifiers.alt
-                && !event.keystroke.modifiers.shift
-                && !event.keystroke.modifiers.platform
-            {
-                window.toggle_fullscreen();
-                cx.stop_propagation();
-            }
-        })
-        .detach();
+        cx.intercept_keystrokes(WorkspaceWindow::intercept_fullscreen_escape)
+            .detach();
         let displays = cx.displays();
         for (index, display) in displays.iter().enumerate() {
             eprintln!(

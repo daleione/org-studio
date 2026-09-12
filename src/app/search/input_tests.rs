@@ -8,6 +8,47 @@ use gpui::{Modifiers, prelude::*, px};
 use std::sync::Arc;
 
 #[gpui::test]
+fn escape_closes_transient_inputs_before_leaving_fullscreen(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| {
+        cx.set_reduce_motion(true);
+        cx.intercept_keystrokes(WorkspaceWindow::intercept_fullscreen_escape)
+            .detach();
+    });
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    workspace.update(cx, |w, cx| w.create_buffer("全屏搜索.org".into(), None, cx));
+    cx.update(|window, _| window.toggle_fullscreen());
+    cx.run_until_parked();
+
+    for (incremental, replacing) in [(false, false), (false, true), (true, false)] {
+        workspace.update(cx, |w, cx| {
+            w.open_search(incremental, false, false, cx);
+            if replacing {
+                w.search_toggle_replacement(cx);
+            }
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        workspace.update(cx, |w, _| assert!(!w.search_is_open()));
+        cx.update(|window, _| assert!(window.is_fullscreen()));
+    }
+
+    workspace.update(cx, |w, cx| {
+        w.open_buffer_picker(crate::app::buffers::PickerIntent::Switch, cx)
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    workspace.update(cx, |w, _| assert!(w.buffers.panel.is_none()));
+    cx.update(|window, _| assert!(window.is_fullscreen()));
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, _| assert!(!window.is_fullscreen()));
+}
+
+#[gpui::test]
 fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     cx.update(|cx| cx.set_reduce_motion(true));

@@ -475,3 +475,90 @@ fn home_picker_uses_window_width_and_leaves_no_statusline(cx: &mut gpui::TestApp
     cx.run_until_parked();
     assert!(cx.debug_bounds("floating-status-line").is_none());
 }
+
+#[gpui::test]
+fn recent_panel_scroll_stays_inside_the_panel(cx: &mut gpui::TestAppContext) {
+    use gpui::{point, px, size};
+    let scroll = |position, delta| gpui::ScrollWheelEvent {
+        position,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(delta))),
+        touch_phase: gpui::TouchPhase::Moved,
+        ..Default::default()
+    };
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(size(px(900.), px(700.)));
+    let session = w.update(cx, |w, cx| {
+        w.create_buffer("正文.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&session, &"A scrollable line of text\n".repeat(200), cx);
+    cx.run_until_parked();
+    let editor = w.update(cx, |w, _| w.editor(crate::app::PaneSide::Left).unwrap());
+    editor.update(cx, |e, cx| {
+        e.scroll_to_source_offset(crate::document::ByteOffset(0), cx)
+    });
+    cx.run_until_parked();
+    let origin = editor.update(cx, |e, cx| e.top_source_anchor(&e.snapshot(cx)));
+    w.update(cx, |w, cx| {
+        w.recent_documents = (0..10)
+            .map(|index| crate::recent_documents::RecentDocument {
+                path: PathBuf::from(format!("/tmp/recent-scroll-{index}.org")),
+                opened_at: index,
+            })
+            .collect();
+        w.open_buffer_picker(PickerIntent::Switch, cx);
+        if let Some(Panel::Picker(p)) = &mut w.buffers.panel {
+            p.recent = true;
+        }
+    });
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("floating-status-line").unwrap();
+    let center = bounds.center();
+    cx.simulate_event(scroll(center, -80.));
+    cx.run_until_parked();
+    w.update(cx, |w, _| assert!(w.buffers.scroll.offset().y < px(0.)));
+    assert_eq!(
+        editor.update(cx, |e, cx| e.top_source_anchor(&e.snapshot(cx))),
+        origin
+    );
+
+    // Cover both ends of the list, the header, and the footer outside the scroll area.
+    for (position, delta) in [
+        (center, -10000.),
+        (center, -80.),
+        (center, 10000.),
+        (center, 80.),
+        (point(center.x, bounds.top() + px(20.)), -80.),
+        (point(center.x, bounds.bottom() - px(20.)), -80.),
+    ] {
+        cx.simulate_event(scroll(position, delta));
+        cx.run_until_parked();
+        assert_eq!(
+            editor.update(cx, |e, cx| e.top_source_anchor(&e.snapshot(cx))),
+            origin
+        );
+    }
+    w.update(cx, |w, cx| {
+        if let Some(Panel::Picker(p)) = &w.buffers.panel {
+            p.input.update(cx, |i, cx| i.sync("没有匹配", cx));
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    cx.simulate_event(scroll(center, -80.));
+    cx.run_until_parked();
+    assert_eq!(
+        editor.update(cx, |e, cx| e.top_source_anchor(&e.snapshot(cx))),
+        origin
+    );
+
+    w.update(cx, |w, cx| w.cancel_buffer_panel(cx));
+    cx.run_until_parked();
+    cx.simulate_event(scroll(center, -80.));
+    cx.run_until_parked();
+    assert_ne!(
+        editor.update(cx, |e, cx| e.top_source_anchor(&e.snapshot(cx))),
+        origin
+    );
+}
