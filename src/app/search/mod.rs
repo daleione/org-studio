@@ -7,7 +7,7 @@ mod input;
 mod lifecycle;
 mod navigation;
 mod notice;
-mod presentation;
+pub(crate) mod presentation;
 mod replace;
 mod scan;
 mod session;

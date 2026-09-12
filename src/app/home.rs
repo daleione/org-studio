@@ -14,7 +14,6 @@ pub(crate) fn render_home(
     opening: Option<&std::path::Path>,
     language: Language,
 ) -> gpui::Div {
-    let open_entity = entity.clone();
     let drop_entity = entity.clone();
     let clear_entity = entity.clone();
     div()
@@ -70,7 +69,7 @@ pub(crate) fn render_home(
                         )
                         .child(
                             div()
-                                .id("home-open-document")
+                                .id("home-document-hint")
                                 .relative()
                                 .mt_6()
                                 .w_full()
@@ -80,14 +79,9 @@ pub(crate) fn render_home(
                                 .border_color(rgb(0xe1e1e4))
                                 .bg(rgb(0xffffff))
                                 .shadow_sm()
-                                .cursor_pointer()
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .hover(|style| style.border_color(rgb(0xb9cee5)).bg(rgb(0xfcfdff)))
-                                .on_click(move |_, window, cx| {
-                                    open_entity.update(cx, |this, cx| this.choose_file(window, cx));
-                                })
                                 .on_drop(move |paths: &ExternalPaths, window, cx| {
                                     drop_entity.update(cx, |this, cx| {
                                         this.open_dropped_paths(paths, window, cx)
@@ -103,7 +97,7 @@ pub(crate) fn render_home(
                                                 name.to_string_lossy()
                                             )
                                         })
-                                        .unwrap_or_else(|| language.text("home.open").to_owned()),
+                                        .unwrap_or_else(|| "C-x C-f".to_owned()),
                                     opening
                                         .map(|path| path.display().to_string())
                                         .unwrap_or_else(|| {

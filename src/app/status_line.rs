@@ -19,6 +19,7 @@ use crate::{
 
 mod host;
 mod icons;
+pub(crate) mod shell;
 use icons::{StatusIcon, status_icon};
 mod model;
 mod popover;
@@ -598,9 +599,10 @@ pub(crate) fn render_status_line(
     entity: Entity<WorkspaceWindow>,
     window: &Window,
 ) -> gpui::AnyElement {
-    render_status_line_content(snapshot, layout, entity, window, None, false)
+    render_status_line_content(snapshot, layout, entity, window, None, false, None)
 }
 
+#[cfg(test)]
 pub(crate) fn render_floating_status_line(
     snapshot: &StatusLineSnapshot,
     layout: StatusLineLayout,
@@ -611,7 +613,7 @@ pub(crate) fn render_floating_status_line(
     floating_status_container(FLOATING_STATUS_HEIGHT)
         .id(format!("pane-{}-floating-status", snapshot.pane.0))
         .child(render_status_line_content(
-            snapshot, layout, entity, window, echo, true,
+            snapshot, layout, entity, window, echo, true, None,
         ))
         .into_any_element()
 }
@@ -634,6 +636,54 @@ pub(crate) fn floating_status_container(height: f32) -> gpui::Div {
         .shadow_lg()
 }
 
+pub(crate) fn buffer_status_width(count: usize) -> f32 {
+    (count.to_string().len() as f32 * 7.0 + 20.0).max(40.0)
+}
+
+pub(crate) fn render_buffer_status_trigger(
+    count: usize,
+    entity: Entity<WorkspaceWindow>,
+    language: Language,
+) -> gpui::AnyElement {
+    let title: Arc<str> = match language {
+        Language::Chinese => format!("已打开 {count} 个文档 · C-x b"),
+        Language::English => format!("{count} open documents · C-x b"),
+    }
+    .into();
+    div()
+        .w(px(buffer_status_width(count)))
+        .flex_none()
+        .flex()
+        .items_center()
+        .justify_center()
+        .child(
+            div()
+                .id("buffer-status-trigger")
+                .debug_selector(|| "buffer-status-trigger".to_owned())
+                .h(px(26.0))
+                .min_w(px(26.0))
+                .px(px(6.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.0))
+                .bg(rgb(0xe9eef5))
+                .text_size(px(11.0))
+                .text_color(rgb(STATUS_FOREGROUND))
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(0xdfe8f5)))
+                .tooltip(move |_, cx| cx.new(|_| popover::OutlineTooltip(title.clone())).into())
+                .child(count.to_string())
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    entity.update(cx, |w, cx| {
+                        w.open_buffer_picker(crate::app::buffers::PickerIntent::Switch, cx);
+                    });
+                }),
+        )
+        .into_any_element()
+}
+
 pub(crate) fn render_status_line_content(
     snapshot: &StatusLineSnapshot,
     layout: StatusLineLayout,
@@ -641,6 +691,7 @@ pub(crate) fn render_status_line_content(
     window: &Window,
     echo: Option<gpui::AnyElement>,
     floating: bool,
+    buffer_count: Option<usize>,
 ) -> gpui::AnyElement {
     let theme = current_theme();
     let pane_id = snapshot.pane.0;
@@ -794,8 +845,9 @@ pub(crate) fn render_status_line_content(
             .overflow_hidden()
             .gap(px(0.0));
         right = right.child(
-            if layout.statistics == Variant::Full && snapshot.document_statistics.is_some() {
-                let stats = snapshot.document_statistics.unwrap();
+            if layout.statistics == Variant::Full
+                && let Some(stats) = snapshot.document_statistics
+            {
                 button
                     .child(statistic_field(
                         StatusIcon::Document,
@@ -885,6 +937,13 @@ pub(crate) fn render_status_line_content(
                 .child(status_icon(StatusIcon::Format))
                 .child(format_label(format)),
         );
+    }
+    if let Some(count) = buffer_count {
+        right = right.child(render_buffer_status_trigger(
+            count,
+            entity.clone(),
+            snapshot.language,
+        ));
     }
     let overflow = layout.overflow.clone();
     let more_entity = entity.clone();

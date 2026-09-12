@@ -175,7 +175,7 @@ impl WorkspaceWindow {
             if let Some(anchor) = search {
                 self.request_open_at(path, anchor.into(), window, cx);
             } else {
-                self.request_open(path, window, cx);
+                self.open(path, cx);
             }
         } else {
             cx.open_with_system(&path);

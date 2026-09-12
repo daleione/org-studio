@@ -19,14 +19,7 @@ impl WorkspaceWindow {
             ByteRange, DocumentCommand, EditOrigin, EditTransaction, Selection, TextEdit,
             TextSnapshot,
         };
-        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-        let session = self
-            .document_session()
-            .filter(|session| {
-                let open = session.read(cx).path();
-                open == path || std::fs::canonicalize(open).is_ok_and(|open| open == canonical)
-            })
-            .cloned();
+        let session = self.buffer_for_path(path, cx);
         if let Some(session) = session {
             let snapshot = session.read(cx).snapshot();
             let range = ByteRange::new(0, snapshot.len_bytes());
@@ -60,7 +53,7 @@ impl WorkspaceWindow {
         cx: &Context<Self>,
     ) -> Result<TaskRecord, crate::agenda::WorkflowError> {
         let mut task = task.clone();
-        if let Some(session) = self.document_session() {
+        if let Some(session) = self.buffer_for_path(&task.source.path, cx) {
             let session = session.read(cx);
             let path = session.path();
             if path == task.source.path.as_path()
@@ -93,14 +86,7 @@ impl WorkspaceWindow {
         operation: &AgendaCommand,
         cx: &mut Context<Self>,
     ) -> Result<(), Arc<str>> {
-        let open = self
-            .document_session()
-            .filter(|session| {
-                let path = session.read(cx).path();
-                path == task.source.path.as_path()
-                    || std::fs::canonicalize(path).is_ok_and(|path| path == *task.source.path)
-            })
-            .cloned();
+        let open = self.buffer_for_path(&task.source.path, cx);
         let is_open = open.is_some();
         let session = match open {
             Some(session) => session,

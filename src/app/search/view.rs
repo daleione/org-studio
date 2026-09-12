@@ -129,8 +129,8 @@ impl WorkspaceWindow {
         let controls_width = layout.controls_width;
         let mode_item_width = layout.mode_item_width;
         let mode_width = layout.mode_width();
-        let reveal = (shape.replacement / layout.replacement_height).clamp(0., 1.);
-        let animating = (shape.replacement
+        let reveal = (shape.expansion_height / layout.replacement_height).clamp(0., 1.);
+        let animating = (shape.expansion_height
             - if s.replacement_expanded {
                 layout.replacement_height
             } else {
@@ -420,7 +420,7 @@ impl WorkspaceWindow {
                 .text_size(px(12.))
                 .font_family(".SystemUIFont")
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(content.opacity(shape.search_opacity))
+                .child(content.opacity(shape.content_opacity))
                 .when_some(status_content, |shell, status| {
                     shell.child(
                         div()
@@ -430,7 +430,7 @@ impl WorkspaceWindow {
                             .left(px((rendered_width - width) / 2.))
                             .w(px((width - 2.).max(0.)))
                             .h(px(FLOATING_STATUS_HEIGHT - 2.))
-                            .opacity(1. - shape.search_opacity)
+                            .opacity(1. - shape.content_opacity)
                             .child(status),
                     )
                 }),

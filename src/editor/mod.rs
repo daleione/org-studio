@@ -844,7 +844,7 @@ impl SemanticEditor {
                 this.folds.apply_delta(delta);
                 this.fold_animation = None;
                 this.fold_animation_revision = this.fold_animation_revision.wrapping_add(1);
-                let path = this.session.read(cx).path().to_path_buf();
+                let path = this.session.read(cx).syntax_path().to_path_buf();
                 let projection = this.folds.projection(&path, &snapshot);
                 this.fold_markers = Arc::new(projection.marker_lines);
                 this.display_map.set_hidden_ranges(projection.hidden_ranges);
@@ -1344,14 +1344,14 @@ impl SemanticEditor {
         let snapshot = self.snapshot(cx);
         let index = self
             .folds
-            .heading_index(self.session.read(cx).path(), &snapshot);
+            .heading_index(self.session.read(cx).syntax_path(), &snapshot);
         index.outline_at(&snapshot, offset)
     }
 
     pub(crate) fn outline_entries(&self, cx: &App) -> Vec<crate::document::OutlineEntry> {
         let snapshot = self.snapshot(cx);
         self.folds
-            .heading_index(self.session.read(cx).path(), &snapshot)
+            .heading_index(self.session.read(cx).syntax_path(), &snapshot)
             .outline_entries(&snapshot)
     }
 

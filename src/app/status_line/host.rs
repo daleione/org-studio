@@ -23,7 +23,7 @@ use super::{
 fn preview_matches_session(preview: &ReadingPreviewPanel, session: &DocumentSession) -> bool {
     preview.document().document_id == session.id()
         && preview.document().revision <= session.revision()
-        && preview.document().path == session.path()
+        && preview.document().path == session.syntax_path()
 }
 
 impl WorkspaceWindow {
@@ -111,7 +111,9 @@ impl WorkspaceWindow {
                 format_character_count(document_statistics.characters, self.language).into(),
             ),
             document_statistics: Some(document_statistics),
-            format: Some(DocumentFormat::from_path(ready.session.read(cx).path())),
+            format: Some(DocumentFormat::from_path(
+                ready.session.read(cx).syntax_path(),
+            )),
             transient: self.document_transient_status(None, cx),
         })
     }

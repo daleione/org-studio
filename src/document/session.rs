@@ -93,6 +93,7 @@ pub enum SaveAckError {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SaveStartError {
     ReadOnly,
+    NeedsPath,
     AlreadySaving,
     Conflict,
 }
@@ -202,6 +203,11 @@ pub struct DocumentSession {
 }
 
 enum SessionBackend {
+    Draft {
+        name: Arc<str>,
+        syntax_hint: PathBuf,
+        state: Box<SessionFileState>,
+    },
     File {
         path: PathBuf,
         state: Box<SessionFileState>,
@@ -226,6 +232,44 @@ struct SessionFileState {
 impl EventEmitter<DocumentEvent> for DocumentSession {}
 
 impl DocumentSession {
+    pub(crate) fn draft(name: impl Into<Arc<str>>) -> Self {
+        let name = name.into();
+        let mut syntax_hint = PathBuf::from(name.as_ref());
+        if syntax_hint.extension().is_none() {
+            syntax_hint.set_extension("org");
+        }
+        let buffer = DocumentBuffer::from_utf8(Vec::new()).expect("empty UTF-8");
+        Self {
+            user_editable: true,
+            saved_revision: buffer.revision(),
+            buffer,
+            history: UndoHistory::default(),
+            backend: SessionBackend::Draft {
+                name,
+                syntax_hint,
+                state: Box::new(SessionFileState {
+                    metadata: FileMetadata::from_loaded(Path::new(""), b""),
+                    sync_state: SyncState::InSync {
+                        stamp: FileStamp::detached(b""),
+                    },
+                    save_state: SaveState::Idle,
+                }),
+            },
+        }
+    }
+
+    pub(crate) fn display_name(&self) -> String {
+        match &self.backend {
+            SessionBackend::Draft { name, .. } => name.to_string(),
+            SessionBackend::Generated { source } => source.display_name.to_string(),
+            SessionBackend::File { path, .. } => path
+                .file_name()
+                .unwrap_or(path.as_os_str())
+                .to_string_lossy()
+                .into_owned(),
+        }
+    }
+
     pub(crate) fn resource_changed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         if self.is_generated() {
             return;
@@ -319,10 +363,19 @@ impl DocumentSession {
         self.file_path().unwrap_or_else(|| Path::new(""))
     }
 
+    /// Parser/resource hint for an unnamed document. This is display metadata, never a save
+    /// destination or an identity: filesystem operations must use file_path().
+    pub(crate) fn syntax_path(&self) -> &Path {
+        match &self.backend {
+            SessionBackend::Draft { syntax_hint, .. } => syntax_hint,
+            _ => self.path(),
+        }
+    }
+
     pub(crate) fn file_path(&self) -> Option<&Path> {
         match &self.backend {
             SessionBackend::File { path, .. } => Some(path),
-            SessionBackend::Generated { .. } => None,
+            SessionBackend::Generated { .. } | SessionBackend::Draft { .. } => None,
         }
     }
 
@@ -336,14 +389,14 @@ impl DocumentSession {
 
     fn file(&self) -> &SessionFileState {
         match &self.backend {
-            SessionBackend::File { state, .. } => state,
+            SessionBackend::File { state, .. } | SessionBackend::Draft { state, .. } => state,
             _ => panic!("generated buffer has no file state"),
         }
     }
 
     fn file_mut(&mut self) -> &mut SessionFileState {
         match &mut self.backend {
-            SessionBackend::File { state, .. } => state,
+            SessionBackend::File { state, .. } | SessionBackend::Draft { state, .. } => state,
             _ => panic!("generated buffer has no file state"),
         }
     }
@@ -513,6 +566,9 @@ impl DocumentSession {
             return Err(SaveStartError::AlreadySaving);
         }
         let source_path = self.path().to_path_buf();
+        if self.file_path().is_none() && target.is_none() {
+            return Err(SaveStartError::NeedsPath);
+        }
         let target_path =
             super::resolve_symlink_target(&target.unwrap_or_else(|| source_path.clone()));
         let same_target = target_path == super::resolve_symlink_target(&source_path);
@@ -631,9 +687,16 @@ impl DocumentSession {
         if outcome.source_path != self.path() {
             return Err(SaveAckError::DifferentTarget);
         }
-        if let SessionBackend::File { path, .. } = &mut self.backend {
-            *path = outcome.target_path;
-        }
+        let path_changed = self.file_path() != Some(outcome.target_path.as_path());
+        let state = Box::new(SessionFileState {
+            metadata: outcome.metadata.clone(),
+            sync_state: self.file().sync_state.clone(),
+            save_state: SaveState::Idle,
+        });
+        self.backend = SessionBackend::File {
+            path: outcome.target_path.clone(),
+            state,
+        };
         self.file_mut().metadata = outcome.metadata;
         self.file_mut().save_state = SaveState::Idle;
         self.file_mut().sync_state = if self.revision() == outcome.save_point.revision() {
@@ -645,11 +708,18 @@ impl DocumentSession {
                 base: outcome.stamp,
             }
         };
-        self.mark_saved(outcome.save_point, cx)
+        let result = self.mark_saved(outcome.save_point, cx);
+        if path_changed {
+            cx.emit(DocumentEvent::PathChanged {
+                document_id: self.id(),
+                path: outcome.target_path,
+            });
+        }
+        result
     }
 
     pub fn observe_disk(&mut self, observed: Option<FileStamp>) -> DiskChangeAction {
-        if self.is_generated() {
+        if self.file_path().is_none() {
             return DiskChangeAction::Ignore;
         }
         if matches!(self.file().save_state, SaveState::Saving { .. }) {
@@ -755,7 +825,7 @@ impl DocumentSession {
     }
 
     pub fn reload_request(&self) -> Result<ReloadRequest, ReloadError> {
-        if self.is_generated() {
+        if self.file_path().is_none() {
             return Err(ReloadError::NoFileBackend);
         }
         if self.is_dirty() {
@@ -834,6 +904,43 @@ mod tests {
     use super::*;
     use crate::document::{ByteRange, TextEdit, TextSnapshot};
     use gpui::AppContext;
+
+    #[gpui::test]
+    fn draft_first_save_retains_identity_and_undo(cx: &mut gpui::TestAppContext) {
+        let path = std::env::temp_dir().join(format!("draft-save-{}.org", std::process::id()));
+        let session = cx.new(|_| DocumentSession::draft("草稿"));
+        let id = cx.read(|cx| session.read(cx).id());
+        let request = session.update(cx, |s, cx| {
+            assert!(s.file_path().is_none());
+            assert!(matches!(s.begin_save(None), Err(SaveStartError::NeedsPath)));
+            s.edit(
+                DocumentCommand::new(
+                    EditTransaction::new(
+                        s.revision(),
+                        vec![TextEdit::new(ByteRange::new(0, 0), "中文 draft")],
+                    ),
+                    Selection::default(),
+                    Selection::default(),
+                    EditOrigin::Other,
+                ),
+                cx,
+            )
+            .unwrap();
+            s.begin_save(Some(path.clone())).unwrap()
+        });
+        let outcome = crate::document::write_atomic(request).unwrap();
+        session.update(cx, |s, cx| {
+            s.finish_save(outcome, cx).unwrap();
+            assert_eq!(s.id(), id);
+            assert_eq!(s.file_path(), Some(path.as_path()));
+            assert!(!s.is_dirty());
+            s.undo(cx).unwrap();
+            assert_eq!(contents(s), "");
+            assert!(s.is_dirty());
+        });
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "中文 draft");
+        std::fs::remove_file(path).unwrap();
+    }
 
     fn contents(session: &DocumentSession) -> String {
         let snapshot = session.snapshot();

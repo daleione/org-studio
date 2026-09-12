@@ -9,6 +9,22 @@ use gpui::{Context, Modifiers, px};
 use std::sync::{Arc, atomic::AtomicBool};
 
 impl WorkspaceWindow {
+    pub(crate) fn focus_search_input(&mut self, cx: &mut Context<Self>) {
+        if let Some(p) = &mut self.search.presentation {
+            p.motion = std::mem::take(&mut self.buffers.motion);
+            self.buffers.returning = false;
+        }
+        if let Some(session) = &mut self.search.session {
+            session.focus_pending = true;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn search_input_composing(&self, cx: &gpui::App) -> bool {
+        self.search.session.as_ref().is_some_and(|s| {
+            s.input.read(cx).is_composing() || s.replacement_input.read(cx).is_composing()
+        })
+    }
     pub(crate) fn open_search(
         &mut self,
         isearch: bool,
@@ -16,6 +32,9 @@ impl WorkspaceWindow {
         replace: bool,
         cx: &mut Context<Self>,
     ) {
+        if self.buffers.panel.is_some() {
+            self.cancel_buffer_panel(cx);
+        }
         if self.content_route != ContentRoute::Document {
             return;
         }

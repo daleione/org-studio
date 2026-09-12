@@ -60,6 +60,31 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
     let mut builder = CommandRegistryBuilder::default();
     for (name, title, command) in [
         (
+            "org-studio.workspace.switch-buffer",
+            "Switch document",
+            BuiltinCommand::SwitchBuffer,
+        ),
+        (
+            "org-studio.workspace.close-buffer",
+            "Close document",
+            BuiltinCommand::CloseBuffer,
+        ),
+        (
+            "org-studio.workspace.save-buffers",
+            "Review saves",
+            BuiltinCommand::SaveBuffers,
+        ),
+        (
+            "org-studio.workspace.next-buffer",
+            "Next document",
+            BuiltinCommand::NextBuffer,
+        ),
+        (
+            "org-studio.workspace.previous-buffer",
+            "Previous document",
+            BuiltinCommand::PreviousBuffer,
+        ),
+        (
             "org-studio.document.find",
             "Find in Document",
             BuiltinCommand::FindDocument,
@@ -83,7 +108,14 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
         builder
             .register_builtin(BuiltinCommandSpec {
                 name: name.into(),
-                aliases: &[],
+                aliases: match command {
+                    BuiltinCommand::SwitchBuffer => &["switch-to-buffer", "list-buffers"],
+                    BuiltinCommand::CloseBuffer => &["kill-buffer"],
+                    BuiltinCommand::SaveBuffers => &["save-some-buffers"],
+                    BuiltinCommand::NextBuffer => &["next-buffer"],
+                    BuiltinCommand::PreviousBuffer => &["previous-buffer"],
+                    _ => &[],
+                },
                 title,
                 description: title,
                 command,
@@ -226,7 +258,7 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
     builder
         .register_builtin(BuiltinCommandSpec {
             name: SHOW_HOME_COMMAND.into(),
-            aliases: &["list-buffers"],
+            aliases: &[],
             title: "Home",
             description: "Show the document home and recent files",
             command: BuiltinCommand::ShowHome,
@@ -748,7 +780,27 @@ pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
         },
         BindingSpec {
             keys: "C-x C-b",
-            behavior: BindingBehavior::Command(SHOW_HOME_COMMAND),
+            behavior: BindingBehavior::Command("switch-to-buffer"),
+        },
+        BindingSpec {
+            keys: "C-x b",
+            behavior: BindingBehavior::Command("switch-to-buffer"),
+        },
+        BindingSpec {
+            keys: "C-x k",
+            behavior: BindingBehavior::Command("kill-buffer"),
+        },
+        BindingSpec {
+            keys: "C-x s",
+            behavior: BindingBehavior::Command("save-some-buffers"),
+        },
+        BindingSpec {
+            keys: "C-x right",
+            behavior: BindingBehavior::Command("next-buffer"),
+        },
+        BindingSpec {
+            keys: "C-x left",
+            behavior: BindingBehavior::Command("previous-buffer"),
         },
         BindingSpec {
             keys: "C-x C-r",

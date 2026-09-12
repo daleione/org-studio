@@ -27,6 +27,10 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn show_home_now(&mut self, cx: &mut Context<Self>) {
+        self.close_search(false, cx);
+        if let Some(document) = self.state.take_ready() {
+            self.park_document(document);
+        }
         self.suspend_derived_preview();
         self.derived.latest = None;
         self.generation = self.generation.wrapping_add(1);
@@ -34,7 +38,6 @@ impl WorkspaceWindow {
         self.stop_document_watch();
         self.editor_minimap_width_subscriptions.clear();
         self.save.status = None;
-        self.save.interaction = crate::app::save::SaveInteraction::Idle;
         self.state = WorkspaceLoadState::Empty;
         self.opened_at = None;
         self.first_frame_scheduled = None;
@@ -122,6 +125,26 @@ impl WorkspaceWindow {
     }
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.buffer_busy() {
+            return;
+        }
+        if let Some(session) = self.buffer_for_path(&path, cx) {
+            let id = session.read(cx).id();
+            self.activate_buffer(id, cx);
+            return;
+        }
+        if matches!(&self.state, WorkspaceLoadState::Loading { path: pending, .. } if crate::app::buffers::same_file(pending, &path))
+        {
+            return;
+        }
+        self.background_pending_open(cx);
+        let pending_key = std::fs::canonicalize(&path).unwrap_or_else(|_| path.clone());
+        // Promoting an in-flight background load replaces its callback; only the
+        // foreground completion may install the new active document.
+        self.buffers.loads.remove(&pending_key);
+        self.close_search(false, cx);
+        self.dismiss_buffer_panel(cx);
+        self.content_route = ContentRoute::Document;
         self.open_with_previous(path, true, cx);
     }
 
@@ -460,11 +483,11 @@ impl WorkspaceWindow {
         self.file_watch_target = None;
     }
 
-    fn sync_document_watch(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn sync_document_watch(&mut self, cx: &mut Context<Self>) {
         if let Some(path) = self
             .state
             .ready()
-            .map(|document| document.session.read(cx).path().to_path_buf())
+            .and_then(|document| document.session.read(cx).file_path().map(PathBuf::from))
         {
             self.watch_document_profiled(path, self.generation, cx);
         } else {
@@ -487,6 +510,9 @@ impl WorkspaceWindow {
         let previous = self.state.take_ready();
         self.state = match result {
             Ok(loaded) => {
+                if let Some(previous) = previous {
+                    self.park_document(previous);
+                }
                 // Soft wrap is deliberately document-local. A transient M-z
                 // choice must never leak into the next opened document.
                 self.soft_wrap = true;
@@ -519,10 +545,12 @@ impl WorkspaceWindow {
                             .map_or(0.0, |opened_at| opened_at.elapsed().as_secs_f64() * 1000.0),
                     );
                 }
-                crate::recent_documents::record_success(
-                    &mut self.recent_documents,
-                    session.path().to_path_buf(),
-                );
+                if let Some(path) = session.file_path() {
+                    crate::recent_documents::record_success(
+                        &mut self.recent_documents,
+                        path.to_path_buf(),
+                    );
+                }
                 self.home_error = None;
                 let session = cx.new(|_| session);
                 let editor_syntax = Arc::new(crate::editor::EditorSyntaxService::default());
@@ -668,16 +696,14 @@ impl WorkspaceWindow {
         let receiver = cx.prompt_for_paths(PathPromptOptions {
             files: true,
             directories: false,
-            multiple: false,
-            prompt: Some("Open Org document".into()),
+            multiple: true,
+            prompt: Some(self.buffer_text("打开文档", "Open documents").into()),
         });
 
         self.picker_task = Some(cx.spawn_in(window, async move |this, cx| {
             let selected = receiver.await;
-            if let Ok(Ok(Some(paths))) = selected
-                && let Some(path) = paths.into_iter().next()
-            {
-                let _ = this.update_in(cx, |this, window, cx| this.request_open(path, window, cx));
+            if let Ok(Ok(Some(paths))) = selected {
+                let _ = this.update_in(cx, |this, _, cx| this.open_buffers(paths, cx));
             }
         }));
     }
@@ -707,15 +733,17 @@ impl WorkspaceWindow {
     pub(crate) fn open_dropped_paths(
         &mut self,
         paths: &gpui::ExternalPaths,
-        window: &mut gpui::Window,
+        _window: &mut gpui::Window,
         cx: &mut Context<Self>,
     ) {
-        if let Some(path) = paths
+        let paths = paths
             .paths()
             .iter()
-            .find(|path| is_supported_document(path))
-        {
-            self.request_open(path.clone(), window, cx);
+            .filter(|path| is_supported_document(path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !paths.is_empty() {
+            self.open_buffers(paths, cx);
             return;
         }
         self.home_error = Some("Drop an Org or Markdown document to open it.".into());

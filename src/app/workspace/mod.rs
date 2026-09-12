@@ -199,6 +199,7 @@ impl WorkspaceWindow {
             which_key_items: Arc::new(Vec::new()),
             echo: crate::app::echo_area::EchoAreaHost::default(),
             search: crate::app::search::SearchHost::default(),
+            buffers: crate::app::buffers::BufferHost::default(),
             content_route: if std::env::var_os("ORG_STUDIO_AGENDA_TEXT").is_some() {
                 ContentRoute::AgendaText
             } else if std::env::var_os("ORG_STUDIO_AGENDA").is_some() {
@@ -326,7 +327,7 @@ impl WorkspaceWindow {
                 let session = session.read(cx);
                 preview.document_id == session.id()
                     && preview.revision == session.revision()
-                    && preview.path == session.path()
+                    && preview.path == session.syntax_path()
             })
         })
     }
@@ -440,6 +441,7 @@ impl WorkspaceWindow {
     pub(crate) fn set_language(&mut self, language: crate::i18n::Language, cx: &mut Context<Self>) {
         if self.language != language {
             self.language = language;
+            cx.set_menus(crate::app::application_menus(language));
             self.export.clear_status();
             self.save_preview_settings();
             cx.notify();
@@ -510,7 +512,7 @@ impl WorkspaceWindow {
             WorkspaceLoadState::Loading { path, .. } | WorkspaceLoadState::Failed { path, .. } => {
                 Some(path)
             }
-            WorkspaceLoadState::Ready { document } => Some(document.session.read(cx).path()),
+            WorkspaceLoadState::Ready { document } => document.session.read(cx).file_path(),
             WorkspaceLoadState::Empty => None,
         }
     }
@@ -714,9 +716,12 @@ impl WorkspaceWindow {
         let Some(snapshot) = self.document_status_snapshot(pane, render.cx) else {
             return div().w(px(render.width)).h_full().min_w_0().child(content);
         };
+        let status_width =
+            (render.width - 2.0 * crate::app::status_line::FLOATING_STATUS_INSET).max(1.0);
+        let buffer_count = self.buffer_sessions().count();
         let layout = self.status_layout(
             &snapshot,
-            (render.width - 2.0 * crate::app::status_line::FLOATING_STATUS_INSET).max(1.0),
+            (status_width - crate::app::status_line::buffer_status_width(buffer_count)).max(1.),
             render.window,
         );
         let style_popover_left =
@@ -733,7 +738,9 @@ impl WorkspaceWindow {
                     self.language,
                 )
             });
-        let returning_status = self.search_is_closing(pane).then(|| {
+        let buffer_panel =
+            self.buffers.pane == pane && (self.buffers.panel.is_some() || self.buffers.returning);
+        let returning_status = (self.search_is_closing(pane) || buffer_panel).then(|| {
             crate::app::status_line::render_status_line_content(
                 &snapshot,
                 layout.clone(),
@@ -741,6 +748,7 @@ impl WorkspaceWindow {
                 render.window,
                 echo.take(),
                 true,
+                Some(buffer_count),
             )
         });
         div()
@@ -759,13 +767,33 @@ impl WorkspaceWindow {
                     .min_h_0()
                     .capture_any_mouse_down(move |_, _, cx| {
                         search_entity.update(cx, |w, cx| {
-                            w.close_search(false, cx);
+                            if matches!(
+                                w.buffers.panel,
+                                Some(crate::app::buffers::Panel::Review(_))
+                            ) {
+                                cx.stop_propagation();
+                                return;
+                            }
+                            if w.buffers.panel.is_some() {
+                                w.cancel_buffer_panel(cx);
+                            } else {
+                                w.close_search(false, cx);
+                            }
                             w.activate_pane(pane, cx);
                         });
                     })
                     .child(content),
             )
-            .child(
+            .child(if buffer_panel {
+                self.buffer_panel(
+                    pane,
+                    entity.clone(),
+                    render.width,
+                    returning_status,
+                    render.cx,
+                )
+                .unwrap()
+            } else {
                 self.search_bar(
                     pane,
                     entity.clone(),
@@ -775,15 +803,22 @@ impl WorkspaceWindow {
                 )
                 .map(gpui::IntoElement::into_any_element)
                 .unwrap_or_else(|| {
-                    crate::app::status_line::render_floating_status_line(
+                    let content = crate::app::status_line::render_status_line_content(
                         &snapshot,
                         layout,
                         entity.clone(),
                         render.window,
                         echo,
+                        true,
+                        Some(buffer_count),
+                    );
+                    crate::app::status_line::floating_status_container(
+                        crate::app::status_line::FLOATING_STATUS_HEIGHT,
                     )
-                }),
-            )
+                    .child(content)
+                    .into_any_element()
+                })
+            })
             .when_some(status_popover, |view, popover| {
                 view.child(crate::app::status_line::render_status_popover(
                     popover,
@@ -950,11 +985,16 @@ impl WorkspaceWindow {
             WorkspaceLoadState::Ready { document } => Some(document.session.read(cx).path()),
             WorkspaceLoadState::Empty => None,
         };
-        let title = path
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("Org Studio")
-            .to_owned();
+        let title = self
+            .document_session()
+            .filter(|s| s.read(cx).file_path().is_none())
+            .map(|s| s.read(cx).display_name())
+            .unwrap_or_else(|| {
+                path.and_then(|path| path.file_name())
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("Org Studio")
+                    .to_owned()
+            });
         let Some(session) = self.document_session() else {
             return title;
         };

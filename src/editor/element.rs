@@ -453,7 +453,7 @@ impl Element for EditorElement {
         });
         let inline_image_candidates = {
             let editor = self.editor.read(cx);
-            let document_path = editor.session.read(cx).path().to_path_buf();
+            let document_path = editor.session.read(cx).syntax_path().to_path_buf();
             if crate::document::DocumentFormat::from_path(&document_path)
                 == crate::document::DocumentFormat::Org
             {
@@ -552,7 +552,7 @@ impl Element for EditorElement {
             .map(|animation| (animation.changed_ranges.clone(), animation.scale()))
             .unwrap_or_else(|| (Arc::from([]), 1.0));
         let paint_lines = animated_paint_lines(&editor.display_map, visible_lines, &fold_ranges);
-        let editor_path = editor.session.read(cx).path().to_path_buf();
+        let editor_path = editor.session.read(cx).syntax_path().to_path_buf();
         let document_format = crate::document::DocumentFormat::from_path(&editor_path);
         let style_query = syntax::SparseEditorStyleSnapshot::query_lines(
             &editor_path,
@@ -681,7 +681,7 @@ impl Element for EditorElement {
                 )
             } else {
                 syntax::runs(
-                    editor.session.read(cx).path(),
+                    editor.session.read(cx).syntax_path(),
                     &text,
                     base_run,
                     line_style,
@@ -972,7 +972,7 @@ impl Element for EditorElement {
         );
         let (minimap, minimap_raster_request) = build_minimap(
             editor,
-            editor.session.read(cx).path(),
+            editor.session.read(cx).syntax_path(),
             &snapshot,
             styles_pending,
             minimap_bounds,

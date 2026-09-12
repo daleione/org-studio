@@ -66,7 +66,7 @@ impl WorkspaceWindow {
             return;
         };
         let snapshot = session.read(cx).snapshot();
-        let path = session.read(cx).path().to_path_buf();
+        let path = session.read(cx).syntax_path().to_path_buf();
         self.reconcile_visible_reading_panes(cx);
         if !force && self.visible_reading_panes_are_current(cx) {
             return;
@@ -138,7 +138,7 @@ impl WorkspaceWindow {
                             };
                             if current.read(cx).id() != request_document_id
                                 || current.read(cx).revision() != request_revision
-                                || current.read(cx).path() != request_path
+                                || current.read(cx).syntax_path() != request_path
                             {
                                 return false;
                             }

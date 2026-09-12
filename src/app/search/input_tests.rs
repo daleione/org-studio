@@ -374,7 +374,7 @@ fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppCon
         let current = p.motion.sample(available, std::time::Instant::now()).0;
         let midway = super::geometry::ShellShape {
             width: (480. + available) / 2.,
-            search_opacity: 0.5,
+            content_opacity: 0.5,
             ..current
         };
         p.motion

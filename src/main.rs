@@ -1,19 +1,18 @@
 use std::{cell::RefCell, path::PathBuf, rc::Rc};
 
 use gpui::{
-    App, Bounds, KeyBinding, Menu, MenuItem, SharedString, SystemMenuType, TitlebarOptions,
-    WindowAppearance, WindowBounds, WindowHandle, WindowOptions, prelude::*, px, size,
+    App, Bounds, KeyBinding, SharedString, TitlebarOptions, WindowAppearance, WindowBounds,
+    WindowHandle, WindowOptions, prelude::*, px, size,
 };
 use org_studio::{
     app::WorkspaceWindow,
-    editor::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     perf_tracing,
     preview::{
         DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, ExportDocument,
         IncreaseContentFontSize, InitialDocumentLoad, OpenDocument, QuitApplication,
-        ReloadDocument, ResetContentFontSize, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome,
-        ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
-        UseEnglish, preload_initial_document,
+        ReloadDocument, ResetContentFontSize, SaveDocument, SaveDocumentAs, ShowEditor,
+        ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap,
+        preload_initial_document,
     },
     window_state,
 };
@@ -47,7 +46,7 @@ impl ApplicationController {
                 if let Some(path) = path.clone()
                     && preview.current_document_path(cx) != Some(path.as_path())
                 {
-                    preview.request_open(path, window, cx);
+                    preview.open(path, cx);
                 }
                 window.activate_window();
             });
@@ -224,7 +223,9 @@ fn main() {
                 Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
             ),
         ]);
-        cx.set_menus(app_menus());
+        cx.set_menus(org_studio::app::application_menus(
+            org_studio::settings::WorkspaceSettings::load().language,
+        ));
         // Leave fullscreen with Escape. Registered as a keystroke interceptor so
         // it fires before any editor binding (Escape is a binding prefix there)
         // and before the emacs router consumes the key.
@@ -291,55 +292,4 @@ fn main() {
     if let Some(perf_trace) = perf_trace {
         perf_trace.report();
     }
-}
-
-fn app_menus() -> Vec<Menu> {
-    vec![
-        Menu::new("Org Studio").items([
-            MenuItem::os_submenu("Services", SystemMenuType::Services),
-            MenuItem::separator(),
-            MenuItem::action("Quit Org Studio", QuitApplication),
-        ]),
-        Menu::new("File").items([
-            MenuItem::action("Home", ShowHome),
-            MenuItem::separator(),
-            MenuItem::action("Open...", OpenDocument),
-            MenuItem::separator(),
-            MenuItem::action("Save", SaveDocument),
-            MenuItem::action("Save As...", SaveDocumentAs),
-            MenuItem::separator(),
-            MenuItem::action("Export...", ExportDocument),
-            MenuItem::separator(),
-            MenuItem::action("Reload", ReloadDocument),
-        ]),
-        Menu::new("Edit").items([
-            MenuItem::action("Undo", Undo),
-            MenuItem::action("Redo", Redo),
-            MenuItem::separator(),
-            MenuItem::action("Cut", Cut),
-            MenuItem::action("Copy", Copy),
-            MenuItem::action("Paste", Paste),
-            MenuItem::separator(),
-            MenuItem::action("Select All", SelectAll),
-            MenuItem::separator(),
-            MenuItem::action("Find…", org_studio::app::FindDocument),
-        ]),
-        Menu::new("View").items([
-            MenuItem::action("Editor", ShowEditor),
-            MenuItem::action("Reading", ShowReading),
-            MenuItem::action("Split", ShowSplit),
-            MenuItem::separator(),
-            MenuItem::action("Toggle Soft Wrap", ToggleSoftWrap),
-            MenuItem::action("Toggle Sidebar", ToggleSidebar),
-            MenuItem::action("Toggle Minimap", ToggleMinimap),
-            MenuItem::separator(),
-            MenuItem::action("Increase Content Font Size", IncreaseContentFontSize),
-            MenuItem::action("Decrease Content Font Size", DecreaseContentFontSize),
-            MenuItem::action("Reset Content Font Size", ResetContentFontSize),
-        ]),
-        Menu::new("Language").items([
-            MenuItem::action("English", UseEnglish),
-            MenuItem::action("Chinese (Simplified)", UseChinese),
-        ]),
-    ]
 }

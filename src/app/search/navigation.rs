@@ -127,6 +127,9 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn search_render_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.buffers.panel.is_some() {
+            return;
+        }
         self.search_presentation_tick(window, cx);
         let Some(s) = &self.search.session else {
             return;
@@ -181,7 +184,7 @@ impl WorkspaceWindow {
             } else {
                 0.
             };
-            (shape.replacement - target).abs() > 0.5
+            (shape.expansion_height - target).abs() > 0.5
         });
         let failed = s.failed();
         s.input.update(cx, |input, cx| {

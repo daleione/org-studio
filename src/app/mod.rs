@@ -25,6 +25,8 @@ use status_line::StatusLineHost;
 use workspace::ScrollBenchmark;
 
 mod agenda;
+pub(crate) mod buffers;
+pub use buffers::{CloseBuffer, NewDocument, SaveBuffers, SwitchBuffer};
 mod command_window;
 mod component;
 mod derived;
@@ -32,7 +34,9 @@ mod echo_area;
 pub(crate) mod export_ui;
 mod file_manager;
 mod home;
+mod menus;
 mod native_input;
+pub use menus::application_menus;
 mod overlays;
 mod render;
 mod save;
@@ -261,6 +265,7 @@ impl WorkspaceLoadState {
 }
 
 pub struct WorkspaceWindow {
+    pub(crate) buffers: buffers::BufferHost,
     pub(crate) search: search::SearchHost,
     pub(crate) language: crate::i18n::Language,
     pub(crate) focus_handle: Option<FocusHandle>,

@@ -335,7 +335,7 @@ impl SemanticEditor {
             return;
         }
         let snapshot = self.snapshot(cx);
-        let path = self.session.read(cx).path().to_path_buf();
+        let path = self.session.read(cx).syntax_path().to_path_buf();
         let table_candidate = crate::document::DocumentFormat::detect(&path)
             .and_then(|format| {
                 let line = snapshot.line_index_at(self.selection.head()).ok()?;
@@ -375,7 +375,7 @@ impl SemanticEditor {
             return;
         }
         let snapshot = self.snapshot(cx);
-        let path = self.session.read(cx).path().to_path_buf();
+        let path = self.session.read(cx).syntax_path().to_path_buf();
         let headings = crate::document::DocumentFormat::detect(&path)
             .map(|_| self.folds.heading_index(&path, &snapshot));
         let Some(context) = super::org_commands::EditorCommandContext::at_with_headings(
@@ -595,7 +595,7 @@ impl SemanticEditor {
             return;
         }
         let snapshot = self.snapshot(cx);
-        let path = self.session.read(cx).path().to_path_buf();
+        let path = self.session.read(cx).syntax_path().to_path_buf();
         let headings = crate::document::DocumentFormat::detect(&path)
             .map(|_| self.folds.heading_index(&path, &snapshot));
         let Some(context) = super::org_commands::EditorCommandContext::at_with_headings(
@@ -672,7 +672,7 @@ impl SemanticEditor {
             return false;
         }
         let snapshot = self.snapshot(cx);
-        let path = self.session.read(cx).path().to_path_buf();
+        let path = self.session.read(cx).syntax_path().to_path_buf();
         let Some(context) =
             super::org_commands::EditorCommandContext::at(&path, &snapshot, self.selection.head())
         else {
@@ -1250,7 +1250,7 @@ impl SemanticEditor {
             && self.fold_markers.contains(&line)
         {
             let snapshot = self.snapshot(cx);
-            let path = self.session.read(cx).path().to_path_buf();
+            let path = self.session.read(cx).syntax_path().to_path_buf();
             self.finish_fold_animation();
             let previous = self.folds.projection(&path, &snapshot);
             self.folds.expand_at(&snapshot, line);

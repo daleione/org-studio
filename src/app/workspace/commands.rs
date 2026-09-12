@@ -108,7 +108,7 @@ impl WorkspaceWindow {
                 self.open_search(false, false, true, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::OpenDocument) => {
-                self.choose_file(window, cx)
+                self.open_buffer_picker(crate::app::buffers::PickerIntent::File, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ShowHome) => {
                 self.request_home(window, cx)
@@ -155,6 +155,21 @@ impl WorkspaceWindow {
                     return;
                 }
                 self.save_document(window, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::SwitchBuffer) => {
+                self.open_buffer_picker(crate::app::buffers::PickerIntent::Switch, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::CloseBuffer) => {
+                self.open_buffer_picker(crate::app::buffers::PickerIntent::Close, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::SaveBuffers) => {
+                self.begin_buffer_review(crate::app::buffers::ReviewKind::Save, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::NextBuffer) => {
+                self.cycle_buffer(true, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::PreviousBuffer) => {
+                self.cycle_buffer(false, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::SaveDocumentAs) => {
                 if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
@@ -278,7 +293,7 @@ impl WorkspaceWindow {
                 self.dired_move(-(command_count(prefix) as i64), cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredOpen) => {
-                self.dired_open_selected(window, cx)
+                self.dired_open_selected(cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::DiredUp) => self.dired_up(cx),
             CommandImplementation::Builtin(BuiltinCommand::DiredBack) => {

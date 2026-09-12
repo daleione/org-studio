@@ -12,7 +12,7 @@ use std::sync::{
 #[derive(Default)]
 pub(crate) struct SearchHost {
     pub(super) session: Option<Session>,
-    pub(super) presentation: Option<super::presentation::Presentation>,
+    pub(crate) presentation: Option<super::presentation::Presentation>,
     pub(super) next_id: u64,
     pub(super) history: Vec<String>,
 }

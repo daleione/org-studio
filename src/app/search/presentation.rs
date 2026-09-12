@@ -34,13 +34,13 @@ pub(super) enum PresentationPhase {
     Search,
     Returning(BarSnapshot),
 }
-pub(super) struct Presentation {
+pub(crate) struct Presentation {
     pub pane: PaneSide,
     pub surface: PaneSurface,
     pub document: DocumentId,
     pub available_width: f32,
     pub motion: ShellMotion,
-    pub phase: PresentationPhase,
+    pub(super) phase: PresentationPhase,
 }
 impl Presentation {
     pub fn new(pane: PaneSide, surface: PaneSurface, document: DocumentId) -> Self {
@@ -80,8 +80,8 @@ impl BarSnapshot {
             height: crate::app::status_line::FLOATING_STATUS_HEIGHT
                 + replacement
                 + if self.detail.is_some() { 26. } else { 0. },
-            replacement,
-            search_opacity: 1.,
+            expansion_height: replacement,
+            content_opacity: 1.,
         }
     }
 }

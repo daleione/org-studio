@@ -10,12 +10,11 @@ use crate::{
     editor::Copy,
     preview::{
         DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, EXPORT_DOCUMENT_COMMAND,
-        ExportDocument, IncreaseContentFontSize, OPEN_DOCUMENT_COMMAND, OpenDocument,
-        OpenFileManager, QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND,
-        ReloadDocument, ResetContentFontSize, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
-        SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor,
-        ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
-        UseEnglish,
+        ExportDocument, IncreaseContentFontSize, OpenDocument, OpenFileManager,
+        QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND, ReloadDocument,
+        ResetContentFontSize, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
+        SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome, ShowReading,
+        ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish,
     },
     theme::current_theme,
 };
@@ -242,6 +241,7 @@ impl Render for WorkspaceWindow {
             }));
         }
         self.search_render_tick(window, cx);
+        self.buffer_tick(window, cx);
         window.set_window_title(&self.window_title(cx));
         self.schedule_file_manager_presentation(window, cx);
         if self.scroll_benchmark.is_some() && !self.minimap_visible {
@@ -369,20 +369,48 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &crate::app::FindDocument, _, cx| {
                 this.open_search(false, false, false, cx)
             }))
-            .capture_key_down(cx.listener(Self::search_capture))
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.search_is_open()
+                    && !this.search_input_composing(cx)
+                    && this.buffers.panel.is_none()
+                    && (event.keystroke.modifiers.control && event.keystroke.key == "x"
+                        || this.keyboard.pending_keys().is_some())
+                {
+                    this.key_down(event, window, cx);
+                    return;
+                }
+                if this.buffers.panel.is_some() {
+                    if this.buffer_busy() {
+                        if event.keystroke.modifiers.control && event.keystroke.key == "g" {
+                            this.cancel_buffer_panel(cx);
+                        }
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if matches!(
+                        this.buffers.panel,
+                        Some(crate::app::buffers::Panel::Review(_))
+                    ) {
+                        this.buffer_review_key(event, window, cx);
+                        cx.stop_propagation();
+                    }
+                } else {
+                    this.search_capture(event, window, cx);
+                }
+            }))
             .on_key_down(cx.listener(|this, event, window, cx| {
-                if !this.search_is_open() {
+                if !this.search_is_open() && this.buffers.panel.is_none() {
                     this.key_down(event, window, cx);
                 }
             }))
             .on_action(cx.listener(
-                |this, action: &crate::editor::ActivateReadOnlyLine, window, cx| {
-                    this.activate_generated_line(action.line, window, cx);
+                |this, action: &crate::editor::ActivateReadOnlyLine, _, cx| {
+                    this.activate_generated_line(action.line, cx);
                 },
             ))
-            .on_action(cx.listener(|this, _: &OpenDocument, window, cx| {
-                this.dispatch_command(OPEN_DOCUMENT_COMMAND, window, cx)
-            }))
+            .on_action(
+                cx.listener(|this, _: &OpenDocument, window, cx| this.choose_file(window, cx)),
+            )
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
                 this.dispatch_command(SHOW_HOME_COMMAND, window, cx)
             }))
@@ -395,6 +423,26 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &SaveDocumentAs, window, cx| {
                 this.dispatch_command(SAVE_DOCUMENT_AS_COMMAND, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::buffers::NewDocument, _, cx| {
+                    this.open_buffer_picker(crate::app::buffers::PickerIntent::New, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::app::buffers::SwitchBuffer, _, cx| {
+                    this.open_buffer_picker(crate::app::buffers::PickerIntent::Switch, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::app::buffers::CloseBuffer, _, cx| {
+                    this.open_buffer_picker(crate::app::buffers::PickerIntent::Close, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::app::buffers::SaveBuffers, _, cx| {
+                    this.begin_buffer_review(crate::app::buffers::ReviewKind::Save, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &ExportDocument, window, cx| {
                 this.dispatch_command(EXPORT_DOCUMENT_COMMAND, window, cx)
             }))
@@ -480,6 +528,20 @@ impl Render for WorkspaceWindow {
                             self.language,
                         ))
                     }),
+            )
+            .when(
+                (self.content_route != crate::app::ContentRoute::Document
+                    || self.state.ready().is_none())
+                    && (self.buffers.panel.is_some() || self.buffers.returning),
+                |view| {
+                    view.children(self.buffer_panel(
+                        self.buffers.pane,
+                        entity.clone(),
+                        command_window_width,
+                        None,
+                        cx,
+                    ))
+                },
             )
             .when(resizing_sidebar, |view| {
                 view.child(

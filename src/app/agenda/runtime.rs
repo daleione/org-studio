@@ -15,7 +15,7 @@ pub(super) struct ScanRequest {
     pub roots: Vec<PathBuf>,
     pub previous: Arc<AgendaIndexSnapshot>,
     pub generation: u64,
-    pub live: Option<(PathBuf, DocumentSnapshot)>,
+    pub live: Vec<(PathBuf, DocumentSnapshot)>,
 }
 
 #[cfg(test)]
@@ -32,10 +32,10 @@ mod tests {
             roots: vec![root.clone()],
             previous: Arc::default(),
             generation: 1,
-            live: Some((
+            live: vec![(
                 path.clone(),
                 DocumentSnapshot::from_utf8(b"* TODO Unsaved\n".to_vec()).unwrap(),
-            )),
+            )],
         });
         assert_eq!(first.shards[0].tasks[0].title.as_ref(), "Unsaved");
         let id = first.shards[0].file;
@@ -51,7 +51,7 @@ mod tests {
             roots: vec![root.clone()],
             previous: index.snapshot(),
             generation: 2,
-            live: None,
+            live: Vec::new(),
         });
         assert_eq!(second.shards.len(), 1);
         assert_ne!(second.shards[0].file, id);
@@ -71,7 +71,7 @@ pub(super) struct ScanResult {
 }
 
 pub(super) fn scan(mut request: ScanRequest) -> ScanResult {
-    if let Some((path, _)) = &mut request.live {
+    for (path, _) in &mut request.live {
         *path = std::fs::canonicalize(&*path).unwrap_or_else(|_| path.clone());
     }
     request.roots = request
@@ -94,14 +94,15 @@ pub(super) fn scan(mut request: ScanRequest) -> ScanResult {
             };
         }
     };
-    if let Some((path, _)) = &request.live
-        && path
+    for (path, _) in &request.live {
+        if path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("org"))
-        && request.roots.iter().any(|root| path.starts_with(root))
-        && !sources.iter().any(|source| source.path == *path)
-    {
-        sources.push(crate::agenda::DiscoveredSource { path: path.clone() });
+            && request.roots.iter().any(|root| path.starts_with(root))
+            && !sources.iter().any(|source| source.path == *path)
+        {
+            sources.push(crate::agenda::DiscoveredSource { path: path.clone() });
+        }
     }
     let mut next = request
         .identities
@@ -124,9 +125,7 @@ pub(super) fn scan(mut request: ScanRequest) -> ScanResult {
                 next += 1;
                 file
             });
-        if let Some((path, snapshot)) = &request.live
-            && *path == source.path
-        {
+        if let Some((path, snapshot)) = request.live.iter().find(|(path, _)| *path == source.path) {
             if let Some(previous) = request
                 .previous
                 .files
@@ -176,7 +175,7 @@ pub(super) struct AgendaRuntime {
     pub initialized: bool,
     pub identities: std::collections::BTreeMap<PathBuf, FileId>,
     pub worker: LatestRequestWorker<ScanRequest, ScanResult>,
-    pub live: Option<(PathBuf, DocumentSnapshot)>,
+    pub live: Vec<(PathBuf, DocumentSnapshot)>,
     pub pump: Option<Task<()>>,
     pub watch: Option<Task<()>>,
 }
@@ -188,7 +187,7 @@ impl Default for AgendaRuntime {
             initialized: false,
             identities: Default::default(),
             worker: LatestRequestWorker::spawn(scan),
-            live: None,
+            live: Vec::new(),
             pump: None,
             watch: None,
         }
@@ -197,14 +196,19 @@ impl Default for AgendaRuntime {
 
 impl WorkspaceWindow {
     pub(crate) fn sync_agenda_document(&mut self, cx: &mut Context<Self>) {
-        let live = self.document_session().map(|session| {
-            let session = session.read(cx);
-            (session.path().to_path_buf(), session.snapshot())
-        });
-        let identity = |value: &Option<(PathBuf, DocumentSnapshot)>| {
+        let mut live = self
+            .buffer_sessions()
+            .filter_map(|session| {
+                let session = session.read(cx);
+                Some((session.file_path()?.to_path_buf(), session.snapshot()))
+            })
+            .collect::<Vec<_>>();
+        live.sort_by(|a, b| a.0.cmp(&b.0));
+        let identity = |value: &Vec<(PathBuf, DocumentSnapshot)>| {
             value
-                .as_ref()
+                .iter()
                 .map(|(path, snapshot)| (path.clone(), snapshot.document_id(), snapshot.revision()))
+                .collect::<Vec<_>>()
         };
         if identity(&live) != identity(&self.agenda.runtime.live) {
             self.agenda.runtime.live = live;

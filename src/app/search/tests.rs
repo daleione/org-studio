@@ -73,8 +73,8 @@ fn search_exit_drops_business_state_and_reopen_keeps_the_entire_shape(
         let expanded = ShellShape {
             width: 480.,
             height: 109.,
-            replacement: 41.,
-            search_opacity: 1.,
+            expansion_height: 41.,
+            content_opacity: 1.,
         };
         p.motion.update(expanded, 1200., Instant::now(), false);
         w.close_search(false, cx);
@@ -93,8 +93,8 @@ fn search_exit_drops_business_state_and_reopen_keeps_the_entire_shape(
         let midway = ShellShape {
             width: 800.,
             height: 75.5,
-            replacement: 20.5,
-            search_opacity: 0.5,
+            expansion_height: 20.5,
+            content_opacity: 0.5,
         };
         p.motion.update(midway, 1200., Instant::now(), false);
         w.open_search(false, false, false, cx);

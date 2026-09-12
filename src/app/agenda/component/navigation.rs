@@ -302,11 +302,9 @@ pub(crate) fn source_context_menu(
                         .size(px(15.)),
                 )
                 .child(language.text("agenda.open_file"))
-                .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
-                    workspace.update(cx, |this, cx| {
-                        this.open_agenda_source_file(menu.file, window, cx)
-                    });
+                    workspace.update(cx, |this, cx| this.open_agenda_source_file(menu.file, cx));
                 }),
         )
 }

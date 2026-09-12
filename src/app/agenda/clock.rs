@@ -52,10 +52,7 @@ impl WorkspaceWindow {
                 }
                 continue;
             }
-            if let Some(session) = self
-                .document_session()
-                .filter(|session| session.read(cx).path() == log.file)
-            {
+            if let Some(session) = self.buffer_for_path(&log.file, cx) {
                 let snapshot = session.read(cx).snapshot();
                 let text =
                     snapshot.copy_range(crate::document::ByteRange::new(0, snapshot.len_bytes()));

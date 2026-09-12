@@ -51,18 +51,13 @@ impl WorkspaceWindow {
         true
     }
 
-    pub(crate) fn activate_generated_line(
-        &mut self,
-        line: u64,
-        window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(crate) fn activate_generated_line(&mut self, line: u64, cx: &mut gpui::Context<Self>) {
         if self.generated_command_disposition(crate::editor::GeneratedCommand::Activate)
             == crate::editor::CommandDisposition::Enabled
             || (self.content_route == crate::app::ContentRoute::Agenda
                 && self.agenda.state.projection == super::state::AgendaProjection::Source)
         {
-            self.open_agenda_text_line(line, window, cx);
+            self.open_agenda_text_line(line, cx);
         }
     }
 
@@ -147,12 +142,7 @@ impl WorkspaceWindow {
         self.agenda.text_generation = Some(generation);
     }
 
-    pub(crate) fn open_agenda_text_line(
-        &mut self,
-        line: u64,
-        window: &mut gpui::Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
+    pub(crate) fn open_agenda_text_line(&mut self, line: u64, cx: &mut gpui::Context<Self>) {
         let Some(reference) = self.agenda.text_projection_version.and_then(|version| {
             self.agenda
                 .text_view
@@ -184,7 +174,7 @@ impl WorkspaceWindow {
             self.request_document_focus(cx);
             self.reveal_agenda_text_target(cx);
         } else {
-            self.request_open(path, window, cx);
+            self.open(path, cx);
             if self.agenda.pending_text_task.is_some() {
                 self.agenda.pending_text_generation = Some(self.generation);
             }
@@ -272,7 +262,7 @@ mod tests {
         let key = shard.tasks[1].key;
         let expected = shard.tasks[1].source.heading_range.start.0 + 8;
         let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
-        cx.update(|window, app| {
+        cx.update(|_, app| {
             workspace.update(app, |workspace, cx| {
                 workspace.generation = 1;
                 assert!(workspace.apply_load_result(1, Ok(loaded), cx));
@@ -311,12 +301,12 @@ mod tests {
                     .unwrap();
                 workspace.agenda.text_projection_version = Some(projection.version);
                 workspace.content_route = crate::app::ContentRoute::Agenda;
-                workspace.open_agenda_text_line(0, window, cx);
+                workspace.open_agenda_text_line(0, cx);
                 assert!(matches!(
                     workspace.content_route,
                     crate::app::ContentRoute::Agenda
                 ));
-                workspace.open_agenda_text_line(1, window, cx);
+                workspace.open_agenda_text_line(1, cx);
                 assert!(matches!(
                     workspace.content_route,
                     crate::app::ContentRoute::Document

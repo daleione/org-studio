@@ -8,7 +8,6 @@ impl WorkspaceWindow {
     pub(crate) fn open_agenda_source_file(
         &mut self,
         file: crate::agenda::FileId,
-        window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) {
         let path = self
@@ -36,9 +35,8 @@ impl WorkspaceWindow {
         self.content_route = crate::app::ContentRoute::Document;
         self.request_document_focus(cx);
         // Reuse the live session, including unsaved edits and undo history.
-        // Switching files must go through the existing save/discard/cancel guard.
         if !already_open {
-            self.request_open(path, window, cx);
+            self.open(path, cx);
         }
         cx.notify();
     }
@@ -773,7 +771,7 @@ mod source_file_tests {
         let shard =
             crate::agenda::shard_from_disk(crate::agenda::FileId(1), 1, path.clone()).unwrap();
         let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
-        cx.update(|window, app| {
+        cx.update(|_, app| {
             workspace.update(app, |workspace, cx| {
                 workspace.generation = 1;
                 assert!(workspace.apply_load_result(1, Ok(loaded), cx));
@@ -794,7 +792,7 @@ mod source_file_tests {
                 });
                 workspace.agenda.runtime.index.replace(shard);
                 workspace.content_route = crate::app::ContentRoute::Agenda;
-                workspace.open_agenda_source_file(crate::agenda::FileId(1), window, cx);
+                workspace.open_agenda_source_file(crate::agenda::FileId(1), cx);
                 assert!(matches!(
                     workspace.content_route,
                     crate::app::ContentRoute::Document

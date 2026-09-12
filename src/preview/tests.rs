@@ -1942,7 +1942,7 @@ fn control_c_control_c_realigns_the_table_at_point(cx: &mut gpui::TestAppContext
 }
 
 #[gpui::test]
-fn ctrl_x_ctrl_b_with_the_editor_focused_goes_home_without_moving_the_cursor(
+fn ctrl_x_ctrl_b_with_the_editor_focused_lists_buffers_without_moving_the_cursor(
     cx: &mut gpui::TestAppContext,
 ) {
     let (workspace, cx) = cx.add_window_view(|_, cx| {
@@ -1976,10 +1976,22 @@ fn ctrl_x_ctrl_b_with_the_editor_focused_goes_home_without_moving_the_cursor(
             "the completing Ctrl-B must not edit or move through the document"
         );
     });
-    workspace.update(cx, |workspace, _| {
+    workspace.update(cx, |workspace, cx| {
         assert!(
-            matches!(workspace.state, WorkspaceLoadState::Empty),
-            "Ctrl-X Ctrl-B should reach the Home command, not the line-editing binding"
+            matches!(
+                workspace.buffers.panel,
+                Some(crate::app::buffers::Panel::Picker(_))
+            ),
+            "Ctrl-X Ctrl-B should open the buffer list, not the line-editing binding"
+        );
+        assert_eq!(workspace.document_session(), Some(&session));
+        assert_eq!(
+            workspace
+                .editor(crate::app::PaneSide::Left)
+                .unwrap()
+                .read(cx)
+                .selection(),
+            Selection::caret(ByteOffset(2))
         );
     });
 }

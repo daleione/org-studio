@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc};
+use std::sync::Arc;
 
 use gpui::Task;
 
@@ -13,25 +13,12 @@ pub(crate) enum SaveStatus {
     Error(Arc<str>),
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum PendingTransition {
-    Close,
-    Quit,
-    Open {
-        path: PathBuf,
-        anchor: Option<Arc<str>>,
-    },
-    Home,
-}
-
 #[derive(Clone, Debug, Default)]
 pub(crate) enum SaveInteraction {
     #[default]
     Idle,
-    GuardPrompt(PendingTransition),
-    ConflictPrompt(Option<PendingTransition>),
-    SaveAsPrompt(Option<PendingTransition>),
-    Saving(Option<PendingTransition>),
+    Prompt,
+    Saving,
     AllowCloseOnce,
 }
 

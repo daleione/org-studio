@@ -1,0 +1,477 @@
+use super::picker::match_score;
+use super::*;
+use crate::document::{
+    ByteRange, DocumentCommand, EditOrigin, EditTransaction, Selection, TextEdit, TextSnapshot,
+};
+use gpui::AppContext;
+
+fn edit(session: &Entity<DocumentSession>, text: &str, cx: &mut gpui::TestAppContext) {
+    session.update(cx, |s, cx| {
+        s.edit(
+            DocumentCommand::new(
+                EditTransaction::new(
+                    s.revision(),
+                    vec![TextEdit::new(
+                        ByteRange::new(0, s.snapshot().len_bytes()),
+                        text,
+                    )],
+                ),
+                Selection::default(),
+                Selection::default(),
+                EditOrigin::Other,
+            ),
+            cx,
+        )
+        .unwrap();
+    });
+}
+
+fn text(session: &Entity<DocumentSession>, cx: &gpui::TestAppContext) -> String {
+    cx.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+    })
+}
+
+#[gpui::test]
+fn switching_and_home_preserve_independent_sessions_and_undo(cx: &mut gpui::TestAppContext) {
+    let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    let a = w.update(cx, |w, cx| {
+        w.create_buffer("A".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&a, "中文 A", cx);
+    let a_editor = w.update(cx, |w, _| w.editor(crate::app::PaneSide::Left).unwrap());
+    let b = w.update(cx, |w, cx| {
+        w.create_buffer("B".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&b, "English B", cx);
+    w.update(cx, |w, cx| {
+        w.activate_buffer(a.read(cx).id(), cx);
+        assert_eq!(w.document_session().unwrap(), &a);
+        assert_eq!(w.editor(crate::app::PaneSide::Left).unwrap(), a_editor);
+        assert_eq!(w.buffer_sessions().count(), 2);
+        w.show_home_now(cx);
+        assert!(w.document_session().is_none());
+        assert_eq!(w.buffer_sessions().count(), 2);
+        w.activate_buffer(b.read(cx).id(), cx);
+    });
+    a.update(cx, |s, cx| {
+        s.undo(cx).unwrap();
+    });
+    assert_eq!(text(&a, cx), "");
+    assert_eq!(text(&b, cx), "English B");
+}
+
+#[gpui::test]
+fn exit_review_includes_hidden_drafts_and_cancel_keeps_them(cx: &mut gpui::TestAppContext) {
+    let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    for name in ["中文草稿", "English draft"] {
+        let session = w.update(cx, |w, cx| {
+            w.create_buffer(name.into(), None, cx);
+            w.document_session().unwrap().clone()
+        });
+        edit(&session, name, cx);
+    }
+    w.update(cx, |w, cx| {
+        w.show_home_now(cx);
+        w.begin_buffer_review(ReviewKind::Quit, cx);
+        assert_eq!(w.buffers.review().unwrap().entries.len(), 2);
+        w.cancel_buffer_panel(cx);
+        assert!(w.buffers.review().is_none());
+        assert!(w.buffer_sessions().all(|s| s.read(cx).is_dirty()));
+    });
+}
+
+#[gpui::test]
+fn emacs_picker_is_stable_and_does_not_type_into_document(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| {
+        w.create_buffer("notes.org".into(), None, cx);
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-x b");
+    cx.run_until_parked();
+    let original = cx.debug_bounds("floating-status-line").unwrap();
+    w.update(cx, |w, cx| {
+        assert!(matches!(w.buffers.panel, Some(Panel::Picker(_))));
+        if let Some(Panel::Picker(p)) = &w.buffers.panel {
+            p.input.update(cx, |i, cx| i.sync("不存在 / no match", cx));
+        }
+        cx.notify();
+    });
+    cx.run_until_parked();
+    assert_eq!(cx.debug_bounds("floating-status-line").unwrap(), original);
+    cx.simulate_keystrokes("ctrl-g");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert!(w.buffers.panel.is_none());
+        assert!(!w.document_session().unwrap().read(cx).is_dirty());
+    });
+    cx.simulate_keystrokes("ctrl-x ctrl-b");
+    cx.run_until_parked();
+    w.update(cx, |w, _| {
+        assert!(matches!(w.buffers.panel, Some(Panel::Picker(_))))
+    });
+    cx.simulate_keystrokes("ctrl-g");
+    cx.simulate_resize(gpui::size(gpui::px(390.), gpui::px(600.)));
+    for language in [
+        crate::i18n::Language::Chinese,
+        crate::i18n::Language::English,
+    ] {
+        w.update(cx, |w, cx| {
+            w.language = language;
+            w.open_buffer_picker(PickerIntent::New, cx);
+            if let Some(Panel::Picker(p)) = &mut w.buffers.panel {
+                p.markdown = true;
+            }
+        });
+        cx.run_until_parked();
+        w.update(cx, |w, cx| {
+            let Some(Panel::Picker(p)) = &w.buffers.panel else {
+                panic!("missing input");
+            };
+            let input = p.input.read(cx);
+            assert!(
+                f32::from(input.painted_bounds().unwrap().size.width) >= input.content_width,
+                "placeholder must fit in {language:?}"
+            );
+        });
+        let bounds = cx.debug_bounds("floating-status-line").unwrap();
+        assert!(f32::from(bounds.right()) <= 390.);
+        assert_eq!(f32::from(bounds.size.height), 92.);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn aliases_and_hard_links_have_one_file_identity() {
+    let directory = std::env::temp_dir().join(format!("buffer-identity-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let file = directory.join("notes.org");
+    let hard = directory.join("hard.org");
+    let sym = directory.join("symbolic.org");
+    std::fs::write(&file, "text").unwrap();
+    std::fs::hard_link(&file, &hard).unwrap();
+    std::os::unix::fs::symlink(&file, &sym).unwrap();
+    assert!(same_file(&file, &hard));
+    assert!(same_file(&file, &sym));
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[gpui::test]
+fn save_review_names_drafts_sequentially_and_keeps_skipped_edits(cx: &mut gpui::TestAppContext) {
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let root = std::env::temp_dir().join(format!("buffer-review-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let mut sessions = Vec::new();
+    for name in ["A", "B", "跳过"] {
+        let session = w.update(cx, |w, cx| {
+            w.create_buffer(name.into(), None, cx);
+            let s = w.document_session().unwrap().clone();
+            s.update(cx, |s, cx| {
+                s.apply_transient_edit(
+                    EditTransaction::new(
+                        s.revision(),
+                        vec![TextEdit::new(ByteRange::new(0, 0), name)],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            });
+            s
+        });
+        sessions.push(session);
+    }
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.begin_buffer_review(ReviewKind::Save, cx);
+            w.buffers.review_mut().unwrap().entries[0].save = false;
+            w.process_buffer_review(window, cx);
+        })
+    });
+    for name in ["B", "A"] {
+        cx.cx
+            .simulate_new_path_selection(|_| Some(root.join(format!("{name}.org"))));
+        cx.run_until_parked();
+    }
+    w.update(cx, |w, cx| {
+        assert!(w.buffers.review().is_none());
+        assert!(!sessions[0].read(cx).is_dirty());
+        assert!(!sessions[1].read(cx).is_dirty());
+        assert!(sessions[2].read(cx).is_dirty());
+        assert!(sessions[2].read(cx).file_path().is_none());
+    });
+    assert_eq!(std::fs::read_to_string(root.join("A.org")).unwrap(), "A");
+    assert_eq!(std::fs::read_to_string(root.join("B.org")).unwrap(), "B");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn batch_open_keeps_every_success_and_focuses_the_first_file(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("buffer-batch-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let paths = [
+        root.join("A.org"),
+        root.join("B.md"),
+        root.join("missing.org"),
+    ];
+    std::fs::write(&paths[0], "* A").unwrap();
+    std::fs::write(&paths[1], "# B").unwrap();
+    let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| w.open_buffers(paths.to_vec(), cx));
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert_eq!(w.buffer_sessions().count(), 2);
+        assert!(same_file(
+            w.document_session().unwrap().read(cx).path(),
+            &paths[0]
+        ));
+        let b = w.buffer_for_path(&paths[1], cx).unwrap();
+        w.open(paths[1].clone(), cx);
+        assert_eq!(w.document_session().unwrap(), &b);
+        assert_eq!(w.buffer_sessions().count(), 2);
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn save_callback_stays_with_its_document_after_switching(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("buffer-save-switch-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("A.org");
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let a = w.update(cx, |w, cx| {
+        w.create_buffer("A".into(), Some(path.clone()), cx);
+        let a = w.document_session().unwrap().clone();
+        a.update(cx, |s, cx| {
+            s.apply_transient_edit(
+                EditTransaction::new(
+                    s.revision(),
+                    vec![TextEdit::new(ByteRange::new(0, 0), "saved A")],
+                ),
+                cx,
+            )
+            .unwrap();
+        });
+        a
+    });
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.save_document(window, cx);
+            w.create_buffer("B".into(), None, cx);
+            let b = w.document_session().unwrap().clone();
+            b.update(cx, |s, cx| {
+                s.apply_transient_edit(
+                    EditTransaction::new(
+                        s.revision(),
+                        vec![TextEdit::new(ByteRange::new(0, 0), "unsaved B")],
+                    ),
+                    cx,
+                )
+                .unwrap();
+            });
+        })
+    });
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert!(!a.read(cx).is_dirty());
+        let b = w.document_session().unwrap().read(cx);
+        assert!(b.is_dirty());
+        assert_eq!(b.display_name(), "B");
+        assert!(b.file_path().is_none());
+    });
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "saved A");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn keyboard_close_reviews_before_discard_and_window_close_checks_hidden_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| {
+        w.create_buffer("keep".into(), None, cx);
+        let s = w.document_session().unwrap().clone();
+        s.update(cx, |s, cx| {
+            s.apply_transient_edit(
+                EditTransaction::new(
+                    s.revision(),
+                    vec![TextEdit::new(ByteRange::new(0, 0), "keep this")],
+                ),
+                cx,
+            )
+            .unwrap();
+        });
+        w.create_buffer("discard".into(), None, cx);
+        let s = w.document_session().unwrap().clone();
+        s.update(cx, |s, cx| {
+            s.apply_transient_edit(
+                EditTransaction::new(
+                    s.revision(),
+                    vec![TextEdit::new(ByteRange::new(0, 0), "discard this")],
+                ),
+                cx,
+            )
+            .unwrap();
+        });
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-x k enter");
+    cx.run_until_parked();
+    w.update(cx, |w, _| {
+        assert_eq!(w.buffers.review().unwrap().entries.len(), 1)
+    });
+    cx.simulate_keystrokes("space enter");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert_eq!(w.buffer_sessions().count(), 1);
+        assert_eq!(
+            w.document_session().unwrap().read(cx).display_name(),
+            "keep"
+        );
+        w.show_home_now(cx);
+    });
+    cx.run_until_parked();
+    assert!(!cx.simulate_close());
+    cx.run_until_parked();
+    w.update(cx, |w, _| {
+        assert_eq!(w.buffers.review().unwrap().kind, ReviewKind::Window)
+    });
+    cx.simulate_keystrokes("ctrl-g");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert!(w.buffer_sessions().next().unwrap().read(cx).is_dirty())
+    });
+}
+
+#[test]
+fn matching_handles_unicode_case_and_path_ranking() {
+    assert_eq!(match_score("生活.org", "笔记/生活.org", "生活"), Some(800));
+    assert_eq!(
+        match_score("README.md", "project/README.md", "readme.md"),
+        Some(1000)
+    );
+    assert_eq!(
+        match_score("notes.org", "工作/notes.org", "工作"),
+        Some(300)
+    );
+    assert_eq!(match_score("reading-list.md", "", "rdlst"), Some(100));
+    assert_eq!(match_score("notes.org", "", "不存在"), None);
+}
+
+#[gpui::test]
+fn cancelled_review_does_not_write_after_path_prompt_returns(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("buffer-cancel-prompt-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let target = root.join("草稿.org");
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let session = w.update(cx, |w, cx| {
+        w.create_buffer("草稿".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&session, "尚未保存", cx);
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.begin_buffer_review(ReviewKind::Save, cx);
+            w.process_buffer_review(window, cx);
+            w.cancel_buffer_panel(cx);
+            w.begin_buffer_review(ReviewKind::Quit, cx);
+        })
+    });
+    cx.cx.simulate_new_path_selection(|_| Some(target.clone()));
+    cx.run_until_parked();
+    assert!(
+        !target.exists(),
+        "a cancelled review must not start a write"
+    );
+    w.update(cx, |w, cx| {
+        assert!(session.read(cx).is_dirty());
+        assert!(session.read(cx).file_path().is_none());
+        let review = w.buffers.review().unwrap();
+        assert_eq!(review.kind, ReviewKind::Quit);
+        assert!(!review.running && !review.entries[0].done);
+        w.open_buffer_picker(PickerIntent::Switch, cx);
+        assert!(w.buffers.review().is_none());
+        w.request_close_buffer(session.read(cx).id(), cx);
+        assert!(matches!(
+            w.buffers.review().unwrap().kind,
+            ReviewKind::Close(_)
+        ));
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn open_picker_includes_documents_loaded_in_the_background(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("buffer-live-picker-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("后台.md");
+    std::fs::write(&path, "# 后台").unwrap();
+    let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| {
+        w.create_buffer("当前.org".into(), None, cx);
+        w.open_buffer_picker(PickerIntent::Switch, cx);
+        w.open_background_buffer(path.clone(), cx);
+    });
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        let candidates = w.buffer_candidates(cx);
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(candidates[0].name, "当前.org");
+        assert_eq!(candidates[1].name, "后台.md");
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn latest_foreground_open_wins_without_losing_previous_requests(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("buffer-open-focus-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let a = root.join("A.org");
+    let b = root.join("B.org");
+    std::fs::write(&a, "* A").unwrap();
+    std::fs::write(&b, "* B").unwrap();
+    let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| {
+        w.open(a.clone(), cx);
+        w.open(b.clone(), cx);
+    });
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert_eq!(w.buffer_sessions().count(), 2);
+        assert!(same_file(
+            w.document_session().unwrap().read(cx).file_path().unwrap(),
+            &b
+        ));
+        assert!(w.buffer_for_path(&a, cx).is_some());
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
+fn home_picker_uses_window_width_and_leaves_no_statusline(cx: &mut gpui::TestAppContext) {
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(true));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(600.)));
+    w.update(cx, |w, cx| {
+        w.create_buffer("分屏.org".into(), None, cx);
+        w.show_home_now(cx);
+    });
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("floating-status-line").is_none());
+    w.update(cx, |w, cx| w.open_buffer_picker(PickerIntent::New, cx));
+    cx.run_until_parked();
+    assert_eq!(
+        f32::from(cx.debug_bounds("floating-status-line").unwrap().size.width),
+        560.
+    );
+    w.update(cx, |w, cx| w.cancel_buffer_panel(cx));
+    cx.run_until_parked();
+    assert!(cx.debug_bounds("floating-status-line").is_none());
+}

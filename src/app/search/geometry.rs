@@ -1,9 +1,7 @@
-use crate::app::status_line::FLOATING_STATUS_HEIGHT;
-use crate::motion::{Easing, MotionSpec, Tween};
+#[cfg(test)]
+use crate::app::status_line::shell::SHELL_MOTION;
+#[cfg(test)]
 use std::time::{Duration, Instant};
-
-pub(super) const SHELL_MOTION: MotionSpec =
-    MotionSpec::new(Duration::from_millis(360), Easing::EaseOutCubic);
 
 #[derive(Clone, Copy)]
 pub(super) struct BarLayout {
@@ -54,62 +52,7 @@ pub(super) fn content_width(
         .clamp(480., 960.)
         .min(available.max(1.))
 }
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(super) struct ShellShape {
-    pub width: f32,
-    pub height: f32,
-    pub replacement: f32,
-    pub search_opacity: f32,
-}
-impl ShellShape {
-    pub fn status(width: f32) -> Self {
-        Self {
-            width,
-            height: FLOATING_STATUS_HEIGHT,
-            replacement: 0.,
-            search_opacity: 0.,
-        }
-    }
-    fn interpolate(self, to: Self, p: f32) -> Self {
-        Self {
-            width: self.width + (to.width - self.width) * p,
-            height: self.height + (to.height - self.height) * p,
-            replacement: self.replacement + (to.replacement - self.replacement) * p,
-            search_opacity: self.search_opacity + (to.search_opacity - self.search_opacity) * p,
-        }
-    }
-}
-#[derive(Default)]
-pub(super) struct ShellMotion {
-    target: Option<ShellShape>,
-    from: Option<ShellShape>,
-    progress: Option<Tween>,
-}
-impl ShellMotion {
-    pub fn update(&mut self, target: ShellShape, available: f32, now: Instant, animate: bool) {
-        if self.target == Some(target) && animate {
-            return;
-        }
-        let from = self.sample(available, now).0;
-        self.target = Some(target);
-        self.from = Some(from);
-        self.progress = (animate && from != target).then(|| Tween::new(now, 0., 1., SHELL_MOTION));
-    }
-    pub fn sample(&self, available: f32, now: Instant) -> (ShellShape, bool) {
-        let target = self.target.unwrap_or_else(|| ShellShape::status(available));
-        let (mut shape, active) = self.progress.map_or((target, false), |motion| {
-            let sample = motion.sample(now);
-            (
-                self.from
-                    .unwrap_or(target)
-                    .interpolate(target, sample.value),
-                sample.active,
-            )
-        });
-        shape.width = shape.width.clamp(1., available.max(1.));
-        (shape, active)
-    }
-}
+pub(super) use crate::app::status_line::shell::{ShellMotion, ShellShape};
 
 #[cfg(test)]
 mod tests {
@@ -120,8 +63,8 @@ mod tests {
         let search = ShellShape {
             width: 480.,
             height: 109.,
-            replacement: 41.,
-            search_opacity: 1.,
+            expansion_height: 41.,
+            content_opacity: 1.,
         };
         let mut motion = ShellMotion::default();
         motion.update(search, 1200., now, true);
@@ -133,7 +76,7 @@ mod tests {
         let shape = motion.sample(1200., midway).0;
         let find = ShellShape {
             height: 42.,
-            replacement: 0.,
+            expansion_height: 0.,
             ..search
         };
         motion.update(find, 1200., midway, true);
