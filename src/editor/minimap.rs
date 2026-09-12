@@ -42,6 +42,54 @@ fn perf_enabled() -> bool {
     *PERF_ENABLED.get_or_init(|| std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_PERF").is_some())
 }
 
+pub(crate) fn prewarm_text_rasterizer() {
+    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight, Wrap};
+    static PREWARMED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+    PREWARMED.get_or_init(|| {
+        let started = Instant::now();
+        let mut rasterizer = crate::minimap::text_rasterizer()
+            .lock()
+            .expect("minimap rasterizer poisoned");
+        let (font_system, swash_cache) = &mut *rasterizer;
+        let mut buffer = Buffer::new(font_system, Metrics::new(6.0, 8.0));
+        buffer.set_size(Some(1600.0), Some(8.0));
+        buffer.set_wrap(Wrap::None);
+        // Preload the Editor font family and all rendered weight/style combinations.
+        for (weight, style) in [
+            (Weight::NORMAL, Style::Normal),
+            (Weight::BOLD, Style::Normal),
+            (Weight::SEMIBOLD, Style::Normal),
+            (Weight::NORMAL, Style::Italic),
+            (Weight::BOLD, Style::Italic),
+            (Weight::SEMIBOLD, Style::Italic),
+        ] {
+            let attrs = Attrs::new()
+                .family(Family::Name(super::EDITOR_FONT_FAMILY))
+                .weight(weight)
+                .style(style);
+            buffer.set_text(
+                "Org Markdown 中文 α 😀 e\u{301} AaZz 0123456789 +-*/_`#[](){} :=> ",
+                &attrs,
+                Shaping::Advanced,
+                None,
+            );
+            buffer.shape_until_scroll(font_system, false);
+            buffer.draw(
+                font_system,
+                swash_cache,
+                Color::rgb(0, 0, 0),
+                |_, _, _, _, _| {},
+            );
+        }
+        if perf_enabled() {
+            eprintln!(
+                "org_editor_minimap_text_prewarm elapsed_ms={:.3}",
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+        }
+    });
+}
+
 #[cfg(feature = "benchmarks")]
 fn trace_enabled() -> bool {
     *TRACE_ENABLED.get_or_init(|| std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_TRACE").is_some())

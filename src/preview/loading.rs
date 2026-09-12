@@ -89,30 +89,40 @@ pub(crate) fn image_dimensions(path: &Path) -> Result<(u32, u32), String> {
     }
 }
 
-fn svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+pub(crate) fn svg_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
     let source = std::str::from_utf8(bytes).ok()?;
     let document = roxmltree::Document::parse(source).ok()?;
     let svg = document.root_element();
     if !svg.tag_name().name().eq_ignore_ascii_case("svg") {
         return None;
     }
-    if let Some(view_box) = svg
+    let view_box = svg
         .attribute("viewBox")
         .or_else(|| svg.attribute("viewbox"))
-    {
-        let values = view_box
-            .split(|character: char| character.is_ascii_whitespace() || character == ',')
-            .filter(|value| !value.is_empty())
-            .map(str::parse::<f64>)
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?;
-        if values.len() == 4 {
-            return positive_dimensions(values[2].abs(), values[3].abs());
+        .and_then(|value| {
+            let values = value
+                .split(|c: char| c.is_ascii_whitespace() || c == ',')
+                .filter(|value| !value.is_empty())
+                .map(str::parse::<f64>)
+                .collect::<Result<Vec<_>, _>>()
+                .ok()?;
+            (values.len() == 4 && values[2] > 0.0 && values[3] > 0.0)
+                .then(|| (values[2], values[3]))
+        });
+    // Resolve each axis independently, as GPUI's SVG renderer does. Missing
+    // lengths default to 100%; percentages refer to the corresponding viewBox axis.
+    // Absolute viewport lengths are already in logical pixels after unit conversion.
+    let resolve = |value: Option<&str>, reference: Option<f64>| {
+        let value = value.unwrap_or("100%").trim();
+        if let Some(percent) = value.strip_suffix('%') {
+            Some(reference? * percent.trim().parse::<f64>().ok()? / 100.0)
+        } else {
+            svg_length(value)
         }
-    }
+    };
     positive_dimensions(
-        svg_length(svg.attribute("width")?)?,
-        svg_length(svg.attribute("height")?)?,
+        resolve(svg.attribute("width"), view_box.map(|size| size.0))?,
+        resolve(svg.attribute("height"), view_box.map(|size| size.1))?,
     )
 }
 
@@ -1018,16 +1028,58 @@ mod tests {
     use crate::document::{ByteRange, DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit};
 
     #[test]
-    fn svg_dimensions_prefer_the_view_box_and_preserve_its_aspect_ratio() {
+    fn svg_dimensions_prefer_absolute_viewport_lengths_over_view_box_units() {
         let svg = br#"<svg viewBox="0 0 573.307 105.18" width="573.307pt" height="105.18pt" xmlns="http://www.w3.org/2000/svg"></svg>"#;
-        assert_eq!(svg_dimensions(svg), Some((573, 105)));
-        assert_eq!(fitted_image_size(573, 105, 960.0), (573.0, 105.0));
+        assert_eq!(svg_dimensions(svg), Some((764, 140)));
+        let svg = br#"<svg viewBox="0 0 100 100" width="200px" height="100px"/>"#;
+        assert_eq!(svg_dimensions(svg), Some((200, 100)));
+    }
+
+    #[test]
+    fn svg_dimensions_fall_back_to_view_box_without_absolute_viewport_lengths() {
+        for svg in [
+            br#"<svg viewBox="0 0 573.307 105.18"/>"#.as_slice(),
+            br#"<svg width="100%" height="100%" viewBox="0 0 573.307 105.18"/>"#,
+        ] {
+            assert_eq!(svg_dimensions(svg), Some((573, 105)));
+        }
     }
 
     #[test]
     fn svg_dimensions_convert_absolute_lengths_without_a_view_box() {
         let svg = br#"<svg width="24pt" height="12pt" xmlns="http://www.w3.org/2000/svg"></svg>"#;
         assert_eq!(svg_dimensions(svg), Some((32, 16)));
+    }
+
+    #[gpui::test]
+    fn svg_dimensions_match_renderer_for_percentage_and_single_axis_lengths(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        for (attributes, expected) in [
+            (r#"width="100%" height="50%""#, (100, 50)),
+            (r#"width="200""#, (200, 100)),
+            (r#"height="150""#, (100, 150)),
+            (r#"width="72pt" height="25%""#, (96, 25)),
+        ] {
+            let source = format!(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" {attributes}><rect width="100" height="100"/></svg>"#
+            );
+            assert_eq!(svg_dimensions(source.as_bytes()), Some(expected));
+            cx.update(|cx| {
+                let rendered = cx
+                    .svg_renderer()
+                    .render_single_frame(source.as_bytes(), 1.0)
+                    .unwrap();
+                let size = rendered.size(0);
+                assert_eq!(
+                    (
+                        size.width.0 as f32 / gpui::SMOOTH_SVG_SCALE_FACTOR,
+                        size.height.0 as f32 / gpui::SMOOTH_SVG_SCALE_FACTOR
+                    ),
+                    (expected.0 as f32, expected.1 as f32)
+                );
+            });
+        }
     }
 
     #[test]

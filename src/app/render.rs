@@ -265,6 +265,17 @@ impl Render for WorkspaceWindow {
                 // The list viewport is only known after the first layout pass. Render once
                 // more so pane-local status (notably bottom-edge progress) uses real bounds.
                 cx.notify();
+                // Font discovery is process-wide, independent of document size. Prepare it
+                // after the first readable frame so a later minimap toggle only draws rows.
+                // Low priority keeps document loading and interaction ahead of this work.
+                if generation == 1 {
+                    cx.background_executor()
+                        .spawn_with_priority(gpui::Priority::Low, async {
+                            crate::editor::prewarm_minimap_text_rasterizer();
+                            crate::preview::minimap::prewarm_text_rasterizer();
+                        })
+                        .detach();
+                }
                 if generation == 1
                     && std::env::var_os("ORG_STUDIO_RELOAD_BENCH").is_some()
                     && matches!(this.state, WorkspaceLoadState::Ready { .. })

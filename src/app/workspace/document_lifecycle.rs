@@ -782,8 +782,11 @@ impl WorkspaceWindow {
             self.propagate_editor_minimap_settings(cx);
         }
         if self.minimap_visible {
-            cx.background_spawn(async { minimap::prewarm_text_rasterizer() })
-                .detach();
+            cx.background_spawn(async {
+                crate::editor::prewarm_minimap_text_rasterizer();
+                minimap::prewarm_text_rasterizer();
+            })
+            .detach();
         }
         self.save_preview_settings();
         cx.notify();

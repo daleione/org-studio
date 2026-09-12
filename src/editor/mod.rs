@@ -1,6 +1,7 @@
 mod commands;
 mod element;
 mod folding;
+mod image_loader;
 mod input;
 mod layout_map;
 mod minimap;
@@ -9,6 +10,8 @@ mod org_commands;
 mod read_only;
 mod search;
 mod syntax;
+
+pub(crate) use minimap::prewarm_text_rasterizer as prewarm_minimap_text_rasterizer;
 
 pub(crate) use read_only::{
     CommandDisposition, GeneratedCommand, GeneratedTextView, LineHighlights,
@@ -343,18 +346,19 @@ impl InlineImageCache {
         }
     }
 
-    fn accept(&mut self, path: &Path, image: Arc<RenderImage>) -> (Arc<RenderImage>, (u32, u32)) {
+    fn accept_loaded(
+        &mut self,
+        path: &Path,
+        loaded: image_loader::LoadedImage,
+    ) -> (Arc<RenderImage>, (u32, u32)) {
+        let image_loader::LoadedImage { image, dimensions } = loaded;
         self.clock = self.clock.wrapping_add(1);
         self.refreshing.remove(path);
-        let size = image.size(0);
-        let mut dimensions = (u32::from(size.width).max(1), u32::from(size.height).max(1));
-        if path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+        if let Some(entry) = self.entries.get_mut(path)
+            && entry.image == image
         {
-            dimensions.0 = (dimensions.0 as f32 / gpui::SMOOTH_SVG_SCALE_FACTOR).round() as u32;
-            dimensions.1 = (dimensions.1 as f32 / gpui::SMOOTH_SVG_SCALE_FACTOR).round() as u32;
+            entry.last_used = self.clock;
+            return (image, entry.dimensions);
         }
         self.entries.insert(
             path.to_path_buf(),
@@ -377,6 +381,19 @@ impl InlineImageCache {
             self.entries.remove(&oldest);
         }
         (image, dimensions)
+    }
+
+    #[cfg(test)]
+    fn accept(&mut self, path: &Path, image: Arc<RenderImage>) -> (Arc<RenderImage>, (u32, u32)) {
+        let scale = if path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("svg"))
+        {
+            gpui::SMOOTH_SVG_SCALE_FACTOR
+        } else {
+            1.0
+        };
+        self.accept_loaded(path, image_loader::LoadedImage::from_render(image, scale))
     }
 
     fn fail(&mut self, path: &Path) -> bool {
@@ -1290,6 +1307,7 @@ impl SemanticEditor {
     }
 
     pub(crate) fn refresh_inline_image(&mut self, path: &Path, cx: &mut Context<Self>) {
+        cx.remove_asset::<image_loader::EditorImageLoader>(&Arc::<Path>::from(path));
         self.inline_image_cache.borrow_mut().refresh(path);
         cx.notify();
     }
@@ -1301,9 +1319,11 @@ impl SemanticEditor {
     fn accept_inline_image_render(
         &self,
         path: &Path,
-        image: Arc<RenderImage>,
+        loaded: image_loader::LoadedImage,
     ) -> (Arc<RenderImage>, (u32, u32)) {
-        self.inline_image_cache.borrow_mut().accept(path, image)
+        self.inline_image_cache
+            .borrow_mut()
+            .accept_loaded(path, loaded)
     }
 
     fn fail_inline_image_render(&self, path: &Path) -> bool {

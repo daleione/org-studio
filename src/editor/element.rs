@@ -491,8 +491,7 @@ impl Element for EditorElement {
             .filter_map(|(line, line_start, path, cached)| {
                 let previous_dimensions = cached.as_ref().map(|(_, dimensions)| *dimensions);
                 let path: Arc<std::path::Path> = path.into();
-                let resource: gpui::Resource = path.clone().into();
-                let loaded = window.use_asset::<gpui::ImgResourceLoader>(&resource, cx);
+                let loaded = window.use_asset::<super::image_loader::EditorImageLoader>(&path, cx);
                 let (image, dimensions) = match loaded {
                     Some(Ok(image)) => self
                         .editor
@@ -1179,15 +1178,16 @@ impl Element for EditorElement {
                 );
             }
             for media in &state.minimap.media {
-                let resource: gpui::Resource = media.path.clone().into();
-                let Some(Ok(image)) = window.use_asset::<gpui::ImgResourceLoader>(&resource, cx)
+                let source: Arc<std::path::Path> = media.path.clone().into();
+                let Some(Ok(loaded)) =
+                    window.use_asset::<super::image_loader::EditorImageLoader>(&source, cx)
                 else {
                     continue;
                 };
-                let natural = image.size(0);
+                let image = loaded.image;
                 let Some((x, y, width, height)) = editor_minimap_media_geometry(
-                    natural.width.0 as f32,
-                    natural.height.0 as f32,
+                    loaded.dimensions.0 as f32,
+                    loaded.dimensions.1 as f32,
                     f32::from(state.minimap.bounds.size.width),
                     media.row_y,
                     media.row_height,
@@ -3165,6 +3165,115 @@ mod tests {
         let (left, right) = editor_block_horizontal_bounds(px(100.0), px(700.0), 180.0);
         assert_eq!(left, px(-80.0));
         assert_eq!(right, px(520.0));
+    }
+
+    #[gpui::test]
+    fn minimap_opened_after_scroll_keeps_visible_svg_dimensions_stable(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/preview-basics.org");
+        let source = std::fs::read(&path).unwrap();
+        let session = cx.new(|_| DocumentSession::from_utf8(path.clone(), source).unwrap());
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        let media = cx.update(|cx| {
+            let snapshot = session.read(cx).snapshot();
+            (0..snapshot.len_lines())
+                .filter_map(|line| {
+                    let range = snapshot
+                        .line_content_range(crate::document::LineIndex(line))
+                        .ok()?;
+                    let text = snapshot.copy_range(range);
+                    let target = crate::org_syntax::standalone_image_path(&text)?;
+                    let path = crate::preview::resolve_image_path(&path, target);
+                    let image = crate::editor::image_loader::decode_svg(
+                        &std::fs::read(&path).unwrap(),
+                        &cx.svg_renderer(),
+                    )
+                    .unwrap();
+                    let dimensions = crate::preview::image_dimensions(&path).unwrap();
+                    Some((
+                        RasterMedia {
+                            line,
+                            line_start: range.start.0,
+                            row_offset_units: 0.0,
+                            row_height_units: 1.0,
+                            path,
+                            dimensions: Some(dimensions),
+                        },
+                        image,
+                    ))
+                })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(media.len(), 2);
+        editor.update(cx, |editor, cx| {
+            editor.set_minimap(false, Some(144), cx);
+            editor
+                .display_map
+                .configure(session.read(cx).snapshot().len_lines(), 1606.0);
+            editor.viewport = Some(gpui::Bounds::new(
+                gpui::point(px(0.0), px(0.0)),
+                gpui::size(px(1800.0), px(1028.0)),
+            ));
+            editor.scroll_y = 748.0;
+            editor.set_minimap(true, Some(144), cx);
+            // Each frame measures visible body images, then the background minimap
+            // publishes its discovered dimensions. These writers must converge without
+            // another scroll moving the SVGs out of the body viewport.
+            for _ in 0..3 {
+                for (source, image) in &media {
+                    let (_, (width, height)) =
+                        editor.accept_inline_image_render(&source.path, image.clone());
+                    editor
+                        .inline_image_line_dimensions
+                        .borrow_mut()
+                        .insert(source.line, (source.line_start, width, height));
+                    let (_, height) = crate::preview::fitted_image_size(width, height, 640.0);
+                    editor
+                        .display_map
+                        .update_line_layout(source.line, 1, height, 6.0, 6.0);
+                    assert!(
+                        !apply_editor_minimap_media_dimensions(
+                            editor,
+                            std::slice::from_ref(source)
+                        ),
+                        "visible SVG must not repeatedly reject minimap publication: {:?}",
+                        source.path,
+                    );
+                }
+                assert_eq!(editor.scroll_y, 748.0);
+            }
+        });
+        let request = editor.update(cx, |editor, cx| {
+            let bounds = gpui::Bounds::new(
+                gpui::point(px(1656.0), px(0.0)),
+                gpui::size(px(144.0), px(1028.0)),
+            );
+            let snapshot = session.read(cx).snapshot();
+            editor.minimap.update_snapshot(&snapshot);
+            let geometry = editor.minimap_viewport_geometry(bounds);
+            let (paint, request) = super::build_minimap(
+                editor,
+                &path,
+                &snapshot,
+                false,
+                bounds,
+                geometry,
+                2.0,
+                crate::theme::current_theme(),
+            );
+            assert!(paint.image.is_none());
+            request.expect("opening minimap must schedule its first raster")
+        });
+        cx.update(|cx| super::schedule_minimap_raster(editor.clone(), request, cx));
+        cx.run_until_parked();
+        editor.read_with(cx, |editor, _| {
+            assert!(
+                editor.minimap.active_frame().is_some(),
+                "first raster must publish without another scroll"
+            );
+            assert_eq!(editor.scroll_y, 748.0);
+        });
     }
 
     #[test]
