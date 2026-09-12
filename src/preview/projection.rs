@@ -948,7 +948,7 @@ fn visual_kind(
             MarkdownKind::Quote => VisualRowKind::Quote,
             MarkdownKind::Image { .. } => VisualRowKind::Image { dimensions: None },
             MarkdownKind::Code { ref language, .. }
-                if super::diagram::is_plantuml_language(language.as_deref()) =>
+                if super::diagram::is_diagram_language(language.as_deref()) =>
             {
                 VisualRowKind::Hidden
             }

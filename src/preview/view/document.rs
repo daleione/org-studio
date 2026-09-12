@@ -8,7 +8,7 @@ use super::{
 use crate::preview::BlockId;
 use crate::preview::{
     CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
-    diagram::DiagramProjection,
+    diagram::{DiagramLanguage, DiagramProjection},
     display_map::{DisplayRuns, PreviewLineKind},
     layout::reading_content_width,
     org_line::CheckboxState,
@@ -856,7 +856,10 @@ pub(super) fn render_diagram(
             .text_size(px(12.0))
             .line_height(px(18.0))
             .text_color(rgb(palette.keyword))
-            .child("PlantUML render failed")
+            .child(match DiagramLanguage::from_source_language(language) {
+                Some(language) => format!("{} render failed", language.display_name()),
+                None => "Diagram render failed".to_owned(),
+            })
             .children(
                 diagnostics
                     .iter()

@@ -15,6 +15,43 @@ use super::{
     markdown::{MarkdownBlock, MarkdownKind},
 };
 
+/// Diagram syntaxes that TypstUML can render from source text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum DiagramLanguage {
+    PlantUml,
+    Mermaid,
+}
+
+impl DiagramLanguage {
+    /// Maps an Org/Markdown source-block language to a renderable diagram syntax.
+    pub(crate) fn from_source_language(language: Option<&str>) -> Option<Self> {
+        match language?.trim().to_ascii_lowercase().as_str() {
+            "plantuml" | "puml" | "uml" => Some(Self::PlantUml),
+            "mermaid" | "mmd" => Some(Self::Mermaid),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn display_name(self) -> &'static str {
+        match self {
+            Self::PlantUml => "PlantUML",
+            Self::Mermaid => "Mermaid",
+        }
+    }
+
+    pub(crate) fn input_language(self) -> typstuml::parser::InputLanguage {
+        match self {
+            Self::PlantUml => typstuml::parser::InputLanguage::PlantUml,
+            Self::Mermaid => typstuml::parser::InputLanguage::Mermaid,
+        }
+    }
+}
+
+/// Whether `language` names a diagram syntax that TypstUML can render.
+pub(crate) fn is_diagram_language(language: Option<&str>) -> bool {
+    DiagramLanguage::from_source_language(language).is_some()
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum DiagramProjection {
     Ready {
@@ -79,18 +116,29 @@ impl DiagramCache {
     }
 }
 
-fn diagram_cache() -> &'static Mutex<DiagramCache> {
-    static CACHE: OnceLock<Mutex<DiagramCache>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(DiagramCache::default()))
+/// The same source text renders differently per language, so each syntax keeps
+/// its own LRU cache.
+#[derive(Default)]
+struct DiagramCacheSet {
+    by_language: HashMap<DiagramLanguage, DiagramCache>,
 }
 
-pub(crate) fn is_plantuml_language(language: Option<&str>) -> bool {
-    language.is_some_and(|language| {
-        matches!(
-            language.trim().to_ascii_lowercase().as_str(),
-            "plantuml" | "puml" | "uml"
-        )
-    })
+impl DiagramCacheSet {
+    fn get(&mut self, language: DiagramLanguage, source: &str) -> Option<DiagramProjection> {
+        self.by_language.get_mut(&language)?.get(source)
+    }
+
+    fn insert(&mut self, language: DiagramLanguage, source: &str, projection: DiagramProjection) {
+        self.by_language
+            .entry(language)
+            .or_default()
+            .insert(source, projection);
+    }
+}
+
+fn diagram_cache() -> &'static Mutex<DiagramCacheSet> {
+    static CACHE: OnceLock<Mutex<DiagramCacheSet>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(DiagramCacheSet::default()))
 }
 
 pub(crate) fn build_markdown_diagrams(
@@ -99,11 +147,18 @@ pub(crate) fn build_markdown_diagrams(
 ) -> HashMap<BlockId, DiagramProjection> {
     markdown_diagram_ranges(blocks)
         .into_iter()
-        .map(|(block_id, _, body)| (block_id as BlockId, render(&text.copy_range(body))))
+        .map(|(block_id, _, language, body)| {
+            (
+                block_id as BlockId,
+                render(language, &text.copy_range(body)),
+            )
+        })
         .collect()
 }
 
-fn markdown_diagram_ranges(blocks: &[MarkdownBlock]) -> Vec<(usize, usize, ByteRange)> {
+fn markdown_diagram_ranges(
+    blocks: &[MarkdownBlock],
+) -> Vec<(usize, usize, DiagramLanguage, ByteRange)> {
     let mut diagrams = Vec::new();
     let mut index = 0;
     while index < blocks.len() {
@@ -115,10 +170,10 @@ fn markdown_diagram_ranges(blocks: &[MarkdownBlock]) -> Vec<(usize, usize, ByteR
             index += 1;
             continue;
         };
-        if !is_plantuml_language(language.as_deref()) {
+        let Some(language) = DiagramLanguage::from_source_language(language.as_deref()) else {
             index += 1;
             continue;
-        }
+        };
         let open = index;
         let mut close = open;
         let mut body_start = None;
@@ -149,6 +204,7 @@ fn markdown_diagram_ranges(blocks: &[MarkdownBlock]) -> Vec<(usize, usize, ByteR
         diagrams.push((
             open,
             close,
+            language,
             ByteRange {
                 start: body_start.unwrap_or(body_end),
                 end: body_end,
@@ -158,15 +214,19 @@ fn markdown_diagram_ranges(blocks: &[MarkdownBlock]) -> Vec<(usize, usize, ByteR
     diagrams
 }
 
-fn render(source: &str) -> DiagramProjection {
+fn render(language: DiagramLanguage, source: &str) -> DiagramProjection {
     if let Ok(mut cache) = diagram_cache().lock()
-        && let Some(projection) = cache.get(source)
+        && let Some(projection) = cache.get(language, source)
     {
         return projection;
     }
 
     let rendered = crate::typst_runtime::run_with_cache_cleanup(|| {
-        typstuml::render::render_source(source, typstuml::render::Format::Svg)
+        typstuml::render::render_source_with_language(
+            source,
+            language.input_language(),
+            typstuml::render::Format::Svg,
+        )
     });
     let projection = match rendered {
         Ok(rendered) => {
@@ -192,7 +252,7 @@ fn render(source: &str) -> DiagramProjection {
         },
     };
     if let Ok(mut cache) = diagram_cache().lock() {
-        cache.insert(source, projection.clone());
+        cache.insert(language, source, projection.clone());
     }
     projection
 }
@@ -224,12 +284,21 @@ mod tests {
     use crate::document::DocumentSnapshot;
 
     #[test]
-    fn recognizes_common_plantuml_language_aliases() {
+    fn recognizes_common_diagram_language_aliases() {
         for language in ["plantuml", "PlantUML", "puml", "uml"] {
-            assert!(is_plantuml_language(Some(language)));
+            assert_eq!(
+                DiagramLanguage::from_source_language(Some(language)),
+                Some(DiagramLanguage::PlantUml)
+            );
         }
-        assert!(!is_plantuml_language(Some("rust")));
-        assert!(!is_plantuml_language(None));
+        for language in ["mermaid", "Mermaid", "MMD"] {
+            assert_eq!(
+                DiagramLanguage::from_source_language(Some(language)),
+                Some(DiagramLanguage::Mermaid)
+            );
+        }
+        assert_eq!(DiagramLanguage::from_source_language(Some("rust")), None);
+        assert_eq!(DiagramLanguage::from_source_language(None), None);
     }
 
     #[test]
@@ -253,12 +322,61 @@ mod tests {
     }
 
     #[test]
+    fn renders_a_markdown_mermaid_fence_to_memory_svg() {
+        let text = DocumentSnapshot::from_utf8(
+            b"```mermaid\nflowchart TB; A[Start] --> B[End]\n```\n".to_vec(),
+        )
+        .unwrap();
+        let (blocks, _) = crate::preview::markdown::parse_markdown(&text);
+        let diagrams = build_markdown_diagrams(&text, &blocks);
+
+        let DiagramProjection::Ready {
+            image, dimensions, ..
+        } = diagrams.get(&0).expect("Mermaid block is projected")
+        else {
+            panic!("valid Mermaid should render")
+        };
+        assert_eq!(image.format(), ImageFormat::Svg);
+        assert!(String::from_utf8_lossy(image.bytes()).contains("<svg"));
+        assert!(dimensions.0 > 0.0 && dimensions.1 > 0.0);
+    }
+
+    #[test]
     fn keeps_render_errors_as_inline_diagnostics() {
-        let projection = render("not a PlantUML diagram");
+        let projection = render(DiagramLanguage::PlantUml, "not a PlantUML diagram");
         let DiagramProjection::Error { diagnostics } = projection else {
             panic!("invalid PlantUML should not render")
         };
         assert!(!diagnostics.is_empty());
+
+        let projection = render(DiagramLanguage::Mermaid, "sequenceDiagram\nAlice->>Bob: hi");
+        let DiagramProjection::Error { diagnostics } = projection else {
+            panic!("unsupported Mermaid should not render")
+        };
+        assert!(!diagnostics.is_empty());
+    }
+
+    #[test]
+    fn cached_diagrams_are_keyed_by_language() {
+        let source = "flowchart TB; A --> B";
+        let mut cache = DiagramCacheSet::default();
+        let error = |message: &str| DiagramProjection::Error {
+            diagnostics: Arc::from([Arc::<str>::from(message)]),
+        };
+        cache.insert(DiagramLanguage::PlantUml, source, error("plantuml"));
+        cache.insert(DiagramLanguage::Mermaid, source, error("mermaid"));
+
+        for (language, expected) in [
+            (DiagramLanguage::PlantUml, "plantuml"),
+            (DiagramLanguage::Mermaid, "mermaid"),
+        ] {
+            let DiagramProjection::Error { diagnostics } =
+                cache.get(language, source).expect("cached projection")
+            else {
+                unreachable!("the test inserts error projections")
+            };
+            assert_eq!(diagnostics[0].as_ref(), expected);
+        }
     }
 
     #[test]

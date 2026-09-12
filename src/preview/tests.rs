@@ -238,6 +238,63 @@ fn markdown_plantuml_fence_becomes_one_in_memory_diagram_row() {
 }
 
 #[test]
+fn markdown_mermaid_fence_becomes_one_in_memory_diagram_row() {
+    use super::projection::VisualRowKind;
+
+    let document = loaded_document(
+        "diagram.md",
+        "before\n```mermaid\nflowchart TB; A[Start] --> B[End]\n```\nafter\n",
+    )
+    .into_preview();
+
+    assert_eq!(document.projection.rows.len(), 5);
+    assert!(matches!(
+        document.projection.rows.get(1).unwrap().kind,
+        VisualRowKind::Diagram(super::diagram::DiagramProjection::Ready { .. })
+    ));
+    assert_eq!(
+        document.display_map.as_ref().unwrap().runs(1).text.as_ref(),
+        ""
+    );
+    assert_eq!(
+        document
+            .projection
+            .rows
+            .iter()
+            .filter(|row| matches!(row.kind, VisualRowKind::Hidden))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn org_mermaid_source_block_stays_source_until_babel_execution() {
+    use super::projection::VisualRowKind;
+
+    let document = loaded_document(
+        "diagram.org",
+        "before\n#+begin_src mermaid :file diagram.svg\nflowchart TB; A[Start] --> B[End]\n#+end_src\nafter\n",
+    )
+    .into_preview();
+
+    assert_eq!(document.projection.rows.len(), 3);
+    assert!(
+        document
+            .projection
+            .rows
+            .iter()
+            .any(|row| matches!(row.kind, VisualRowKind::Code(_)))
+    );
+    assert!(
+        !document
+            .projection
+            .rows
+            .iter()
+            .any(|row| matches!(row.kind, VisualRowKind::Diagram(_)))
+    );
+}
+
+#[test]
 fn org_plantuml_source_block_stays_source_until_babel_execution() {
     use super::projection::VisualRowKind;
 

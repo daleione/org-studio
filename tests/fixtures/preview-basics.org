@@ -50,6 +50,17 @@ Native Rust and GPUI preview.
 #+RESULTS:
 [[file:images/login.svg]]
 
+#+begin_src mermaid :file images/flow.svg
+flowchart LR
+A (["Start"])
+A --> B{"Decision"}
+B --> C["Option A"]
+B --> D["Option B"]
+#+end_src
+
+#+RESULTS:
+[[file:images/flow.svg]]
+
 
 #+begin_src typst :file images/typst-demo.svg
 #set page(width: 640pt, height: auto, margin: 18pt)

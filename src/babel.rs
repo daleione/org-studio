@@ -44,14 +44,17 @@ pub(crate) struct PreparedBabelOutput {
 
 #[derive(Clone, Copy)]
 enum BabelExecutor {
-    PlantUml(typstuml::render::Format),
+    Diagram {
+        language: crate::preview::DiagramLanguage,
+        format: typstuml::render::Format,
+    },
     Typst(crate::typst_runtime::OutputFormat),
 }
 
 impl BabelExecutor {
     fn language_name(self) -> &'static str {
         match self {
-            Self::PlantUml(_) => "PlantUML",
+            Self::Diagram { language, .. } => language.display_name(),
             Self::Typst(_) => "Typst",
         }
     }
@@ -107,19 +110,22 @@ pub(crate) fn prepare_source_block_execution(
         unreachable!("source block was selected above")
     };
     let language = language.as_deref().unwrap_or("");
-    let source_language = if crate::preview::is_plantuml_language(Some(language)) {
-        "plantuml"
-    } else if language.eq_ignore_ascii_case("typst") || language.eq_ignore_ascii_case("typ") {
-        "typst"
-    } else {
-        return Err(format!(
-            "No Babel executor is registered for {}",
-            if language.is_empty() {
-                "this block"
-            } else {
-                language
-            }
-        ));
+    let diagram_language = crate::preview::DiagramLanguage::from_source_language(Some(language));
+    let typst_source =
+        language.eq_ignore_ascii_case("typst") || language.eq_ignore_ascii_case("typ");
+    let executor_name = match (diagram_language, typst_source) {
+        (Some(diagram), _) => diagram.display_name(),
+        (None, true) => "Typst",
+        (None, false) => {
+            return Err(format!(
+                "No Babel executor is registered for {}",
+                if language.is_empty() {
+                    "this block"
+                } else {
+                    language
+                }
+            ));
+        }
     };
 
     let opening = snapshot.copy_range(ByteRange {
@@ -129,16 +135,7 @@ pub(crate) fn prepare_source_block_execution(
     let tokens = tokenize_header(&opening)?;
     let file = header_argument(&tokens, ":file")
         .filter(|file| !file.is_empty())
-        .ok_or_else(|| {
-            format!(
-                "{} execution requires a :file header argument",
-                if source_language == "typst" {
-                    "Typst"
-                } else {
-                    "PlantUML"
-                }
-            )
-        })?;
+        .ok_or_else(|| format!("{executor_name} execution requires a :file header argument"))?;
     if file.contains(['\n', '\r', ']']) {
         return Err("The :file value contains characters that cannot form an Org link".to_owned());
     }
@@ -150,16 +147,22 @@ pub(crate) fn prepare_source_block_execution(
     if target == document_path {
         return Err("The Babel result must not overwrite the Org document".to_owned());
     }
-    let executor = if source_language == "typst" {
+    let executor = if typst_source {
         BabelExecutor::Typst(
             crate::typst_runtime::OutputFormat::infer_from_path(&target)
                 .ok_or_else(|| "Typst :file must end in .svg, .png, or .pdf".to_owned())?,
         )
     } else {
-        BabelExecutor::PlantUml(
-            typstuml::render::Format::infer_from_path(&target)
-                .ok_or_else(|| "PlantUML :file must end in .svg, .png, or .pdf".to_owned())?,
-        )
+        let language = diagram_language.expect("diagram language checked above");
+        BabelExecutor::Diagram {
+            language,
+            format: typstuml::render::Format::infer_from_path(&target).ok_or_else(|| {
+                format!(
+                    "{} :file must end in .svg, .png, or .pdf",
+                    language.display_name()
+                )
+            })?,
+        }
     };
     let silent = header_values(&tokens, ":results")
         .iter()
@@ -205,9 +208,13 @@ pub(crate) fn execute_source_block(
     request: BabelExecutionRequest,
 ) -> Result<PreparedBabelOutput, String> {
     let (bytes, warnings) = match request.executor {
-        BabelExecutor::PlantUml(format) => {
+        BabelExecutor::Diagram { language, format } => {
             let rendered = crate::typst_runtime::run_with_cache_cleanup(|| {
-                typstuml::render::render_source(&request.source, format)
+                typstuml::render::render_source_with_language(
+                    &request.source,
+                    language.input_language(),
+                    format,
+                )
             })
             .map_err(|error| {
                 error
@@ -516,6 +523,64 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.contains(":file"));
+    }
+
+    #[test]
+    fn mermaid_requires_an_explicit_output_file() {
+        let source = "#+begin_src mermaid\nflowchart TB; A --> B\n#+end_src\n";
+        let text = snapshot(source);
+        let error = prepare_source_block_execution(
+            &text,
+            Path::new("notes.org"),
+            Selection::caret(ByteOffset(source.find("flowchart").unwrap() as u64)),
+        )
+        .err()
+        .unwrap();
+        assert!(error.contains(":file"), "{error}");
+        assert!(error.contains("Mermaid"), "{error}");
+    }
+
+    #[test]
+    fn mermaid_execution_publishes_svg_and_reports_the_language() {
+        use crate::document::{DocumentBuffer, EditTransaction};
+
+        let unique = NEXT_TEMP_OUTPUT.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "org-studio-mermaid-babel-test-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&root).unwrap();
+        let document_path = root.join("notes.org");
+        let source = "#+begin_src mermaid :file images/flow.svg\nflowchart TB; A[Start] --> B[End]\n#+end_src\n";
+        let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let before = buffer.snapshot();
+        let request = prepare_source_block_execution(
+            &before,
+            &document_path,
+            Selection::caret(ByteOffset(source.find("flowchart").unwrap() as u64)),
+        )
+        .unwrap();
+        assert_eq!(request.language_name(), "Mermaid");
+
+        let mut output = execute_source_block(request).unwrap().publish().unwrap();
+        assert_eq!(output.language_name, "Mermaid");
+        let edit = output.result_edit.take().unwrap();
+        buffer
+            .commit(EditTransaction::new(before.revision(), vec![edit]))
+            .unwrap();
+
+        let svg = fs::read(root.join("images/flow.svg")).unwrap();
+        assert!(String::from_utf8_lossy(&svg).contains("<svg"));
+        assert!(
+            buffer
+                .snapshot()
+                .copy_range(ByteRange::new(0, buffer.snapshot().len_bytes()))
+                .contains("#+RESULTS:\n[[file:images/flow.svg]]")
+        );
+
+        fs::remove_file(root.join("images/flow.svg")).unwrap();
+        fs::remove_dir(root.join("images")).unwrap();
+        fs::remove_dir(root).unwrap();
     }
 
     #[test]

@@ -1586,6 +1586,56 @@ mod tests {
     }
 
     #[test]
+    fn diagram_fence_language_switch_rebuilds_the_rendered_diagram() {
+        use super::super::{diagram::DiagramProjection, projection::VisualRowKind};
+
+        let source = "before\n```plantuml\nflowchart TB; A[Start] --> B[End]\n```\nafter\n";
+        let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let before = buffer.snapshot();
+        let previous = derive_preview(PathBuf::from("diagram.md"), before.clone());
+        let previous_svg = previous
+            .projection
+            .rows
+            .iter()
+            .find_map(|row| match &row.kind {
+                VisualRowKind::Diagram(DiagramProjection::Ready { image, .. }) => {
+                    Some(image.bytes().to_vec())
+                }
+                _ => None,
+            })
+            .expect("initial PlantUML diagram renders");
+        let language = source.find("plantuml").unwrap() as u64;
+        let delta = buffer
+            .commit(EditTransaction::new(
+                before.revision(),
+                vec![TextEdit::new(
+                    ByteRange::new(language, language + "plantuml".len() as u64),
+                    "mermaid",
+                )],
+            ))
+            .unwrap();
+
+        let next = derive_preview_incremental(
+            PathBuf::from("diagram.md"),
+            buffer.snapshot(),
+            Some(&previous),
+            &[delta],
+        );
+        let next_svg = next
+            .projection
+            .rows
+            .iter()
+            .find_map(|row| match &row.kind {
+                VisualRowKind::Diagram(DiagramProjection::Ready { image, .. }) => {
+                    Some(image.bytes())
+                }
+                _ => None,
+            })
+            .expect("the switched Mermaid diagram renders");
+        assert_ne!(next_svg, previous_svg);
+    }
+
+    #[test]
     fn markdown_text_edit_keeps_incremental_projection_with_a_distant_diagram() {
         let source =
             "alpha\nbeta\ngamma\n\n```plantuml\n@startuml\nAlice -> Bob\n@enduml\n```\n\nomega\n";

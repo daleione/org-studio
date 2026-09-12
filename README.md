@@ -20,11 +20,12 @@ org-studio README.md
 
 Finder, drag-and-drop, and `open` use the same macOS Open Document event path. Override installation locations with `ORG_STUDIO_APP_DIR` and `ORG_STUDIO_BIN_DIR`.
 
-## PlantUML
+## PlantUML and Mermaid
 
-Markdown `plantuml`, `puml`, and `uml` fenced blocks render automatically in Reading view.
+Markdown `plantuml`, `puml`, and `uml` fenced blocks render automatically in Reading
+view, as do `mermaid` and `mmd` fenced blocks.
 
-Org follows Babel semantics: add a `:file` result and press `C-c C-c` with the caret inside the source block. Org Studio writes SVG, PNG, or PDF according to the filename extension and inserts or replaces the `#+RESULTS` file link as an undoable document edit.
+Org follows Babel semantics: add a `:file` result and press `C-c C-c` with the caret inside the source block. Org Studio writes SVG, PNG, or PDF according to the filename extension and inserts or replaces the `#+RESULTS` file link as an undoable document edit. The same workflow applies to `plantuml` and `mermaid` source blocks.
 
 ```org
 #+begin_src plantuml :file images/login.svg
@@ -33,6 +34,16 @@ Alice -> Bob: Login
 @enduml
 #+end_src
 ```
+
+```org
+#+begin_src mermaid :file images/flow.svg
+flowchart TB; A[Start] --> B[End]
+#+end_src
+```
+
+Mermaid support tracks TypstUML's subset: `flowchart`/`graph` diagrams only. Other
+Mermaid diagram types and unsupported statements surface as inline render diagnostics
+rather than silent failures.
 
 ## Typst source blocks
 

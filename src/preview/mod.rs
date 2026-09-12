@@ -49,8 +49,8 @@ mod style;
 mod table;
 #[cfg(test)]
 mod tests;
+pub(crate) use diagram::DiagramLanguage;
 use diagram::build_markdown_diagrams;
-pub(crate) use diagram::is_plantuml_language;
 use fold_transition::{
     FoldDirection, FoldMeasurement, FoldSegment, FoldTransition, FoldTransitionInput,
     FoldTransitionPlan,
