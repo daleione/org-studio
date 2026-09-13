@@ -85,6 +85,42 @@ fn exit_review_includes_hidden_drafts_and_cancel_keeps_them(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+fn cc_co_opens_the_link_under_the_caret(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let session = w.update(cx, |w, cx| {
+        w.create_buffer("links.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(
+        &session,
+        "* Top\n:PROPERTIES:\n:CUSTOM_ID: plan\n:END:\n\nbody [[#plan][jump]]\n",
+        cx,
+    );
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        let editor = w
+            .editor(w.document_workspace.active_pane)
+            .expect("an editor pane");
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(Selection::caret(crate::document::ByteOffset(50)), cx)
+        });
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-c ctrl-o");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        let editor = w.editor(w.document_workspace.active_pane).unwrap();
+        assert_eq!(
+            editor.read(cx).selection().head().0,
+            19,
+            "C-c C-o must jump to the :CUSTOM_ID: line"
+        );
+    });
+}
+
+#[gpui::test]
 fn emacs_picker_is_stable_and_does_not_type_into_document(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     cx.update(|cx| cx.set_reduce_motion(true));

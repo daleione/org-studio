@@ -4,6 +4,7 @@ mod folding;
 mod image_loader;
 mod input;
 mod layout_map;
+mod links;
 mod minimap;
 mod minimap_media;
 mod org_commands;
@@ -12,6 +13,8 @@ mod search;
 mod syntax;
 
 pub(crate) use minimap::prewarm_text_rasterizer as prewarm_minimap_text_rasterizer;
+
+pub(crate) use links::vertical_distance;
 
 pub(crate) use read_only::{
     CommandDisposition, GeneratedCommand, GeneratedTextView, LineHighlights,
@@ -173,6 +176,14 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("pagedown", ScrollPageDown, Some("SemanticEditor")),
         KeyBinding::new("pageup", ScrollPageUp, Some("SemanticEditor")),
     ]);
+}
+
+/// A classified link on a painted row, in display-text offsets.
+#[derive(Clone, Debug)]
+pub(super) struct LinkHit {
+    pub(super) line: LineIndex,
+    pub(super) display_range: Range<usize>,
+    pub(super) meta: crate::links::LinkInfo,
 }
 
 #[derive(Clone)]
@@ -593,6 +604,11 @@ pub struct SemanticEditor {
     emacs_mark_active: bool,
     viewport: Option<Bounds<Pixels>>,
     hit_rows: Arc<[HitRow]>,
+    link_hits: Arc<[LinkHit]>,
+    /// Identity of the link under the pointer (`(line, display range)`), so
+    /// hover state survives reordering of `link_hits` between frames.
+    hovered_link: Option<(LineIndex, Range<usize>)>,
+    hover_position: Option<Point<Pixels>>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_run_button_hovered: bool,
     source_run_feedback: Option<SourceRunFeedback>,
@@ -961,6 +977,9 @@ impl SemanticEditor {
             emacs_mark_active: false,
             viewport: None,
             hit_rows: Arc::from([]),
+            link_hits: Arc::from([]),
+            hovered_link: None,
+            hover_position: None,
             source_run_buttons: Arc::from([]),
             source_run_button_hovered: false,
             source_run_feedback: None,

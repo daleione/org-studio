@@ -216,6 +216,14 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ExecuteSourceBlock) => {
                 self.execute_source_block(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::OpenLinkAt) => {
+                // Resolve via the active pane: a pending `C-c` prefix moves focus
+                // to the workspace root, so a focus-based lookup would drop the
+                // command. `execute_source_block` takes the same route.
+                if let Some(editor) = self.editor(self.document_workspace.active_pane) {
+                    editor.update(cx, |editor, cx| editor.open_link_at_caret(cx));
+                }
+            }
             CommandImplementation::Builtin(BuiltinCommand::ToggleInlineImagePreviews) => {
                 window.dispatch_action(Box::new(crate::editor::ToggleInlineImagePreviews), cx);
             }

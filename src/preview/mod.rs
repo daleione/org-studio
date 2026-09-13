@@ -110,6 +110,7 @@ const SHOW_SPLIT_COMMAND: &str = "org-studio.workspace.show-split";
 const TOGGLE_SOFT_WRAP_COMMAND: &str = "org-studio.editor.toggle-soft-wrap";
 const ORG_CONTEXT_COMMAND: &str = "org-studio.org.context-command";
 const EXECUTE_SOURCE_BLOCK_COMMAND: &str = "org-studio.babel.execute-source-block";
+const OPEN_LINK_AT_COMMAND: &str = "org-studio.navigation.open-link-at";
 const TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND: &str = "org-studio.org.toggle-inline-image-previews";
 pub(crate) const INCREASE_CONTENT_FONT_SIZE_COMMAND: &str =
     "org-studio.view.increase-content-font-size";

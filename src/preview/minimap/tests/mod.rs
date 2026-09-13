@@ -638,6 +638,7 @@ fn display_run_slices_rebase_inline_and_syntax_ranges() {
             source: 2..8,
             range: 2..8,
             kind: InlineKind::Bold,
+            target: None,
         }]),
         links: Arc::from([super::super::display_map::InlineLink {
             range: 2..8,

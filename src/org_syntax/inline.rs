@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{ops::Range, sync::Arc};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InlineKind {
@@ -22,6 +22,10 @@ pub struct InlineSpan {
     pub kind: InlineKind,
     pub source: Range<usize>,
     pub range: Range<usize>,
+    /// Raw link target: the `[[…]]` inner for Org links, the `dest_url` for
+    /// Markdown links, the footnote name for footnote references, and the
+    /// target text for dedicated/radio targets. `None` for plain emphasis.
+    pub target: Option<Arc<str>>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -40,12 +44,19 @@ pub fn parse(source: &str) -> InlineText {
                 InlineKind::FootnoteReference,
                 cursor..end,
                 &source[cursor..end],
+                Some(Arc::from(&source[cursor..end])),
             );
             cursor = end;
             continue;
         }
         if let Some((end, display, kind)) = target_at(source, cursor) {
-            push_span(&mut output, kind, cursor..end, display);
+            push_span(
+                &mut output,
+                kind,
+                cursor..end,
+                display,
+                Some(Arc::from(display)),
+            );
             cursor = end;
             continue;
         }
@@ -58,11 +69,16 @@ pub fn parse(source: &str) -> InlineText {
                 .split_once("][")
                 .map(|(_, text)| text)
                 .unwrap_or(inside);
+            let target = inside
+                .split_once("][")
+                .map(|(target, _)| target)
+                .unwrap_or(inside);
             push_span(
                 &mut output,
                 InlineKind::Link,
                 cursor..inside_end + 2,
                 display,
+                Some(Arc::from(target)),
             );
             cursor = inside_end + 2;
             continue;
@@ -70,19 +86,25 @@ pub fn parse(source: &str) -> InlineText {
         if matches!(source.as_bytes()[cursor], b'<' | b'[')
             && let Some((end, display)) = timestamp_at(source, cursor)
         {
-            push_span(&mut output, InlineKind::Timestamp, cursor..end, display);
+            push_span(
+                &mut output,
+                InlineKind::Timestamp,
+                cursor..end,
+                display,
+                None,
+            );
             cursor = end;
             continue;
         }
         if let Some((end, display)) = latex_at(source, cursor) {
-            push_span(&mut output, InlineKind::Latex, cursor..end, display);
+            push_span(&mut output, InlineKind::Latex, cursor..end, display, None);
             cursor = end;
             continue;
         }
         if let Some(end) = entity_end(source, cursor) {
             let raw = &source[cursor..end];
             let display = entity_display(raw).unwrap_or(raw);
-            push_span(&mut output, InlineKind::Entity, cursor..end, display);
+            push_span(&mut output, InlineKind::Entity, cursor..end, display, None);
             cursor = end;
             continue;
         }
@@ -94,7 +116,7 @@ pub fn parse(source: &str) -> InlineText {
             let content = &source[cursor + 1..close];
             if !content.is_empty() {
                 if matches!(kind, InlineKind::Code | InlineKind::Verbatim) {
-                    push_span(&mut output, kind, cursor..close + 1, content);
+                    push_span(&mut output, kind, cursor..close + 1, content, None);
                 } else {
                     push_nested_span(&mut output, kind, cursor..close + 1, content, cursor + 1);
                 }
@@ -127,6 +149,7 @@ fn push_nested_span(
         kind,
         source,
         range: start..end,
+        target: None,
     });
     output
         .spans
@@ -134,6 +157,7 @@ fn push_nested_span(
             kind: span.kind,
             source: span.source.start + source_offset..span.source.end + source_offset,
             range: span.range.start + start..span.range.end + start,
+            target: span.target,
         }));
 }
 
@@ -177,13 +201,20 @@ fn target_at(source: &str, start: usize) -> Option<(usize, &str, InlineKind)> {
     ))
 }
 
-fn push_span(output: &mut InlineText, kind: InlineKind, source: Range<usize>, display: &str) {
+fn push_span(
+    output: &mut InlineText,
+    kind: InlineKind,
+    source: Range<usize>,
+    display: &str,
+    target: Option<Arc<str>>,
+) {
     let start = output.text.len();
     output.text.push_str(display);
     output.spans.push(InlineSpan {
         kind,
         source,
         range: start..output.text.len(),
+        target,
     });
 }
 

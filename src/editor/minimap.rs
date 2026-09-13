@@ -1981,6 +1981,7 @@ mod tests {
             underline: false,
             strikethrough: false,
             pill: false,
+            link: None,
         }
     }
 

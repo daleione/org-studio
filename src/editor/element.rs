@@ -72,6 +72,8 @@ pub struct PrepaintState {
     rows: Vec<PaintRow>,
     block_backgrounds: Vec<PaintQuad>,
     tag_pills: Vec<PaintQuad>,
+    hover_quads: Vec<PaintQuad>,
+    link_hits: Vec<super::LinkHit>,
     source_run_buttons: Vec<SourceRunButtonPaint>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
@@ -596,6 +598,8 @@ impl Element for EditorElement {
         let mut rows = Vec::with_capacity(paint_lines.len());
         let mut selection_quads = Vec::new();
         let mut tag_pill_quads = Vec::new();
+        let mut hover_quads = Vec::new();
+        let mut link_hits = Vec::new();
         let mut caret = None;
         let mut next_y = first_line_y;
         let minimap_bounds = Bounds::new(
@@ -849,6 +853,31 @@ impl Element for EditorElement {
                     px(row_wrap_width),
                     theme,
                 );
+            }
+
+            for span in &semantic_row {
+                if let Some(meta) = &span.link {
+                    link_hits.push(super::LinkHit {
+                        line,
+                        display_range: span.bytes.clone(),
+                        meta: meta.clone(),
+                    });
+                }
+            }
+            if let Some(hovered) = editor
+                .hovered_link
+                .as_ref()
+                .filter(|(hover_line, _)| *hover_line == line)
+                .and_then(|(_, range)| {
+                    editor
+                        .link_hits
+                        .iter()
+                        .find(|hit| hit.line == line && hit.display_range == *range)
+                })
+                && inline_image.is_none()
+                && line_animation_scale >= 0.999
+            {
+                push_link_hover_quad(&mut hover_quads, &hit, hovered, px(row_wrap_width), theme);
             }
 
             let first = editor
@@ -1123,6 +1152,8 @@ impl Element for EditorElement {
             rows,
             block_backgrounds,
             tag_pills: tag_pill_quads,
+            hover_quads,
+            link_hits,
             source_run_buttons,
             selection: selection_quads,
             caret,
@@ -1292,6 +1323,9 @@ impl Element for EditorElement {
                     for pill in state.tag_pills.drain(..) {
                         window.paint_quad(pill);
                     }
+                    for pill in state.hover_quads.drain(..) {
+                        window.paint_quad(pill);
+                    }
                     for selection in state.selection.drain(..) {
                         window.paint_quad(selection);
                     }
@@ -1424,6 +1458,26 @@ impl Element for EditorElement {
                 },
             );
         });
+
+        // Link hover: pointing-hand cursor and a small tooltip near the pointer.
+        let (hovered_link, hover_position) = {
+            let editor = self.editor.read(cx);
+            let link = editor
+                .hovered_link
+                .as_ref()
+                .and_then(|(hover_line, range)| {
+                    editor
+                        .link_hits
+                        .iter()
+                        .find(|hit| hit.line == *hover_line && hit.display_range == *range)
+                })
+                .cloned();
+            (link, editor.hover_position)
+        };
+        if let (Some(link), Some(position)) = (hovered_link, hover_position) {
+            window.set_window_cursor_style(CursorStyle::PointingHand);
+            paint_link_tooltip(window, cx, position, &link, bounds);
+        }
         #[cfg(feature = "benchmarks")]
         let elapsed = state.started_at.elapsed();
         let measured_rows = state
@@ -1455,6 +1509,7 @@ impl Element for EditorElement {
                     size(px(editor.minimap.width), bounds.size.height),
                 ));
             editor.hit_rows = hits;
+            editor.link_hits = Arc::from(std::mem::take(&mut state.link_hits));
             editor.source_run_buttons = source_run_button_hits;
             if editor.display_map.soft_wrap() {
                 editor.scroll_x = 0.0;
@@ -2970,6 +3025,124 @@ fn push_selection_quads(
     }
 }
 
+fn paint_link_tooltip(
+    window: &mut Window,
+    cx: &mut App,
+    position: gpui::Point<Pixels>,
+    link: &super::LinkHit,
+    bounds: Bounds<Pixels>,
+) {
+    use crate::links::LinkKind;
+
+    let theme = crate::theme::current_theme();
+    let language = crate::i18n::Language::system();
+    let kind_label = match &link.meta.kind {
+        LinkKind::External => language.text("link.kind.external"),
+        LinkKind::File => language.text("link.kind.file"),
+        LinkKind::Internal => language.text("link.kind.internal"),
+        LinkKind::Mail => language.text("link.kind.mail"),
+        LinkKind::Dangerous => language.text("link.kind.dangerous"),
+        LinkKind::Other => language.text("link.kind.other"),
+    };
+    let accent = syntax::link_accent(&link.meta.kind, theme);
+    let mut target: String = link.meta.raw.to_string();
+    const TOOLTIP_TARGET_CHARS: usize = 40;
+    if target.chars().count() > TOOLTIP_TARGET_CHARS {
+        let prefix = target
+            .chars()
+            .take(TOOLTIP_TARGET_CHARS - 1)
+            .collect::<String>();
+        target = format!("{prefix}…");
+    }
+    let hint = match link.meta.kind {
+        LinkKind::Dangerous => language.text("link.warn.hint"),
+        _ => language.text("link.open.hint"),
+    };
+
+    let base_font = gpui::Font::default();
+    let make_run = |color: u32, len: usize| TextRun {
+        len,
+        font: base_font.clone(),
+        color: gpui::rgb(color).into(),
+        background_color: None,
+        underline: None,
+        strikethrough: None,
+    };
+    // NOTE: `shape_line`'s final argument is `force_width` — it monospace-spaces
+    // every glyph to that width, it does NOT cap the line. Never pass it here.
+    let label_text: gpui::SharedString = format!("{kind_label} {target}").into();
+    let label_len = label_text.len();
+    let line1 = window.text_system().shape_line(
+        label_text,
+        px(11.0),
+        &[make_run(theme.foreground, label_len)],
+        None,
+    );
+    let hint_text: gpui::SharedString = hint.into();
+    let hint_len = hint_text.len();
+    let line2 = window.text_system().shape_line(
+        hint_text,
+        px(10.5),
+        &[make_run(theme.foreground_dim, hint_len)],
+        None,
+    );
+
+    let pad = px(10.0);
+    let line1_height = px(15.0);
+    let line2_height = px(14.0);
+    let width = line1.width().max(line2.width()) + pad * 2.0 + px(6.0);
+    let height = line1_height + line2_height + pad * 1.6;
+    let mut origin = position + gpui::point(px(14.0), px(18.0));
+    if origin.x + width > bounds.right() {
+        origin.x = (position.x - width - px(6.0)).max(bounds.left() + px(2.0));
+    }
+    if origin.y + height > bounds.bottom() {
+        origin.y = (position.y - height - px(6.0)).max(bounds.top() + px(2.0));
+    }
+    let card = Bounds::from_corners(origin, origin + gpui::size(width, height).into());
+    let radius = px(8.0);
+    let warn = link.meta.kind == LinkKind::Dangerous;
+    let border_color = if warn {
+        rgba((accent << 8) | 0xff)
+    } else {
+        rgba((theme.border << 8) | 0xff)
+    };
+    window.paint_quad(quad(
+        card,
+        Corners {
+            top_left: radius,
+            top_right: radius,
+            bottom_right: radius,
+            bottom_left: radius,
+        },
+        rgba((theme.background << 8) | 0xf4),
+        Edges {
+            top: px(1.0),
+            right: px(1.0),
+            bottom: px(1.0),
+            left: px(1.0),
+        },
+        border_color,
+        BorderStyle::default(),
+    ));
+    let _ = line1.paint(
+        origin + gpui::point(pad, pad * 0.7),
+        line1_height,
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+    let _ = line2.paint(
+        origin + gpui::point(pad, pad * 0.7 + line1_height),
+        line2_height,
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
+}
+
 /// Paints one rounded pill behind each Org tag span, keeping the `:` source
 /// separators outside the fill so every byte of the raw heading stays visible.
 fn push_tag_pill_quads(
@@ -2979,67 +3152,95 @@ fn push_tag_pill_quads(
     wrap_width: Pixels,
     theme: &crate::theme::Theme,
 ) {
-    let line_height = hit.line_height;
-    let line_height_px = f32::from(line_height).max(1.0);
     for span in spans.iter().filter(|span| span.pill) {
-        // Draw over the tag name only; the leading/trailing colons stay raw.
         let start = span.bytes.start.saturating_add(1);
         let end = span.bytes.end.saturating_sub(1);
         if start >= end {
             continue;
         }
-        let start_position = hit.position_for_display_index(start).unwrap_or_default();
-        let end_position = hit
-            .position_for_display_index(end)
-            .unwrap_or(start_position);
-        let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
-        let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;
-        for row in first_row..=last_row {
-            let left = if row == first_row {
-                start_position.x - px(TAG_PILL_PAD_X)
-            } else {
-                Pixels::ZERO
-            };
-            let right = if row == last_row {
-                end_position.x + px(TAG_PILL_PAD_X)
-            } else {
-                wrap_width
-            };
-            if right <= left {
-                continue;
-            }
-            let top = hit.origin_y + px(row as f32 * line_height_px) + px(TAG_PILL_INSET_Y);
-            let bottom =
-                hit.origin_y + px((row + 1) as f32 * line_height_px) - px(TAG_PILL_INSET_Y);
-            if bottom <= top {
-                continue;
-            }
-            let radius = if first_row == last_row {
-                px(TAG_PILL_RADIUS)
-            } else {
-                px(2.0)
-            };
-            let accent = theme.attribute;
-            quads.push(quad(
-                Bounds::from_corners(
-                    point(hit.text_origin_x + left, top),
-                    point(hit.text_origin_x + right, bottom),
-                ),
-                Corners {
-                    top_left: radius,
-                    top_right: radius,
-                    bottom_right: radius,
-                    bottom_left: radius,
-                },
-                rgba((accent << 8) | 0x16),
-                Edges::default(),
-                rgba(0),
-                BorderStyle::default(),
-            ));
-        }
+        push_pill_quads(quads, hit, start, end, wrap_width, theme.attribute, 0x16);
     }
 }
 
+/// Highlights the link currently under the pointer.
+fn push_link_hover_quad(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    link: &super::LinkHit,
+    wrap_width: Pixels,
+    theme: &crate::theme::Theme,
+) {
+    push_pill_quads(
+        quads,
+        hit,
+        link.display_range.start,
+        link.display_range.end,
+        wrap_width,
+        syntax::link_accent(&link.meta.kind, theme),
+        0x26,
+    );
+}
+
+/// Shared wrap-aware pill geometry: one rounded rect per visual row of
+/// `start..end`, padded horizontally and inset vertically.
+fn push_pill_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    start: usize,
+    end: usize,
+    wrap_width: Pixels,
+    accent: u32,
+    fill_alpha: u32,
+) {
+    let start_position = hit.position_for_display_index(start).unwrap_or_default();
+    let end_position = hit
+        .position_for_display_index(end.max(start.saturating_add(1)))
+        .unwrap_or(start_position);
+    let line_height_px = f32::from(hit.line_height).max(1.0);
+    let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
+    let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;
+    for row in first_row..=last_row {
+        let left = if row == first_row {
+            start_position.x
+        } else {
+            Pixels::ZERO
+        } - px(TAG_PILL_PAD_X);
+        let right = if row == last_row {
+            end_position.x
+        } else {
+            wrap_width
+        } + px(TAG_PILL_PAD_X);
+        if right <= left {
+            continue;
+        }
+        let top = hit.origin_y + px(row as f32 * line_height_px) + px(TAG_PILL_INSET_Y);
+        let bottom = hit.origin_y + px((row + 1) as f32 * line_height_px) - px(TAG_PILL_INSET_Y);
+        if bottom <= top {
+            continue;
+        }
+        let radius = if first_row == last_row {
+            px(TAG_PILL_RADIUS)
+        } else {
+            px(2.0)
+        };
+        quads.push(quad(
+            Bounds::from_corners(
+                point(hit.text_origin_x + left, top),
+                point(hit.text_origin_x + right, bottom),
+            ),
+            Corners {
+                top_left: radius,
+                top_right: radius,
+                bottom_right: radius,
+                bottom_left: radius,
+            },
+            rgba((accent << 8) | fill_alpha),
+            Edges::default(),
+            rgba(0),
+            BorderStyle::default(),
+        ));
+    }
+}
 fn push_search_quads(
     quads: &mut Vec<PaintQuad>,
     hit: &HitRow,

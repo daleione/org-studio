@@ -10,6 +10,7 @@ pub mod file_watcher;
 pub mod i18n;
 pub mod input;
 pub mod keymap;
+pub(crate) mod links;
 pub mod minimap;
 mod motion;
 pub mod navigation;

@@ -913,7 +913,7 @@ fn is_org_property_line(text: &str) -> bool {
     })
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct SpanStyle {
     color: Option<EditorColorToken>,
     weight: Option<FontWeight>,
@@ -922,6 +922,8 @@ struct SpanStyle {
     strikethrough: bool,
     /// Painted as a rounded pill behind the source text (Org trailing tags).
     pill: bool,
+    /// Classified link metadata (type + raw target) for hover/activation.
+    link: Option<crate::links::LinkInfo>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -930,6 +932,12 @@ pub(super) enum EditorColorToken {
     InlineCode,
     Verbatim,
     Link,
+    LinkExternal,
+    LinkFile,
+    LinkInternal,
+    LinkMail,
+    LinkWarn,
+    LinkOther,
     Date,
     Todo,
     TodoActive,
@@ -956,6 +964,12 @@ impl EditorColorToken {
             Self::InlineCode => theme.inline_code,
             Self::Verbatim => theme.verbatim,
             Self::Link => theme.link,
+            Self::LinkExternal => theme.link_external,
+            Self::LinkFile => theme.link_file,
+            Self::LinkInternal => theme.link_internal,
+            Self::LinkMail => theme.link_mail,
+            Self::LinkWarn => theme.link_warn,
+            Self::LinkOther => theme.link_other,
             Self::Date => theme.date,
             Self::Todo => theme.todo,
             Self::TodoActive => theme.todo_active,
@@ -995,6 +1009,8 @@ pub(super) struct EditorSemanticSpan {
     pub(super) strikethrough: bool,
     /// Paint a rounded pill behind the span while keeping every source byte visible.
     pub(super) pill: bool,
+    /// Classified link metadata when this span is a link (hover/activation).
+    pub(super) link: Option<crate::links::LinkInfo>,
 }
 
 /// Produces semantic paint runs without hiding or replacing any source byte.
@@ -1210,6 +1226,35 @@ pub(super) fn semantic_spans(
         Language::Markdown | Language::Org => {}
     }
 
+    // Bare links (GFM autolink extension): recognized schemes in running text.
+    // Ranges covered by bracketed links or code/verbatim spans stay untouched.
+    if !verbatim {
+        let link_ranges: Vec<Range<usize>> = spans
+            .iter()
+            .filter(|(_, style)| style.link.is_some())
+            .map(|(range, _)| range.clone())
+            .collect();
+        let plain_link_format = match document_language {
+            Language::Org => crate::links::LinkFormat::Org,
+            Language::Markdown => crate::links::LinkFormat::Markdown,
+        };
+        for (range, meta) in crate::links::scan_plain_links(text, plain_link_format) {
+            if range_intersects_any(&range, &opaque_inline_ranges)
+                || range_intersects_any(&range, &link_ranges)
+            {
+                continue;
+            }
+            spans.push((
+                range,
+                SpanStyle {
+                    color: Some(link_color_token(&meta.kind)),
+                    link: Some(meta),
+                    ..SpanStyle::default()
+                },
+            ));
+        }
+    }
+
     spans
         .into_iter()
         .filter(|(range, _)| {
@@ -1230,6 +1275,7 @@ pub(super) fn semantic_spans(
             underline: style.underline,
             strikethrough: style.strikethrough,
             pill: style.pill,
+            link: style.link,
         })
         .collect()
 }
@@ -1296,6 +1342,24 @@ fn collect_inline_semantics(
     opaque_ranges
 }
 
+fn link_color_token(kind: &crate::links::LinkKind) -> EditorColorToken {
+    use crate::links::LinkKind;
+    match kind {
+        LinkKind::External => EditorColorToken::LinkExternal,
+        LinkKind::File => EditorColorToken::LinkFile,
+        LinkKind::Internal => EditorColorToken::LinkInternal,
+        LinkKind::Mail => EditorColorToken::LinkMail,
+        LinkKind::Dangerous => EditorColorToken::LinkWarn,
+        LinkKind::Other => EditorColorToken::LinkOther,
+    }
+}
+
+/// Resolved accent color for a link kind. Kept as the single source of truth
+/// so hover highlights and tooltips always match the text color.
+pub(super) fn link_accent(kind: &crate::links::LinkKind, theme: &Theme) -> u32 {
+    link_color_token(kind).resolve(theme)
+}
+
 fn collect_inline_spans(
     language: Language,
     text: &str,
@@ -1338,17 +1402,42 @@ fn collect_inline_spans(
                 color: Some(EditorColorToken::Verbatim),
                 ..SpanStyle::default()
             },
-            InlineKind::Link | InlineKind::FootnoteReference => SpanStyle {
-                color: Some(EditorColorToken::Link),
-                underline: language == Language::Markdown,
-                ..SpanStyle::default()
-            },
+            InlineKind::Link => {
+                let format = match language {
+                    Language::Org => crate::links::LinkFormat::Org,
+                    Language::Markdown => crate::links::LinkFormat::Markdown,
+                };
+                let meta = inline_span
+                    .target
+                    .as_deref()
+                    .map(|target| crate::links::classify(target, format));
+                SpanStyle {
+                    color: Some(
+                        meta.as_ref()
+                            .map(|meta| link_color_token(&meta.kind))
+                            .unwrap_or(EditorColorToken::Link),
+                    ),
+                    underline: language == Language::Markdown,
+                    link: meta,
+                    ..SpanStyle::default()
+                }
+            }
+            InlineKind::Target | InlineKind::RadioTarget | InlineKind::FootnoteReference => {
+                let meta = inline_span
+                    .target
+                    .as_deref()
+                    .map(|target| crate::links::LinkInfo {
+                        kind: crate::links::LinkKind::Internal,
+                        raw: Arc::from(target),
+                    });
+                SpanStyle {
+                    color: Some(EditorColorToken::LinkInternal),
+                    link: meta,
+                    ..SpanStyle::default()
+                }
+            }
             InlineKind::Timestamp => SpanStyle {
                 color: Some(EditorColorToken::Date),
-                ..SpanStyle::default()
-            },
-            InlineKind::Target | InlineKind::RadioTarget => SpanStyle {
-                color: Some(EditorColorToken::Attribute),
                 ..SpanStyle::default()
             },
             InlineKind::Entity | InlineKind::Latex => SpanStyle {
@@ -2171,6 +2260,84 @@ mod tests {
     }
 
     #[test]
+    fn org_links_classify_by_type_keeping_the_raw_source() {
+        let text = "[[https://x.org][web]] [[file:notes.org][notes]] [[#cid][jump]] [[mailto:a@b.c][mail]] [[shell:ls][danger]] [[irc:chan][chat]]";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let links: Vec<(EditorColorToken, &str)> = spans
+            .iter()
+            .filter_map(|span| {
+                span.link
+                    .as_ref()
+                    .map(|meta| (span.color.expect("links are colored"), meta.raw.as_ref()))
+            })
+            .collect();
+        assert_eq!(
+            links,
+            vec![
+                (EditorColorToken::LinkExternal, "https://x.org"),
+                (EditorColorToken::LinkFile, "file:notes.org"),
+                (EditorColorToken::LinkInternal, "#cid"),
+                (EditorColorToken::LinkMail, "mailto:a@b.c"),
+                (EditorColorToken::LinkWarn, "shell:ls"),
+                (EditorColorToken::LinkOther, "irc:chan"),
+            ]
+        );
+        // Raw source bytes are all preserved by the paint runs.
+        let theme = current_theme();
+        let runs = runs(
+            Path::new("a.org"),
+            text,
+            base_run(text.len()),
+            &style,
+            None,
+            theme,
+        );
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
+    }
+
+    #[test]
+    fn bare_urls_are_scanned_as_external_links() {
+        let text = "visit https://orgmode.org now and www.example.com/a!";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let external: Vec<&str> = spans
+            .iter()
+            .filter(|span| {
+                matches!(
+                    span.link,
+                    Some(crate::links::LinkInfo {
+                        kind: crate::links::LinkKind::External,
+                        ..
+                    })
+                )
+            })
+            .map(|span| &text[span.bytes.clone()])
+            .collect();
+        assert_eq!(external, vec!["https://orgmode.org", "www.example.com/a"]);
+    }
+
+    #[test]
+    fn markdown_links_classify_dest_urls() {
+        let text = "[web](https://x.org) [file](a.md) [sec](#top) [mail](mailto:a@b.c)";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.md"), text, &style);
+        let colors: Vec<EditorColorToken> = spans
+            .iter()
+            .filter_map(|span| span.link.as_ref().map(|_| span.color.expect("colored")))
+            .collect();
+        assert_eq!(
+            colors,
+            vec![
+                EditorColorToken::LinkExternal,
+                EditorColorToken::LinkFile,
+                EditorColorToken::LinkInternal,
+                EditorColorToken::LinkMail,
+            ]
+        );
+    }
+
+    #[test]
     fn org_tag_ranges_split_clusters_into_individual_tags_with_colons() {
         // Adjacent tags share the separator colon, so the ranges overlap on it.
         assert_eq!(org_tag_ranges("* H :alpha:beta:"), vec![4..11, 10..16]);
@@ -2247,10 +2414,17 @@ mod tests {
         let spans = semantic_spans(Path::new("unicode.org"), text, &style);
 
         assert!(!spans.is_empty());
+        assert!(spans.iter().any(|span| {
+            matches!(
+                span.color,
+                Some(EditorColorToken::LinkExternal | EditorColorToken::LinkInternal)
+            )
+        }));
         assert!(
             spans
                 .iter()
-                .any(|span| span.color == Some(EditorColorToken::Link))
+                .filter(|span| span.link.is_some())
+                .all(|span| { span.link.as_ref().is_some_and(|meta| !meta.raw.is_empty()) })
         );
         assert!(spans.iter().all(|span| {
             span.bytes.start < span.bytes.end

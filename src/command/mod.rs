@@ -70,6 +70,7 @@ pub enum BuiltinCommand {
     PreviousBuffer,
     OrgContextCommand,
     ExecuteSourceBlock,
+    OpenLinkAt,
     ToggleInlineImagePreviews,
     UndoDocument,
     RedoDocument,

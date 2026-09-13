@@ -1204,6 +1204,15 @@ impl SemanticEditor {
             window.dispatch_action(Box::new(super::RunSourceBlockAt { source_offset }), cx);
             return;
         }
+        if (event.modifiers.platform || event.modifiers.control)
+            && let Some(link) = self
+                .link_at_position(event.position)
+                .and_then(|index| self.link_hits.get(index))
+                .cloned()
+        {
+            self.open_link(&link, cx);
+            return;
+        }
         if let Some(bounds) = self.minimap.bounds {
             let x = f32::from(event.position.x);
             if (x - f32::from(bounds.left())).abs() <= super::minimap::RESIZE_HANDLE {
@@ -1278,6 +1287,15 @@ impl SemanticEditor {
             .any(|button| button.bounds.contains(&event.position));
         if source_run_button_hovered != self.source_run_button_hovered {
             self.source_run_button_hovered = source_run_button_hovered;
+            cx.notify();
+        }
+        let hovered_link = self
+            .link_at_position(event.position)
+            .and_then(|index| self.link_hits.get(index))
+            .map(|hit| (hit.line, hit.display_range.clone()));
+        if hovered_link.as_ref() != self.hovered_link.as_ref() {
+            self.hovered_link = hovered_link.clone();
+            self.hover_position = hovered_link.map(|_| event.position);
             cx.notify();
         }
         if let Some((start_x, start_width)) = self.minimap.resizing {
@@ -1725,18 +1743,6 @@ impl SemanticEditor {
         };
         self.selection_utf16 = start..end;
         self.selection_utf16_reversed = self.selection.is_reversed();
-    }
-}
-
-fn vertical_distance(y: Pixels, row: &super::HitRow) -> f32 {
-    let top = row.visible_top;
-    let bottom = row.visible_bottom;
-    if y < top {
-        f32::from(top - y)
-    } else if y > bottom {
-        f32::from(y - bottom)
-    } else {
-        0.0
     }
 }
 

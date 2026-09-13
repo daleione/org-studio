@@ -21,7 +21,7 @@ use super::{
     DIRED_UNMARK_COMMAND, DIRED_UP_COMMAND, END_COMMAND, EXECUTE_SOURCE_BLOCK_COMMAND,
     EXPORT_DOCUMENT_COMMAND, GLOBAL_VISIBILITY_CYCLE_COMMAND, INCREASE_CONTENT_FONT_SIZE_COMMAND,
     OPEN_AGENDA_COMMAND, OPEN_AGENDA_TEXT_COMMAND, OPEN_DEFAULT_DIRED_COMMAND,
-    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, ORG_CONTEXT_COMMAND,
+    OPEN_DOCUMENT_COMMAND, OPEN_FILE_MANAGER_COMMAND, OPEN_LINK_AT_COMMAND, ORG_CONTEXT_COMMAND,
     QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
     RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND,
     SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND,
@@ -165,6 +165,23 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in save-as command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: OPEN_LINK_AT_COMMAND.into(),
+            aliases: &["org-open-at-point"],
+            title: "Open Link at Point",
+            description: "Open the Org or Markdown link at point",
+            command: BuiltinCommand::OpenLinkAt,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::None,
+            required_capabilities: CapabilitySet::READ_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in open-link command");
     builder
         .register_builtin(BuiltinCommandSpec {
             name: EXECUTE_SOURCE_BLOCK_COMMAND.into(),
@@ -689,6 +706,10 @@ pub(crate) fn source_bindings() -> Vec<BindingSpec<'static>> {
             behavior: BindingBehavior::PassThrough,
         }),
     );
+    bindings.push(BindingSpec {
+        keys: "C-c C-o",
+        behavior: BindingBehavior::Command(OPEN_LINK_AT_COMMAND),
+    });
     bindings
 }
 

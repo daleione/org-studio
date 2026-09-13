@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 
 use crate::{
@@ -148,7 +150,8 @@ fn parse_markdown_range(
         let logical = line.text.trim_end_matches(['\r', '\n']);
         let trimmed = logical.trim_start();
         let leading = logical.len() - trimmed.len();
-        let line_end = line.range.start.0 + logical.len() as u64;
+        let line_end =
+            line.range.start.0 + u64::try_from(logical.len()).expect("line length fits u64");
         let (kind, content_start, content_end) = if let Some((marker, count, language)) = &fence {
             let closes = leading <= 3 && is_closing_fence(trimmed, *marker, *count);
             let kind = MarkdownKind::Code {
@@ -258,10 +261,11 @@ pub(crate) fn parse_markdown_inline(source: &str) -> InlineText {
     // one ordinary paragraph fragment forces the parser into inline context; both rendered and
     // source ranges are rebased before the result leaves this function.
     const INLINE_CONTEXT_PREFIX: &str = "p: ";
+    type InlineTag = (TagEnd, InlineKind, usize, usize, Option<Arc<str>>);
     let wrapped = format!("{INLINE_CONTEXT_PREFIX}{source}");
     let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
     let mut result = InlineText::default();
-    let mut stack: Vec<(TagEnd, InlineKind, usize, usize)> = Vec::new();
+    let mut stack: Vec<InlineTag> = Vec::new();
     for (event, source_range) in Parser::new_ext(&wrapped, options).into_offset_iter() {
         match event {
             Event::Start(tag) => {
@@ -273,17 +277,28 @@ pub(crate) fn parse_markdown_inline(source: &str) -> InlineText {
                     _ => None,
                 };
                 if let Some(kind) = kind {
-                    stack.push((tag.to_end(), kind, result.text.len(), source_range.start));
+                    let target = match &tag {
+                        Tag::Link { dest_url, .. } => Some(Arc::from(dest_url.as_ref())),
+                        _ => None,
+                    };
+                    stack.push((
+                        tag.to_end(),
+                        kind,
+                        result.text.len(),
+                        source_range.start,
+                        target,
+                    ));
                 }
             }
             Event::End(end) => {
                 if let Some(index) = stack.iter().rposition(|(expected, ..)| *expected == end) {
-                    let (_, kind, start, source_start) = stack.remove(index);
+                    let (_, kind, start, source_start, target) = stack.remove(index);
                     if start < result.text.len() {
                         result.spans.push(InlineSpan {
                             kind,
                             source: source_start..source_range.end,
                             range: start..result.text.len(),
+                            target,
                         });
                     }
                 }
@@ -298,6 +313,7 @@ pub(crate) fn parse_markdown_inline(source: &str) -> InlineText {
                     kind: InlineKind::Code,
                     source: source_range,
                     range: start..result.text.len(),
+                    target: None,
                 });
             }
             Event::SoftBreak => result.text.push(' '),

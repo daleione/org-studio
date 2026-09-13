@@ -191,5 +191,13 @@
   "agenda.list_view": "列表",
   "agenda.calendar_view": "日历",
   "agenda.text_view": "文本视图",
-  "agenda.task_location_changed": "任务位置已改变，请刷新日程后重试"
+  "agenda.task_location_changed": "任务位置已改变，请刷新日程后重试",
+  "link.kind.external": "外部链接",
+  "link.kind.file": "文件链接",
+  "link.kind.internal": "内部跳转",
+  "link.kind.mail": "邮件",
+  "link.kind.dangerous": "危险链接",
+  "link.kind.other": "其他链接",
+  "link.open.hint": "⌘点击 或 C-c C-o 打开",
+  "link.warn.hint": "危险链接：不会执行"
 }

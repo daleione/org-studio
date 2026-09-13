@@ -191,5 +191,13 @@
   "agenda.list_view": "List",
   "agenda.calendar_view": "Calendar",
   "agenda.text_view": "Text view",
-  "agenda.task_location_changed": "Task location changed; refresh Agenda and try again"
+  "agenda.task_location_changed": "Task location changed; refresh Agenda and try again",
+  "link.kind.external": "External link",
+  "link.kind.file": "File link",
+  "link.kind.internal": "Internal link",
+  "link.kind.mail": "Mail link",
+  "link.kind.dangerous": "Dangerous link",
+  "link.kind.other": "Other link",
+  "link.open.hint": "Cmd-click or C-c C-o to open",
+  "link.warn.hint": "Dangerous link: not executed"
 }
