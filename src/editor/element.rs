@@ -42,6 +42,9 @@ const SOURCE_RUN_BUTTON_HIT_SLOP: f32 = 4.0;
 const SOURCE_RUN_ICON_FONT_SCALE: f32 = 0.82;
 const BLOCK_VERTICAL_INSET: f32 = 2.0;
 const BLOCK_RADIUS: f32 = 7.0;
+const TAG_PILL_PAD_X: f32 = 3.0;
+const TAG_PILL_INSET_Y: f32 = 2.0;
+const TAG_PILL_RADIUS: f32 = 5.0;
 const INLINE_IMAGE_VERTICAL_PADDING: f32 = 6.0;
 const INLINE_IMAGE_MAX_WIDTH: f32 = 640.0;
 
@@ -68,6 +71,7 @@ pub struct PrepaintState {
     started_at: Instant,
     rows: Vec<PaintRow>,
     block_backgrounds: Vec<PaintQuad>,
+    tag_pills: Vec<PaintQuad>,
     source_run_buttons: Vec<SourceRunButtonPaint>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
@@ -591,6 +595,7 @@ impl Element for EditorElement {
         );
         let mut rows = Vec::with_capacity(paint_lines.len());
         let mut selection_quads = Vec::new();
+        let mut tag_pill_quads = Vec::new();
         let mut caret = None;
         let mut next_y = first_line_y;
         let minimap_bounds = Bounds::new(
@@ -674,15 +679,20 @@ impl Element for EditorElement {
                 strikethrough: None,
             };
             let marked_display = local_marked(marked, content_range, &display);
+            let mut semantic_row = Vec::new();
             let runs = if let Some(highlights) = editor.generated_highlights.as_ref() {
                 highlights.get(line_number as usize).map_or_else(
                     || vec![base_run.clone()],
                     |highlights| super::read_only::highlighted_runs(base_run.clone(), highlights),
                 )
             } else {
-                syntax::runs(
+                semantic_row = syntax::semantic_spans(
                     editor.session.read(cx).syntax_path(),
                     &text,
+                    line_style,
+                );
+                syntax::runs_from_spans(
+                    &semantic_row,
                     base_run,
                     line_style,
                     marked_display.clone(),
@@ -830,6 +840,16 @@ impl Element for EditorElement {
                 table_layout,
                 inline_image_preview: inline_image.is_some(),
             };
+
+            if !semantic_row.is_empty() && inline_image.is_none() && line_animation_scale >= 0.999 {
+                push_tag_pill_quads(
+                    &mut tag_pill_quads,
+                    &hit,
+                    &semantic_row,
+                    px(row_wrap_width),
+                    theme,
+                );
+            }
 
             let first = editor
                 .search_ranges
@@ -1102,6 +1122,7 @@ impl Element for EditorElement {
             started_at,
             rows,
             block_backgrounds,
+            tag_pills: tag_pill_quads,
             source_run_buttons,
             selection: selection_quads,
             caret,
@@ -1267,6 +1288,9 @@ impl Element for EditorElement {
                     }
                     for background in state.rows.iter().filter_map(|row| row.background.clone()) {
                         window.paint_quad(background);
+                    }
+                    for pill in state.tag_pills.drain(..) {
+                        window.paint_quad(pill);
                     }
                     for selection in state.selection.drain(..) {
                         window.paint_quad(selection);
@@ -2941,6 +2965,76 @@ fn push_selection_quads(
                     ),
                 ),
                 rgba(0x3f78f24a),
+            ));
+        }
+    }
+}
+
+/// Paints one rounded pill behind each Org tag span, keeping the `:` source
+/// separators outside the fill so every byte of the raw heading stays visible.
+fn push_tag_pill_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    spans: &[syntax::EditorSemanticSpan],
+    wrap_width: Pixels,
+    theme: &crate::theme::Theme,
+) {
+    let line_height = hit.line_height;
+    let line_height_px = f32::from(line_height).max(1.0);
+    for span in spans.iter().filter(|span| span.pill) {
+        // Draw over the tag name only; the leading/trailing colons stay raw.
+        let start = span.bytes.start.saturating_add(1);
+        let end = span.bytes.end.saturating_sub(1);
+        if start >= end {
+            continue;
+        }
+        let start_position = hit.position_for_display_index(start).unwrap_or_default();
+        let end_position = hit
+            .position_for_display_index(end)
+            .unwrap_or(start_position);
+        let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
+        let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;
+        for row in first_row..=last_row {
+            let left = if row == first_row {
+                start_position.x - px(TAG_PILL_PAD_X)
+            } else {
+                Pixels::ZERO
+            };
+            let right = if row == last_row {
+                end_position.x + px(TAG_PILL_PAD_X)
+            } else {
+                wrap_width
+            };
+            if right <= left {
+                continue;
+            }
+            let top = hit.origin_y + px(row as f32 * line_height_px) + px(TAG_PILL_INSET_Y);
+            let bottom =
+                hit.origin_y + px((row + 1) as f32 * line_height_px) - px(TAG_PILL_INSET_Y);
+            if bottom <= top {
+                continue;
+            }
+            let radius = if first_row == last_row {
+                px(TAG_PILL_RADIUS)
+            } else {
+                px(2.0)
+            };
+            let accent = theme.attribute;
+            quads.push(quad(
+                Bounds::from_corners(
+                    point(hit.text_origin_x + left, top),
+                    point(hit.text_origin_x + right, bottom),
+                ),
+                Corners {
+                    top_left: radius,
+                    top_right: radius,
+                    bottom_right: radius,
+                    bottom_left: radius,
+                },
+                rgba((accent << 8) | 0x16),
+                Edges::default(),
+                rgba(0),
+                BorderStyle::default(),
             ));
         }
     }

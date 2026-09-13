@@ -1980,6 +1980,7 @@ mod tests {
             italic: false,
             underline: false,
             strikethrough: false,
+            pill: false,
         }
     }
 

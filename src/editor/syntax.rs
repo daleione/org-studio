@@ -920,6 +920,8 @@ struct SpanStyle {
     font_style: Option<FontStyle>,
     underline: bool,
     strikethrough: bool,
+    /// Painted as a rounded pill behind the source text (Org trailing tags).
+    pill: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -991,6 +993,8 @@ pub(super) struct EditorSemanticSpan {
     pub(super) italic: bool,
     pub(super) underline: bool,
     pub(super) strikethrough: bool,
+    /// Paint a rounded pill behind the span while keeping every source byte visible.
+    pub(super) pill: bool,
 }
 
 /// Produces semantic paint runs without hiding or replacing any source byte.
@@ -1024,9 +1028,20 @@ pub(super) fn runs(
     }
 
     let spans = semantic_spans(path, text, line_style);
+    runs_from_spans(&spans, base, line_style, marked, theme)
+}
 
-    let mut boundaries = vec![0, text.len()];
-    for span in &spans {
+/// Like [`runs`], but takes precomputed semantic spans so callers that also
+/// need the spans (e.g. tag pill geometry) only parse the line once.
+pub(super) fn runs_from_spans(
+    spans: &[EditorSemanticSpan],
+    base: TextRun,
+    _line_style: &EditorLineStyle,
+    marked: Option<Range<usize>>,
+    theme: &Theme,
+) -> Vec<TextRun> {
+    let mut boundaries = vec![0, base.len];
+    for span in spans {
         boundaries.extend([span.bytes.start, span.bytes.end]);
     }
     if let Some(marked) = &marked {
@@ -1214,6 +1229,7 @@ pub(super) fn semantic_spans(
             italic: style.font_style == Some(FontStyle::Italic),
             underline: style.underline,
             strikethrough: style.strikethrough,
+            pill: style.pill,
         })
         .collect()
 }
@@ -1529,28 +1545,55 @@ fn collect_org_tags_outside(
     opaque_ranges: &[Range<usize>],
     spans: &mut Vec<(Range<usize>, SpanStyle)>,
 ) {
+    for range in org_tag_ranges(text) {
+        if !range_intersects_any(&range, opaque_ranges) {
+            spans.push((
+                range,
+                SpanStyle {
+                    color: Some(color),
+                    pill: true,
+                    ..SpanStyle::default()
+                },
+            ));
+        }
+    }
+}
+
+/// Byte ranges of each individual tag in a trailing Org tag cluster.
+///
+/// `* H :alpha:beta:` yields the ranges of `:alpha:` and `:beta:`. Adjacent
+/// tags share the separator colon, so the two ranges overlap on that single
+/// byte — exactly how Org writes the cluster. Callers paint each tag as a
+/// separate pill while keeping every source byte visible. Returns an empty vec
+/// when the trailing token is not a valid Org tag cluster.
+pub(super) fn org_tag_ranges(text: &str) -> Vec<Range<usize>> {
     let trimmed_end = text.trim_end();
     let Some(start) = trimmed_end.rfind(' ') else {
-        return;
+        return Vec::new();
     };
     let candidate = &trimmed_end[start + 1..];
-    let range = start + 1..trimmed_end.len();
-    if candidate.len() >= 3
-        && candidate.starts_with(':')
-        && candidate.ends_with(':')
-        && candidate[1..candidate.len() - 1].chars().all(|character| {
+    if candidate.len() < 3
+        || !candidate.starts_with(':')
+        || !candidate.ends_with(':')
+        || !candidate[1..candidate.len() - 1].chars().all(|character| {
             character.is_alphanumeric() || matches!(character, ':' | '_' | '@' | '#')
         })
-        && !range_intersects_any(&range, opaque_ranges)
     {
-        spans.push((
-            range,
-            SpanStyle {
-                color: Some(color),
-                ..SpanStyle::default()
-            },
-        ));
+        return Vec::new();
     }
+    let base = start + 1;
+    let inner = &candidate[1..candidate.len() - 1];
+    let mut name_start = base + 1;
+    let mut ranges = Vec::new();
+    for name in inner.split(':') {
+        // Leading colon (shared with the previous tag's trailing colon) + name
+        // + trailing colon.
+        let start = name_start - 1;
+        let end = name_start + name.len() + 1;
+        ranges.push(start..end);
+        name_start += name.len() + 1;
+    }
+    ranges
 }
 
 fn range_intersects_any(range: &Range<usize>, others: &[Range<usize>]) -> bool {
@@ -2128,6 +2171,69 @@ mod tests {
     }
 
     #[test]
+    fn org_tag_ranges_split_clusters_into_individual_tags_with_colons() {
+        // Adjacent tags share the separator colon, so the ranges overlap on it.
+        assert_eq!(org_tag_ranges("* H :alpha:beta:"), vec![4..11, 10..16]);
+        assert_eq!(
+            org_tag_ranges("** TODO Ship it :ui:mac:"),
+            vec![16..20, 19..24]
+        );
+        assert_eq!(org_tag_ranges("body text"), Vec::<Range<usize>>::new());
+        assert_eq!(org_tag_ranges("* H :alpha"), Vec::<Range<usize>>::new());
+        assert_eq!(org_tag_ranges("* H alpha:"), Vec::<Range<usize>>::new());
+        assert_eq!(org_tag_ranges("* H :"), Vec::<Range<usize>>::new());
+        assert_eq!(org_tag_ranges("* H :a@b#c_d:"), vec![4..13]);
+        for (text, ranges) in [
+            ("* H :alpha:beta:", org_tag_ranges("* H :alpha:beta:")),
+            (
+                "** TODO Ship it :ui:mac:",
+                org_tag_ranges("** TODO Ship it :ui:mac:"),
+            ),
+        ] {
+            for range in &ranges {
+                assert!(
+                    text.is_char_boundary(range.start) && text.is_char_boundary(range.end),
+                    "{range:?} is not on char boundaries in {text:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn semantic_spans_mark_each_org_tag_as_a_pill() {
+        let text = "** TODO Ship it :ui:mac:";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let pills: Vec<&str> = spans
+            .iter()
+            .filter(|span| span.pill)
+            .map(|span| &text[span.bytes.clone()])
+            .collect();
+        assert_eq!(pills, vec![":ui:", ":mac:"]);
+        for span in spans.iter().filter(|span| span.pill) {
+            assert_eq!(span.color, Some(EditorColorToken::Attribute));
+            assert!(
+                text.is_char_boundary(span.bytes.start) && text.is_char_boundary(span.bytes.end),
+                "pill range is not on char boundaries: {:?}",
+                span.bytes
+            );
+        }
+    }
+
+    #[test]
+    fn org_tags_inside_inline_code_are_not_pilled() {
+        let text = "see =a:b:= then :real:";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let pills: Vec<&str> = spans
+            .iter()
+            .filter(|span| span.pill)
+            .map(|span| &text[span.bytes.clone()])
+            .collect();
+        assert_eq!(pills, vec![":real:"]);
+    }
+
+    #[test]
     fn semantic_spans_are_shared_tokens_with_valid_complex_utf8_ranges() {
         let text = "前缀 [[https://例子.invalid][链接😀]] cafe\u{301} שלום *粗体*";
         let style = EditorLineStyle {
@@ -2204,7 +2310,10 @@ mod tests {
     fn long_code_line_highlights_without_invalid_or_truncated_semantic_ranges() {
         let text = format!("let payload = \"{}😀\"; // 尾部", "x".repeat(16_384));
         let style = EditorLineStyle {
-            source_range: ByteRange::new(0, text.len() as u64),
+            source_range: ByteRange::new(
+                0,
+                u64::try_from(text.len()).expect("line length fits u64"),
+            ),
             id: EditorStyleId::Code,
             code_language: Some(Arc::from("rust")),
             block: None,
