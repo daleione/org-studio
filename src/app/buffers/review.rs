@@ -24,7 +24,7 @@ impl WorkspaceWindow {
                 "down" | "tab" => r.selected = (r.selected + 1) % len,
                 "p" if m.control => r.selected = (r.selected + len - 1) % len,
                 "n" if m.control => r.selected = (r.selected + 1) % len,
-                "space" if !r.entries[r.selected].done => {
+                "space" if !r.running && !r.entries[r.selected].done => {
                     r.entries[r.selected].save = !r.entries[r.selected].save
                 }
                 _ => {}
@@ -92,6 +92,49 @@ impl WorkspaceWindow {
         self.buffers.returning = false;
         self.buffers.focus_pending = true;
         cx.notify();
+    }
+
+    pub(crate) fn set_buffer_review_choice(
+        &mut self,
+        id: DocumentId,
+        save: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(review) = self.buffers.review_mut()
+            && !review.running
+            && let Some((index, entry)) = review
+                .entries
+                .iter_mut()
+                .enumerate()
+                .find(|(_, entry)| entry.id == id && !entry.done)
+        {
+            entry.save = save;
+            review.selected = index;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn discard_buffer_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !matches!(
+            self.save.interaction,
+            crate::app::save::SaveInteraction::Idle
+        ) {
+            return;
+        }
+        let Some(review) = self.buffers.review_mut() else {
+            return;
+        };
+        if review.running || review.kind == ReviewKind::Save {
+            return;
+        }
+        for entry in &mut review.entries {
+            if !entry.done {
+                entry.save = false;
+            }
+        }
+        // Keep captured revisions and the existing final validation. This path skips
+        // saving, but must not discard a newer edit or an unreviewed hidden document.
+        self.process_buffer_review(window, cx);
     }
 
     pub(crate) fn process_buffer_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {

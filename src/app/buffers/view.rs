@@ -1,7 +1,10 @@
 use super::*;
+use crate::components::selection_style::{
+    HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
+};
 use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
 
-fn button(
+fn button_base(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
@@ -17,8 +20,42 @@ fn button(
         .text_size(px(12.))
         .text_color(rgb(0x71829a))
         .cursor_pointer()
-        .hover(|s| s.bg(rgb(0xeaf0f8)))
         .child(label.into())
+}
+
+fn button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+) -> gpui::Stateful<gpui::Div> {
+    button_base(id, label).hover(|s| s.bg(rgb(HOVER_BACKGROUND)))
+}
+
+fn review_button(
+    id: impl Into<gpui::ElementId>,
+    label: impl Into<gpui::SharedString>,
+    selected: bool,
+    disabled: bool,
+) -> gpui::Stateful<gpui::Div> {
+    let background = if selected {
+        SELECTED_BACKGROUND
+    } else {
+        0xffffff
+    };
+    let foreground = if selected { 0xffffff } else { 0x506178 };
+    button_base(id, label)
+        .bg(rgb(background))
+        .text_color(rgb(foreground))
+        .when(disabled, |s| s.opacity(0.5).cursor_default())
+        .hover(move |s| {
+            s.bg(rgb(if disabled {
+                background
+            } else if selected {
+                SELECTED_HOVER_BACKGROUND
+            } else {
+                HOVER_BACKGROUND
+            }))
+            .text_color(rgb(foreground))
+        })
 }
 
 impl WorkspaceWindow {
@@ -400,10 +437,13 @@ impl WorkspaceWindow {
             ReviewKind::Close(_) => {
                 self.buffer_text("关闭前，处理这份修改", "Save before closing?")
             }
-            _ => self.buffer_text("退出前，处理这些修改", "Before you go, review your changes"),
+            _ => self.buffer_text("退出前保存更改？", "Save changes before quitting?"),
         };
         let cancel_entity = entity.clone();
         let submit_entity = entity.clone();
+        let discard_entity = entity.clone();
+        let has_save = r.entries.iter().any(|e| e.save && !e.done);
+        let has_discard = r.entries.iter().any(|e| !e.save && !e.done);
         let rows = r
             .entries
             .iter()
@@ -411,15 +451,58 @@ impl WorkspaceWindow {
             .filter_map(|(index, e)| {
                 let session = self.buffer_session(e.id, cx)?;
                 let s = session.read(cx);
-                let choice_entity = entity.clone();
-                let label = if e.done {
-                    self.buffer_text("已保存", "Saved")
-                } else if e.save {
-                    self.buffer_text("保存", "Save")
-                } else if r.kind == ReviewKind::Save {
-                    self.buffer_text("暂不保存", "Skip for now")
+                let choices = if e.done {
+                    div()
+                        .text_size(px(12.))
+                        .text_color(rgb(0x71829a))
+                        .child(self.buffer_text("已保存", "Saved"))
                 } else {
-                    self.buffer_text("不保存 · 丢弃", "Discard changes")
+                    div()
+                        .flex()
+                        .flex_none()
+                        .gap(px(3.))
+                        .p(px(2.))
+                        .rounded(px(6.))
+                        .bg(rgb(0xeaf0f5))
+                        .children([true, false].into_iter().map(|save| {
+                            let choice_entity = entity.clone();
+                            let id = e.id;
+                            let label = if save {
+                                self.buffer_text("保存", "Save")
+                            } else if r.kind == ReviewKind::Save {
+                                self.buffer_text("跳过", "Skip")
+                            } else {
+                                self.buffer_text("丢弃", "Discard")
+                            };
+                            review_button(
+                                (
+                                    if save {
+                                        "buffer-save-choice"
+                                    } else {
+                                        "buffer-discard-choice"
+                                    },
+                                    index,
+                                ),
+                                label,
+                                e.save == save,
+                                r.running,
+                            )
+                            .debug_selector(move || {
+                                format!(
+                                    "buffer-review-{}-{index}",
+                                    if save { "save" } else { "discard" }
+                                )
+                            })
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                move |_, _, cx| {
+                                    cx.stop_propagation();
+                                    choice_entity.update(cx, |w, cx| {
+                                        w.set_buffer_review_choice(id, save, cx)
+                                    });
+                                },
+                            )
+                        }))
                 };
                 Some(
                     div()
@@ -464,27 +547,7 @@ impl WorkspaceWindow {
                                         ),
                                 ),
                         )
-                        .child(
-                            button(("buffer-save-choice", index), label)
-                                .w(px(128.))
-                                .border_1()
-                                .border_color(rgb(0xe0e7f0))
-                                .bg(rgb(0xffffff))
-                                .text_color(rgb(if e.save { 0x71829a } else { 0xab6970 }))
-                                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                    cx.stop_propagation();
-                                    choice_entity.update(cx, |w, cx| {
-                                        if let Some(r) = w.buffers.review_mut()
-                                            && !r.running
-                                            && !r.entries[index].done
-                                        {
-                                            r.entries[index].save = !r.entries[index].save;
-                                            r.selected = index;
-                                            cx.notify();
-                                        }
-                                    });
-                                }),
-                        ),
+                        .child(choices),
                 )
             })
             .collect::<Vec<_>>();
@@ -492,9 +555,15 @@ impl WorkspaceWindow {
             self.buffer_text("正在保存…", "Saving…")
         } else {
             match r.kind {
-                ReviewKind::Save => self.buffer_text("确认", "Confirm"),
-                ReviewKind::Close(_) => self.buffer_text("确认并关闭", "Confirm & close"),
-                _ => self.buffer_text("确认并退出", "Confirm & quit"),
+                ReviewKind::Save if has_save => self.buffer_text("保存所选", "Save selected"),
+                ReviewKind::Save => self.buffer_text("完成", "Done"),
+                ReviewKind::Close(_) if has_save => self.buffer_text("保存并关闭", "Save & close"),
+                ReviewKind::Close(_) => self.buffer_text("不保存关闭", "Close without saving"),
+                _ if has_save && has_discard => {
+                    self.buffer_text("确认选择并退出", "Apply choices & quit")
+                }
+                _ if has_save => self.buffer_text("保存并退出", "Save & quit"),
+                _ => self.buffer_text("不保存退出", "Quit without saving"),
             }
         };
         div()
@@ -512,6 +581,12 @@ impl WorkspaceWindow {
                     .text_color(rgb(0x576a82))
                     .child(title),
             )
+            .child(div().px(px(18.)).pb(px(12.)).flex_none().text_size(px(12.)).text_color(rgb(0x71829a))
+                .child(if r.kind == ReviewKind::Save {
+                    self.buffer_text("选择要保存的文档；跳过的修改会保留。", "Choose documents to save. Skipped edits will be kept.")
+                } else {
+                    self.buffer_text("为每份文档选择保存或丢弃。丢弃的修改无法恢复。", "Choose Save or Discard for each document. Discarded edits cannot be recovered.")
+                }))
             .child(
                 div()
                     .id("buffer-review-list")
@@ -545,7 +620,9 @@ impl WorkspaceWindow {
             )
             .child(
                 div()
-                    .h(px(60.))
+                    .min_h(px(60.))
+                    .py(px(10.))
+                    .flex_wrap()
                     .flex_none()
                     .px(px(16.))
                     .flex()
@@ -554,17 +631,28 @@ impl WorkspaceWindow {
                     .gap(px(10.))
                     .border_t_1()
                     .border_color(rgb(0xe4ebf4))
+                    .when(r.kind != ReviewKind::Save && has_save, |footer| footer.child(
+                        review_button("buffer-review-discard-all", if matches!(r.kind, ReviewKind::Close(_)) {
+                            self.buffer_text("不保存关闭", "Close without saving")
+                        } else { self.buffer_text("不保存退出", "Quit without saving") }, false, r.running)
+                            .debug_selector(|| "buffer-review-discard-all".into())
+                            .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                                cx.stop_propagation();
+                                discard_entity.update(cx, |w, cx| w.discard_buffer_review(window, cx));
+                            })
+                    ))
+                    .child(div().flex_1())
                     .child(
                         button("buffer-review-cancel", self.buffer_text("取消", "Cancel"))
+                            .debug_selector(|| "buffer-review-cancel".into())
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 cx.stop_propagation();
                                 cancel_entity.update(cx, |w, cx| w.cancel_buffer_panel(cx));
                             }),
                     )
                     .child(
-                        button("buffer-review-submit", label)
-                            .bg(rgb(0x4977cf))
-                            .text_color(rgb(0xffffff))
+                        review_button("buffer-review-submit", label, true, r.running)
+                            .debug_selector(|| "buffer-review-submit".into())
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
                                 submit_entity
