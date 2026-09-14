@@ -729,6 +729,8 @@ pub(super) struct PreparedEditorMinimapFrame {
     pub(super) geometry_generation: EditorVisualGeometryGeneration,
     pub(super) layout: Arc<super::layout_map::EditorLayoutMap>,
     pub(super) raster: CachedRaster,
+    /// A complete frame stays complete while a newer revision's layout is building.
+    uses_complete_layout: bool,
 }
 
 /// Identity of every input that can affect Editor visual-row geometry.
@@ -784,6 +786,7 @@ impl PreparedEditorMinimapFrame {
             },
             layout,
             raster,
+            uses_complete_layout: false,
         }
     }
 
@@ -1496,12 +1499,9 @@ impl EditorMinimapHost {
             .map(|ready| ready.layout.clone())
     }
 
-    pub(super) fn active_frame_uses_prepared_layout(&self) -> bool {
-        let Some(active) = self.active_frame() else {
-            return false;
-        };
-        self.prepared_layout()
-            .is_some_and(|prepared| Arc::ptr_eq(&active.layout, &prepared))
+    pub(super) fn active_frame_has_complete_layout(&self) -> bool {
+        self.active_frame()
+            .is_some_and(|active| active.uses_complete_layout)
     }
 
     pub(super) fn active_frame(&self) -> Option<PreparedEditorMinimapFrame> {
@@ -1515,8 +1515,14 @@ impl EditorMinimapHost {
         self.active_frame().map(|frame| frame.layout)
     }
 
-    pub(super) fn publish_frame(&self, frame: PreparedEditorMinimapFrame) {
+    pub(super) fn publish_frame(&self, mut frame: PreparedEditorMinimapFrame) {
         debug_assert!(frame.is_coherent());
+        // Record provenance at publication instead of comparing with the latest
+        // prepared layout on every paint. Reserving its successor clears `ready`,
+        // but must not send this frame back through the stale bootstrap camera.
+        frame.uses_complete_layout |= self
+            .prepared_layout()
+            .is_some_and(|prepared| Arc::ptr_eq(&frame.layout, &prepared));
         let mut active = self
             .prepared_frame
             .lock()

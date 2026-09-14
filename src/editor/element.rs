@@ -3358,7 +3358,23 @@ mod tests {
                     .minimap
                     .active_frame()
                     .expect("initial minimap is painted");
-                assert!(editor.minimap.active_frame_uses_prepared_layout());
+                assert!(editor.minimap.active_frame_has_complete_layout());
+                let bounds = editor.minimap.bounds.unwrap();
+                // Retain a stale bootstrap anchor while the complete frame is scrolled.
+                let bootstrap = editor.minimap_viewport_geometry(bounds);
+                let (total, top, bottom) =
+                    editor.minimap_source_viewport(f32::from(bounds.size.height));
+                editor.scroll_y = 1_200.0;
+                editor.minimap.note_viewport_scrolled(1_200.0);
+                editor.minimap.stabilize_viewport(
+                    bootstrap,
+                    total,
+                    top,
+                    bottom,
+                    f32::from(bounds.size.height),
+                    crate::minimap::Density::for_width(f32::from(bounds.size.width)),
+                );
+                let original_geometry = editor.minimap_viewport_geometry(bounds);
                 let snapshot = editor.snapshot(cx);
                 let context = EditorCommandContext::at(&path, &snapshot, ByteOffset(2)).unwrap();
                 assert!(editor.align_table_from_context(
@@ -3382,8 +3398,13 @@ mod tests {
                     cx.text_system().clone(),
                 )
                 .unwrap();
-                let bounds = editor.minimap.bounds.unwrap();
                 let geometry = editor.minimap_viewport_geometry(bounds);
+                assert!(
+                    (geometry.content_top - original_geometry.content_top).abs() < 0.001,
+                    "pending layout switched the active image to a stale bootstrap camera: {} -> {}",
+                    original_geometry.content_top,
+                    geometry.content_top,
+                );
                 let (paint, request) = super::build_minimap(
                     editor,
                     &path,

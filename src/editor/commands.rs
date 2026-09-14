@@ -1447,10 +1447,9 @@ impl SemanticEditor {
             density,
             line_height,
         );
-        if self.minimap.active_frame_uses_prepared_layout() {
-            // The complete Editor layout is now the same immutable geometry used by the active
-            // minimap frame. Follow the shared Editor/Reading projection directly; the legacy
-            // stabilization camera is only needed during the short sparse-layout bootstrap.
+        if self.minimap.active_frame_has_complete_layout() {
+            // Complete frames keep this projection while their successor is prepared.
+            // The legacy camera is only needed during the sparse-layout bootstrap.
             viewport
         } else {
             self.minimap.stabilize_viewport(
@@ -1493,7 +1492,7 @@ impl SemanticEditor {
                     * base_line_height
             },
             |frame| {
-                if self.minimap.active_frame_uses_prepared_layout() {
+                if self.minimap.active_frame_has_complete_layout() {
                     return super::minimap::source_viewport_for_layout(
                         frame.layout.as_ref(),
                         &self.display_map,

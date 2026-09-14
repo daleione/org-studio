@@ -42,6 +42,12 @@ struct SyntaxCacheInner {
     builder: Option<SyntaxBuilderToken>,
 }
 
+impl SyntaxCacheInner {
+    fn contains_newer_revision(&self, document_id: DocumentId, revision: Revision) -> bool {
+        self.document_id == Some(document_id) && self.revision > revision
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct SyntaxBuilderToken {
     document_id: DocumentId,
@@ -72,6 +78,9 @@ impl EditorSyntaxService {
         first_line: u64,
     ) {
         let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+        if cache.contains_newer_revision(document_id, revision) {
+            return;
+        }
         if cache.document_id != Some(document_id) {
             cache.contexts.clear();
             cache.contexts.insert(0, CodeContext::default());
@@ -109,24 +118,30 @@ impl EditorSyntaxService {
         let revision = snapshot.revision();
         let (start, mut context) = {
             let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
-            if cache.document_id != Some(document_id)
-                || cache.revision != revision
-                || cache.language != language
-            {
-                cache.document_id = Some(document_id);
-                cache.revision = revision;
-                cache.language = language;
-                cache.contexts.clear();
-                cache.contexts.insert(0, CodeContext::default());
-                cache.focus_line = 0;
-                cache.builder = None;
+            if cache.contains_newer_revision(document_id, revision) {
+                // The caller can have passed ready_context_at before an edit arrived.
+                // Parse its old snapshot privately; never roll the shared cache back.
+                (0, CodeContext::default())
+            } else {
+                if cache.document_id != Some(document_id)
+                    || cache.revision != revision
+                    || cache.language != language
+                {
+                    cache.document_id = Some(document_id);
+                    cache.revision = revision;
+                    cache.language = language;
+                    cache.contexts.clear();
+                    cache.contexts.insert(0, CodeContext::default());
+                    cache.focus_line = 0;
+                    cache.builder = None;
+                }
+                let (&start, checkpoint_context) = cache
+                    .contexts
+                    .range(..=first_line)
+                    .next_back()
+                    .expect("line zero syntax checkpoint exists");
+                (start, checkpoint_context.clone())
             }
-            let (&start, checkpoint_context) = cache
-                .contexts
-                .range(..=first_line)
-                .next_back()
-                .expect("line zero syntax checkpoint exists");
-            (start, checkpoint_context.clone())
         };
         let _scan = tracing::info_span!("editor_semantic_scan").entered();
         let mut completed_checkpoints = Vec::new();
@@ -176,6 +191,9 @@ impl EditorSyntaxService {
     ) -> Option<CodeContext> {
         let ready = {
             let mut cache = self.inner.lock().expect("editor syntax cache poisoned");
+            if cache.contains_newer_revision(snapshot.document_id(), snapshot.revision()) {
+                return None;
+            }
             if cache.document_id != Some(snapshot.document_id())
                 || cache.revision != snapshot.revision()
                 || cache.language != language
@@ -2763,6 +2781,50 @@ mod tests {
             assert_eq!(style.id, EditorStyleId::Code);
             assert_eq!(style.block.as_ref().unwrap().kind, EditorBlockKind::Quote);
         }
+    }
+
+    #[test]
+    fn stale_background_queries_preserve_current_revision_styles() {
+        use crate::document::{DocumentBuffer, EditTransaction, TextEdit};
+
+        let source = format!(
+            "#+begin_src rust\n{}#+end_src\n",
+            "let value = 1;\n".repeat(1_100)
+        );
+        let mut buffer = DocumentBuffer::from_utf8(source.into_bytes()).unwrap();
+        let old = buffer.snapshot();
+        let path = Path::new("editing.org");
+        let service = EditorSyntaxService::default();
+        SparseEditorStyleSnapshot::query_lines(path, &old, &[900], &service);
+        service.build_focused(path, &old);
+
+        let offset = old.line_content_range(LineIndex(301)).unwrap().start;
+        buffer
+            .commit(EditTransaction::new(
+                old.revision(),
+                vec![TextEdit::new(ByteRange::new(offset.0, offset.0), " ")],
+            ))
+            .unwrap();
+        let current = buffer.snapshot();
+        service.invalidate_from(current.document_id(), current.revision(), 301);
+        let visible = SparseEditorStyleSnapshot::query_lines(path, &current, &[290], &service);
+        assert!(!visible.pending);
+
+        // A cancelled layout/raster job can still reach its next syntax query.
+        SparseEditorStyleSnapshot::query_lines(path, &old, &[900], &service);
+        service.build_focused(path, &old);
+        let visible = SparseEditorStyleSnapshot::query_lines(path, &current, &[290], &service);
+        assert!(
+            !visible.pending,
+            "stale background work discarded current checkpoints"
+        );
+        assert_eq!(visible.snapshot.line(290).unwrap().id, EditorStyleId::Code);
+
+        // Also cover invalidation between ready_context_at and context_at.
+        assert!(service.context_at(&old, Language::Org, 900).in_block);
+        let visible = SparseEditorStyleSnapshot::query_lines(path, &current, &[290], &service);
+        assert!(!visible.pending);
+        assert_eq!(service.inner.lock().unwrap().revision, current.revision());
     }
 
     #[test]
