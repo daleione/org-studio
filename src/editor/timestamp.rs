@@ -24,6 +24,7 @@ impl SemanticEditor {
     ) {
         if self.ui_language != language {
             self.ui_language = language;
+            self.set_todo_language(language, cx);
             if let Some(popup) = &self.timestamp_popup {
                 popup
                     .picker
@@ -116,7 +117,8 @@ impl SemanticEditor {
     }
 
     pub(super) fn timestamp_hover(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
-        if self.timestamp_popup.is_some()
+        if self.todo_popup.is_some()
+            || self.timestamp_popup.is_some()
             || self.is_selecting
             || self.minimap.drag.is_some()
             || self.minimap.resizing.is_some()
@@ -148,6 +150,7 @@ impl SemanticEditor {
                 if this.timestamp_hover_range == Some(range)
                     && this.snapshot(cx).revision() == revision
                     && !this.is_selecting
+                    && this.todo_popup.is_none()
                 {
                     this.open_timestamp_picker(range, source, kind, anchor, cx);
                 }

@@ -1,5 +1,8 @@
 //! Calendar and repeat subviews for the shared timestamp picker.
 use super::*;
+use crate::components::selection_style::{
+    HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
+};
 
 impl TimestampPicker {
     fn button(
@@ -18,9 +21,19 @@ impl TimestampPicker {
             .rounded(px(7.))
             .cursor_pointer()
             .text_size(px(12.))
-            .text_color(rgb(if selected { 0xffffff } else { 0x3f78f2 }))
-            .when(selected, |s| s.bg(rgb(0x3f78f2)))
-            .hover(|s| s.bg(rgb(if selected { 0x3269df } else { 0xeaf1ff })))
+            .text_color(rgb(if selected {
+                0xffffff
+            } else {
+                SELECTED_BACKGROUND
+            }))
+            .when(selected, |s| s.bg(rgb(SELECTED_BACKGROUND)))
+            .hover(|s| {
+                s.bg(rgb(if selected {
+                    SELECTED_HOVER_BACKGROUND
+                } else {
+                    HOVER_BACKGROUND
+                }))
+            })
             .child(text.into())
             .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
     }

@@ -297,5 +297,12 @@
   "timestamp.unit.month": "月",
   "timestamp.unit.month_plural": "月",
   "timestamp.unit.year": "年",
-  "timestamp.unit.year_plural": "年"
+  "timestamp.unit.year_plural": "年",
+  "todo.title": "切换状态",
+  "todo.open": "未完成",
+  "todo.closed": "已结束",
+  "todo.customize": "自定义状态…",
+  "todo.remove": "移除状态",
+  "todo.source_changed": "标题已变化，请重新打开状态菜单。",
+  "todo.failed": "未能修改状态，请重新打开菜单。"
 }

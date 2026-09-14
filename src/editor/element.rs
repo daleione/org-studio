@@ -935,6 +935,31 @@ impl Element for EditorElement {
                     );
                 }
             }
+            if let Some(range) = editor.todo_highlight() {
+                let start = range
+                    .start
+                    .0
+                    .max(content_range.start.0)
+                    .saturating_sub(content_range.start.0)
+                    .min(content_range.len()) as usize;
+                let end = range
+                    .end
+                    .0
+                    .min(content_range.end.0)
+                    .saturating_sub(content_range.start.0)
+                    .min(content_range.len()) as usize;
+                if start < end && inline_image.is_none() {
+                    push_pill_quads(
+                        &mut hover_quads,
+                        &hit,
+                        hit.display.source_to_display(start),
+                        hit.display.source_to_display(end),
+                        px(row_wrap_width),
+                        theme.todo,
+                        0x22,
+                    );
+                }
+            }
             let selected = selection.range();
             let selected_start = selected.start.0.max(full_range.start.0);
             let selected_end = selected.end.0.min(full_range.end.0);

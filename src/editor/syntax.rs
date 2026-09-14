@@ -852,8 +852,8 @@ fn update_org_todo_faces(text: &str, context: &mut CodeContext) {
         };
         let face = match state.keyword.as_ref() {
             "PROJ" => TodoFace::Project,
-            "STRT" => TodoFace::Active,
-            "WAIT" | "HOLD" => TodoFace::Waiting,
+            "STRT" | "DOING" | "NEXT" => TodoFace::Active,
+            "WAIT" | "WAITING" | "HOLD" => TodoFace::Waiting,
             _ => default_face,
         };
         context.todo_faces.insert(Arc::clone(&state.keyword), face);

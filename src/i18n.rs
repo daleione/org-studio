@@ -20,7 +20,7 @@ mod tests {
             messages
                 .keys()
                 .filter(|key| {
-                    ["agenda.", "search.", "timestamp.", "calendar."]
+                    ["agenda.", "search.", "timestamp.", "calendar.", "todo."]
                         .iter()
                         .any(|prefix| key.starts_with(prefix))
                 })

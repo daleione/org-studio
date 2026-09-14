@@ -1115,6 +1115,8 @@ impl SemanticEditor {
     }
 
     fn keyboard_quit(&mut self, _: &KeyboardQuit, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_todo(cx);
+        self.todo_hover_range = None;
         self.dismiss_timestamp(cx);
         self.finish_composition(cx);
         self.emacs_mark_active = false;
@@ -1282,6 +1284,7 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.todo_hover(event.position, cx);
         self.timestamp_hover(event.position, cx);
         let source_run_button_hovered = self
             .source_run_buttons
@@ -1578,6 +1581,8 @@ impl SemanticEditor {
     }
 
     pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
+        self.dismiss_todo(cx);
+        self.todo_hover_range = None;
         self.dismiss_timestamp(cx);
         self.timestamp_hover_range = None;
         let viewport_height = self
@@ -1788,9 +1793,12 @@ impl Render for SemanticEditor {
         let entity = cx.entity();
         let scroll_entity = entity.clone();
         let timestamp_overlay = self.timestamp_overlay(cx);
+        let todo_overlay = self.todo_overlay(window, cx);
         div()
             .id("semantic-editor")
-            .key_context(if self.timestamp_popup.is_some() {
+            .key_context(if self.todo_popup.is_some() {
+                "TodoPicker"
+            } else if self.timestamp_popup.is_some() {
                 "TimestampPicker"
             } else {
                 "SemanticEditor"
@@ -1798,6 +1806,12 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(
                 |this, _: &crate::components::timestamp_picker::CancelTimestamp, _, cx| {
                     this.dismiss_timestamp(cx)
+                },
+            ))
+            .on_action(cx.listener(
+                |this, _: &crate::components::todo_picker::CancelTodo, _, cx| {
+                    this.dismiss_todo(cx);
+                    this.autofocus = true;
                 },
             ))
             .track_focus(&self.focus_handle)
@@ -1851,12 +1865,23 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(Self::scroll_page_up))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if this.todo_key(event, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if event.keystroke.key == "escape" && this.timestamp_popup.is_some() {
                     this.dismiss_timestamp(cx);
                     cx.stop_propagation();
                 }
             }))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+            .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
+                if !hovered {
+                    this.todo_hover(window.mouse_position(), cx);
+                }
+                if !hovered && this.todo_popup.is_none() {
+                    this.todo_hover_task = None;
+                    this.todo_hover_range = None;
+                }
                 if !hovered && this.timestamp_popup.is_none() {
                     this.timestamp_hover_task = None;
                     if this.timestamp_hover_range.take().is_some() {
@@ -1877,6 +1902,7 @@ impl Render for SemanticEditor {
             })
             .child(EditorElement::new(entity))
             .children(timestamp_overlay)
+            .children(todo_overlay)
             .when_some(self.command_feedback.clone(), |editor, message| {
                 editor.child(
                     div()

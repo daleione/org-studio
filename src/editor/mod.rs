@@ -12,6 +12,7 @@ mod read_only;
 mod search;
 mod syntax;
 mod timestamp;
+mod todo;
 
 pub(crate) use minimap::prewarm_text_rasterizer as prewarm_minimap_text_rasterizer;
 
@@ -114,6 +115,7 @@ const EDITOR_FONT_FAMILY: &str = "JetBrains Mono";
 
 pub fn init(cx: &mut App) {
     crate::components::timestamp_picker::init(cx);
+    crate::components::todo_picker::init(cx);
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some("SemanticEditor")),
         KeyBinding::new("delete", DeleteForward, Some("SemanticEditor")),
@@ -612,6 +614,12 @@ pub struct SemanticEditor {
     /// hover state survives reordering of `link_hits` between frames.
     hovered_link: Option<(LineIndex, Range<usize>)>,
     timestamp_popup: Option<timestamp::TimestampPopup>,
+    todo_popup: Option<todo::TodoPopup>,
+    todo_hover_range: Option<ByteRange>,
+    todo_dismissed: Option<ByteRange>,
+    todo_hover_task: Option<Task<()>>,
+    todo_dismiss_task: Option<Task<()>>,
+    todo_config: Option<(Revision, Arc<crate::org_semantic::OrgFileConfig>)>,
     timestamp_hover_range: Option<ByteRange>,
     timestamp_dismissed: Option<ByteRange>,
     timestamp_hover_task: Option<Task<()>>,
@@ -761,6 +769,9 @@ impl SemanticEditor {
                     | DocumentEvent::Reloaded { .. }
                     | DocumentEvent::PathChanged { .. }
             ) {
+                this.dismiss_todo(cx);
+                this.todo_hover_range = None;
+                this.todo_config = None;
                 this.dismiss_timestamp(cx);
                 this.timestamp_hover_range = None;
             }
@@ -997,6 +1008,12 @@ impl SemanticEditor {
             link_hits: Arc::from([]),
             hovered_link: None,
             timestamp_popup: None,
+            todo_popup: None,
+            todo_hover_range: None,
+            todo_dismissed: None,
+            todo_hover_task: None,
+            todo_dismiss_task: None,
+            todo_config: None,
             timestamp_hover_range: None,
             timestamp_dismissed: None,
             timestamp_hover_task: None,
