@@ -35,7 +35,7 @@ pub(crate) mod export_ui;
 mod file_manager;
 mod home;
 mod menus;
-mod native_input;
+pub(crate) use crate::components::native_input;
 pub use menus::application_menus;
 mod overlays;
 mod prefix_hint;

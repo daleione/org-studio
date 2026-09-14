@@ -117,7 +117,7 @@ pub(super) fn parse_timestamps(text: &str, source_start: u64) -> Vec<OrgTimestam
     result
 }
 
-fn parse_single(
+pub(super) fn parse_single(
     inner: &str,
     active: bool,
     kind: TimestampKind,
@@ -162,22 +162,22 @@ fn parse_date(text: &str) -> Option<Date> {
         return None;
     }
     Date::new(
-        text[..4].parse().ok()?,
-        text[5..7].parse().ok()?,
-        text[8..10].parse().ok()?,
+        text.get(..4)?.parse().ok()?,
+        text.get(5..7)?.parse().ok()?,
+        text.get(8..10)?.parse().ok()?,
     )
     .ok()
 }
 
-fn parse_time(text: &str) -> Option<Time> {
+pub(super) fn parse_time(text: &str) -> Option<Time> {
     let (hour, minute) = text.split_once(':')?;
-    if hour.len() != 2 || minute.len() != 2 {
+    if !(1..=2).contains(&hour.len()) || minute.len() != 2 {
         return None;
     }
     Time::new(hour.parse().ok()?, minute.parse().ok()?, 0, 0).ok()
 }
 
-fn parse_repeater(token: &str) -> Option<Repeater> {
+pub(super) fn parse_repeater(token: &str) -> Option<Repeater> {
     let (mode, body) = if let Some(body) = token.strip_prefix("++") {
         (RepeaterMode::CatchUp, body)
     } else if let Some(body) = token.strip_prefix(".+") {
@@ -186,10 +186,10 @@ fn parse_repeater(token: &str) -> Option<Repeater> {
         (RepeaterMode::Cumulative, token.strip_prefix('+')?)
     };
     let (value, unit) = parse_period(body)?;
-    Some(Repeater { mode, value, unit })
+    (value > 0).then_some(Repeater { mode, value, unit })
 }
 
-fn parse_warning(token: &str) -> Option<WarningPeriod> {
+pub(super) fn parse_warning(token: &str) -> Option<WarningPeriod> {
     let (delayed, body) = token
         .strip_prefix("--")
         .map(|body| (true, body))
@@ -203,7 +203,8 @@ fn parse_warning(token: &str) -> Option<WarningPeriod> {
 }
 
 fn parse_period(body: &str) -> Option<(u32, TimeUnit)> {
-    let (number, unit) = body.split_at(body.len().checked_sub(1)?);
+    let split = body.len().checked_sub(1)?;
+    let (number, unit) = (body.get(..split)?, body.get(split..)?);
     let unit = match unit {
         "h" => TimeUnit::Hour,
         "d" => TimeUnit::Day,
@@ -213,7 +214,7 @@ fn parse_period(body: &str) -> Option<(u32, TimeUnit)> {
         _ => return None,
     };
     let value = number.parse().ok()?;
-    (value > 0).then_some((value, unit))
+    Some((value, unit))
 }
 
 fn planning_kind(prefix: &str) -> TimestampKind {

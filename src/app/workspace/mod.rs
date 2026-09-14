@@ -267,6 +267,7 @@ impl WorkspaceWindow {
         let minimap_visible = self.minimap_visible;
         let minimap_width = self.minimap_width;
         let content_font_size = *self.content_font_sizes.get(pane);
+        let language = self.language;
         let editor = cx.new(move |cx| {
             let mut editor = crate::editor::SemanticEditor::new_with_syntax_service(
                 session,
@@ -274,6 +275,7 @@ impl WorkspaceWindow {
                 editor_syntax,
                 cx,
             );
+            editor.set_ui_language(language, cx);
             editor.set_content_font_size(content_font_size, cx);
             editor.set_bottom_overlay_clearance(crate::app::status_line::FLOATING_STATUS_CLEARANCE);
             editor.set_soft_wrap(soft_wrap, cx);
@@ -439,6 +441,14 @@ impl WorkspaceWindow {
     pub(crate) fn set_language(&mut self, language: crate::i18n::Language, cx: &mut Context<Self>) {
         if self.language != language {
             self.language = language;
+            if let Some(document) = self.state.ready() {
+                for editor in [&document.editors.left, &document.editors.right]
+                    .into_iter()
+                    .flatten()
+                {
+                    editor.update(cx, |editor, cx| editor.set_ui_language(language, cx));
+                }
+            }
             cx.set_menus(crate::app::application_menus(language));
             self.export.clear_status();
             self.save_preview_settings();

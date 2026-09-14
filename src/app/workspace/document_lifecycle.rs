@@ -566,6 +566,7 @@ impl WorkspaceWindow {
                     self.minimap_visible
                 };
                 let document_workspace = self.document_workspace;
+                let language = self.language;
                 let soft_wrap = self.soft_wrap;
                 let minimap_width = self.minimap_width;
                 let content_font_sizes = self.content_font_sizes.clone();
@@ -583,6 +584,7 @@ impl WorkspaceWindow {
                                         editor_syntax,
                                         cx,
                                     );
+                                editor.set_ui_language(language, cx);
                                 editor.set_content_font_size(*content_font_sizes.get(pane), cx);
                                 editor.set_bottom_overlay_clearance(
                                     crate::app::status_line::FLOATING_STATUS_CLEARANCE,

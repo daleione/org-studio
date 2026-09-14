@@ -8,6 +8,7 @@ mod extract;
 mod file_config;
 mod model;
 mod timestamp;
+pub(crate) mod timestamp_edit;
 
 pub(crate) use extract::{analyze, analyze_incremental};
 pub(crate) use file_config::parse_todo_directive;

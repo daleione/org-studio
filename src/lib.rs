@@ -2,6 +2,7 @@ pub(crate) mod agenda;
 pub mod app;
 mod babel;
 pub mod command;
+pub(crate) mod components;
 pub mod document;
 pub mod editor;
 pub mod export;

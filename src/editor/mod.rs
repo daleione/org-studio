@@ -11,6 +11,7 @@ mod org_commands;
 mod read_only;
 mod search;
 mod syntax;
+mod timestamp;
 
 pub(crate) use minimap::prewarm_text_rasterizer as prewarm_minimap_text_rasterizer;
 
@@ -112,6 +113,7 @@ const LINE_HEIGHT: f32 = 22.0;
 const EDITOR_FONT_FAMILY: &str = "JetBrains Mono";
 
 pub fn init(cx: &mut App) {
+    crate::components::timestamp_picker::init(cx);
     cx.bind_keys([
         KeyBinding::new("backspace", Backspace, Some("SemanticEditor")),
         KeyBinding::new("delete", DeleteForward, Some("SemanticEditor")),
@@ -573,6 +575,7 @@ impl EditorFrameBenchmark {
 }
 
 pub struct SemanticEditor {
+    ui_language: crate::i18n::Language,
     generated_highlights: Option<Vec<LineHighlights>>,
     activate_read_only_lines: bool,
     session: Entity<DocumentSession>,
@@ -608,6 +611,10 @@ pub struct SemanticEditor {
     /// Identity of the link under the pointer (`(line, display range)`), so
     /// hover state survives reordering of `link_hits` between frames.
     hovered_link: Option<(LineIndex, Range<usize>)>,
+    timestamp_popup: Option<timestamp::TimestampPopup>,
+    timestamp_hover_range: Option<ByteRange>,
+    timestamp_dismissed: Option<ByteRange>,
+    timestamp_hover_task: Option<Task<()>>,
     hover_position: Option<Point<Pixels>>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_run_button_hovered: bool,
@@ -748,6 +755,15 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
+            if matches!(
+                event,
+                DocumentEvent::Edited { .. }
+                    | DocumentEvent::Reloaded { .. }
+                    | DocumentEvent::PathChanged { .. }
+            ) {
+                this.dismiss_timestamp(cx);
+                this.timestamp_hover_range = None;
+            }
             if let DocumentEvent::Edited { delta, .. } = event {
                 this.inline_image_preview_overrides =
                     std::mem::take(&mut this.inline_image_preview_overrides)
@@ -946,6 +962,7 @@ impl SemanticEditor {
         let mut display_map = EditorLayoutMap::default();
         display_map.configure(initial_snapshot.len_lines(), 1.0);
         Self {
+            ui_language: crate::i18n::Language::system(),
             session,
             generated_highlights: None,
             activate_read_only_lines: false,
@@ -979,6 +996,10 @@ impl SemanticEditor {
             hit_rows: Arc::from([]),
             link_hits: Arc::from([]),
             hovered_link: None,
+            timestamp_popup: None,
+            timestamp_hover_range: None,
+            timestamp_dismissed: None,
+            timestamp_hover_task: None,
             hover_position: None,
             source_run_buttons: Arc::from([]),
             source_run_button_hovered: false,
