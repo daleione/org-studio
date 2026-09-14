@@ -888,7 +888,7 @@ mod tests {
             e.hit_rows
                 .iter()
                 .rev()
-                .find(|r| r.origin_y + r.line_height <= e.viewport.unwrap().bottom())
+                .find(|r| r.origin_y + px(6.) < e.viewport.unwrap().bottom())
                 .unwrap()
                 .line
                 .0

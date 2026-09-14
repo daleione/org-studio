@@ -887,8 +887,34 @@ fn heading_todo_span(language: Language, text: &str, context: &CodeContext) -> O
     })
 }
 
-fn metrics_for(_style: EditorStyleId) -> BlockMetrics {
-    BlockMetrics::default()
+fn metrics_for(style: EditorStyleId) -> BlockMetrics {
+    match style {
+        EditorStyleId::Heading(1) => BlockMetrics {
+            font_scale: 1.50,
+            line_height: 34.0,
+            before: 12.0,
+            after: 5.0,
+        },
+        EditorStyleId::Heading(2) => BlockMetrics {
+            font_scale: 1.34,
+            line_height: 30.0,
+            before: 10.0,
+            after: 4.0,
+        },
+        EditorStyleId::Heading(3) => BlockMetrics {
+            font_scale: 1.20,
+            line_height: 27.0,
+            before: 8.0,
+            after: 3.0,
+        },
+        EditorStyleId::Heading(_) => BlockMetrics {
+            font_scale: 1.08,
+            line_height: 24.0,
+            before: 5.0,
+            after: 2.0,
+        },
+        _ => BlockMetrics::default(),
+    }
 }
 
 fn is_list_line(text: &str) -> bool {
@@ -1017,11 +1043,25 @@ pub(super) struct EditorSemanticSpan {
 pub(super) fn runs(
     path: &Path,
     text: &str,
+    base: TextRun,
+    line_style: &EditorLineStyle,
+    marked: Option<Range<usize>>,
+    theme: &Theme,
+) -> Vec<TextRun> {
+    let spans = semantic_spans(path, text, line_style);
+    runs_from_spans(&spans, base, line_style, marked, theme)
+}
+
+/// Like [`runs`], but takes precomputed semantic spans so callers that also
+/// need the spans (e.g. tag pill geometry) only parse the line once.
+pub(super) fn runs_from_spans(
+    spans: &[EditorSemanticSpan],
     mut base: TextRun,
     line_style: &EditorLineStyle,
     marked: Option<Range<usize>>,
     theme: &Theme,
 ) -> Vec<TextRun> {
+    // Both rendering entry points must apply the block face before inline overrides.
     match line_style.id {
         EditorStyleId::Heading(level) => {
             base.font.weight = FontWeight::BOLD;
@@ -1043,19 +1083,6 @@ pub(super) fn runs(
         EditorStyleId::List | EditorStyleId::Plain => {}
     }
 
-    let spans = semantic_spans(path, text, line_style);
-    runs_from_spans(&spans, base, line_style, marked, theme)
-}
-
-/// Like [`runs`], but takes precomputed semantic spans so callers that also
-/// need the spans (e.g. tag pill geometry) only parse the line once.
-pub(super) fn runs_from_spans(
-    spans: &[EditorSemanticSpan],
-    base: TextRun,
-    _line_style: &EditorLineStyle,
-    marked: Option<Range<usize>>,
-    theme: &Theme,
-) -> Vec<TextRun> {
     let mut boundaries = vec![0, base.len];
     for span in spans {
         boundaries.extend([span.bytes.start, span.bytes.end]);
@@ -1786,7 +1813,7 @@ mod tests {
             markup_runs.iter().map(|run| run.len).sum::<usize>(),
             text.len()
         );
-        assert_eq!(style.metrics, BlockMetrics::default());
+        assert_eq!(style.metrics.font_scale, 1.34);
     }
 
     #[test]
@@ -1945,18 +1972,19 @@ mod tests {
     }
 
     #[test]
-    fn official_headings_keep_source_markers_at_body_size() {
+    fn headings_restore_level_colors_and_sizes_in_precomputed_rendering() {
         let theme = current_theme();
-        for (text, level) in [("* Headline", 1), ("** Sub-headline :tag:", 2)] {
+        for (text, level, scale) in [
+            ("* Headline", 1, 1.50),
+            ("** Sub-headline :tag:", 2, 1.34),
+            ("*** Third", 3, 1.20),
+            ("**** Fourth", 4, 1.08),
+            ("***** Fifth", 4, 1.08),
+        ] {
             let style = line_style(text, &mut CodeContext::default());
-            let runs = runs(
-                Path::new("a.org"),
-                text,
-                base_run(text.len()),
-                &style,
-                None,
-                theme,
-            );
+            // Exercise the entry point used by EditorElement (not just the wrapper).
+            let spans = semantic_spans(Path::new("a.org"), text, &style);
+            let runs = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
             let expected: gpui::Hsla = rgb(theme.heading[level - 1]).into();
             assert_eq!(run_at(&runs, 0).color, expected);
             let title = text
@@ -1964,7 +1992,47 @@ mod tests {
                 .unwrap();
             assert_eq!(run_at(&runs, title).color, expected);
             assert_eq!(run_at(&runs, 0).font.weight, FontWeight::BOLD);
-            assert_eq!(style.metrics, BlockMetrics::default());
+            assert_eq!(style.metrics.font_scale, scale);
+            assert!(style.metrics.line_height >= 15.0 * scale);
+            if let Some(tag) = text.find(":tag:") {
+                assert_eq!(run_at(&runs, tag).color, rgb(theme.link).into());
+            }
+        }
+    }
+
+    #[test]
+    fn precomputed_heading_runs_keep_inline_status_and_tag_colors() {
+        let text = "** TODO 中文任务 :preview:";
+        let theme = current_theme();
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let direct = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
+        for (needle, color) in [
+            ("**", theme.heading[1]),
+            ("TODO", theme.todo),
+            ("中文", theme.heading[1]),
+            (":preview:", theme.link),
+        ] {
+            assert_eq!(
+                run_at(&direct, text.find(needle).unwrap()).color,
+                rgb(color).into()
+            );
+        }
+        assert_eq!(direct.iter().map(|r| r.len).sum::<usize>(), text.len());
+        let ordinary = runs(
+            Path::new("a.org"),
+            text,
+            base_run(text.len()),
+            &style,
+            None,
+            theme,
+        );
+        for offset in 0..text.len() {
+            assert_eq!(
+                run_at(&direct, offset).color,
+                run_at(&ordinary, offset).color
+            );
+            assert_eq!(run_at(&direct, offset).font, run_at(&ordinary, offset).font);
         }
     }
 

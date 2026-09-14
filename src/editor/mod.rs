@@ -2891,4 +2891,72 @@ mod tests {
             assert_eq!(editor.minimap.viewport_generation(), viewport_generation);
         });
     }
+    #[gpui::test]
+    fn heading_typography_scales_wraps_and_hit_tests_in_the_editor(cx: &mut gpui::TestAppContext) {
+        cx.update(init);
+        let source = format!(
+            "* 一级标题\n** TODO 二级标题 {} :preview:\n正文\n*** 三级标题\n**** 四级标题\n",
+            "较长的中文标题和 English words ".repeat(4)
+        );
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                PathBuf::from("heading-layout.org"),
+                source.as_bytes().to_vec(),
+            )
+            .unwrap()
+        });
+        let (editor, cx) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        cx.simulate_resize(gpui::size(px(480.), px(1600.)));
+        for size in [15, 30] {
+            editor.update(cx, |e, cx| {
+                e.set_content_font_size(crate::typography::ContentFontSize::new(size), cx);
+            });
+            cx.run_until_parked();
+            let (point, expected) = cx.read(|cx| {
+                let e = editor.read(cx);
+                for (line, scale) in [(0, 1.50), (1, 1.34), (2, 1.0), (3, 1.20), (4, 1.08)] {
+                    let row = e.hit_rows.iter().find(|r| r.line.0 == line).unwrap();
+                    assert!((f32::from(row.layout.font_size()) - size as f32 * scale).abs() < 0.01);
+                }
+                for pair in e.hit_rows.windows(2) {
+                    assert!(
+                        pair[0].visible_bottom <= pair[1].visible_top + px(0.01),
+                        "heading rows must not overlap"
+                    );
+                }
+                let row = e.hit_rows.iter().find(|r| r.line.0 == 1).unwrap();
+                assert!(!row.layout.wrap_boundaries().is_empty());
+                // Pick a UTF-8 boundary inside the second visual row.
+                let (local, position) = row
+                    .display
+                    .text
+                    .char_indices()
+                    .filter_map(|(index, _)| {
+                        row.position_for_display_index(index)
+                            .map(|point| (index, point))
+                    })
+                    .filter(|(_, point)| point.y >= row.line_height)
+                    .nth(2)
+                    .unwrap();
+                let point = gpui::point(
+                    row.text_origin_x + position.x + px(0.5),
+                    row.origin_y + position.y + row.line_height / 2.,
+                );
+                let expected =
+                    ByteOffset(row.range.start.0 + row.display.display_to_source(local) as u64);
+                (point, expected)
+            });
+            cx.simulate_click(point, gpui::Modifiers::default());
+            cx.run_until_parked();
+            cx.read(|cx| {
+                let e = editor.read(cx);
+                assert_eq!(e.selection.head(), expected);
+                assert_eq!(
+                    e.snapshot(cx)
+                        .copy_range(ByteRange::new(0, e.snapshot(cx).len_bytes())),
+                    source
+                );
+            });
+        }
+    }
 }
