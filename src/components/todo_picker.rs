@@ -1,5 +1,7 @@
 //! Compact status quick bar. The host owns positioning and document edits.
-use super::selection_style::{HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND};
+use super::selection_style::{
+    HOVER_BACKGROUND, QUICK_BAR_HEIGHT, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
+};
 use crate::{
     i18n::Language,
     org_semantic::{TodoState, TodoStateKind},
@@ -11,7 +13,6 @@ use gpui::{
 };
 use std::{collections::HashSet, sync::Arc};
 
-pub(crate) const BAR_HEIGHT: f32 = 36.;
 pub(crate) const MORE_HEIGHT: f32 = 78.;
 gpui::actions!(todo_picker, [CancelTodo]);
 pub(crate) fn init(cx: &mut App) {
@@ -233,76 +234,79 @@ impl Render for TodoPicker {
             let keyword = state.keyword.to_string();
             let debug_keyword = keyword.clone();
             let current_keyword = keyword.clone();
-            options = options.child(
-                div()
-                    .id(("todo-option", index))
-                    .debug_selector(move || format!("todo-option-{debug_keyword}"))
-                    .w(px(self.button_width(state, window)))
-                    .h(px(26.))
-                    .flex_none()
-                    .px(px(8.))
-                    .rounded(px(6.))
-                    .border_1()
-                    .border_color(rgba(if current { 0 } else { (color << 8) | 0x40 }))
-                    .flex()
-                    .items_center()
-                    .gap(px(6.))
-                    .cursor_pointer()
-                    .when(current, |s| {
-                        s.bg(rgb(SELECTED_BACKGROUND)).text_color(rgb(0xffffff))
-                    })
-                    .when(!current, |s| s.text_color(rgb(color)))
-                    .when(
-                        !current
-                            && self.keyboard_navigation
-                            && index == self.selected
-                            && !self.more_open,
-                        |s| {
-                            s.bg(rgb(HOVER_BACKGROUND))
-                                .border_color(rgba((color << 8) | 0x80))
-                        },
-                    )
-                    .hover(move |s| {
-                        s.bg(rgb(if current {
-                            SELECTED_HOVER_BACKGROUND
-                        } else {
-                            HOVER_BACKGROUND
-                        }))
-                        .border_color(rgba(if current { 0 } else { (color << 8) | 0x80 }))
-                    })
-                    .when(current, |s| {
-                        s.child(
-                            div()
-                                .flex_none()
-                                .debug_selector(move || format!("todo-current-{current_keyword}"))
-                                .child("✓"),
+            options =
+                options.child(
+                    div()
+                        .id(("todo-option", index))
+                        .debug_selector(move || format!("todo-option-{debug_keyword}"))
+                        .w(px(self.button_width(state, window)))
+                        .h(px(26.))
+                        .flex_none()
+                        .px(px(8.))
+                        .rounded(px(6.))
+                        .border_1()
+                        .border_color(rgba(if current { 0 } else { (color << 8) | 0x40 }))
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .cursor_pointer()
+                        .when(current, |s| {
+                            s.bg(rgb(SELECTED_BACKGROUND)).text_color(rgb(0xffffff))
+                        })
+                        .when(!current, |s| s.text_color(rgb(color)))
+                        .when(
+                            !current
+                                && self.keyboard_navigation
+                                && index == self.selected
+                                && !self.more_open,
+                            |s| {
+                                s.bg(rgb(HOVER_BACKGROUND))
+                                    .border_color(rgba((color << 8) | 0x80))
+                            },
                         )
-                    })
-                    .child(
-                        div()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .font_family("Menlo")
-                            .font_weight(gpui::FontWeight::MEDIUM)
-                            .child(keyword),
-                    )
-                    .when_some(self.fast_key(state), |s, key| {
-                        s.child(
+                        .hover(move |s| {
+                            s.bg(rgb(if current {
+                                SELECTED_HOVER_BACKGROUND
+                            } else {
+                                HOVER_BACKGROUND
+                            }))
+                            .border_color(rgba(if current { 0 } else { (color << 8) | 0x80 }))
+                        })
+                        .when(current, |s| {
+                            s.child(
+                                div()
+                                    .flex_none()
+                                    .debug_selector(move || {
+                                        format!("todo-current-{current_keyword}")
+                                    })
+                                    .child("✓"),
+                            )
+                        })
+                        .child(
                             div()
-                                .flex_none()
-                                .text_size(px(10.))
-                                .opacity(0.65)
-                                .child(key.to_string()),
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .font_family("Menlo")
+                                .font_weight(gpui::FontWeight::MEDIUM)
+                                .child(keyword),
                         )
-                    })
-                    .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx))),
-            );
+                        .when_some(self.fast_key(state), |s, key| {
+                            s.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(px(10.))
+                                    .opacity(0.65)
+                                    .child(key.to_string()),
+                            )
+                        })
+                        .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx))),
+                );
         }
         let bar = div()
             .id("todo-bar")
             .debug_selector(|| "todo-bar".into())
-            .h(px(BAR_HEIGHT))
+            .h(px(QUICK_BAR_HEIGHT))
             .w_full()
             .p(px(4.))
             .border_1()

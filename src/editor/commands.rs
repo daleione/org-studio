@@ -1115,8 +1115,9 @@ impl SemanticEditor {
     }
 
     fn keyboard_quit(&mut self, _: &KeyboardQuit, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_inline(cx);
         self.dismiss_todo(cx);
-        self.todo_hover_range = None;
+        self.todo.hover_range = None;
         self.dismiss_timestamp(cx);
         self.finish_composition(cx);
         self.emacs_mark_active = false;
@@ -1197,6 +1198,9 @@ impl SemanticEditor {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         self.emacs_mark_active = false;
+        if self.inline_mouse_down(event, cx) {
+            return;
+        }
         if let Some(source_offset) = self
             .source_run_buttons
             .iter()
@@ -1284,6 +1288,7 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.inline_hover(event.position, cx);
         self.todo_hover(event.position, cx);
         self.timestamp_hover(event.position, cx);
         let source_run_button_hovered = self
@@ -1341,7 +1346,7 @@ impl SemanticEditor {
         }
     }
 
-    fn on_mouse_up(&mut self, _: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
         self.minimap.drag = None;
         if self.minimap.resizing.take().is_some() {
             cx.emit(super::EditorMinimapWidthEvent(self.minimap.width));
@@ -1349,6 +1354,7 @@ impl SemanticEditor {
         self.is_selecting = false;
         self.drag_position = None;
         self.autoscroll_task = None;
+        self.inline_mouse_up(event.position, cx);
     }
 
     pub(super) fn seek_from_minimap(&mut self, pointer_y: Pixels, cx: &mut Context<Self>) {
@@ -1581,10 +1587,11 @@ impl SemanticEditor {
     }
 
     pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
+        self.dismiss_inline(cx);
         self.dismiss_todo(cx);
-        self.todo_hover_range = None;
+        self.todo.hover_range = None;
         self.dismiss_timestamp(cx);
-        self.timestamp_hover_range = None;
+        self.timestamp.hover_range = None;
         let viewport_height = self
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
@@ -1794,11 +1801,14 @@ impl Render for SemanticEditor {
         let scroll_entity = entity.clone();
         let timestamp_overlay = self.timestamp_overlay(cx);
         let todo_overlay = self.todo_overlay(window, cx);
+        let inline_overlay = self.inline_overlay(window, cx);
         div()
             .id("semantic-editor")
-            .key_context(if self.todo_popup.is_some() {
+            .key_context(if self.inline_actions.popup.is_some() {
+                "InlinePicker"
+            } else if self.todo.popup.is_some() {
                 "TodoPicker"
-            } else if self.timestamp_popup.is_some() {
+            } else if self.timestamp.popup.is_some() {
                 "TimestampPicker"
             } else {
                 "SemanticEditor"
@@ -1865,26 +1875,31 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(Self::scroll_page_up))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
+                if this.inline_key(event, cx) {
+                    cx.stop_propagation();
+                    return;
+                }
                 if this.todo_key(event, cx) {
                     cx.stop_propagation();
                     return;
                 }
-                if event.keystroke.key == "escape" && this.timestamp_popup.is_some() {
+                if event.keystroke.key == "escape" && this.timestamp.popup.is_some() {
                     this.dismiss_timestamp(cx);
                     cx.stop_propagation();
                 }
             }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !hovered {
+                    this.inline_hover(window.mouse_position(), cx);
                     this.todo_hover(window.mouse_position(), cx);
                 }
-                if !hovered && this.todo_popup.is_none() {
-                    this.todo_hover_task = None;
-                    this.todo_hover_range = None;
+                if !hovered && this.todo.popup.is_none() {
+                    this.todo.hover_task = None;
+                    this.todo.hover_range = None;
                 }
-                if !hovered && this.timestamp_popup.is_none() {
-                    this.timestamp_hover_task = None;
-                    if this.timestamp_hover_range.take().is_some() {
+                if !hovered && this.timestamp.popup.is_none() {
+                    this.timestamp.hover_task = None;
+                    if this.timestamp.hover_range.take().is_some() {
                         cx.notify();
                     }
                 }
@@ -1903,6 +1918,7 @@ impl Render for SemanticEditor {
             .child(EditorElement::new(entity))
             .children(timestamp_overlay)
             .children(todo_overlay)
+            .children(inline_overlay)
             .when_some(self.command_feedback.clone(), |editor, message| {
                 editor.child(
                     div()
@@ -1922,7 +1938,7 @@ impl Render for SemanticEditor {
     }
 }
 
-fn map_offset_through_edits(offset: ByteOffset, edits: &[TextEdit]) -> ByteOffset {
+pub(super) fn map_offset_through_edits(offset: ByteOffset, edits: &[TextEdit]) -> ByteOffset {
     let mut shift = 0_i128;
     for edit in edits {
         if offset <= edit.range.start {

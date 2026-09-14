@@ -257,6 +257,8 @@
   "timestamp.title": "日期与时间",
   "timestamp.source_open": "⌄ Org 源码预览",
   "timestamp.source_closed": "› Org 源码预览",
+  "timestamp.source_changed": "日期所在文本已变化，请重新打开日历。",
+  "timestamp.failed": "未能修改日期，请重新打开日历。",
   "timestamp.invalid": "请检查日期范围、时间（HH:MM）和重复间隔（1–9999）。",
   "timestamp.cancel": "取消",
   "timestamp.apply": "应用",
@@ -304,5 +306,18 @@
   "todo.customize": "自定义状态…",
   "todo.remove": "移除状态",
   "todo.source_changed": "标题已变化，请重新打开状态菜单。",
-  "todo.failed": "未能修改状态，请重新打开菜单。"
+  "todo.failed": "未能修改状态，请重新打开菜单。",
+  "inline.invalid_link": "请输入有效的链接地址。",
+  "inline.inherited_short": "继承标签",
+  "inline.remove": "移除",
+  "inline.tags_search": "搜索或添加标签",
+  "inline.add": "添加",
+  "inline.inherited": "继承标签 · 在父标题或 FILETAGS 中修改",
+  "inline.tags": "标签",
+  "inline.edit_link": "编辑链接地址",
+  "inline.open": "打开",
+  "inline.copy": "复制",
+  "inline.edit": "编辑",
+  "inline.cancel": "取消",
+  "inline.apply": "应用"
 }

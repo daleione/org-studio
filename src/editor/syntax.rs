@@ -1684,7 +1684,7 @@ fn collect_org_tags_outside(
 /// when the trailing token is not a valid Org tag cluster.
 pub(super) fn org_tag_ranges(text: &str) -> Vec<Range<usize>> {
     let trimmed_end = text.trim_end();
-    let Some(start) = trimmed_end.rfind(' ') else {
+    let Some(start) = trimmed_end.rfind(char::is_whitespace) else {
         return Vec::new();
     };
     let candidate = &trimmed_end[start + 1..];
@@ -1692,7 +1692,7 @@ pub(super) fn org_tag_ranges(text: &str) -> Vec<Range<usize>> {
         || !candidate.starts_with(':')
         || !candidate.ends_with(':')
         || !candidate[1..candidate.len() - 1].chars().all(|character| {
-            character.is_alphanumeric() || matches!(character, ':' | '_' | '@' | '#')
+            character.is_alphanumeric() || matches!(character, ':' | '_' | '@' | '#' | '%')
         })
     {
         return Vec::new();

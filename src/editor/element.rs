@@ -852,6 +852,7 @@ impl Element for EditorElement {
                     &semantic_row,
                     px(row_wrap_width),
                     theme,
+                    editor.inline_tag_highlight(),
                 );
             }
 
@@ -956,6 +957,31 @@ impl Element for EditorElement {
                         hit.display.source_to_display(end),
                         px(row_wrap_width),
                         theme.todo,
+                        0x22,
+                    );
+                }
+            }
+            if let Some(range) = editor.inline_background_highlight() {
+                let start = range
+                    .start
+                    .0
+                    .max(content_range.start.0)
+                    .saturating_sub(content_range.start.0)
+                    .min(content_range.len()) as usize;
+                let end = range
+                    .end
+                    .0
+                    .min(content_range.end.0)
+                    .saturating_sub(content_range.start.0)
+                    .min(content_range.len()) as usize;
+                if start < end && inline_image.is_none() {
+                    push_pill_quads(
+                        &mut hover_quads,
+                        &hit,
+                        hit.display.source_to_display(start),
+                        hit.display.source_to_display(end),
+                        px(row_wrap_width),
+                        theme.link,
                         0x22,
                     );
                 }
@@ -1509,24 +1535,8 @@ impl Element for EditorElement {
             );
         });
 
-        // Link hover: pointing-hand cursor and a small tooltip near the pointer.
-        let (hovered_link, hover_position) = {
-            let editor = self.editor.read(cx);
-            let link = editor
-                .hovered_link
-                .as_ref()
-                .and_then(|(hover_line, range)| {
-                    editor
-                        .link_hits
-                        .iter()
-                        .find(|hit| hit.line == *hover_line && hit.display_range == *range)
-                })
-                .cloned();
-            (link, editor.hover_position)
-        };
-        if let (Some(link), Some(position)) = (hovered_link, hover_position) {
+        if self.editor.read(cx).inline_highlight().is_some() {
             window.set_window_cursor_style(CursorStyle::PointingHand);
-            paint_link_tooltip(window, cx, position, &link, bounds);
         }
         #[cfg(feature = "benchmarks")]
         let elapsed = state.started_at.elapsed();
@@ -3075,124 +3085,6 @@ fn push_selection_quads(
     }
 }
 
-fn paint_link_tooltip(
-    window: &mut Window,
-    cx: &mut App,
-    position: gpui::Point<Pixels>,
-    link: &super::LinkHit,
-    bounds: Bounds<Pixels>,
-) {
-    use crate::links::LinkKind;
-
-    let theme = crate::theme::current_theme();
-    let language = crate::i18n::Language::system();
-    let kind_label = match &link.meta.kind {
-        LinkKind::External => language.text("link.kind.external"),
-        LinkKind::File => language.text("link.kind.file"),
-        LinkKind::Internal => language.text("link.kind.internal"),
-        LinkKind::Mail => language.text("link.kind.mail"),
-        LinkKind::Dangerous => language.text("link.kind.dangerous"),
-        LinkKind::Other => language.text("link.kind.other"),
-    };
-    let accent = syntax::link_accent(&link.meta.kind, theme);
-    let mut target: String = link.meta.raw.to_string();
-    const TOOLTIP_TARGET_CHARS: usize = 40;
-    if target.chars().count() > TOOLTIP_TARGET_CHARS {
-        let prefix = target
-            .chars()
-            .take(TOOLTIP_TARGET_CHARS - 1)
-            .collect::<String>();
-        target = format!("{prefix}…");
-    }
-    let hint = match link.meta.kind {
-        LinkKind::Dangerous => language.text("link.warn.hint"),
-        _ => language.text("link.open.hint"),
-    };
-
-    let base_font = gpui::Font::default();
-    let make_run = |color: u32, len: usize| TextRun {
-        len,
-        font: base_font.clone(),
-        color: gpui::rgb(color).into(),
-        background_color: None,
-        underline: None,
-        strikethrough: None,
-    };
-    // NOTE: `shape_line`'s final argument is `force_width` — it monospace-spaces
-    // every glyph to that width, it does NOT cap the line. Never pass it here.
-    let label_text: gpui::SharedString = format!("{kind_label} {target}").into();
-    let label_len = label_text.len();
-    let line1 = window.text_system().shape_line(
-        label_text,
-        px(11.0),
-        &[make_run(theme.foreground, label_len)],
-        None,
-    );
-    let hint_text: gpui::SharedString = hint.into();
-    let hint_len = hint_text.len();
-    let line2 = window.text_system().shape_line(
-        hint_text,
-        px(10.5),
-        &[make_run(theme.foreground_dim, hint_len)],
-        None,
-    );
-
-    let pad = px(10.0);
-    let line1_height = px(15.0);
-    let line2_height = px(14.0);
-    let width = line1.width().max(line2.width()) + pad * 2.0 + px(6.0);
-    let height = line1_height + line2_height + pad * 1.6;
-    let mut origin = position + gpui::point(px(14.0), px(18.0));
-    if origin.x + width > bounds.right() {
-        origin.x = (position.x - width - px(6.0)).max(bounds.left() + px(2.0));
-    }
-    if origin.y + height > bounds.bottom() {
-        origin.y = (position.y - height - px(6.0)).max(bounds.top() + px(2.0));
-    }
-    let card = Bounds::from_corners(origin, origin + gpui::size(width, height).into());
-    let radius = px(8.0);
-    let warn = link.meta.kind == LinkKind::Dangerous;
-    let border_color = if warn {
-        rgba((accent << 8) | 0xff)
-    } else {
-        rgba((theme.border << 8) | 0xff)
-    };
-    window.paint_quad(quad(
-        card,
-        Corners {
-            top_left: radius,
-            top_right: radius,
-            bottom_right: radius,
-            bottom_left: radius,
-        },
-        rgba((theme.background << 8) | 0xf4),
-        Edges {
-            top: px(1.0),
-            right: px(1.0),
-            bottom: px(1.0),
-            left: px(1.0),
-        },
-        border_color,
-        BorderStyle::default(),
-    ));
-    let _ = line1.paint(
-        origin + gpui::point(pad, pad * 0.7),
-        line1_height,
-        TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
-    let _ = line2.paint(
-        origin + gpui::point(pad, pad * 0.7 + line1_height),
-        line2_height,
-        TextAlign::Left,
-        None,
-        window,
-        cx,
-    );
-}
-
 /// Paints one rounded pill behind each Org tag span, keeping the `:` source
 /// separators outside the fill so every byte of the raw heading stays visible.
 fn push_tag_pill_quads(
@@ -3201,6 +3093,7 @@ fn push_tag_pill_quads(
     spans: &[syntax::EditorSemanticSpan],
     wrap_width: Pixels,
     theme: &crate::theme::Theme,
+    active: Option<ByteRange>,
 ) {
     for span in spans.iter().filter(|span| span.pill) {
         let start = span.bytes.start.saturating_add(1);
@@ -3208,7 +3101,20 @@ fn push_tag_pill_quads(
         if start >= end {
             continue;
         }
-        push_pill_quads(quads, hit, start, end, wrap_width, theme.attribute, 0x16);
+        let source_start = hit.range.start.0 + hit.display.display_to_source(start) as u64;
+        let source_end = hit.range.start.0 + hit.display.display_to_source(end) as u64;
+        let hovered =
+            active.is_some_and(|range| range.start.0 < source_end && range.end.0 > source_start);
+        // Change the existing pill's fill, never paint a second rounded rectangle.
+        push_pill_quads(
+            quads,
+            hit,
+            start,
+            end,
+            wrap_width,
+            theme.attribute,
+            if hovered { 0x2a } else { 0x16 },
+        );
     }
 }
 

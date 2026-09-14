@@ -257,6 +257,8 @@
   "timestamp.title": "Date & time",
   "timestamp.source_open": "⌄ Org source preview",
   "timestamp.source_closed": "› Org source preview",
+  "timestamp.source_changed": "The date text changed. Open the calendar again.",
+  "timestamp.failed": "Could not change the date. Open the calendar again.",
   "timestamp.invalid": "Check the date range, time (HH:MM), and repeat interval (1–9999).",
   "timestamp.cancel": "Cancel",
   "timestamp.apply": "Apply",
@@ -304,5 +306,18 @@
   "todo.customize": "Customize states…",
   "todo.remove": "Remove status",
   "todo.source_changed": "The heading changed. Open the status menu again.",
-  "todo.failed": "Could not change the status. Open the menu again."
+  "todo.failed": "Could not change the status. Open the menu again.",
+  "inline.invalid_link": "Enter a valid link destination.",
+  "inline.inherited_short": "Inherited",
+  "inline.remove": "Remove",
+  "inline.tags_search": "Search or add a tag",
+  "inline.add": "Add",
+  "inline.inherited": "Inherited · edit on parent heading or FILETAGS",
+  "inline.tags": "Tags",
+  "inline.edit_link": "Edit link address",
+  "inline.open": "Open",
+  "inline.copy": "Copy",
+  "inline.edit": "Edit",
+  "inline.cancel": "Cancel",
+  "inline.apply": "Apply"
 }

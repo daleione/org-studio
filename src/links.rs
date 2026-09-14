@@ -7,6 +7,9 @@
 
 use std::{ops::Range, sync::Arc};
 
+mod destination;
+pub(crate) use destination::LiteralDestination;
+
 /// Document format context for [`classify`]: a bare word is a fuzzy internal
 /// link in Org but a relative file path in Markdown.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

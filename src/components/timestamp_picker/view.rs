@@ -71,17 +71,8 @@ impl TimestampPicker {
             .flex_none()
             .text_color(rgb(0x626c7d))
     }
-    fn row(&self, label: impl Into<gpui::SharedString>) -> gpui::Div {
+    fn row(label: impl Into<gpui::SharedString>, icon: Option<&'static str>) -> gpui::Div {
         let label = label.into();
-        let icon = if label.as_ref() == self.t("timestamp.time") {
-            Some("clock")
-        } else if label.as_ref() == self.t("timestamp.repeat") {
-            Some("arrows-clockwise")
-        } else if label.as_ref() == self.t("timestamp.add_to_agenda") {
-            Some("calendar-blank")
-        } else {
-            None
-        };
         div()
             .flex()
             .items_center()
@@ -91,7 +82,7 @@ impl TimestampPicker {
             .child(div().flex_1().min_w_0().child(label))
     }
     fn finish_repeat(&mut self, cx: &mut Context<Self>) {
-        if self.count_error {
+        if self.input_invalid(InputField::RepeatCount, cx) {
             return;
         }
         if self.endpoint().is_some_and(|e| e.value.repeater.is_none()) {
@@ -167,8 +158,8 @@ impl TimestampPicker {
     fn time_editor(&self, cx: &Context<Self>) -> gpui::Div {
         let value = &self.endpoint().unwrap().value;
         let mut group = div().flex().flex_col().gap_1().p_2();
-        let mut time_row = self.row(self.t("timestamp.time"));
-        if value.start_time.is_some() || self.time_error {
+        let mut time_row = Self::row(self.t("timestamp.time"), Some("clock"));
+        if value.start_time.is_some() || self.input_invalid(InputField::StartTime, cx) {
             time_row = time_row
                 .child(div().w(px(78.)).child(self.time_input.clone()))
                 .child(self.button(
@@ -202,49 +193,53 @@ impl TimestampPicker {
         }
         group = group.child(time_row);
         if value.start_time.is_some() {
-            group = group.child(if value.end_time.is_some() || self.end_time_error {
-                self.row(self.t("timestamp.end_time"))
-                    .child(div().w(px(78.)).child(self.end_time_input.clone()))
-                    .child(self.button(
-                        "remove-end-time",
-                        self.t("timestamp.remove"),
+            group = group.child(
+                if value.end_time.is_some() || self.input_invalid(InputField::EndTime, cx) {
+                    Self::row(self.t("timestamp.end_time"), None)
+                        .child(div().w(px(78.)).child(self.end_time_input.clone()))
+                        .child(self.button(
+                            "remove-end-time",
+                            self.t("timestamp.remove"),
+                            false,
+                            cx,
+                            |this, _, cx| {
+                                if let Some(e) = this.endpoint_mut() {
+                                    e.value.end_time = None;
+                                }
+                                this.sync_inputs(cx);
+                                this.changed(cx);
+                            },
+                        ))
+                } else {
+                    Self::row("", None).min_h(px(24.)).child(self.button(
+                        "add-end-time",
+                        self.t("timestamp.add_end_time"),
                         false,
                         cx,
                         |this, _, cx| {
                             if let Some(e) = this.endpoint_mut() {
-                                e.value.end_time = None;
+                                e.value.end_time = e
+                                    .value
+                                    .start_time
+                                    .and_then(|t| t.checked_add(Span::new().hours(1)).ok());
                             }
                             this.sync_inputs(cx);
                             this.changed(cx);
                         },
                     ))
-            } else {
-                self.row("").min_h(px(24.)).child(self.button(
-                    "add-end-time",
-                    self.t("timestamp.add_end_time"),
-                    false,
-                    cx,
-                    |this, _, cx| {
-                        if let Some(e) = this.endpoint_mut() {
-                            e.value.end_time = e
-                                .value
-                                .start_time
-                                .and_then(|t| t.checked_add(Span::new().hours(1)).ok());
-                        }
-                        this.sync_inputs(cx);
-                        this.changed(cx);
-                    },
-                ))
-            });
+                },
+            );
         }
 
-        group.child(self.row("").child(self.button(
+        group.child(Self::row("", None).child(self.button(
             "time-done",
             self.t("timestamp.done"),
             false,
             cx,
             |this, window, cx| {
-                if !this.time_error && !this.end_time_error {
+                if !this.input_invalid(InputField::StartTime, cx)
+                    && !this.input_invalid(InputField::EndTime, cx)
+                {
                     this.expanded = None;
                     window.focus(&this.focus, cx);
                     cx.notify();
@@ -318,15 +313,18 @@ impl TimestampPicker {
             );
             let selected = self.editing_end == end;
             dates = dates.child(
-                self.row(if has_range {
-                    if end {
-                        self.t("timestamp.end")
+                Self::row(
+                    if has_range {
+                        if end {
+                            self.t("timestamp.end")
+                        } else {
+                            self.t("timestamp.start")
+                        }
                     } else {
-                        self.t("timestamp.start")
-                    }
-                } else {
-                    self.t("timestamp.date")
-                })
+                        self.t("timestamp.date")
+                    },
+                    None,
+                )
                 .min_h(px(48.))
                 .when(end, |s| s.border_t_1().border_color(rgb(0xe9ebf0)))
                 .child(
@@ -384,11 +382,7 @@ impl TimestampPicker {
                         !self.editing_end,
                         cx,
                         |this, _, cx| {
-                            if !this.time_error
-                                && !this.end_time_error
-                                && !this.count_error
-                                && !this.warning_error
-                            {
+                            if !this.has_input_errors(cx) {
                                 this.editing_end = false;
                                 this.expanded = None;
                                 this.sync_inputs(cx);
@@ -402,11 +396,7 @@ impl TimestampPicker {
                         self.editing_end,
                         cx,
                         |this, _, cx| {
-                            if !this.time_error
-                                && !this.end_time_error
-                                && !this.count_error
-                                && !this.warning_error
-                            {
+                            if !this.has_input_errors(cx) {
                                 this.editing_end = true;
                                 this.expanded = None;
                                 this.sync_inputs(cx);
@@ -434,21 +424,23 @@ impl TimestampPicker {
                         )
                 },
             );
-            group = group.child(self.row(self.t("timestamp.repeat")).child(self.button(
-                "repeat-page",
-                format!("{summary}  ›"),
-                false,
-                cx,
-                |this, _, cx| {
-                    this.repeat_page = true;
-                    this.expanded = None;
-                    cx.notify();
-                },
-            )));
+            group = group.child(
+                Self::row(self.t("timestamp.repeat"), Some("arrows-clockwise")).child(self.button(
+                    "repeat-page",
+                    format!("{summary}  ›"),
+                    false,
+                    cx,
+                    |this, _, cx| {
+                        this.repeat_page = true;
+                        this.expanded = None;
+                        cx.notify();
+                    },
+                )),
+            );
         }
         group = group
             .child(
-                self.row(self.t("timestamp.add_to_agenda")).child(
+                Self::row(self.t("timestamp.add_to_agenda"), Some("calendar-blank")).child(
                     div()
                         .id("active")
                         .w(px(36.))
@@ -500,7 +492,7 @@ impl TimestampPicker {
                 || self.t("timestamp.default").to_owned(),
                 |w| format!("{} {}", w.value, unit_text(w.unit, w.value, self.language)),
             );
-            let mut warning = Self::group().child(self.row(label).child(self.button(
+            let mut warning = Self::group().child(Self::row(label, None).child(self.button(
                 "warning-open",
                 format!("{summary}  ›"),
                 false,
@@ -512,7 +504,7 @@ impl TimestampPicker {
             )));
             if self.warning_open {
                 warning = warning.child(
-                    self.row(self.t("timestamp.interval"))
+                    Self::row(self.t("timestamp.interval"), None)
                         .child(div().w(px(65.)).child(self.warning_input.clone())),
                 );
                 let mut units = div().flex().gap_1();
@@ -663,7 +655,7 @@ impl TimestampPicker {
         page = page.child(
             Self::group()
                 .child(
-                    self.row(self.t("timestamp.repeat_interval"))
+                    Self::row(self.t("timestamp.repeat_interval"), None)
                         .child(self.t("timestamp.every"))
                         .child(div().w(px(48.)).child(self.count_input.clone()))
                         .child(self.button(
@@ -682,7 +674,7 @@ impl TimestampPicker {
                 )
                 .when(self.unit_menu, |s| s.child(units))
                 .child(
-                    self.row(self.t("timestamp.start_date"))
+                    Self::row(self.t("timestamp.start_date"), None)
                         .border_t_1()
                         .border_color(rgb(0xe6e8ed))
                         .child(self.button(
@@ -710,7 +702,7 @@ impl TimestampPicker {
                     s.child(self.date_editor(cx))
                 })
                 .child(
-                    self.row(self.t("timestamp.weekday"))
+                    Self::row(self.t("timestamp.weekday"), None)
                         .text_color(rgb(0x92949d))
                         .child(
                             [
@@ -815,7 +807,7 @@ impl TimestampPicker {
                 }
                 this.repeat_page = false;
                 this.expanded = None;
-                this.count_error = false;
+                this.set_input_invalid(InputField::RepeatCount, false, cx);
                 this.changed(cx);
             },
         ));
@@ -826,7 +818,7 @@ impl TimestampPicker {
 impl Render for TimestampPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let max_height = (f32::from(window.viewport_size().height) - 24.).max(100.);
-        let valid = self.valid();
+        let valid = self.valid(cx);
         div()
             .id("timestamp-picker")
             .debug_selector(|| "timestamp-picker".to_owned())

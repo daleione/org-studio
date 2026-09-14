@@ -2,6 +2,7 @@ mod commands;
 mod element;
 mod folding;
 mod image_loader;
+mod inline_actions;
 mod input;
 mod layout_map;
 mod links;
@@ -613,16 +614,9 @@ pub struct SemanticEditor {
     /// Identity of the link under the pointer (`(line, display range)`), so
     /// hover state survives reordering of `link_hits` between frames.
     hovered_link: Option<(LineIndex, Range<usize>)>,
-    timestamp_popup: Option<timestamp::TimestampPopup>,
-    todo_popup: Option<todo::TodoPopup>,
-    todo_hover_range: Option<ByteRange>,
-    todo_dismissed: Option<ByteRange>,
-    todo_hover_task: Option<Task<()>>,
-    todo_dismiss_task: Option<Task<()>>,
-    todo_config: Option<(Revision, Arc<crate::org_semantic::OrgFileConfig>)>,
-    timestamp_hover_range: Option<ByteRange>,
-    timestamp_dismissed: Option<ByteRange>,
-    timestamp_hover_task: Option<Task<()>>,
+    todo: todo::TodoInteraction,
+    timestamp: timestamp::TimestampInteraction,
+    inline_actions: inline_actions::InlineActions,
     hover_position: Option<Point<Pixels>>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_run_button_hovered: bool,
@@ -653,6 +647,20 @@ pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
 impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
 
 impl SemanticEditor {
+    pub(crate) fn set_ui_language(
+        &mut self,
+        language: crate::i18n::Language,
+        cx: &mut Context<Self>,
+    ) {
+        if self.ui_language != language {
+            self.ui_language = language;
+            self.set_todo_language(language, cx);
+            self.set_timestamp_language(language, cx);
+            self.set_inline_language(language, cx);
+            cx.notify();
+        }
+    }
+
     pub(super) fn animated_line_start_y(&self, line: u64) -> f32 {
         let base = self.display_map.line_start_y(line);
         let Some(animation) = self.fold_animation.as_ref() else {
@@ -763,17 +771,19 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
+            let mut retain_inline_geometry = false;
             if matches!(
                 event,
                 DocumentEvent::Edited { .. }
                     | DocumentEvent::Reloaded { .. }
                     | DocumentEvent::PathChanged { .. }
             ) {
+                retain_inline_geometry = this.inline_document_changed(event, cx);
                 this.dismiss_todo(cx);
-                this.todo_hover_range = None;
-                this.todo_config = None;
+                this.todo.hover_range = None;
+                this.todo.config = None;
                 this.dismiss_timestamp(cx);
-                this.timestamp_hover_range = None;
+                this.timestamp.hover_range = None;
             }
             if let DocumentEvent::Edited { delta, .. } = event {
                 this.inline_image_preview_overrides =
@@ -881,7 +891,7 @@ impl SemanticEditor {
                 } else {
                     this.display_map.configure(snapshot.len_lines(), wrap_width);
                 }
-                if delta.edits.len() != 1 {
+                if delta.edits.len() != 1 && !retain_inline_geometry {
                     this.display_map.invalidate_layout_from(first_line);
                 }
                 this.folds.apply_delta(delta);
@@ -1007,16 +1017,9 @@ impl SemanticEditor {
             hit_rows: Arc::from([]),
             link_hits: Arc::from([]),
             hovered_link: None,
-            timestamp_popup: None,
-            todo_popup: None,
-            todo_hover_range: None,
-            todo_dismissed: None,
-            todo_hover_task: None,
-            todo_dismiss_task: None,
-            todo_config: None,
-            timestamp_hover_range: None,
-            timestamp_dismissed: None,
-            timestamp_hover_task: None,
+            todo: todo::TodoInteraction::default(),
+            timestamp: timestamp::TimestampInteraction::default(),
+            inline_actions: inline_actions::InlineActions::default(),
             hover_position: None,
             source_run_buttons: Arc::from([]),
             source_run_button_hovered: false,

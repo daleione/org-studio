@@ -7,6 +7,8 @@
 mod extract;
 mod file_config;
 mod model;
+mod tags;
+pub(crate) use tags::valid_tag;
 mod timestamp;
 pub(crate) mod timestamp_edit;
 

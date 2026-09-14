@@ -20,9 +20,16 @@ mod tests {
             messages
                 .keys()
                 .filter(|key| {
-                    ["agenda.", "search.", "timestamp.", "calendar.", "todo."]
-                        .iter()
-                        .any(|prefix| key.starts_with(prefix))
+                    [
+                        "agenda.",
+                        "search.",
+                        "timestamp.",
+                        "calendar.",
+                        "todo.",
+                        "inline.",
+                    ]
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix))
                 })
                 .cloned()
                 .collect::<std::collections::BTreeSet<_>>()
