@@ -1963,8 +1963,14 @@ fn build_minimap(
         && editor
             .minimap
             .is_layout_refinement_generation(key.generation);
+    // Editing a table can change its byte ranges and wrap boundaries together.
+    // Do not briefly replace the old image with new text shaped against the live,
+    // partially measured layout while complete geometry is still being prepared.
+    // With no previous image, retain the existing fast first-frame path.
+    let awaiting_layout = active_frame.is_some() && editor.minimap.layout_preparation_pending();
     let mut raster_request = None;
     if !semantics_pending
+        && !awaiting_layout
         && !cached_matches
         && !defer_layout_refinement
         && editor.minimap.reserve_raster(key)
@@ -2718,6 +2724,14 @@ fn schedule_minimap_raster(
             *in_flight = None;
             drop(in_flight);
 
+            // A layout request may have superseded this raster after it started.
+            if editor.minimap.active_frame().is_some()
+                && editor.minimap.layout_preparation_pending()
+            {
+                cx.notify();
+                return;
+            }
+
             // The minimap scans a bounded window ahead of the Editor viewport.
             // Resolve image dimensions there and commit the corresponding Editor
             // row height before publishing the raster. The next raster is then
@@ -3321,6 +3335,109 @@ mod tests {
     };
     use gpui::{AppContext, px};
     use std::path::Path;
+
+    #[gpui::test]
+    fn tab_alignment_holds_minimap_pixels_until_complete_layout(cx: &mut gpui::TestAppContext) {
+        use crate::document::ByteOffset;
+        use crate::editor::org_commands::{EditorCommandContext, TableNavigation};
+        use std::sync::Arc;
+        cx.update(crate::editor::init);
+        for (path, table) in [
+            ("align.org", "| a|bbb|\n|---+---|\n|长字段| x|\n"),
+            ("align.md", "| a|bbb|\n|---|---|\n|长字段| x|\n"),
+        ] {
+            let path = std::path::PathBuf::from(path);
+            let source = format!("{table}{}", "body text\n".repeat(200));
+            let session =
+                cx.new(|_| DocumentSession::from_utf8(path.clone(), source.into_bytes()).unwrap());
+            let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+            view.simulate_resize(gpui::size(px(800.), px(500.)));
+            view.run_until_parked();
+            editor.update(view, |editor, cx| {
+                let previous = editor
+                    .minimap
+                    .active_frame()
+                    .expect("initial minimap is painted");
+                assert!(editor.minimap.active_frame_uses_prepared_layout());
+                let snapshot = editor.snapshot(cx);
+                let context = EditorCommandContext::at(&path, &snapshot, ByteOffset(2)).unwrap();
+                assert!(editor.align_table_from_context(
+                    &snapshot,
+                    &context,
+                    TableNavigation::NextCell,
+                    cx
+                ));
+                let snapshot = editor.snapshot(cx);
+                assert_eq!(snapshot.revision().0, 1);
+                editor.minimap.update_snapshot(&snapshot);
+                // Reserve, but deliberately hold back the complete-layout job. This
+                // exercises the intermediate frame regardless of executor timing.
+                let preparation = super::prepare_minimap_layout_request(
+                    editor,
+                    &path,
+                    &snapshot,
+                    gpui::font(".SystemUIFont"),
+                    px(15.),
+                    crate::theme::current_theme(),
+                    cx.text_system().clone(),
+                )
+                .unwrap();
+                let bounds = editor.minimap.bounds.unwrap();
+                let geometry = editor.minimap_viewport_geometry(bounds);
+                let (paint, request) = super::build_minimap(
+                    editor,
+                    &path,
+                    &snapshot,
+                    false,
+                    bounds,
+                    geometry,
+                    1.,
+                    crate::theme::current_theme(),
+                );
+                assert!(Arc::ptr_eq(&paint.image.unwrap().0, &previous.raster.image));
+                assert!(
+                    request.is_none(),
+                    "Tab must not rasterize new table text using an unfinished layout"
+                );
+                // Once the first Tab has aligned the table, the next Tab only
+                // navigates: neither the document nor raster generation changes.
+                let generation = editor.minimap.generation;
+                let context =
+                    EditorCommandContext::at(&path, &snapshot, editor.selection().head()).unwrap();
+                assert!(editor.align_table_from_context(
+                    &snapshot,
+                    &context,
+                    TableNavigation::NextCell,
+                    cx
+                ));
+                assert_eq!(editor.snapshot(cx).revision(), snapshot.revision());
+                assert_eq!(editor.minimap.generation, generation);
+                let complete = Arc::new(editor.display_map.clone());
+                assert!(editor.minimap.publish_prepared_layout(
+                    &preparation.key,
+                    preparation.epoch,
+                    complete.clone()
+                ));
+                editor.minimap.invalidate_raster();
+                let (_, request) = super::build_minimap(
+                    editor,
+                    &path,
+                    &snapshot,
+                    false,
+                    bounds,
+                    geometry,
+                    1.,
+                    crate::theme::current_theme(),
+                );
+                assert!(Arc::ptr_eq(
+                    &request
+                        .expect("minimap refresh resumes with complete geometry")
+                        .layout,
+                    &complete
+                ));
+            });
+        }
+    }
 
     fn block_row(edge: EditorBlockEdge, top: f32) -> EditorBlockPaintRow {
         EditorBlockPaintRow {

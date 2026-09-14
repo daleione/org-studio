@@ -1468,6 +1468,21 @@ impl EditorMinimapHost {
         true
     }
 
+    /// A new document or geometry configuration needs a complete layout before
+    /// it can replace an already displayed frame. Keep this true across retries.
+    pub(super) fn layout_preparation_pending(&self) -> bool {
+        let state = self
+            .layout_preparation
+            .lock()
+            .expect("editor minimap layout preparation poisoned");
+        state.desired.as_ref().is_some_and(|desired| {
+            state
+                .ready
+                .as_ref()
+                .is_none_or(|ready| &ready.key != desired)
+        })
+    }
+
     pub(super) fn prepared_layout(&self) -> Option<Arc<super::layout_map::EditorLayoutMap>> {
         let state = self
             .layout_preparation
