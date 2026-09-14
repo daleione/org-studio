@@ -7,7 +7,7 @@ use crate::{
 };
 use gpui::{
     App, Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, MouseButton, Render, Window,
-    div, prelude::*, px, rgb,
+    div, prelude::*, px, rgb, rgba,
 };
 use std::{collections::HashSet, sync::Arc};
 
@@ -108,7 +108,7 @@ impl TodoPicker {
                 .width,
         );
         (width
-            + 16.
+            + 18. // Horizontal padding plus the reserved 1px borders.
             + if self.fast_key(state).is_some() {
                 15.
             } else {
@@ -229,6 +229,7 @@ impl Render for TodoPicker {
             .gap(px(3.));
         for (index, state) in self.states.iter().enumerate() {
             let current = self.current == state.keyword;
+            let color = Self::status_color(state);
             let keyword = state.keyword.to_string();
             let debug_keyword = keyword.clone();
             let current_keyword = keyword.clone();
@@ -241,6 +242,8 @@ impl Render for TodoPicker {
                     .flex_none()
                     .px(px(8.))
                     .rounded(px(6.))
+                    .border_1()
+                    .border_color(rgba(if current { 0 } else { (color << 8) | 0x40 }))
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -248,13 +251,16 @@ impl Render for TodoPicker {
                     .when(current, |s| {
                         s.bg(rgb(SELECTED_BACKGROUND)).text_color(rgb(0xffffff))
                     })
-                    .when(!current, |s| s.text_color(rgb(Self::status_color(state))))
+                    .when(!current, |s| s.text_color(rgb(color)))
                     .when(
                         !current
                             && self.keyboard_navigation
                             && index == self.selected
                             && !self.more_open,
-                        |s| s.bg(rgb(HOVER_BACKGROUND)),
+                        |s| {
+                            s.bg(rgb(HOVER_BACKGROUND))
+                                .border_color(rgba((color << 8) | 0x80))
+                        },
                     )
                     .hover(move |s| {
                         s.bg(rgb(if current {
@@ -262,6 +268,7 @@ impl Render for TodoPicker {
                         } else {
                             HOVER_BACKGROUND
                         }))
+                        .border_color(rgba(if current { 0 } else { (color << 8) | 0x80 }))
                     })
                     .when(current, |s| {
                         s.child(
