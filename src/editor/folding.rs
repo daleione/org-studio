@@ -72,31 +72,55 @@ impl EditorFoldState {
         if subtree_end == heading.line + 1 {
             return false;
         }
-        self.global = GlobalVisibility::All;
         let existing = self
             .headings
             .iter()
             .position(|heading| heading.source.range.start == range.start);
         let has_children =
             !direct_child_indices(index.as_slice(), heading_index, subtree_end).is_empty();
-        match next_local_visibility(
-            existing.map(|index| self.headings[index].visibility),
-            has_children,
-        ) {
-            LocalVisibility::Folded => self.headings.push(FoldedHeading {
-                source: snapshot.revision_range(range),
-                visibility: LocalVisibility::Folded,
-            }),
-            LocalVisibility::Children => {
-                let index = existing.expect("fold index exists");
-                self.headings[index].visibility = LocalVisibility::Children;
+        let current = if self.global == GlobalVisibility::All {
+            existing.map(|index| self.headings[index].visibility)
+        } else {
+            let projection = self.projection(path, snapshot);
+            if projection
+                .hidden_ranges
+                .iter()
+                .any(|hidden| hidden.start <= heading.line + 1 && hidden.end >= subtree_end)
+            {
+                Some(LocalVisibility::Folded)
+            } else if projection
+                .hidden_ranges
+                .iter()
+                .any(|hidden| hidden.start < subtree_end && hidden.end > heading.line + 1)
+            {
+                Some(LocalVisibility::Children)
+            } else {
+                None
             }
-            LocalVisibility::Subtree => {
-                self.headings.remove(existing.expect("fold index exists"));
-            }
-            LocalVisibility::Empty => unreachable!(),
-        }
+        };
+        self.set_heading_visibility(
+            snapshot,
+            range,
+            next_local_visibility(current, has_children),
+        );
         true
+    }
+
+    fn set_heading_visibility(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        range: crate::document::ByteRange,
+        visibility: LocalVisibility,
+    ) {
+        self.headings
+            .retain(|heading| heading.source.range.start != range.start);
+        // An expanded subtree is an explicit exception to a global folded view.
+        if visibility != LocalVisibility::Subtree || self.global != GlobalVisibility::All {
+            self.headings.push(FoldedHeading {
+                source: snapshot.revision_range(range),
+                visibility,
+            });
+        }
     }
 
     /// Toggle an Org begin/end block or Markdown fence only from its opening boundary. Tabs inside
@@ -116,7 +140,6 @@ impl EditorFoldState {
         else {
             return false;
         };
-        self.global = GlobalVisibility::All;
         if let Some(index) = self
             .blocks
             .iter()
@@ -169,14 +192,16 @@ impl EditorFoldState {
         true
     }
 
-    pub(super) fn expand_at(&mut self, snapshot: &DocumentSnapshot, line: u64) {
-        if self.global != GlobalVisibility::All {
-            self.global = GlobalVisibility::All;
-            self.headings.clear();
-        }
+    pub(super) fn expand_at(&mut self, path: &Path, snapshot: &DocumentSnapshot, line: u64) {
         if let Ok(range) = snapshot.line_content_range(LineIndex(line)) {
-            self.headings
-                .retain(|heading| heading.source.range.start != range.start);
+            if self
+                .heading_index(path, snapshot)
+                .as_slice()
+                .iter()
+                .any(|heading| heading.start == range.start)
+            {
+                self.set_heading_visibility(snapshot, range, LocalVisibility::Subtree);
+            }
             self.blocks
                 .retain(|block| block.source.range.start != range.start);
         }
@@ -210,56 +235,56 @@ impl EditorFoldState {
         let mut hidden = Vec::new();
         let mut markers = HashSet::new();
         let semantic_lines = semantic_line_count(snapshot);
-        match self.global {
-            GlobalVisibility::All => {
-                for folded in &self.headings {
-                    if let Some((index, heading)) = headings
-                        .iter()
-                        .enumerate()
-                        .find(|(_, heading)| heading.start == folded.source.range.start)
-                    {
-                        let end = heading_subtree_end(semantic_lines, headings, index);
-                        if heading.line + 1 < end {
-                            match folded.visibility {
-                                LocalVisibility::Folded => {
-                                    hidden.push(heading.line + 1..end);
-                                    markers.insert(heading.line);
+        if self.global != GlobalVisibility::All {
+            let outline = outline_headings(headings);
+            let (visible, global_markers) =
+                global_outline_visibility(semantic_lines as usize, &outline, self.global);
+            hidden = complement(snapshot.len_lines(), &visible);
+            markers.extend(global_markers.into_iter().map(|line| line as u64));
+        }
+        for folded in &self.headings {
+            if let Some((index, heading)) = headings
+                .iter()
+                .enumerate()
+                .find(|(_, heading)| heading.start == folded.source.range.start)
+            {
+                let end = heading_subtree_end(semantic_lines, headings, index);
+                if self.global != GlobalVisibility::All {
+                    // Apply local exceptions in action order, so a child can be opened
+                    // after revealing its parent without expanding neighboring subtrees.
+                    let body = heading.line + 1..end;
+                    hidden = subtract_ranges(&hidden, std::slice::from_ref(&body));
+                    markers.retain(|line| *line < heading.line || *line >= end);
+                }
+                if heading.line + 1 < end {
+                    match folded.visibility {
+                        LocalVisibility::Folded => {
+                            hidden.push(heading.line + 1..end);
+                            markers.insert(heading.line);
+                        }
+                        LocalVisibility::Children => {
+                            let entry_end = headings.get(index + 1).map_or(end, |next| next.line);
+                            let mut cursor = entry_end;
+                            for child_index in direct_child_indices(headings, index, end) {
+                                let child = headings[child_index];
+                                if cursor < child.line {
+                                    hidden.push(cursor..child.line);
                                 }
-                                LocalVisibility::Children => {
-                                    let entry_end =
-                                        headings.get(index + 1).map_or(end, |next| next.line);
-                                    let mut cursor = entry_end;
-                                    for child_index in direct_child_indices(headings, index, end) {
-                                        let child = headings[child_index];
-                                        if cursor < child.line {
-                                            hidden.push(cursor..child.line);
-                                        }
-                                        let child_end = heading_subtree_end(
-                                            semantic_lines,
-                                            headings,
-                                            child_index,
-                                        );
-                                        if child_end > child.line + 1 {
-                                            markers.insert(child.line);
-                                        }
-                                        cursor = child.line + 1;
-                                    }
-                                    if cursor < end {
-                                        hidden.push(cursor..end);
-                                    }
+                                let child_end =
+                                    heading_subtree_end(semantic_lines, headings, child_index);
+                                if child_end > child.line + 1 {
+                                    markers.insert(child.line);
                                 }
-                                LocalVisibility::Empty | LocalVisibility::Subtree => unreachable!(),
+                                cursor = child.line + 1;
+                            }
+                            if cursor < end {
+                                hidden.push(cursor..end);
                             }
                         }
+                        LocalVisibility::Subtree => {}
+                        LocalVisibility::Empty => unreachable!(),
                     }
                 }
-            }
-            GlobalVisibility::Overview | GlobalVisibility::Contents => {
-                let outline = outline_headings(headings);
-                let (visible, global_markers) =
-                    global_outline_visibility(semantic_lines as usize, &outline, self.global);
-                hidden = complement(snapshot.len_lines(), &visible);
-                markers.extend(global_markers.into_iter().map(|line| line as u64));
             }
         }
         if !self.blocks.is_empty() {
@@ -607,12 +632,53 @@ mod tests {
             folds.hidden_ranges(org(), &snapshot),
             vec![0..1, 2..5, 6..8]
         );
+        // After global collapse, Tab opens only the current (second) heading.
+        assert!(folds.toggle_heading(org(), &snapshot, 5));
+        assert_eq!(
+            folds.hidden_ranges(org(), &snapshot),
+            vec![0..1, 2..5, 7..8]
+        );
+        assert!(folds.projection(org(), &snapshot).marker_lines.contains(&1));
+        assert!(!folds.projection(org(), &snapshot).marker_lines.contains(&5));
+        folds.toggle_heading(org(), &snapshot, 5);
+        assert_eq!(
+            folds.hidden_ranges(org(), &snapshot),
+            vec![0..1, 2..5, 6..8]
+        );
+        folds.toggle_heading(org(), &snapshot, 1);
+        assert_eq!(
+            folds.hidden_ranges(org(), &snapshot),
+            vec![0..1, 4..5, 6..8]
+        );
+        folds.toggle_heading(org(), &snapshot, 3);
+        assert_eq!(folds.hidden_ranges(org(), &snapshot), vec![0..1, 6..8]);
+        folds.toggle_heading(org(), &snapshot, 3);
+        assert_eq!(
+            folds.hidden_ranges(org(), &snapshot),
+            vec![0..1, 4..5, 6..8]
+        );
+        folds.toggle_heading(org(), &snapshot, 1);
+        assert_eq!(folds.hidden_ranges(org(), &snapshot), vec![0..1, 6..8]);
+        // The child's old local fold must not override the parent's later expansion.
+        folds.toggle_heading(org(), &snapshot, 3);
+        assert_eq!(
+            folds.hidden_ranges(org(), &snapshot),
+            vec![0..1, 4..5, 6..8]
+        );
         assert!(folds.cycle_global(org(), &snapshot));
         assert_eq!(folds.global, GlobalVisibility::Contents);
         assert_eq!(
             folds.hidden_ranges(org(), &snapshot),
             vec![0..1, 2..3, 4..5, 6..8]
         );
+        folds.toggle_heading(org(), &snapshot, 3);
+        assert_eq!(
+            folds.hidden_ranges(org(), &snapshot),
+            vec![0..1, 2..3, 6..8]
+        );
+        // Clicking a gutter fold marker must also leave the other heading alone.
+        folds.expand_at(org(), &snapshot, 1);
+        assert_eq!(folds.hidden_ranges(org(), &snapshot), vec![0..1, 6..8]);
         assert!(folds.cycle_global(org(), &snapshot));
         assert!(folds.hidden_ranges(org(), &snapshot).is_empty());
     }
@@ -674,6 +740,9 @@ mod tests {
         assert_eq!(folds.hidden_ranges(markdown(), &snapshot), vec![3..4]);
         folds.toggle_heading(markdown(), &snapshot, 0);
         assert!(folds.hidden_ranges(markdown(), &snapshot).is_empty());
+        folds.cycle_global(markdown(), &snapshot);
+        folds.toggle_heading(markdown(), &snapshot, 0);
+        assert_eq!(folds.hidden_ranges(markdown(), &snapshot), vec![3..4, 5..6]);
     }
 
     #[test]

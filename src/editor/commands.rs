@@ -1272,7 +1272,7 @@ impl SemanticEditor {
             let path = self.session.read(cx).syntax_path().to_path_buf();
             self.finish_fold_animation();
             let previous = self.folds.projection(&path, &snapshot);
-            self.folds.expand_at(&snapshot, line);
+            self.folds.expand_at(&path, &snapshot, line);
             let target = self.folds.projection(&path, &snapshot);
             self.animate_fold_layout(previous, target, line, window, cx);
             return;
