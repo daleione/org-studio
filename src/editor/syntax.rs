@@ -1065,6 +1065,9 @@ pub(super) fn runs_from_spans(
     match line_style.id {
         EditorStyleId::Heading(level) => {
             base.font.weight = FontWeight::BOLD;
+            // JetBrains Mono substitutes `***` with a staggered asterism ligature.
+            // Source headings must keep their level markers individually legible.
+            base.font.features = gpui::FontFeatures::disable_ligatures();
             base.color = rgb(theme.heading[(level.saturating_sub(1) as usize).min(3)]).into();
         }
         EditorStyleId::CodeBoundary => {
@@ -1162,7 +1165,25 @@ pub(super) fn semantic_spans(
     let document_language = language(path);
     let mut opaque_inline_ranges = Vec::new();
     if !verbatim {
-        opaque_inline_ranges = collect_inline_semantics(document_language, text, &mut spans);
+        // Heading markers are block syntax, not inline emphasis delimiters.
+        let inline_start = if matches!(line_style.id, EditorStyleId::Heading(_)) {
+            let trimmed = text.trim_start();
+            let marker = match document_language {
+                Language::Org => b'*',
+                Language::Markdown => b'#',
+            };
+            text.len() - trimmed.len() + trimmed.bytes().take_while(|byte| *byte == marker).count()
+        } else {
+            0
+        };
+        opaque_inline_ranges =
+            collect_inline_semantics(document_language, &text[inline_start..], &mut spans);
+        for (range, _) in &mut spans {
+            *range = range.start + inline_start..range.end + inline_start;
+        }
+        for range in &mut opaque_inline_ranges {
+            *range = range.start + inline_start..range.end + inline_start;
+        }
         if let Some(todo) = &line_style.todo {
             spans.push((
                 todo.range.clone(),
