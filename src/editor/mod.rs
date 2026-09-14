@@ -11,6 +11,7 @@ mod minimap_media;
 mod org_commands;
 mod read_only;
 mod search;
+mod source_copy;
 mod syntax;
 mod timestamp;
 mod todo;
@@ -619,6 +620,7 @@ pub struct SemanticEditor {
     inline_actions: inline_actions::InlineActions,
     hover_position: Option<Point<Pixels>>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
+    source_copy: source_copy::SourceCopy,
     source_run_button_hovered: bool,
     source_run_feedback: Option<SourceRunFeedback>,
     source_run_feedback_generation: u64,
@@ -926,6 +928,7 @@ impl SemanticEditor {
                 this.shape_cache.clear();
                 this.hit_rows = Arc::from([]);
                 this.source_run_buttons = Arc::from([]);
+                this.source_copy.buttons.clear();
                 this.source_run_button_hovered = false;
                 this.inline_image_line_dimensions.borrow_mut().clear();
                 this.map_source_run_feedback(delta);
@@ -943,6 +946,7 @@ impl SemanticEditor {
                 this.display_map.set_hidden_ranges(Vec::new());
                 this.shape_cache.clear();
                 this.source_run_buttons = Arc::from([]);
+                this.source_copy.buttons.clear();
                 this.source_run_button_hovered = false;
                 this.inline_image_preview_overrides.clear();
                 this.inline_image_line_dimensions.borrow_mut().clear();
@@ -961,6 +965,7 @@ impl SemanticEditor {
                 this.shape_cache.clear();
                 this.hit_rows = Arc::from([]);
                 this.source_run_buttons = Arc::from([]);
+                this.source_copy.buttons.clear();
                 this.source_run_button_hovered = false;
                 this.inline_image_preview_overrides.clear();
                 this.inline_image_line_dimensions.borrow_mut().clear();
@@ -1022,6 +1027,7 @@ impl SemanticEditor {
             inline_actions: inline_actions::InlineActions::default(),
             hover_position: None,
             source_run_buttons: Arc::from([]),
+            source_copy: source_copy::SourceCopy::default(),
             source_run_button_hovered: false,
             source_run_feedback: None,
             source_run_feedback_generation: 0,
@@ -1135,6 +1141,7 @@ impl SemanticEditor {
         self.shape_cache.clear();
         self.hit_rows = Arc::from([]);
         self.source_run_buttons = Arc::from([]);
+        self.source_copy.buttons.clear();
         self.source_run_button_hovered = false;
         self.vertical_goal_x = None;
         self.minimap.note_viewport_changed();

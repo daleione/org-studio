@@ -1198,6 +1198,9 @@ impl SemanticEditor {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         self.emacs_mark_active = false;
+        if self.source_copy_down(event) {
+            return;
+        }
         if self.inline_mouse_down(event, cx) {
             return;
         }
@@ -1288,6 +1291,7 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.source_copy_hover(event.position, cx);
         self.inline_hover(event.position, cx);
         self.todo_hover(event.position, cx);
         self.timestamp_hover(event.position, cx);
@@ -1354,6 +1358,7 @@ impl SemanticEditor {
         self.is_selecting = false;
         self.drag_position = None;
         self.autoscroll_task = None;
+        self.source_copy_up(event.position, cx);
         self.inline_mouse_up(event.position, cx);
     }
 
@@ -1802,6 +1807,7 @@ impl Render for SemanticEditor {
         let timestamp_overlay = self.timestamp_overlay(cx);
         let todo_overlay = self.todo_overlay(window, cx);
         let inline_overlay = self.inline_overlay(window, cx);
+        let source_copy_tooltip = self.source_copy_tooltip(window);
         div()
             .id("semantic-editor")
             .key_context(if self.inline_actions.popup.is_some() {
@@ -1890,6 +1896,7 @@ impl Render for SemanticEditor {
             }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !hovered {
+                    this.source_copy_hover(window.mouse_position(), cx);
                     this.inline_hover(window.mouse_position(), cx);
                     this.todo_hover(window.mouse_position(), cx);
                 }
@@ -1919,6 +1926,7 @@ impl Render for SemanticEditor {
             .children(timestamp_overlay)
             .children(todo_overlay)
             .children(inline_overlay)
+            .children(source_copy_tooltip)
             .when_some(self.command_feedback.clone(), |editor, message| {
                 editor.child(
                     div()

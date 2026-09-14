@@ -316,6 +316,8 @@
   "inline.tags": "标签",
   "inline.edit_link": "编辑链接地址",
   "inline.open": "打开",
+  "inline.copy_code": "复制代码",
+  "inline.code_copied": "已复制",
   "inline.copy": "复制",
   "inline.edit": "编辑",
   "inline.cancel": "取消",

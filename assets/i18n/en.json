@@ -316,6 +316,8 @@
   "inline.tags": "Tags",
   "inline.edit_link": "Edit link address",
   "inline.open": "Open",
+  "inline.copy_code": "Copy code",
+  "inline.code_copied": "Copied",
   "inline.copy": "Copy",
   "inline.edit": "Edit",
   "inline.cancel": "Cancel",

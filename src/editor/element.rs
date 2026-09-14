@@ -75,6 +75,7 @@ pub struct PrepaintState {
     hover_quads: Vec<PaintQuad>,
     link_hits: Vec<super::LinkHit>,
     source_run_buttons: Vec<SourceRunButtonPaint>,
+    source_copy_buttons: Vec<super::source_copy::CopyButtonPaint>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     gutter: PaintQuad,
@@ -1107,6 +1108,7 @@ impl Element for EditorElement {
         );
         let schedule_minimap = editor.fold_animation.is_none();
         let source_run_feedback = editor.source_run_feedback;
+        let copy_feedback = editor.source_copy.feedback;
         let horizontal_scroll = editor.scroll_x;
         if let Some((service, path, syntax_snapshot)) = syntax_build_request {
             schedule_syntax_builder(self.editor.clone(), service, path, syntax_snapshot, cx);
@@ -1222,6 +1224,49 @@ impl Element for EditorElement {
                 })
             })
             .collect();
+        let source_copy_buttons = rows
+            .iter()
+            .filter(|row| {
+                row.block.as_ref().is_some_and(|block| {
+                    matches!(
+                        block.kind,
+                        syntax::EditorBlockKind::Source | syntax::EditorBlockKind::MarkdownFence
+                    ) && block.edge == syntax::EditorBlockEdge::Open
+                })
+            })
+            .filter_map(|row| {
+                let block_right = block_content_right - px(BLOCK_RIGHT_INSET);
+                let right = block_right.min(viewport_text_right) - px(10.);
+                let left = right - px(26.);
+                if left < viewport_text_left || row.hit.origin_y < bounds.top() {
+                    return None;
+                }
+                // Use the painted block boundary, including its top inset and
+                // rounded corner, rather than the editor's outer text rectangle.
+                let probe = point(right, row.hit.visible_top + px(BLOCK_VERTICAL_INSET + 1.));
+                let block = block_backgrounds
+                    .iter()
+                    .find(|quad| quad.bounds.contains(&probe))?
+                    .bounds;
+                let height = px(26.).min(block.size.height - px(10.));
+                if height < px(14.) {
+                    return None;
+                }
+                let top = (row.hit.origin_y + (row.hit.line_height - height) / 2.)
+                    .max(block.top() + px(5.));
+                let button = Bounds::new(point(left, top), size(px(26.), height));
+                if button.bottom() > bounds.bottom() || button.bottom() > block.bottom() - px(5.) {
+                    return None;
+                }
+                Some(super::source_copy::CopyButtonPaint::new(
+                    button,
+                    snapshot.revision(),
+                    row.hit.range.start,
+                    copy_feedback == Some((snapshot.revision(), row.hit.range.start)),
+                    window,
+                ))
+            })
+            .collect();
         PrepaintState {
             #[cfg(feature = "benchmarks")]
             started_at,
@@ -1231,6 +1276,7 @@ impl Element for EditorElement {
             hover_quads,
             link_hits,
             source_run_buttons,
+            source_copy_buttons,
             selection: selection_quads,
             caret,
             content_left: block_left,
@@ -1525,6 +1571,9 @@ impl Element for EditorElement {
                             paint(window);
                         }
                     }
+                    for button in &state.source_copy_buttons {
+                        button.paint(window, cx);
+                    }
                     if focus_handle.is_focused(window)
                         && let Some(mut caret) = state.caret.take()
                     {
@@ -1571,6 +1620,11 @@ impl Element for EditorElement {
             editor.hit_rows = hits;
             editor.link_hits = Arc::from(std::mem::take(&mut state.link_hits));
             editor.source_run_buttons = source_run_button_hits;
+            editor.source_copy.buttons = state
+                .source_copy_buttons
+                .iter()
+                .map(|button| button.hit)
+                .collect();
             if editor.display_map.soft_wrap() {
                 editor.scroll_x = 0.0;
             } else {
