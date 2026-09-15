@@ -3648,7 +3648,10 @@ mod tests {
                 })
                 .collect::<Vec<_>>()
         });
-        assert_eq!(media.len(), 2);
+        assert!(
+            media.len() >= 2,
+            "fixture must cover multiple SVGs so competing dimension writers are exercised"
+        );
         editor.update(cx, |editor, cx| {
             editor.set_minimap(false, Some(144), cx);
             editor

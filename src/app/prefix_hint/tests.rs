@@ -67,7 +67,7 @@ fn save_menu_interrupts_both_delayed_and_visible_prefixes(cx: &mut gpui::TestApp
             assert!(w.prefix_hint.task.is_none());
             assert!(!w.prefix_hint_visible());
             assert!(w.buffers.panel.is_some());
-            assert!(w.status.shell.owns(ShellKind::Buffers, PaneSide::Left));
+            assert!(w.status.shell_owns(ShellKind::Buffers, PaneSide::Left));
         });
         cx.simulate_keystrokes("ctrl-g");
         cx.run_until_parked();

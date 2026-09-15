@@ -27,8 +27,8 @@ pub(crate) struct ShellRequest {
 
 /// The statusline owns the animation; features only describe the content they need.
 #[derive(Default)]
-pub(crate) struct ShellHost {
-    pub motion: ShellMotion,
+pub(super) struct ShellHost {
+    pub(super) motion: ShellMotion,
     owner: Option<ShellKind>,
     pane: Option<PaneSide>,
 }

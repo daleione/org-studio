@@ -454,22 +454,15 @@ fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppCon
         w.close_search(false, cx);
         let p = w.search.presentation.as_mut().unwrap();
         let available = p.available_width;
-        let current = w
-            .status
-            .shell
-            .motion
-            .sample(available, std::time::Instant::now())
-            .0;
+        let current = w.status.sample_shell(available, std::time::Instant::now());
         let midway = super::geometry::ShellShape {
             width: (480. + available) / 2.,
             content_opacity: 0.5,
             ..current
         };
         w.status
-            .shell
-            .motion
-            .update(midway, available, std::time::Instant::now(), false);
-        w.status.shell.motion.update(
+            .set_shell_shape_for_test(midway, available, std::time::Instant::now(), false);
+        w.status.set_shell_shape_for_test(
             super::geometry::ShellShape::status(available),
             available,
             std::time::Instant::now() + std::time::Duration::from_secs(60),
@@ -485,7 +478,7 @@ fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppCon
     workspace.update(cx, |w, cx| {
         assert!(!w.search_is_open());
         let p = w.search.presentation.as_mut().unwrap();
-        w.status.shell.motion.update(
+        w.status.set_shell_shape_for_test(
             super::geometry::ShellShape::status(p.available_width),
             p.available_width,
             std::time::Instant::now(),

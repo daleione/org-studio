@@ -39,7 +39,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn prefix_hint_on(&self, pane: PaneSide) -> bool {
-        self.status.shell.owns(ShellKind::Prefix, pane)
+        self.status.shell_owns(ShellKind::Prefix, pane)
     }
 
     pub(crate) fn finish_prefix_return(&mut self, retained: bool) {

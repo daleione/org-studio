@@ -30,7 +30,7 @@ pub(crate) use model::{CachedStatusLayout, StatusLineLayout, StatusLineSnapshot,
 pub(crate) use popover::render_status_popover;
 
 pub(crate) struct StatusLineHost {
-    pub(crate) shell: shell::ShellHost,
+    shell: shell::ShellHost,
     settings: StatusLineSettings,
     popover: Option<StatusPopover>,
     layout_cache: std::cell::RefCell<std::collections::HashMap<PaneId, CachedStatusLayout>>,
@@ -48,6 +48,29 @@ impl StatusLineHost {
 
     pub(crate) fn settings(&self) -> StatusLineSettings {
         self.settings
+    }
+
+    pub(crate) fn shell_owns(&self, kind: shell::ShellKind, pane: super::PaneSide) -> bool {
+        self.shell.owns(kind, pane)
+    }
+
+    pub(crate) fn sample_shell(
+        &self,
+        available: f32,
+        now: std::time::Instant,
+    ) -> shell::ShellShape {
+        self.shell.motion.sample(available, now).0
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_shell_shape_for_test(
+        &mut self,
+        shape: shell::ShellShape,
+        available: f32,
+        now: std::time::Instant,
+        animate: bool,
+    ) {
+        self.shell.motion.update(shape, available, now, animate);
     }
 
     pub(crate) fn dismiss_popover(&mut self) -> bool {

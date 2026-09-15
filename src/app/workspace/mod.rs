@@ -768,8 +768,7 @@ impl WorkspaceWindow {
             });
         let buffer_panel = self
             .status
-            .shell
-            .owns(crate::app::status_line::shell::ShellKind::Buffers, pane);
+            .shell_owns(crate::app::status_line::shell::ShellKind::Buffers, pane);
         let prefix_panel = self.prefix_hint_on(pane);
         let returning_status =
             (self.search_is_closing(pane) || buffer_panel || prefix_panel).then(|| {

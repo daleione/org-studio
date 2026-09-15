@@ -69,17 +69,14 @@ impl WorkspaceWindow {
     ) -> Option<AnyElement> {
         if !self
             .status
-            .shell
-            .owns(crate::app::status_line::shell::ShellKind::Buffers, pane)
+            .shell_owns(crate::app::status_line::shell::ShellKind::Buffers, pane)
         {
             return None;
         }
         let available = (width - 2. * crate::app::status_line::FLOATING_STATUS_INSET).max(1.);
-        let (shape, _) = self
+        let shape = self
             .status
-            .shell
-            .motion
-            .sample(available, std::time::Instant::now());
+            .sample_shell(available, std::time::Instant::now());
         let body = match &self.buffers.panel {
             Some(Panel::Picker(p)) => Some(self.picker_view(p, entity.clone(), cx)),
             Some(Panel::Review(review)) => Some(self.review_view(review, entity.clone(), cx)),

@@ -39,11 +39,9 @@ impl WorkspaceWindow {
             .as_ref()
             .filter(|p| p.pane == pane)?;
         let available = (width - 2. * status_line::FLOATING_STATUS_INSET).max(1.);
-        let (shape, _) = self
+        let shape = self
             .status
-            .shell
-            .motion
-            .sample(available, std::time::Instant::now());
+            .sample_shell(available, std::time::Instant::now());
         Some(
             status_line::floating_status_container(shape.height)
                 .occlude()

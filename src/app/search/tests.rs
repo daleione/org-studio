@@ -77,9 +77,7 @@ fn search_exit_drops_business_state_and_reopen_keeps_the_entire_shape(
             content_opacity: 1.,
         };
         w.status
-            .shell
-            .motion
-            .update(expanded, 1200., Instant::now(), false);
+            .set_shell_shape_for_test(expanded, 1200., Instant::now(), false);
         w.close_search(false, cx);
         assert!(!w.search_is_open());
         assert!(!w.search_owns_input(input.entity_id()));
@@ -100,16 +98,11 @@ fn search_exit_drops_business_state_and_reopen_keeps_the_entire_shape(
             content_opacity: 0.5,
         };
         w.status
-            .shell
-            .motion
-            .update(midway, 1200., Instant::now(), false);
+            .set_shell_shape_for_test(midway, 1200., Instant::now(), false);
         w.open_search(false, false, false, cx);
         let p = w.search.presentation.as_ref().unwrap();
         assert!(!p.returning());
-        assert_eq!(
-            w.status.shell.motion.sample(1200., Instant::now()).0,
-            midway
-        );
+        assert_eq!(w.status.sample_shell(1200., Instant::now()), midway);
         let s = w.search.session.as_ref().unwrap();
         assert_ne!(s.input.entity_id(), input.entity_id());
         w.search_input_changed(input.entity_id(), "stale".into(), cx);

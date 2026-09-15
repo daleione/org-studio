@@ -174,12 +174,7 @@ impl WorkspaceWindow {
         }
         let s = self.search.session.as_mut().unwrap();
         let animating = self.search.presentation.as_ref().is_some_and(|p| {
-            let shape = self
-                .status
-                .shell
-                .motion
-                .sample(p.available_width, Instant::now())
-                .0;
+            let shape = self.status.sample_shell(p.available_width, Instant::now());
             let target = if s.mode.replacing() {
                 super::geometry::BarLayout::new(p.available_width, self.language).replacement_height
             } else {
@@ -213,8 +208,7 @@ impl WorkspaceWindow {
         });
         let owns_shell = self
             .status
-            .shell
-            .owns(crate::app::status_line::shell::ShellKind::Search, s.pane);
+            .shell_owns(crate::app::status_line::shell::ShellKind::Search, s.pane);
         if owns_shell && std::mem::take(&mut s.focus_pending) {
             let focus = s.input.read(cx).focus.clone();
             window.focus(&focus, cx);
@@ -232,10 +226,7 @@ impl WorkspaceWindow {
             crate::app::status_line::FLOATING_STATUS_CLEARANCE,
             |p| {
                 self.status
-                    .shell
-                    .motion
-                    .sample(p.available_width, Instant::now())
-                    .0
+                    .sample_shell(p.available_width, Instant::now())
                     .height
                     + crate::app::status_line::FLOATING_STATUS_BOTTOM
                     + 12.
