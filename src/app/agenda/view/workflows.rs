@@ -5,55 +5,6 @@ use crate::{
 };
 use gpui::{Entity, MouseButton, div, prelude::*, px, rgb};
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::{AppContext, Context, IntoElement, Modifiers, Render, Window};
-
-    #[gpui::test]
-    fn cancelling_refile_does_not_reopen_the_underlying_inbox_row(cx: &mut gpui::TestAppContext) {
-        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
-        workspace.update(cx, |workspace, _| {
-            workspace.agenda.state.overlay = AgendaOverlay::Refile;
-            workspace.agenda.state.selected = Some(2);
-        });
-        struct Harness(Entity<WorkspaceWindow>);
-        impl Render for Harness {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                let workspace = self.0.clone();
-                div()
-                    .size_full()
-                    .relative()
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        workspace.update(cx, |workspace, _| {
-                            workspace.agenda.state.overlay = AgendaOverlay::Refile
-                        });
-                    })
-                    .child(refile_overlay(
-                        crate::i18n::Language::English,
-                        self.0.clone(),
-                        vec![],
-                        0,
-                        "",
-                        None,
-                    ))
-            }
-        }
-        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace.clone()));
-        let bounds = cx
-            .debug_bounds("agenda-workflow-Cancel")
-            .expect("cancel is rendered");
-        let center = bounds.center();
-        cx.simulate_mouse_move(center, None, Modifiers::default());
-        cx.simulate_click(center, Modifiers::default());
-        workspace.update(cx, |workspace, _| {
-            assert_eq!(workspace.agenda.state.overlay, AgendaOverlay::None);
-            assert_eq!(workspace.agenda.state.selected, Some(2));
-            assert!(workspace.agenda.state.refile_task.is_none());
-        });
-    }
-}
-
 fn action(
     workspace: Entity<WorkspaceWindow>,
     label: &'static str,
@@ -468,4 +419,53 @@ fn repeat_overlay(
                         )),
                 ),
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{AppContext, Context, IntoElement, Modifiers, Render, Window};
+
+    #[gpui::test]
+    fn cancelling_refile_does_not_reopen_the_underlying_inbox_row(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        workspace.update(cx, |workspace, _| {
+            workspace.agenda.state.overlay = AgendaOverlay::Refile;
+            workspace.agenda.state.selected = Some(2);
+        });
+        struct Harness(Entity<WorkspaceWindow>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                let workspace = self.0.clone();
+                div()
+                    .size_full()
+                    .relative()
+                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                        workspace.update(cx, |workspace, _| {
+                            workspace.agenda.state.overlay = AgendaOverlay::Refile
+                        });
+                    })
+                    .child(refile_overlay(
+                        crate::i18n::Language::English,
+                        self.0.clone(),
+                        vec![],
+                        0,
+                        "",
+                        None,
+                    ))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace.clone()));
+        let bounds = cx
+            .debug_bounds("agenda-workflow-Cancel")
+            .expect("cancel is rendered");
+        let center = bounds.center();
+        cx.simulate_mouse_move(center, None, Modifiers::default());
+        cx.simulate_click(center, Modifiers::default());
+        workspace.update(cx, |workspace, _| {
+            assert_eq!(workspace.agenda.state.overlay, AgendaOverlay::None);
+            assert_eq!(workspace.agenda.state.selected, Some(2));
+            assert!(workspace.agenda.state.refile_task.is_none());
+        });
+    }
 }

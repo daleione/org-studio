@@ -798,11 +798,12 @@ mod tests {
             Arc::new("/tmp/agenda-fold.org".into()),
             &analysis,
         ));
-        let first = Some("2026-09-07".parse().unwrap());
+        let first_date = "2026-09-07".parse().unwrap();
+        let first = Some(first_date);
         let second = Some("2026-09-08".parse().unwrap());
         let result = Arc::new(QueryEngine::default().execute(
             index,
-            &AgendaQuery::builtin(BuiltinQuery::NextSevenDays, first.unwrap()),
+            &AgendaQuery::builtin(BuiltinQuery::NextSevenDays, first_date),
         ));
         host.page_query.result = Some(result.clone());
         host.publish(result.clone());

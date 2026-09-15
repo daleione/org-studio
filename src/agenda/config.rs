@@ -47,35 +47,6 @@ impl Default for AgendaConfig {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn version_one_config_migrates_missing_saved_views() {
-        let config: AgendaConfig =
-            serde_json::from_str(r#"{"version":1,"sources":[],"inbox":null}"#).unwrap();
-        assert!(config.saved_views.is_empty());
-    }
-
-    #[test]
-    fn saved_views_round_trip_structured_query() {
-        let config = AgendaConfig {
-            saved_views: vec![SavedViewConfig {
-                name: "Waiting docs".into(),
-                query: StructuredQuery {
-                    todo: Some("WAITING".into()),
-                    tag: Some("docs".into()),
-                    ..Default::default()
-                },
-            }],
-            ..Default::default()
-        };
-        let decoded: AgendaConfig =
-            serde_json::from_slice(&serde_json::to_vec(&config).unwrap()).unwrap();
-        assert_eq!(decoded, config);
-    }
-}
-
 pub(crate) struct AgendaConfigStore {
     path: PathBuf,
 }
@@ -101,5 +72,35 @@ impl AgendaConfigStore {
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(AgendaConfig::default()),
             Err(error) => Err(error),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn version_one_config_migrates_missing_saved_views() {
+        let config: AgendaConfig =
+            serde_json::from_str(r#"{"version":1,"sources":[],"inbox":null}"#).unwrap();
+        assert!(config.saved_views.is_empty());
+    }
+
+    #[test]
+    fn saved_views_round_trip_structured_query() {
+        let config = AgendaConfig {
+            saved_views: vec![SavedViewConfig {
+                name: "Waiting docs".into(),
+                query: StructuredQuery {
+                    todo: Some("WAITING".into()),
+                    tag: Some("docs".into()),
+                    ..Default::default()
+                },
+            }],
+            ..Default::default()
+        };
+        let decoded: AgendaConfig =
+            serde_json::from_slice(&serde_json::to_vec(&config).unwrap()).unwrap();
+        assert_eq!(decoded, config);
     }
 }

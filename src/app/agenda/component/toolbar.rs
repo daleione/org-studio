@@ -118,165 +118,6 @@ fn edit_icon_button(workspace: Entity<WorkspaceWindow>) -> Stateful<Div> {
         })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use gpui::{Context, Modifiers, Render, Window};
-
-    #[gpui::test]
-    fn narrow_toolbar_preserves_control_geometry(cx: &mut gpui::TestAppContext) {
-        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
-        struct Harness(Entity<WorkspaceWindow>);
-        impl Render for Harness {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div().w(px(250.)).child(agenda_toolbar(AgendaToolbarProps {
-                    workspace: self.0.clone(),
-                    state: &AgendaViewState::default(),
-                    language: Language::Chinese,
-                    window_width: 250.,
-                    main_content_offset: 0.,
-                    window_title: "tasks.org".to_owned(),
-                    search: None,
-                    motion_enabled: true,
-                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
-                }))
-            }
-        }
-        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
-        let search = cx
-            .debug_bounds("agenda-toolbar-icon-assets/icons/agenda/search.svg")
-            .unwrap();
-        assert_eq!(search.size.width, px(30.));
-        assert_eq!(search.size.height, px(30.));
-        assert!(search.right() <= px(250.));
-        for selector in [
-            "agenda-toolbar-icon-assets/icons/agenda/caret-left.svg",
-            "agenda-toolbar-icon-assets/icons/agenda/caret-right.svg",
-        ] {
-            let bounds = cx.debug_bounds(selector).unwrap();
-            assert_eq!(bounds.size.width, px(38.));
-            assert_eq!(bounds.size.height, px(38.));
-            assert!(bounds.right() <= px(250.));
-        }
-        let today = cx.debug_bounds("agenda-toolbar-今天").unwrap();
-        assert_eq!(today.size.height, px(34.));
-        assert!(today.right() <= px(250.));
-
-        let range_switch = cx.debug_bounds("agenda-calendar-range-switch").unwrap();
-        assert_eq!(range_switch.size.height, px(30.));
-        assert!(range_switch.right() <= px(250.));
-        let day = cx.debug_bounds("agenda-toolbar-日").unwrap();
-        let week = cx.debug_bounds("agenda-toolbar-周").unwrap();
-        let month = cx.debug_bounds("agenda-toolbar-月").unwrap();
-        for bounds in [day, week, month] {
-            assert_eq!(bounds.size.height, px(26.));
-            assert!(bounds.right() <= px(250.));
-        }
-        assert_eq!(day.right(), week.left());
-        assert_eq!(week.right(), month.left());
-        let range_indicator = cx
-            .debug_bounds("agenda-calendar-range-slider-indicator")
-            .unwrap();
-        assert_eq!(range_indicator.size, week.size);
-        assert_eq!(range_indicator.left(), week.left());
-        for selector in [
-            "agenda-projection-List",
-            "agenda-projection-Calendar",
-            "agenda-projection-Source",
-        ] {
-            let bounds = cx.debug_bounds(selector).unwrap();
-            assert_eq!(bounds.size.width, px(36.));
-            assert_eq!(bounds.size.height, px(26.));
-            assert!(bounds.right() <= px(250.));
-        }
-        let projection_indicator = cx
-            .debug_bounds("agenda-projection-slider-indicator")
-            .unwrap();
-        let list = cx.debug_bounds("agenda-projection-List").unwrap();
-        assert_eq!(projection_indicator.size, list.size);
-        assert_eq!(projection_indicator.left(), list.left());
-    }
-
-    #[gpui::test]
-    fn wide_toolbar_places_search_and_modes_in_the_titlebar(cx: &mut gpui::TestAppContext) {
-        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
-        struct Harness(Entity<WorkspaceWindow>);
-        impl Render for Harness {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div().w(px(1000.)).child(agenda_toolbar(AgendaToolbarProps {
-                    workspace: self.0.clone(),
-                    state: &AgendaViewState::default(),
-                    language: Language::Chinese,
-                    window_width: 1000.,
-                    main_content_offset: 0.,
-                    window_title: "tasks.org".to_owned(),
-                    search: None,
-                    motion_enabled: true,
-                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
-                }))
-            }
-        }
-        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
-        let actions = cx.debug_bounds("agenda-toolbar-actions").unwrap();
-        let file_row = cx.debug_bounds("agenda-titlebar-file-row").unwrap();
-        let edit_button = cx.debug_bounds("agenda-titlebar-edit-toggle").unwrap();
-        let filename = cx.debug_bounds("agenda-titlebar-file-name").unwrap();
-        let title = cx.debug_bounds("agenda-toolbar-title-row").unwrap();
-        assert_eq!(actions.top(), px(4.));
-        assert_eq!(actions.bottom(), px(crate::app::TITLEBAR_HEIGHT - 4.));
-        assert_eq!(file_row.left(), px(84.));
-        assert_eq!(edit_button.left(), px(84.));
-        assert!(
-            filename.left() >= edit_button.right(),
-            "the file name must sit to the right of the edit button"
-        );
-        assert_eq!(filename.bottom(), px(crate::app::TITLEBAR_HEIGHT));
-        assert!(title.top() > actions.bottom());
-    }
-
-    #[gpui::test]
-    fn toolbar_edit_button_returns_to_the_document(cx: &mut gpui::TestAppContext) {
-        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
-        workspace.update(cx, |workspace, cx| workspace.open_agenda(cx));
-        struct Harness(Entity<WorkspaceWindow>);
-        impl Render for Harness {
-            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-                div().w(px(900.)).child(agenda_toolbar(AgendaToolbarProps {
-                    workspace: self.0.clone(),
-                    state: &AgendaViewState::default(),
-                    language: Language::Chinese,
-                    window_width: 900.,
-                    main_content_offset: 0.,
-                    window_title: "tasks.org".to_owned(),
-                    search: None,
-                    motion_enabled: true,
-                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
-                }))
-            }
-        }
-        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace.clone()));
-        let edit_button = cx
-            .debug_bounds("agenda-titlebar-edit-toggle")
-            .expect("edit toggle should be rendered in the agenda toolbar");
-        let edit_icon = cx
-            .debug_bounds("agenda-titlebar-edit-icon")
-            .expect("edit icon should be rendered");
-        assert_eq!(edit_button.size, gpui::size(px(26.), px(26.)));
-        assert_eq!(edit_icon.size, gpui::size(px(14.), px(14.)));
-        assert!(
-            edit_icon.left() >= edit_button.left() && edit_icon.right() <= edit_button.right(),
-            "edit icon must stay inside its button"
-        );
-        cx.simulate_mouse_move(edit_button.center(), None, Modifiers::default());
-        cx.simulate_click(edit_button.center(), Modifiers::default());
-        assert_eq!(
-            workspace.read_with(cx, |workspace, _| workspace.content_route),
-            crate::app::ContentRoute::Document,
-            "clicking the agenda toolbar edit button must return to the document route"
-        );
-    }
-}
-
 pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
     let AgendaToolbarProps {
         workspace,
@@ -661,4 +502,163 @@ fn projection_switch(
                     })
             }),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui::{Context, Modifiers, Render, Window};
+
+    #[gpui::test]
+    fn narrow_toolbar_preserves_control_geometry(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        struct Harness(Entity<WorkspaceWindow>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(250.)).child(agenda_toolbar(AgendaToolbarProps {
+                    workspace: self.0.clone(),
+                    state: &AgendaViewState::default(),
+                    language: Language::Chinese,
+                    window_width: 250.,
+                    main_content_offset: 0.,
+                    window_title: "tasks.org".to_owned(),
+                    search: None,
+                    motion_enabled: true,
+                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
+                }))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
+        let search = cx
+            .debug_bounds("agenda-toolbar-icon-assets/icons/agenda/search.svg")
+            .unwrap();
+        assert_eq!(search.size.width, px(30.));
+        assert_eq!(search.size.height, px(30.));
+        assert!(search.right() <= px(250.));
+        for selector in [
+            "agenda-toolbar-icon-assets/icons/agenda/caret-left.svg",
+            "agenda-toolbar-icon-assets/icons/agenda/caret-right.svg",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert_eq!(bounds.size.width, px(38.));
+            assert_eq!(bounds.size.height, px(38.));
+            assert!(bounds.right() <= px(250.));
+        }
+        let today = cx.debug_bounds("agenda-toolbar-今天").unwrap();
+        assert_eq!(today.size.height, px(34.));
+        assert!(today.right() <= px(250.));
+
+        let range_switch = cx.debug_bounds("agenda-calendar-range-switch").unwrap();
+        assert_eq!(range_switch.size.height, px(30.));
+        assert!(range_switch.right() <= px(250.));
+        let day = cx.debug_bounds("agenda-toolbar-日").unwrap();
+        let week = cx.debug_bounds("agenda-toolbar-周").unwrap();
+        let month = cx.debug_bounds("agenda-toolbar-月").unwrap();
+        for bounds in [day, week, month] {
+            assert_eq!(bounds.size.height, px(26.));
+            assert!(bounds.right() <= px(250.));
+        }
+        assert_eq!(day.right(), week.left());
+        assert_eq!(week.right(), month.left());
+        let range_indicator = cx
+            .debug_bounds("agenda-calendar-range-slider-indicator")
+            .unwrap();
+        assert_eq!(range_indicator.size, week.size);
+        assert_eq!(range_indicator.left(), week.left());
+        for selector in [
+            "agenda-projection-List",
+            "agenda-projection-Calendar",
+            "agenda-projection-Source",
+        ] {
+            let bounds = cx.debug_bounds(selector).unwrap();
+            assert_eq!(bounds.size.width, px(36.));
+            assert_eq!(bounds.size.height, px(26.));
+            assert!(bounds.right() <= px(250.));
+        }
+        let projection_indicator = cx
+            .debug_bounds("agenda-projection-slider-indicator")
+            .unwrap();
+        let list = cx.debug_bounds("agenda-projection-List").unwrap();
+        assert_eq!(projection_indicator.size, list.size);
+        assert_eq!(projection_indicator.left(), list.left());
+    }
+
+    #[gpui::test]
+    fn wide_toolbar_places_search_and_modes_in_the_titlebar(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        struct Harness(Entity<WorkspaceWindow>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(1000.)).child(agenda_toolbar(AgendaToolbarProps {
+                    workspace: self.0.clone(),
+                    state: &AgendaViewState::default(),
+                    language: Language::Chinese,
+                    window_width: 1000.,
+                    main_content_offset: 0.,
+                    window_title: "tasks.org".to_owned(),
+                    search: None,
+                    motion_enabled: true,
+                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
+                }))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
+        let actions = cx.debug_bounds("agenda-toolbar-actions").unwrap();
+        let file_row = cx.debug_bounds("agenda-titlebar-file-row").unwrap();
+        let edit_button = cx.debug_bounds("agenda-titlebar-edit-toggle").unwrap();
+        let filename = cx.debug_bounds("agenda-titlebar-file-name").unwrap();
+        let title = cx.debug_bounds("agenda-toolbar-title-row").unwrap();
+        assert_eq!(actions.top(), px(4.));
+        assert_eq!(actions.bottom(), px(crate::app::TITLEBAR_HEIGHT - 4.));
+        assert_eq!(file_row.left(), px(84.));
+        assert_eq!(edit_button.left(), px(84.));
+        assert!(
+            filename.left() >= edit_button.right(),
+            "the file name must sit to the right of the edit button"
+        );
+        assert_eq!(filename.bottom(), px(crate::app::TITLEBAR_HEIGHT));
+        assert!(title.top() > actions.bottom());
+    }
+
+    #[gpui::test]
+    fn toolbar_edit_button_returns_to_the_document(cx: &mut gpui::TestAppContext) {
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        workspace.update(cx, |workspace, cx| workspace.open_agenda(cx));
+        struct Harness(Entity<WorkspaceWindow>);
+        impl Render for Harness {
+            fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+                div().w(px(900.)).child(agenda_toolbar(AgendaToolbarProps {
+                    workspace: self.0.clone(),
+                    state: &AgendaViewState::default(),
+                    language: Language::Chinese,
+                    window_width: 900.,
+                    main_content_offset: 0.,
+                    window_title: "tasks.org".to_owned(),
+                    search: None,
+                    motion_enabled: true,
+                    titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
+                }))
+            }
+        }
+        let (_, cx) = cx.add_window_view(|_, _| Harness(workspace.clone()));
+        let edit_button = cx
+            .debug_bounds("agenda-titlebar-edit-toggle")
+            .expect("edit toggle should be rendered in the agenda toolbar");
+        let edit_icon = cx
+            .debug_bounds("agenda-titlebar-edit-icon")
+            .expect("edit icon should be rendered");
+        assert_eq!(edit_button.size, gpui::size(px(26.), px(26.)));
+        assert_eq!(edit_icon.size, gpui::size(px(14.), px(14.)));
+        assert!(
+            edit_icon.left() >= edit_button.left() && edit_icon.right() <= edit_button.right(),
+            "edit icon must stay inside its button"
+        );
+        cx.simulate_mouse_move(edit_button.center(), None, Modifiers::default());
+        cx.simulate_click(edit_button.center(), Modifiers::default());
+        assert_eq!(
+            workspace.read_with(cx, |workspace, _| workspace.content_route),
+            crate::app::ContentRoute::Document,
+            "clicking the agenda toolbar edit button must return to the document route"
+        );
+    }
 }

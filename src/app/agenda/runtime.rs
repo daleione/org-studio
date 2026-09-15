@@ -18,52 +18,6 @@ pub(super) struct ScanRequest {
     pub live: Vec<(PathBuf, DocumentSnapshot)>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn scan_preserves_live_text_and_file_identity_after_removal() {
-        let root = std::env::temp_dir().join(format!("agenda-runtime-{}", std::process::id()));
-        std::fs::create_dir_all(&root).unwrap();
-        let path = root.join("a.org");
-        std::fs::write(&path, "* TODO Disk\n").unwrap();
-        let first = scan(ScanRequest {
-            identities: Default::default(),
-            roots: vec![root.clone()],
-            previous: Arc::default(),
-            generation: 1,
-            live: vec![(
-                path.clone(),
-                DocumentSnapshot::from_utf8(b"* TODO Unsaved\n".to_vec()).unwrap(),
-            )],
-        });
-        assert_eq!(first.shards[0].tasks[0].title.as_ref(), "Unsaved");
-        let id = first.shards[0].file;
-        let mut index = crate::agenda::AgendaIndex::default();
-        for shard in first.shards {
-            index.replace(shard);
-        }
-        std::fs::remove_file(&path).unwrap();
-        let other = root.join("b.org");
-        std::fs::write(&other, "* TODO Other\n").unwrap();
-        let second = scan(ScanRequest {
-            identities: first.identities,
-            roots: vec![root.clone()],
-            previous: index.snapshot(),
-            generation: 2,
-            live: Vec::new(),
-        });
-        assert_eq!(second.shards.len(), 1);
-        assert_ne!(second.shards[0].file, id);
-        assert_eq!(
-            second.identities[&std::fs::canonicalize(&root).unwrap().join("a.org")],
-            id
-        );
-        std::fs::remove_file(other).unwrap();
-        std::fs::remove_dir(root).unwrap();
-    }
-}
-
 pub(super) struct ScanResult {
     pub identities: std::collections::BTreeMap<PathBuf, FileId>,
     pub shards: Vec<FileAgendaShard>,
@@ -320,5 +274,52 @@ impl WorkspaceWindow {
                 }
             }
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_preserves_live_text_and_file_identity_after_removal() {
+        let root = std::env::temp_dir().join(format!("agenda-runtime-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("a.org");
+        std::fs::write(&path, "* TODO Disk\n").unwrap();
+        let first = scan(ScanRequest {
+            identities: Default::default(),
+            roots: vec![root.clone()],
+            previous: Arc::default(),
+            generation: 1,
+            live: vec![(
+                path.clone(),
+                DocumentSnapshot::from_utf8(b"* TODO Unsaved\n".to_vec()).unwrap(),
+            )],
+        });
+        assert_eq!(first.shards[0].tasks[0].title.as_ref(), "Unsaved");
+        let id = first.shards[0].file;
+        let mut index = crate::agenda::AgendaIndex::default();
+        for shard in first.shards {
+            index.replace(shard);
+        }
+        std::fs::remove_file(&path).unwrap();
+        let other = root.join("b.org");
+        std::fs::write(&other, "* TODO Other\n").unwrap();
+        let second = scan(ScanRequest {
+            identities: first.identities,
+            roots: vec![root.clone()],
+            previous: index.snapshot(),
+            generation: 2,
+            live: Vec::new(),
+        });
+        assert_eq!(second.shards.len(), 1);
+        assert_ne!(second.shards[0].file, id);
+        assert_eq!(
+            second.identities[&std::fs::canonicalize(&root).unwrap().join("a.org")],
+            id
+        );
+        std::fs::remove_file(other).unwrap();
+        std::fs::remove_dir(root).unwrap();
     }
 }

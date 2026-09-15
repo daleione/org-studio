@@ -511,7 +511,7 @@ pub(crate) fn agenda_calendar(
                                 .items_center()
                                 .rounded(px(6.))
                                 .cursor_pointer()
-                                .hover(|style| style.bg(rgb(0xeeeeF1)))
+                                .hover(|style| style.bg(rgb(0xeeeef1)))
                                 .active(|style| style.opacity(0.72))
                                 .text_color(rgb(0x62666d))
                                 .child(if all_day {

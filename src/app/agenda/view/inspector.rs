@@ -184,7 +184,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .px_2()
                     .py_1()
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xeeeeF1)))
+                    .hover(|style| style.bg(rgb(0xeeeef1)))
                     .child(language.text("agenda.cancel"))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cancel.update(cx, |this, cx| {
@@ -243,7 +243,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .justify_center()
                         .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0xeeeeF1)))
+                        .hover(|style| style.bg(rgb(0xeeeef1)))
                         .child(
                             svg()
                                 .data(super::super::icon::agenda_icon("assets/icons/agenda/x.svg"))

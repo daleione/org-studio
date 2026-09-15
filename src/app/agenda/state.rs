@@ -183,8 +183,10 @@ mod calendar_tests {
     use super::*;
     #[test]
     fn month_navigation_covers_six_week_month_and_year_boundary() {
-        let mut state = AgendaViewState::default();
-        state.calendar_range = CalendarRange::Month;
+        let mut state = AgendaViewState {
+            calendar_range: CalendarRange::Month,
+            ..Default::default()
+        };
         let window = state.calendar_window("2026-03-15".parse().unwrap());
         assert_eq!(window.0.to_string(), "2026-02-23");
         assert_eq!(window.1.to_string(), "2026-04-05");
@@ -331,8 +333,10 @@ mod tests {
 
     #[test]
     fn layers_are_mutually_exclusive_and_escape_in_stack_order() {
-        let mut state = AgendaViewState::default();
-        state.overlay = AgendaOverlay::Capture;
+        let mut state = AgendaViewState {
+            overlay: AgendaOverlay::Capture,
+            ..Default::default()
+        };
         state.select_row(2);
         assert_eq!(state.overlay, AgendaOverlay::None);
         assert_eq!(state.sheet, AgendaSheet::Inspector);

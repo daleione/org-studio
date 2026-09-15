@@ -53,7 +53,7 @@ pub(crate) fn task_row(
             0xffffff
         }))
         .cursor_pointer()
-        .hover(move |style| style.bg(rgb(if selected { 0xddeeff } else { 0xeeeeF1 })))
+        .hover(move |style| style.bg(rgb(if selected { 0xddeeff } else { 0xeeeef1 })))
         .active(|style| style.opacity(0.78))
         .child(
             TaskColumns::cell(TaskColumns::CHECK)

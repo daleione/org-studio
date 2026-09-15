@@ -214,62 +214,6 @@ pub(crate) fn vertical_distance(y: Pixels, row: &super::HitRow) -> f32 {
     }
 }
 
-#[cfg(test)]
-mod link_tests {
-    use super::*;
-
-    #[gpui::test]
-    fn internal_links_resolve_to_their_document_positions(cx: &mut gpui::TestAppContext) {
-        let source = b"* Top\n:PROPERTIES:\n:CUSTOM_ID: plan\n:END:\n\n** Section <<target>>\n* Heading Two\n";
-        let session = cx.new(|_| {
-            crate::document::DocumentSession::from_utf8(
-                std::path::Path::new("t.org").to_path_buf(),
-                source.to_vec(),
-            )
-            .unwrap()
-        });
-        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
-        editor.update(cx, |editor, cx| {
-            let offset = |target: &str| editor.internal_link_offset(target, cx);
-            assert_eq!(
-                offset("#plan").unwrap().0,
-                19,
-                "#custom-id targets :CUSTOM_ID:"
-            );
-            assert_eq!(offset("<<target>>").unwrap().0, 43, "dedicated target");
-            assert_eq!(offset("*Heading Two").unwrap().0, 65, "headline by name");
-            assert!(offset("Section").is_some(), "fuzzy text search");
-            assert!(offset("missing").is_none());
-        });
-    }
-
-    #[gpui::test]
-    fn file_links_resolve_relative_to_the_document_directory(cx: &mut gpui::TestAppContext) {
-        let session = cx.new(|_| {
-            crate::document::DocumentSession::from_utf8(
-                std::path::Path::new("/tmp/org-studio-demo/main.org").to_path_buf(),
-                b"[[file:notes.org]]".to_vec(),
-            )
-            .unwrap()
-        });
-        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
-        editor.update(cx, |editor, cx| {
-            let resolved = editor
-                .resolve_file_link("file:notes.org::12", cx)
-                .expect("resolves");
-            assert_eq!(
-                resolved,
-                std::path::PathBuf::from("/tmp/org-studio-demo/notes.org")
-            );
-            let absolute = editor
-                .resolve_file_link("file:/etc/hosts", cx)
-                .expect("absolute path");
-            assert_eq!(absolute, std::path::PathBuf::from("/etc/hosts"));
-            assert!(editor.resolve_file_link("irc:chan", cx).is_none());
-        });
-    }
-}
-
 /// A reading excerpt for an internal destination, without Org's property drawers.
 pub(super) fn internal_preview(
     snapshot: &DocumentSnapshot,
@@ -345,4 +289,60 @@ pub(super) fn internal_preview(
         }
     }
     (title, preview)
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn internal_links_resolve_to_their_document_positions(cx: &mut gpui::TestAppContext) {
+        let source = b"* Top\n:PROPERTIES:\n:CUSTOM_ID: plan\n:END:\n\n** Section <<target>>\n* Heading Two\n";
+        let session = cx.new(|_| {
+            crate::document::DocumentSession::from_utf8(
+                std::path::Path::new("t.org").to_path_buf(),
+                source.to_vec(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+        editor.update(cx, |editor, cx| {
+            let offset = |target: &str| editor.internal_link_offset(target, cx);
+            assert_eq!(
+                offset("#plan").unwrap().0,
+                19,
+                "#custom-id targets :CUSTOM_ID:"
+            );
+            assert_eq!(offset("<<target>>").unwrap().0, 43, "dedicated target");
+            assert_eq!(offset("*Heading Two").unwrap().0, 65, "headline by name");
+            assert!(offset("Section").is_some(), "fuzzy text search");
+            assert!(offset("missing").is_none());
+        });
+    }
+
+    #[gpui::test]
+    fn file_links_resolve_relative_to_the_document_directory(cx: &mut gpui::TestAppContext) {
+        let session = cx.new(|_| {
+            crate::document::DocumentSession::from_utf8(
+                std::path::Path::new("/tmp/org-studio-demo/main.org").to_path_buf(),
+                b"[[file:notes.org]]".to_vec(),
+            )
+            .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session, cx));
+        editor.update(cx, |editor, cx| {
+            let resolved = editor
+                .resolve_file_link("file:notes.org::12", cx)
+                .expect("resolves");
+            assert_eq!(
+                resolved,
+                std::path::PathBuf::from("/tmp/org-studio-demo/notes.org")
+            );
+            let absolute = editor
+                .resolve_file_link("file:/etc/hosts", cx)
+                .expect("absolute path");
+            assert_eq!(absolute, std::path::PathBuf::from("/etc/hosts"));
+            assert!(editor.resolve_file_link("irc:chan", cx).is_none());
+        });
+    }
 }

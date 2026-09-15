@@ -491,7 +491,7 @@ fn source_discovery_is_recursive_and_org_only() {
     std::fs::write(root.join("a.org"), "* TODO A\n").unwrap();
     std::fs::write(nested.join("b.ORG"), "* TODO B\n").unwrap();
     std::fs::write(nested.join("ignore.md"), "# no\n").unwrap();
-    let found = discover_sources(&[root.clone()]).unwrap();
+    let found = discover_sources(std::slice::from_ref(&root)).unwrap();
     assert_eq!(found.len(), 2);
     std::fs::remove_dir_all(root).unwrap();
 }
