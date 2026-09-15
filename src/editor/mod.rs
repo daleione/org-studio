@@ -430,7 +430,7 @@ pub(super) struct Composition {
     pub(super) original_range: ByteRange,
     pub(super) original_text: String,
     pub(super) before: Selection,
-    pub(super) revision: crate::document::Revision,
+    pub(super) token: crate::document::TransientEditToken,
 }
 
 #[derive(Clone)]
@@ -2744,6 +2744,7 @@ mod tests {
             }),
             ""
         );
+        assert!(!cx.read_entity(&session, |session, _| session.is_dirty()));
     }
 
     #[gpui::test]

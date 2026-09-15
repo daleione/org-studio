@@ -11,7 +11,7 @@ use super::{
     RevisionDelta, RevisionRange, SaveOutcome, SaveRequest, SaveState, Selection, SyncState,
     TargetExpectation, TextEdit, TextEditSummary, TextSnapshot,
     transaction::PreparedText,
-    undo::{HistoryStep, UndoHistory},
+    undo::{EditStateId, HistoryStep, UndoHistory},
 };
 
 #[derive(Clone, Debug)]
@@ -70,6 +70,15 @@ pub enum DocumentEvent {
 pub struct SavePoint {
     document_id: DocumentId,
     revision: Revision,
+    state: EditStateId,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct TransientEditToken {
+    document_id: DocumentId,
+    base_revision: Revision,
+    current_revision: Revision,
+    base_state: EditStateId,
 }
 
 impl SavePoint {
@@ -198,6 +207,8 @@ pub struct DocumentSession {
     user_editable: bool,
     buffer: DocumentBuffer,
     saved_revision: Revision,
+    current_state: EditStateId,
+    saved_state: EditStateId,
     history: UndoHistory,
     backend: SessionBackend,
 }
@@ -242,6 +253,8 @@ impl DocumentSession {
         Self {
             user_editable: true,
             saved_revision: buffer.revision(),
+            current_state: EditStateId::INITIAL,
+            saved_state: EditStateId::INITIAL,
             buffer,
             history: UndoHistory::default(),
             backend: SessionBackend::Draft {
@@ -288,6 +301,8 @@ impl DocumentSession {
         Ok(Self {
             user_editable: true,
             saved_revision: buffer.revision(),
+            current_state: EditStateId::INITIAL,
+            saved_state: EditStateId::INITIAL,
             buffer,
             history: UndoHistory::default(),
             backend: SessionBackend::File {
@@ -316,6 +331,8 @@ impl DocumentSession {
         Self {
             user_editable: false,
             saved_revision: buffer.revision(),
+            current_state: EditStateId::INITIAL,
+            saved_state: EditStateId::INITIAL,
             buffer,
             history: UndoHistory::default(),
             backend: SessionBackend::Generated {
@@ -351,6 +368,8 @@ impl DocumentSession {
             ))
             .expect("whole-buffer replacement is valid");
         self.saved_revision = self.revision();
+        self.current_state = EditStateId::from_committed_revision(self.revision());
+        self.saved_state = self.current_state;
         self.history.clear();
         self.emit_edited(delta, cx);
     }
@@ -410,7 +429,7 @@ impl DocumentSession {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.revision() != self.saved_revision
+        self.current_state != self.saved_state
     }
 
     pub fn sync_state(&self) -> &SyncState {
@@ -440,7 +459,32 @@ impl DocumentSession {
         SavePoint {
             document_id: self.id(),
             revision: self.revision(),
+            state: self.current_state,
         }
+    }
+
+    pub(crate) fn begin_transient_edit(&self) -> TransientEditToken {
+        TransientEditToken {
+            document_id: self.id(),
+            base_revision: self.revision(),
+            current_revision: self.revision(),
+            base_state: self.current_state,
+        }
+    }
+
+    pub(crate) fn apply_transient_update(
+        &mut self,
+        token: &mut TransientEditToken,
+        edits: Vec<TextEdit>,
+        cx: &mut Context<Self>,
+    ) -> Result<RevisionDelta, EditError> {
+        if token.document_id != self.id() || token.current_revision != self.revision() {
+            return Err(EditError::InvalidTransientEdit);
+        }
+        let delta =
+            self.apply_transient_edit(EditTransaction::new(token.current_revision, edits), cx)?;
+        token.current_revision = delta.after;
+        Ok(delta)
     }
 
     pub(crate) fn apply_transient_edit(
@@ -452,7 +496,7 @@ impl DocumentSession {
             return Err(EditError::ReadOnly);
         }
         let delta = self.buffer.commit(transaction)?;
-        self.note_edit();
+        self.set_current_state(EditStateId::from_committed_revision(delta.after));
         self.history.clear_redo();
         cx.emit(DocumentEvent::Edited {
             document_id: self.id(),
@@ -470,15 +514,18 @@ impl DocumentSession {
             return Err(EditError::ReadOnly);
         }
         let snapshot = self.buffer.snapshot();
+        let before_state = self.current_state;
         let mut forward = edit.transaction.edits.clone();
         forward.sort_by_key(|text_edit| text_edit.range.start);
         let delta = self.buffer.commit(edit.transaction)?;
-        self.note_edit();
+        self.set_current_state(EditStateId::from_committed_revision(delta.after));
         let inverse = inverse_edits(&snapshot, &forward);
         self.history.record(
             HistoryStep { forward, inverse },
             edit.before,
             edit.after,
+            before_state,
+            self.current_state,
             edit.origin,
         );
         self.emit_edited(delta.clone(), cx);
@@ -487,24 +534,30 @@ impl DocumentSession {
 
     pub(crate) fn finalize_transient_edit(
         &mut self,
-        expected_revision: Revision,
         forward: Vec<TextEdit>,
         inverse: Vec<TextEdit>,
         before: Selection,
         after: Selection,
+        token: TransientEditToken,
         origin: EditOrigin,
     ) -> Result<(), EditError> {
         if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
-        if self.revision() != expected_revision {
-            return Err(EditError::StaleRevision {
-                expected: self.revision(),
-                actual: expected_revision,
-            });
+        if token.document_id != self.id()
+            || token.base_revision > token.current_revision
+            || token.current_revision != self.revision()
+        {
+            return Err(EditError::InvalidTransientEdit);
         }
-        self.history
-            .record(HistoryStep { forward, inverse }, before, after, origin);
+        self.history.record(
+            HistoryStep { forward, inverse },
+            before,
+            after,
+            token.base_state,
+            self.current_state,
+            origin,
+        );
         Ok(())
     }
 
@@ -512,15 +565,19 @@ impl DocumentSession {
         if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
-        let Some((transactions, selection)) = self.history.prepare_undo(self.revision())? else {
+        let Some((transactions, selection, state)) = self.history.prepare_undo(self.revision())?
+        else {
             return Ok(HistoryOutcome::Empty);
         };
-        for transaction in transactions {
-            let delta = self.buffer.commit(transaction)?;
-            self.note_edit();
+        let deltas = transactions
+            .into_iter()
+            .map(|transaction| self.buffer.commit(transaction))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_current_state(state);
+        self.history.complete_undo();
+        for delta in deltas {
             self.emit_edited(delta, cx);
         }
-        self.history.complete_undo();
         Ok(HistoryOutcome::Applied(selection))
     }
 
@@ -528,15 +585,19 @@ impl DocumentSession {
         if !self.user_editable {
             return Err(EditError::ReadOnly);
         }
-        let Some((transactions, selection)) = self.history.prepare_redo(self.revision())? else {
+        let Some((transactions, selection, state)) = self.history.prepare_redo(self.revision())?
+        else {
             return Ok(HistoryOutcome::Empty);
         };
-        for transaction in transactions {
-            let delta = self.buffer.commit(transaction)?;
-            self.note_edit();
+        let deltas = transactions
+            .into_iter()
+            .map(|transaction| self.buffer.commit(transaction))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.set_current_state(state);
+        self.history.complete_redo();
+        for delta in deltas {
             self.emit_edited(delta, cx);
         }
-        self.history.complete_redo();
         Ok(HistoryOutcome::Applied(selection))
     }
 
@@ -547,14 +608,20 @@ impl DocumentSession {
         });
     }
 
-    fn note_edit(&mut self) {
-        match &self.file().sync_state {
-            SyncState::InSync { stamp } => {
-                self.file_mut().sync_state = SyncState::Dirty {
-                    base: stamp.clone(),
-                };
+    fn set_current_state(&mut self, state: EditStateId) {
+        self.current_state = state;
+        self.refresh_sync_state();
+    }
+
+    fn refresh_sync_state(&mut self) {
+        match self.file().sync_state.clone() {
+            SyncState::InSync { stamp } if self.is_dirty() => {
+                self.file_mut().sync_state = SyncState::Dirty { base: stamp };
             }
-            SyncState::Dirty { .. } | SyncState::Conflict { .. } | SyncState::Missing { .. } => {}
+            SyncState::Dirty { base } if !self.is_dirty() => {
+                self.file_mut().sync_state = SyncState::InSync { stamp: base };
+            }
+            _ => {}
         }
     }
 
@@ -622,6 +689,7 @@ impl DocumentSession {
 
     pub fn begin_save(&mut self, target: Option<PathBuf>) -> Result<SaveRequest, SaveStartError> {
         let request = self.save_request(target)?;
+        self.history.break_coalescing();
         self.file_mut().save_state = SaveState::Saving {
             revision: request.revision(),
             target: request.target_path.clone(),
@@ -648,6 +716,7 @@ impl DocumentSession {
             expected_target: TargetExpectation::Exact(Some(external.clone())),
             metadata: self.file().metadata.clone(),
         };
+        self.history.break_coalescing();
         self.file_mut().save_state = SaveState::Saving {
             revision: request.revision(),
             target: request.target_path.clone(),
@@ -699,14 +768,8 @@ impl DocumentSession {
         };
         self.file_mut().metadata = outcome.metadata;
         self.file_mut().save_state = SaveState::Idle;
-        self.file_mut().sync_state = if self.revision() == outcome.save_point.revision() {
-            SyncState::InSync {
-                stamp: outcome.stamp,
-            }
-        } else {
-            SyncState::Dirty {
-                base: outcome.stamp,
-            }
+        self.file_mut().sync_state = SyncState::InSync {
+            stamp: outcome.stamp,
         };
         let result = self.mark_saved(outcome.save_point, cx);
         if path_changed {
@@ -807,6 +870,9 @@ impl DocumentSession {
             return Ok(false);
         }
         self.saved_revision = saved.revision;
+        self.saved_state = saved.state;
+        self.history.break_coalescing();
+        self.refresh_sync_state();
         cx.emit(DocumentEvent::Saved {
             document_id: self.id(),
             revision: saved.revision,
@@ -862,6 +928,8 @@ impl DocumentSession {
         let delta = prepared.delta;
         self.buffer.replace_prepared(prepared.text, delta.clone())?;
         self.saved_revision = delta.after;
+        self.current_state = EditStateId::from_committed_revision(delta.after);
+        self.saved_state = self.current_state;
         self.file_mut().metadata = prepared.metadata;
         self.file_mut().sync_state = SyncState::InSync {
             stamp: prepared.stamp,
@@ -1238,11 +1306,14 @@ mod tests {
             });
         }
         assert_eq!(cx.read(|cx| contents(session.read(cx))), "xa🙂");
+        assert!(cx.read(|cx| session.read(cx).is_dirty()));
         session.update(cx, |session, cx| {
             assert_eq!(
                 session.undo(cx).unwrap(),
                 HistoryOutcome::Applied(Selection::caret(ByteOffset(1)))
             );
+            assert!(!session.is_dirty());
+            assert!(matches!(session.sync_state(), SyncState::InSync { .. }));
         });
         assert_eq!(cx.read(|cx| contents(session.read(cx))), "x");
         session.update(cx, |session, cx| {
@@ -1250,7 +1321,70 @@ mod tests {
                 session.redo(cx).unwrap(),
                 HistoryOutcome::Applied(Selection::caret(ByteOffset(6)))
             );
+            assert!(session.is_dirty());
+            assert!(matches!(session.sync_state(), SyncState::Dirty { .. }));
         });
         assert_eq!(cx.read(|cx| contents(session.read(cx))), "xa🙂");
+    }
+
+    #[gpui::test]
+    fn save_breaks_typing_coalescence_and_undo_returns_to_clean_state(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let path = std::env::temp_dir().join(format!(
+            "save-undo-boundary-{}-{}.org",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&path, b"x").unwrap();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(path.clone(), std::fs::read(&path).unwrap()).unwrap()
+        });
+        let request = session.update(cx, |session, cx| {
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(
+                            session.revision(),
+                            vec![TextEdit::new(ByteRange::new(1, 1), "a")],
+                        ),
+                        Selection::caret(ByteOffset(1)),
+                        Selection::caret(ByteOffset(2)),
+                        EditOrigin::Typing,
+                    ),
+                    cx,
+                )
+                .unwrap();
+            session.begin_save(None).unwrap()
+        });
+        let outcome = crate::document::write_atomic(request).unwrap();
+        session.update(cx, |session, cx| {
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(
+                            session.revision(),
+                            vec![TextEdit::new(ByteRange::new(2, 2), "b")],
+                        ),
+                        Selection::caret(ByteOffset(2)),
+                        Selection::caret(ByteOffset(3)),
+                        EditOrigin::Typing,
+                    ),
+                    cx,
+                )
+                .unwrap();
+            session.finish_save(outcome, cx).unwrap();
+            assert!(session.is_dirty());
+            assert!(matches!(
+                session.undo(cx).unwrap(),
+                HistoryOutcome::Applied(_)
+            ));
+            assert_eq!(contents(session), "xa");
+            assert!(!session.is_dirty());
+        });
+        std::fs::remove_file(path).unwrap();
     }
 }

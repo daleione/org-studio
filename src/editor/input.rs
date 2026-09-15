@@ -5,8 +5,7 @@ use gpui::{
 };
 
 use crate::document::{
-    ByteOffset, ByteRange, EditOrigin, EditTransaction, Selection, TextEdit, TextSnapshot,
-    Utf16Offset,
+    ByteOffset, ByteRange, EditOrigin, Selection, TextEdit, TextSnapshot, Utf16Offset,
 };
 
 use super::{Composition, PlatformRange, SemanticEditor};
@@ -35,12 +34,13 @@ impl SemanticEditor {
         text: &str,
         cx: &mut Context<Self>,
     ) -> Option<crate::document::Revision> {
-        let revision = self.session.read(cx).revision();
+        let token = &mut self.composition.as_mut()?.token;
         let result = self
             .session
             .update(cx, |session, cx| {
-                session.apply_transient_edit(
-                    EditTransaction::new(revision, vec![TextEdit::new(range, text.to_owned())]),
+                session.apply_transient_update(
+                    token,
+                    vec![TextEdit::new(range, text.to_owned())],
                     cx,
                 )
             })
@@ -62,20 +62,17 @@ impl SemanticEditor {
     ) {
         if self.composition.is_none() {
             let snapshot = self.snapshot(cx);
+            let token = self.session.read(cx).begin_transient_edit();
             self.composition = Some(Composition {
                 original_range: range,
                 original_text: snapshot.copy_range(range),
                 before: self.selection,
-                revision: self.session.read(cx).revision(),
+                token,
             });
         }
         let Some(revision) = self.apply_composition_update(range, text, cx) else {
             return;
         };
-        self.composition
-            .as_mut()
-            .expect("composition exists")
-            .revision = revision;
         let marked = ByteRange::new(range.start.0, range.start.0 + text.len() as u64);
         let marked_end_utf16 = range_utf16.start + text.encode_utf16().count();
         self.marked = (!text.is_empty()).then_some(PlatformRange {
@@ -119,11 +116,11 @@ impl SemanticEditor {
         let current_text = snapshot.copy_range(current);
         let result = self.session.update(cx, |session, _| {
             session.finalize_transient_edit(
-                composition.revision,
                 vec![TextEdit::new(composition.original_range, current_text)],
                 vec![TextEdit::new(current, composition.original_text)],
                 composition.before,
                 self.selection,
+                composition.token,
                 EditOrigin::Ime,
             )
         });
@@ -191,8 +188,16 @@ impl EntityInputHandler for SemanticEditor {
         } else {
             (self.selection.range(), self.selection_utf16.clone())
         };
-        if let Some(composition) = self.composition.take() {
-            if let Some(revision) = self.apply_composition_update(range, text, cx) {
+        if let Some(mut composition) = self.composition.take() {
+            let result = self.session.update(cx, |session, cx| {
+                session.apply_transient_update(
+                    &mut composition.token,
+                    vec![TextEdit::new(range, text.to_owned())],
+                    cx,
+                )
+            });
+            if let Ok(delta) = result {
+                let revision = delta.after;
                 let current = ByteRange::new(range.start.0, range.start.0 + text.len() as u64);
                 self.selection = Selection::caret(current.end);
                 self.selection_revision = revision;
@@ -202,11 +207,11 @@ impl EntityInputHandler for SemanticEditor {
                 self.selection_utf16_reversed = false;
                 let result = self.session.update(cx, |session, _| {
                     session.finalize_transient_edit(
-                        revision,
                         vec![TextEdit::new(composition.original_range, text.to_owned())],
                         vec![TextEdit::new(current, composition.original_text)],
                         composition.before,
                         self.selection,
+                        composition.token,
                         EditOrigin::Ime,
                     )
                 });

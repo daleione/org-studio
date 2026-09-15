@@ -37,6 +37,7 @@ pub use revision::{
     EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
 };
 pub use selection::Selection;
+pub(crate) use session::TransientEditToken;
 pub use session::{
     DiskChangeAction, DocumentCommand, DocumentEvent, DocumentSession, GeneratedSource,
     PreparedReload, ReloadError, ReloadRequest, SaveAckError, SavePoint, SaveStartError,
