@@ -3,7 +3,7 @@ use super::*;
 use crate::components::selection_style::HOVER_BACKGROUND;
 use crate::document::{
     DocumentFormat, LineCursor,
-    markdown::{fence_start, is_closing_fence},
+    markdown::{fence_close, fence_open},
 };
 use gpui::{
     Corners, Edges, Hitbox, HitboxBehavior, ShapedLine, TextAlign, TextRun, point, quad, size,
@@ -135,6 +135,7 @@ fn block_body(
     let mut lines = LineCursor::within(snapshot, ByteRange::new(offset.0, snapshot.len_bytes()))?;
     let opening = lines.next_line()?;
     let header = opening.text.trim();
+    let logical = opening.text.trim_end_matches(['\r', '\n']);
     let fence = match format {
         DocumentFormat::Org => {
             if !header
@@ -146,15 +147,14 @@ fn block_body(
             }
             None
         }
-        DocumentFormat::Markdown => Some(fence_start(header)?),
+        DocumentFormat::Markdown => Some(fence_open(logical)?),
     };
     let start = opening.range.end;
     let mut end = ByteOffset(snapshot.len_bytes());
     while let Some(line) = lines.next_line() {
         let closed = if let Some((marker, count, _)) = &fence {
             let logical = line.text.trim_end_matches(['\r', '\n']);
-            let trimmed = logical.trim_start();
-            logical.len() - trimmed.len() <= 3 && is_closing_fence(trimmed, *marker, *count)
+            fence_close(logical, *marker, *count)
         } else {
             line.text.trim().eq_ignore_ascii_case("#+end_src")
         };

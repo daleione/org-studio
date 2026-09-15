@@ -240,8 +240,21 @@ impl EditorSyntaxService {
     }
 
     /// Advances only shared context checkpoints. This is intended to run on a
-    /// background executor after `query_lines` returns Pending.
+    /// background executor after `query_lines` returns Pending (prefetch).
     pub(super) fn build_focused(&self, path: &Path, snapshot: &DocumentSnapshot) {
+        self.build_until(path, snapshot, None)
+    }
+
+    /// Advances shared context checkpoints until `target` is covered (bounded
+    /// flavor), or toward the recorded focus line when `target` is `None`.
+    ///
+    /// The bounded flavor is used synchronously by `query_lines` so an actually
+    /// requested range never renders the Plain fallback: the block structure,
+    /// code language and metrics are available the same frame. Building only up
+    /// to `target` — never the shared focus line, which a minimap tail request
+    /// may have set to the end of a large document — keeps a deep jump from
+    /// rescanning the whole file on the calling thread.
+    fn build_until(&self, path: &Path, snapshot: &DocumentSnapshot, target: Option<u64>) {
         let language = language(path);
         loop {
             let next = {
@@ -253,7 +266,8 @@ impl EditorSyntaxService {
                     None
                 } else {
                     let frontier = cache.contexts.keys().next_back().copied().unwrap_or(0);
-                    (cache.focus_line > frontier.saturating_add(CONTEXT_CHECKPOINT_LINES))
+                    let target = target.unwrap_or(cache.focus_line);
+                    (frontier.saturating_add(CONTEXT_CHECKPOINT_LINES) < target)
                         .then_some(frontier.saturating_add(CONTEXT_CHECKPOINT_LINES))
                 }
             };
@@ -467,8 +481,7 @@ impl SparseEditorStyleSnapshot {
         requested.sort_unstable();
         requested.dedup();
         let mut styles = BTreeMap::new();
-        let mut pending = false;
-        let mut furthest_pending = 0;
+        let mut unresolved = Vec::new();
         let mut index = 0;
         while index < requested.len() {
             let range_start = requested[index];
@@ -486,10 +499,40 @@ impl SparseEditorStyleSnapshot {
                     &mut styles,
                 );
             } else {
-                pending = true;
-                furthest_pending = furthest_pending.max(range_start);
+                unresolved.push((range_start, range_end));
             }
             index += 1;
+        }
+        let mut pending = false;
+        let mut furthest_pending = 0;
+        if !unresolved.is_empty() {
+            // Synchronously advance the shared checkpoints to cover the requested
+            // lines. An actually visible range therefore never renders Plain
+            // fallback chrome: block structure, code language and metrics are
+            // available on this frame, and the async builder stays as a pure
+            // prefetch/fallback path. The bounded target (not the shared focus
+            // line, which a minimap tail request may have pushed to the end of a
+            // huge document) keeps a deep jump from rescanning the whole file on
+            // the calling thread.
+            let furthest = unresolved.last().map_or(0, |(start, _)| *start);
+            service.request_build(snapshot, language, furthest);
+            service.build_until(path, snapshot, Some(furthest));
+            for (range_start, range_end) in unresolved {
+                if let Some(code) = service.ready_context_at(snapshot, language, range_start) {
+                    append_styles(
+                        snapshot,
+                        language,
+                        range_start..range_end,
+                        code,
+                        &mut styles,
+                    );
+                } else {
+                    // Only reachable for a snapshot older than the shared cache
+                    // (background work racing an edit). Never roll the cache back.
+                    pending = true;
+                    furthest_pending = furthest_pending.max(range_start);
+                }
+            }
         }
         let start_builder = pending && service.request_build(snapshot, language, furthest_pending);
         EditorStyleQuery {
@@ -614,7 +657,7 @@ struct CodeContext {
     block_kind: Option<EditorBlockKind>,
     block_body_line: u64,
     org_end_marker: Option<Arc<str>>,
-    markdown_fence: Option<u8>,
+    markdown_fence: Option<(char, usize)>,
     code_language: Option<Arc<str>>,
     todo_faces: BTreeMap<Arc<str>, TodoFace>,
     has_custom_todo_faces: bool,
@@ -660,8 +703,7 @@ fn classification_prefix(text: &str) -> &str {
 }
 
 fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> EditorStyleId {
-    let trimmed = text.trim_start();
-    let boundary = code_boundary(language, trimmed, code);
+    let boundary = code_boundary(language, text, code);
     if boundary {
         return EditorStyleId::CodeBoundary;
     }
@@ -669,6 +711,7 @@ fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> Edit
         code.block_body_line = code.block_body_line.saturating_add(1);
         return EditorStyleId::Code;
     }
+    let trimmed = text.trim_start();
     if language == Language::Org {
         update_org_todo_faces(trimmed, code);
     }
@@ -714,9 +757,14 @@ fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> Edit
 }
 
 fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool {
+    let trimmed = text.trim_start();
     match language {
         Language::Org => {
             if let Some(end_marker) = code.org_end_marker.as_deref() {
+                // `text` is the complete source line and normally includes its
+                // trailing newline.  Compare the marker against a fully
+                // trimmed line; using only `trim_start` leaves the newline in
+                // place and makes every Org block appear unclosed.
                 if text.trim().eq_ignore_ascii_case(end_marker) {
                     code.in_block = false;
                     code.block_kind = None;
@@ -727,7 +775,7 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
                 }
                 return false;
             }
-            if let Some((name, language)) = org_block_start(text) {
+            if let Some((name, language)) = org_block_start(trimmed) {
                 code.in_block = true;
                 code.block_kind = Some(match name.as_str() {
                     "src" => EditorBlockKind::Source,
@@ -748,33 +796,29 @@ fn code_boundary(language: Language, text: &str, code: &mut CodeContext) -> bool
             }
         }
         Language::Markdown => {
-            let marker = if text.starts_with("```") {
-                Some(b'`')
-            } else if text.starts_with("~~~") {
-                Some(b'~')
-            } else {
-                None
-            };
-            let Some(marker) = marker else {
-                return false;
-            };
             if code.in_block {
-                if code.markdown_fence != Some(marker) {
+                let Some((marker, count)) = code.markdown_fence else {
                     return false;
+                };
+                if crate::document::markdown::fence_close(text, marker, count) {
+                    code.in_block = false;
+                    code.block_kind = None;
+                    code.block_body_line = 0;
+                    code.markdown_fence = None;
+                    code.code_language = None;
+                    return true;
                 }
-                code.in_block = false;
-                code.block_kind = None;
-                code.block_body_line = 0;
-                code.markdown_fence = None;
-                code.code_language = None;
-            } else {
+                return false;
+            }
+            if let Some((marker, count, language)) = crate::document::markdown::fence_open(text) {
                 code.in_block = true;
                 code.block_kind = Some(EditorBlockKind::MarkdownFence);
                 code.block_body_line = 0;
-                code.markdown_fence = Some(marker);
-                code.code_language = markdown_fence_language(text, marker);
+                code.markdown_fence = Some((marker, count));
+                code.code_language = language.map(Arc::from);
+                return true;
             }
-            true
+            false
         }
     }
 }
@@ -794,15 +838,6 @@ fn org_block_start(text: &str) -> Option<(String, Option<Arc<str>>)> {
         .then(|| text.split_whitespace().nth(1).map(Arc::from))
         .flatten();
     Some((name, language))
-}
-
-fn markdown_fence_language(text: &str, marker: u8) -> Option<Arc<str>> {
-    let fence_end = text.bytes().take_while(|byte| *byte == marker).count();
-    text.get(fence_end..)?
-        .split_whitespace()
-        .next()
-        .filter(|language| !language.is_empty())
-        .map(Arc::from)
 }
 
 fn starts_with_ascii_case_insensitive(text: &str, prefix: &str) -> bool {
@@ -842,14 +877,13 @@ fn block_decoration(
 }
 
 fn update_code_context(language: Language, text: &str, code: &mut CodeContext) {
-    let trimmed = text.trim_start();
     let was_in_block = code.in_block;
-    let boundary = code_boundary(language, trimmed, code);
+    let boundary = code_boundary(language, text, code);
     if !boundary && code.in_block {
         code.block_body_line = code.block_body_line.saturating_add(1);
     }
     if language == Language::Org && !was_in_block && !boundary && !code.in_block {
-        update_org_todo_faces(trimmed, code);
+        update_org_todo_faces(text.trim_start(), code);
     }
 }
 
@@ -1823,6 +1857,94 @@ mod tests {
     }
 
     #[test]
+    fn markdown_fences_follow_commonmark_closing_and_opening_rules() {
+        fn styles_for(source: &str) -> Vec<(EditorStyleId, Option<EditorBlockKind>, u64)> {
+            let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let lines = (0..snapshot.len_lines()).collect::<Vec<_>>();
+            let styles = SparseEditorStyleSnapshot::for_lines(
+                Path::new("probe.md"),
+                &snapshot,
+                &lines,
+                &EditorSyntaxService::default(),
+            );
+            lines
+                .iter()
+                .map(|line| {
+                    let style = styles.line(*line).unwrap();
+                    (
+                        style.id,
+                        style.block.as_ref().map(|block| block.kind.clone()),
+                        style
+                            .block
+                            .as_ref()
+                            .and_then(|block| block.body_line)
+                            .unwrap_or(0),
+                    )
+                })
+                .collect()
+        }
+
+        // A 4-backtick fence containing a ```json fence: the inner fence must not
+        // close the outer one, so the json body keeps its code styling.
+        let nested = styles_for("````markdown\n```json\n{ \"a\": 1 }\n```\n````\n");
+        let expected = [
+            (
+                EditorStyleId::CodeBoundary,
+                Some(EditorBlockKind::MarkdownFence),
+                0,
+            ), // ````markdown open
+            (EditorStyleId::Code, Some(EditorBlockKind::MarkdownFence), 1), // ```json body
+            (EditorStyleId::Code, Some(EditorBlockKind::MarkdownFence), 2), // { "a": 1 } body
+            (EditorStyleId::Code, Some(EditorBlockKind::MarkdownFence), 3), // ``` body
+            (
+                EditorStyleId::CodeBoundary,
+                Some(EditorBlockKind::MarkdownFence),
+                4,
+            ), // ```` close
+        ];
+        assert_eq!(&nested[..5], &expected[..]);
+
+        // A closing run shorter than the opening run does not close the fence.
+        let short = styles_for("````json\n{ \"a\": 1 }\n```\n```\n````\n");
+        assert_eq!(
+            short[0],
+            (
+                EditorStyleId::CodeBoundary,
+                Some(EditorBlockKind::MarkdownFence),
+                0
+            )
+        );
+        assert_eq!(
+            short[1],
+            (EditorStyleId::Code, Some(EditorBlockKind::MarkdownFence), 1)
+        );
+        assert_eq!(
+            short[2],
+            (EditorStyleId::Code, Some(EditorBlockKind::MarkdownFence), 2)
+        );
+        assert_eq!(
+            short[3],
+            (EditorStyleId::Code, Some(EditorBlockKind::MarkdownFence), 3)
+        );
+        assert_eq!(
+            short[4],
+            (
+                EditorStyleId::CodeBoundary,
+                Some(EditorBlockKind::MarkdownFence),
+                4
+            )
+        );
+
+        // A fence indented by more than three spaces is an indented code block,
+        // not a fence, so it stays plain text.
+        let indented = styles_for("    ```json\n    { \"a\": 1 }\n    ```\n");
+        for (id, block, _) in indented {
+            assert_eq!(id, EditorStyleId::Plain);
+            assert_eq!(block, None);
+        }
+    }
+
+    #[test]
     fn long_markdown_table_rows_keep_their_source_style() {
         let source = format!("| {} | value |\n", "a".repeat(5_000));
         let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
@@ -2212,6 +2334,28 @@ mod tests {
             body_only.lines[0].block.as_ref().unwrap().body_line,
             Some(1)
         );
+    }
+
+    #[test]
+    fn org_end_marker_closes_blocks_when_building_checkpoint_context() {
+        // Checkpoint scans consume complete lines (including their newline),
+        // unlike viewport classification.  The end marker must still close the
+        // block or every later scrolled-to range is misclassified as source.
+        let mut source = String::from("#+begin_src rust\nlet value = 1;\n#+end_src\n");
+        source.push_str(&"after\n".repeat(300));
+        let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
+        let cache = EditorSyntaxService::default();
+
+        let context = cache.context_at(&snapshot, Language::Org, 256);
+        assert!(!context.in_block);
+
+        let styles = SparseEditorStyleSnapshot::query_lines(
+            Path::new("checkpoint.org"),
+            &snapshot,
+            &[256],
+            &cache,
+        );
+        assert_eq!(styles.snapshot.line(256).unwrap().id, EditorStyleId::Plain);
     }
 
     #[test]
@@ -2729,44 +2873,47 @@ mod tests {
     }
 
     #[test]
-    fn cold_random_queries_return_pending_and_share_one_checkpoint_builder() {
+    fn cold_random_queries_synchronously_cover_their_requested_range() {
         let mut source = String::from("#+begin_quote\n");
         source.push_str(&"body\n".repeat(1_100));
         source.push_str("#+end_quote\n");
         let snapshot = DocumentSnapshot::from_utf8(source.into_bytes()).unwrap();
         let service = EditorSyntaxService::default();
 
+        // A cold query must resolve synchronously: the visible range never falls
+        // back to Plain chrome while checkpoints are missing.
         let first = SparseEditorStyleSnapshot::query_lines(
             Path::new("cold.org"),
             &snapshot,
             &[800],
             &service,
         );
-        assert!(first.pending);
-        assert!(first.start_builder);
-        assert!(first.snapshot.line(800).is_none());
-        assert_eq!(
-            service
-                .inner
-                .lock()
-                .unwrap()
-                .contexts
-                .keys()
-                .copied()
-                .collect::<Vec<_>>(),
-            vec![0],
-            "a cold query must not scan toward the target on its caller"
-        );
+        assert!(!first.pending);
+        assert!(!first.start_builder);
+        let style = first.snapshot.line(800).unwrap();
+        assert_eq!(style.id, EditorStyleId::Code);
+        assert_eq!(style.block.as_ref().unwrap().kind, EditorBlockKind::Quote);
+        // Only the checkpoints needed to cover line 800 were built — the shared
+        // focus line is never the synchronous build target.
+        let contexts = service
+            .inner
+            .lock()
+            .unwrap()
+            .contexts
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        assert!(contexts.iter().all(|line| *line <= 768));
 
+        // A second range is covered on demand; the prefetch build is a no-op.
         let second = SparseEditorStyleSnapshot::query_lines(
             Path::new("cold.org"),
             &snapshot,
             &[900],
             &service,
         );
-        assert!(second.pending);
+        assert!(!second.pending);
         assert!(!second.start_builder);
-
         service.build_focused(Path::new("cold.org"), &snapshot);
         let ready = SparseEditorStyleSnapshot::query_lines(
             Path::new("cold.org"),
@@ -2828,7 +2975,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_releases_builder_token_even_when_revision_is_reused() {
+    fn reset_clears_the_builder_token_and_releases_the_shared_cache() {
         let snapshot = DocumentSnapshot::from_utf8("body\n".repeat(1_100).into_bytes()).unwrap();
         let service = EditorSyntaxService::default();
 
@@ -2838,7 +2985,14 @@ mod tests {
             &[900],
             &service,
         );
-        assert!(first.pending && first.start_builder);
+        // A synchronous query resolves immediately and releases its token.
+        assert!(!first.pending);
+        assert!(!first.start_builder);
+        assert_eq!(
+            service.inner.lock().unwrap().builder,
+            None,
+            "a synchronous query must release the builder token"
+        );
 
         service.reset();
         let after_reset = SparseEditorStyleSnapshot::query_lines(
@@ -2847,6 +3001,11 @@ mod tests {
             &[900],
             &service,
         );
-        assert!(after_reset.pending && after_reset.start_builder);
+        assert!(!after_reset.pending);
+        assert!(!after_reset.start_builder);
+        assert_eq!(
+            after_reset.snapshot.line(900).unwrap().id,
+            EditorStyleId::Plain
+        );
     }
 }

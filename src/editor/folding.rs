@@ -360,10 +360,7 @@ pub(super) fn is_block_boundary_candidate(
         Some(DocumentFormat::Org) => trimmed
             .get(.."#+begin_".len())
             .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+begin_")),
-        Some(DocumentFormat::Markdown) => {
-            let leading = text.len() - trimmed.len();
-            leading <= 3 && crate::document::markdown::fence_start(trimmed).is_some()
-        }
+        Some(DocumentFormat::Markdown) => crate::document::markdown::fence_open(&text).is_some(),
         None => false,
     }
 }
@@ -407,10 +404,8 @@ fn markdown_fenced_block_regions(snapshot: &DocumentSnapshot) -> Vec<BlockRegion
     let mut line_number = 0_u64;
     while let Some(line) = cursor.next_line() {
         let logical = line.text.trim_end_matches(['\r', '\n']);
-        let trimmed = logical.trim_start();
-        let leading = logical.len() - trimmed.len();
         if let Some((marker, count, source, start_line)) = open {
-            if leading <= 3 && crate::document::markdown::is_closing_fence(trimmed, marker, count) {
+            if crate::document::markdown::fence_close(logical, marker, count) {
                 regions.push(BlockRegion {
                     source,
                     start_line,
@@ -418,9 +413,7 @@ fn markdown_fenced_block_regions(snapshot: &DocumentSnapshot) -> Vec<BlockRegion
                 });
                 open = None;
             }
-        } else if leading <= 3
-            && let Some((marker, count, _)) = crate::document::markdown::fence_start(trimmed)
-        {
+        } else if let Some((marker, count, _)) = crate::document::markdown::fence_open(logical) {
             let source = snapshot
                 .line_content_range(LineIndex(line_number))
                 .unwrap_or(line.range);

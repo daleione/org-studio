@@ -5,7 +5,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use crate::{
     document::{
         ByteRange, LineCursor, RevisionDelta, RevisionRange, TextSnapshot,
-        markdown::{atx_heading, fence_start, is_closing_fence},
+        markdown::{atx_heading, fence_close, fence_open},
     },
     org_syntax::inline::{InlineKind, InlineSpan, InlineText},
 };
@@ -153,7 +153,7 @@ fn parse_markdown_range(
         let line_end =
             line.range.start.0 + u64::try_from(logical.len()).expect("line length fits u64");
         let (kind, content_start, content_end) = if let Some((marker, count, language)) = &fence {
-            let closes = leading <= 3 && is_closing_fence(trimmed, *marker, *count);
+            let closes = fence_close(logical, *marker, *count);
             let kind = MarkdownKind::Code {
                 language: language.clone(),
                 role: if closes {
@@ -166,9 +166,7 @@ fn parse_markdown_range(
                 fence = None;
             }
             (kind, line.range.start.0, line_end)
-        } else if leading <= 3
-            && let Some((marker, count, language)) = fence_start(trimmed)
-        {
+        } else if let Some((marker, count, language)) = fence_open(logical) {
             fence = Some((marker, count, language.clone()));
             (
                 MarkdownKind::Code {

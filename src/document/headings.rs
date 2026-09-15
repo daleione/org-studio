@@ -2,7 +2,7 @@ use std::sync::{Arc, OnceLock};
 
 use crate::org_syntax::{BlockKind, parse};
 
-use super::markdown::{atx_heading, fence_start, is_closing_fence};
+use super::markdown::{atx_heading, fence_close, fence_open};
 use super::{ByteOffset, DocumentFormat, DocumentSnapshot, LineCursor, TextSnapshot};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -137,21 +137,18 @@ fn markdown_headings(snapshot: &DocumentSnapshot) -> Vec<DocumentHeading> {
     while let Some(line) = cursor.next_line() {
         let logical = line.text.trim_end_matches(['\r', '\n']);
         let trimmed = logical.trim_start();
-        let leading = logical.len() - trimmed.len();
         if let Some((marker, opening_count)) = fence {
-            if leading <= 3 && is_closing_fence(trimmed, marker, opening_count) {
+            if fence_close(logical, marker, opening_count) {
                 fence = None;
             }
-        } else if leading <= 3 {
-            if let Some((marker, count, _)) = fence_start(trimmed) {
-                fence = Some((marker, count));
-            } else if let Some((level, _)) = atx_heading(trimmed) {
-                headings.push(DocumentHeading {
-                    line: line_number,
-                    level,
-                    start: line.range.start,
-                });
-            }
+        } else if let Some((marker, count, _)) = fence_open(logical) {
+            fence = Some((marker, count));
+        } else if let Some((level, _)) = atx_heading(trimmed) {
+            headings.push(DocumentHeading {
+                line: line_number,
+                level,
+                start: line.range.start,
+            });
         }
         line_number += 1;
     }
