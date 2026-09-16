@@ -595,6 +595,10 @@ pub struct SemanticEditor {
     composition: Option<Composition>,
     content_font_size: crate::typography::ContentFontSize,
     display_map: EditorLayoutMap,
+    /// A minimap visibility/width change is waiting for its complete target-width
+    /// layout.  Keeping this explicit lets the renderer preserve one coherent
+    /// layout while the background preparation runs.
+    minimap_reflow_pending: bool,
     folds: folding::EditorFoldState,
     fold_markers: Arc<HashSet<u64>>,
     fold_animation: Option<EditorFoldAnimation>,
@@ -1004,6 +1008,7 @@ impl SemanticEditor {
             composition: None,
             content_font_size: crate::typography::ContentFontSize::default(),
             display_map,
+            minimap_reflow_pending: false,
             folds: folding::EditorFoldState::default(),
             fold_markers: Arc::new(HashSet::new()),
             fold_animation: None,
@@ -1184,6 +1189,8 @@ impl SemanticEditor {
         }
         if layout_changed {
             self.shape_cache.clear();
+            self.minimap_reflow_pending = true;
+            self.minimap.cancel_layout_preparation();
         }
         cx.notify();
     }

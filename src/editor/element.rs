@@ -402,8 +402,24 @@ impl Element for EditorElement {
             minimap_visible,
             minimap_reveal,
         );
-        let wrap_width =
+        let target_wrap_width =
             (f32::from(bounds.size.width) - gutter_width - minimap_layout_width).max(1.0);
+        let defer_minimap_reflow = {
+            let editor = self.editor.read(cx);
+            let viewport_height = f32::from(bounds.size.height);
+            editor.minimap_reflow_pending
+                && editor.display_map.wrap_width().to_bits() != target_wrap_width.to_bits()
+                && scroll_is_at_end(
+                    editor.scroll_y,
+                    viewport_height,
+                    editor.animated_document_height(),
+                )
+        };
+        let wrap_width = if defer_minimap_reflow {
+            self.editor.read(cx).display_map.wrap_width()
+        } else {
+            target_wrap_width
+        };
         self.editor.update(cx, |editor, _| {
             let viewport_height = f32::from(bounds.size.height);
             let was_at_end = scroll_is_at_end(
@@ -411,14 +427,23 @@ impl Element for EditorElement {
                 viewport_height,
                 editor.animated_document_height(),
             );
+            // Toggling the minimap changes the wrapping width. At the document end,
+            // clearing all measured rows immediately makes the bottom camera use a
+            // baseline-height estimate until the complete minimap layout arrives.
+            // Keep the old, coherent layout for that short preparation window and
+            // publish the new-width layout atomically below.
             let anchor_line = editor.animated_line_at_y(editor.scroll_y);
             let anchor_start = editor.animated_line_start_y(anchor_line);
             let anchor_height = editor.animated_line_height_px(anchor_line).max(1.0);
             let anchor_fraction =
                 ((editor.scroll_y - anchor_start) / anchor_height).clamp(0.0, 1.0);
-            let layout_reconfigured = editor
-                .display_map
-                .configure(snapshot.len_lines(), wrap_width);
+            let layout_reconfigured = !defer_minimap_reflow
+                && editor
+                    .display_map
+                    .configure(snapshot.len_lines(), target_wrap_width);
+            if layout_reconfigured {
+                editor.minimap_reflow_pending = false;
+            }
             if layout_reconfigured {
                 let inline_image_lines = editor
                     .inline_image_line_dimensions
@@ -433,7 +458,7 @@ impl Element for EditorElement {
                     let (_, height) = crate::preview::fitted_image_size(
                         width,
                         height,
-                        wrap_width.min(INLINE_IMAGE_MAX_WIDTH),
+                        target_wrap_width.min(INLINE_IMAGE_MAX_WIDTH),
                     );
                     editor.display_map.update_line_layout(
                         line,
@@ -591,6 +616,7 @@ impl Element for EditorElement {
             editor,
             &editor_path,
             &snapshot,
+            target_wrap_width,
             style.font(),
             font_size,
             theme,
@@ -2156,12 +2182,14 @@ fn prepare_minimap_layout_request(
     editor: &SemanticEditor,
     path: &std::path::Path,
     snapshot: &crate::document::DocumentSnapshot,
+    wrap_width: f32,
     font: gpui::Font,
     font_size: Pixels,
     theme: &crate::theme::Theme,
     text_system: Arc<gpui::TextSystem>,
 ) -> Option<MinimapLayoutPreparationRequest> {
-    if !editor.minimap.visible || editor.fold_animation.is_some() {
+    if !editor.minimap.visible && !editor.minimap_reflow_pending || editor.fold_animation.is_some()
+    {
         return None;
     }
     let mut inline_image_overrides = editor
@@ -2174,7 +2202,7 @@ fn prepare_minimap_layout_request(
         revision: snapshot.revision(),
         path: path.to_path_buf(),
         line_count: snapshot.len_lines(),
-        wrap_width_bits: editor.display_map.wrap_width().to_bits(),
+        wrap_width_bits: wrap_width.to_bits(),
         base_line_height_bits: editor.display_map.base_line_height().to_bits(),
         soft_wrap: editor.display_map.soft_wrap(),
         font: font.clone(),
@@ -2186,11 +2214,13 @@ fn prepare_minimap_layout_request(
         inline_image_resource_generation: editor.inline_image_cache.borrow().resource_generation,
     };
     let epoch = editor.minimap.reserve_layout_preparation(key.clone())?;
+    let mut layout = editor.display_map.clone();
+    layout.configure(snapshot.len_lines(), wrap_width);
     Some(MinimapLayoutPreparationRequest {
         key,
         epoch,
         cancellation_epoch: editor.minimap.layout_preparation_epoch(),
-        layout: editor.display_map.clone(),
+        layout,
         snapshot: snapshot.clone(),
         syntax_service: editor.syntax_service.clone(),
         text_system,
@@ -2446,6 +2476,7 @@ fn schedule_minimap_layout_preparation(
                     / editor.animated_line_height_px(anchor_line).max(1.0))
                 .clamp(0.0, 1.0);
                 editor.display_map = layout.as_ref().clone();
+                editor.minimap_reflow_pending = false;
                 let anchored = editor.animated_line_start_y(anchor_line)
                     + anchor_fraction * editor.animated_line_height_px(anchor_line);
                 editor.scroll_y = stabilized_scroll_y(
@@ -3392,6 +3423,7 @@ mod tests {
                     editor,
                     &path,
                     &snapshot,
+                    editor.display_map.wrap_width(),
                     gpui::font(".SystemUIFont"),
                     px(15.),
                     crate::theme::current_theme(),

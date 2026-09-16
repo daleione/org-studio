@@ -1431,6 +1431,17 @@ impl EditorMinimapHost {
         self.layout_preparation_epoch.clone()
     }
 
+    pub(super) fn cancel_layout_preparation(&self) {
+        let mut state = self
+            .layout_preparation
+            .lock()
+            .expect("editor minimap layout preparation poisoned");
+        state.desired = None;
+        state.in_flight = None;
+        state.ready = None;
+        self.layout_preparation_epoch.fetch_add(1, Ordering::AcqRel);
+    }
+
     /// Publishes a complete layout only if none of its geometry inputs changed while it built.
     pub(super) fn publish_prepared_layout(
         &self,
