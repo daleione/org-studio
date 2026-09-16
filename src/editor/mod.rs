@@ -598,10 +598,9 @@ pub struct SemanticEditor {
     composition: Option<Composition>,
     content_font_size: crate::typography::ContentFontSize,
     display_map: EditorLayoutMap,
-    /// A minimap visibility/width change is waiting for its complete target-width
-    /// layout.  Keeping this explicit lets the renderer preserve one coherent
-    /// layout while the background preparation runs.
-    minimap_reflow_pending: bool,
+    /// A wrap-width change is waiting for its complete target-width layout.
+    /// Until publication, the renderer keeps the previous coherent layout.
+    layout_reflow_pending: bool,
     folds: folding::EditorFoldState,
     fold_markers: Arc<HashSet<u64>>,
     fold_animation: Option<EditorFoldAnimation>,
@@ -613,6 +612,10 @@ pub struct SemanticEditor {
     shape_cache: HashMap<ShapeKey, Arc<WrappedLine>>,
     table_geometry_cache: RefCell<TableGeometryCache>,
     scroll_y: f32,
+    /// The user is pinned to the document end. This is intentionally separate
+    /// from the current measured height: sparse layout measurement can change
+    /// that height from one frame to the next while a window is resizing.
+    scroll_at_end: bool,
     scroll_x: f32,
     vertical_goal_x: Option<f32>,
     emacs_mark_active: bool,
@@ -833,8 +836,10 @@ impl SemanticEditor {
                 let viewport_height = this
                     .viewport
                     .map_or(0.0, |viewport| f32::from(viewport.size.height));
-                let was_at_end = this.viewport.is_some()
-                    && this.scroll_y + viewport_height + 0.5 >= this.display_map.total_height();
+                let was_at_end = this.scroll_at_end
+                    || (this.viewport.is_some()
+                        && this.scroll_y + viewport_height + 0.5
+                            >= this.display_map.total_height());
                 let anchor_line = this.display_map.line_at_y(this.scroll_y);
                 let anchor_start = this.display_map.line_start_y(anchor_line);
                 let anchor_fraction = (this.scroll_y - anchor_start)
@@ -923,6 +928,7 @@ impl SemanticEditor {
                 } else {
                     anchored.clamp(0.0, max_scroll)
                 };
+                this.scroll_at_end = was_at_end;
                 this.layout_anchor = snapshot
                     .line_content_range(LineIndex(anchor_line))
                     .ok()
@@ -1011,7 +1017,7 @@ impl SemanticEditor {
             composition: None,
             content_font_size: crate::typography::ContentFontSize::default(),
             display_map,
-            minimap_reflow_pending: false,
+            layout_reflow_pending: false,
             folds: folding::EditorFoldState::default(),
             fold_markers: Arc::new(HashSet::new()),
             fold_animation: None,
@@ -1023,6 +1029,7 @@ impl SemanticEditor {
             shape_cache: HashMap::with_capacity(128),
             table_geometry_cache: RefCell::new(TableGeometryCache::default()),
             scroll_y: 0.0,
+            scroll_at_end: false,
             scroll_x: 0.0,
             vertical_goal_x: None,
             emacs_mark_active: false,
@@ -1065,6 +1072,14 @@ impl SemanticEditor {
 
     pub fn selection(&self) -> Selection {
         self.selection
+    }
+
+    /// Applies a user-driven vertical scroll and records whether the user chose
+    /// the document end. Layout-driven corrections must preserve their existing
+    /// pin state instead of calling this method.
+    fn set_user_scroll_y(&mut self, scroll_y: f32, max_scroll: f32) {
+        self.scroll_y = scroll_y.clamp(0.0, max_scroll);
+        self.scroll_at_end = self.scroll_y + 0.5 >= max_scroll;
     }
 
     pub(crate) fn request_focus(&mut self, cx: &mut Context<Self>) {
@@ -1192,7 +1207,7 @@ impl SemanticEditor {
         }
         if layout_changed {
             self.shape_cache.clear();
-            self.minimap_reflow_pending = true;
+            self.layout_reflow_pending = true;
             self.minimap.cancel_layout_preparation();
         }
         cx.notify();

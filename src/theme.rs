@@ -352,7 +352,10 @@ mod tests {
         for _ in 0..2 {
             visited.push(visited.last().unwrap().next());
         }
-        assert_eq!(visited, vec![ThemeMode::Auto, ThemeMode::Light, ThemeMode::Dark]);
+        assert_eq!(
+            visited,
+            vec![ThemeMode::Auto, ThemeMode::Light, ThemeMode::Dark]
+        );
     }
 
     #[test]

@@ -404,16 +404,36 @@ impl Element for EditorElement {
         );
         let target_wrap_width =
             (f32::from(bounds.size.width) - gutter_width - minimap_layout_width).max(1.0);
-        let defer_minimap_reflow = {
-            let editor = self.editor.read(cx);
+        self.editor.update(cx, |editor, _| {
             let viewport_height = f32::from(bounds.size.height);
-            editor.minimap_reflow_pending
-                && editor.display_map.wrap_width().to_bits() != target_wrap_width.to_bits()
-                && scroll_is_at_end(
+            let at_end = editor.scroll_at_end
+                || scroll_is_at_end(
                     editor.scroll_y,
                     viewport_height,
                     editor.animated_document_height(),
-                )
+                );
+            let width_changed =
+                editor.display_map.wrap_width().to_bits() != target_wrap_width.to_bits();
+            if at_end && width_changed && !editor.layout_reflow_pending {
+                editor.layout_reflow_pending = true;
+                editor.minimap.cancel_layout_preparation();
+            }
+        });
+        let defer_minimap_reflow = {
+            let editor = self.editor.read(cx);
+            let viewport_height = f32::from(bounds.size.height);
+            // A width change invalidates all measured wrap heights. At the document
+            // end, clearing them would paint one sparse/estimated frame before the
+            // complete target-width layout is ready. Keep the current layout
+            // authoritative until that replacement can happen atomically.
+            editor.layout_reflow_pending
+                && editor.display_map.wrap_width().to_bits() != target_wrap_width.to_bits()
+                && (editor.scroll_at_end
+                    || scroll_is_at_end(
+                        editor.scroll_y,
+                        viewport_height,
+                        editor.animated_document_height(),
+                    ))
         };
         let wrap_width = if defer_minimap_reflow {
             self.editor.read(cx).display_map.wrap_width()
@@ -422,11 +442,12 @@ impl Element for EditorElement {
         };
         self.editor.update(cx, |editor, _| {
             let viewport_height = f32::from(bounds.size.height);
-            let was_at_end = scroll_is_at_end(
-                editor.scroll_y,
-                viewport_height,
-                editor.animated_document_height(),
-            );
+            let was_at_end = editor.scroll_at_end
+                || scroll_is_at_end(
+                    editor.scroll_y,
+                    viewport_height,
+                    editor.animated_document_height(),
+                );
             // Toggling the minimap changes the wrapping width. At the document end,
             // clearing all measured rows immediately makes the bottom camera use a
             // baseline-height estimate until the complete minimap layout arrives.
@@ -442,7 +463,7 @@ impl Element for EditorElement {
                     .display_map
                     .configure(snapshot.len_lines(), target_wrap_width);
             if layout_reconfigured {
-                editor.minimap_reflow_pending = false;
+                editor.layout_reflow_pending = false;
             }
             if layout_reconfigured {
                 let inline_image_lines = editor
@@ -482,6 +503,7 @@ impl Element for EditorElement {
                 viewport_height,
                 editor.animated_document_height(),
             );
+            editor.scroll_at_end = was_at_end;
         });
         let inline_image_candidates = {
             let editor = self.editor.read(cx);
@@ -1661,11 +1683,12 @@ impl Element for EditorElement {
             }
             editor.shape_cache.extend(shaped);
             let viewport_height = f32::from(bounds.size.height);
-            let was_at_end = scroll_is_at_end(
-                editor.scroll_y,
-                viewport_height,
-                editor.animated_document_height(),
-            );
+            let was_at_end = editor.scroll_at_end
+                || scroll_is_at_end(
+                    editor.scroll_y,
+                    viewport_height,
+                    editor.animated_document_height(),
+                );
             let anchor_line = editor.animated_line_at_y(editor.scroll_y);
             let anchor_start = editor.animated_line_start_y(anchor_line);
             let anchor_fraction = ((editor.scroll_y - anchor_start)
@@ -1704,6 +1727,7 @@ impl Element for EditorElement {
             );
             let scroll_settled = (settled_scroll_y - editor.scroll_y).abs() > 0.5;
             editor.scroll_y = settled_scroll_y;
+            editor.scroll_at_end = was_at_end;
             let snapshot = editor.snapshot(cx);
             let pending_reveal = editor.pending_reveal_caret;
             if pending_reveal {
@@ -2190,8 +2214,7 @@ fn prepare_minimap_layout_request(
     theme: &crate::theme::Theme,
     text_system: Arc<gpui::TextSystem>,
 ) -> Option<MinimapLayoutPreparationRequest> {
-    if !editor.minimap.visible && !editor.minimap_reflow_pending || editor.fold_animation.is_some()
-    {
+    if !editor.minimap.visible && !editor.layout_reflow_pending || editor.fold_animation.is_some() {
         return None;
     }
     let mut inline_image_overrides = editor
@@ -2467,18 +2490,19 @@ fn schedule_minimap_layout_preparation(
                 let viewport_height = editor
                     .viewport
                     .map_or(0.0, |viewport| f32::from(viewport.size.height));
-                let was_at_end = scroll_is_at_end(
-                    editor.scroll_y,
-                    viewport_height,
-                    editor.animated_document_height(),
-                );
+                let was_at_end = editor.scroll_at_end
+                    || scroll_is_at_end(
+                        editor.scroll_y,
+                        viewport_height,
+                        editor.animated_document_height(),
+                    );
                 let anchor_line = editor.animated_line_at_y(editor.scroll_y);
                 let anchor_start = editor.animated_line_start_y(anchor_line);
                 let anchor_fraction = ((editor.scroll_y - anchor_start)
                     / editor.animated_line_height_px(anchor_line).max(1.0))
                 .clamp(0.0, 1.0);
                 editor.display_map = layout.as_ref().clone();
-                editor.minimap_reflow_pending = false;
+                editor.layout_reflow_pending = false;
                 let anchored = editor.animated_line_start_y(anchor_line)
                     + anchor_fraction * editor.animated_line_height_px(anchor_line);
                 editor.scroll_y = stabilized_scroll_y(
@@ -2487,6 +2511,7 @@ fn schedule_minimap_layout_preparation(
                     viewport_height,
                     editor.animated_document_height(),
                 );
+                editor.scroll_at_end = was_at_end;
                 editor.hit_rows = Arc::from([]);
                 if std::env::var_os("ORG_STUDIO_EDITOR_MINIMAP_PERF").is_some() {
                     eprintln!(
@@ -2538,11 +2563,12 @@ fn apply_editor_minimap_media_dimensions(
     let viewport_height = editor
         .viewport
         .map_or(0.0, |viewport| f32::from(viewport.size.height));
-    let was_at_end = scroll_is_at_end(
-        editor.scroll_y,
-        viewport_height,
-        editor.animated_document_height(),
-    );
+    let was_at_end = editor.scroll_at_end
+        || scroll_is_at_end(
+            editor.scroll_y,
+            viewport_height,
+            editor.animated_document_height(),
+        );
     let anchor_line = editor.animated_line_at_y(editor.scroll_y);
     let anchor_start = editor.animated_line_start_y(anchor_line);
     let anchor_fraction = ((editor.scroll_y - anchor_start)
@@ -2572,6 +2598,7 @@ fn apply_editor_minimap_media_dimensions(
         viewport_height,
         editor.animated_document_height(),
     );
+    editor.scroll_at_end = was_at_end;
     true
 }
 
@@ -3809,5 +3836,86 @@ mod tests {
         assert_eq!(lines.last(), Some(&999));
         assert!(lines.contains(&1));
         assert!(lines.contains(&998));
+    }
+}
+
+#[cfg(test)]
+mod resize_pin_tests {
+    use super::SemanticEditor;
+    use crate::document::DocumentSession;
+    use gpui::{AppContext, px};
+
+    /// Reproduction for the "drag to the very bottom, then enlarge the window"
+    /// jitter: a minimap drag jumps to the end without measuring the middle of
+    /// the document, so those rows still carry one-line height estimates.
+    /// Enlarging the window pulls rows into the viewport and the total height
+    /// wobbles between estimate and measurement. The pinned-at-end scroll must
+    /// stay glued to the document bottom instead of oscillating between the
+    /// pin path and the anchor path.
+    #[gpui::test]
+    fn enlarging_while_pinned_at_bottom_stays_pinned(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::editor::init);
+        let line = "lorem ipsum dolor sit amet consectetur adipiscing elit ".repeat(12);
+        let source = format!("{line}\n").repeat(600);
+        let session =
+            cx.new(|_| DocumentSession::from_utf8("pin.md".into(), source.into_bytes()).unwrap());
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+
+        view.simulate_resize(gpui::size(px(520.), px(600.)));
+        view.run_until_parked();
+
+        // Jump to the very bottom the way a minimap thumb drag does: the middle
+        // of the document is never measured.
+        editor.update(view, |editor, cx| {
+            let bounds = editor.minimap.bounds.expect("minimap painted");
+            let bottom = bounds.bottom() - px(1.0);
+            editor.seek_from_minimap(bottom, cx);
+        });
+        view.run_until_parked();
+        let stable_height = editor.update(view, |editor, _| editor.animated_document_height());
+
+        // Enlarge the window continuously the way a live window drag delivers
+        // resizes: many size steps without letting the layout settle in
+        // between, then sample the scroll every frame.
+        let mut samples = Vec::new();
+        for step in 0..40 {
+            let width = 520.0 + step as f32 * 6.0;
+            view.simulate_resize(gpui::size(px(width), px(600.)));
+            editor.update(view, |editor, _| {
+                let viewport_height = f32::from(editor.viewport.unwrap().size.height);
+                let max_scroll = (editor.animated_document_height() - viewport_height).max(0.0);
+                samples.push((
+                    editor.scroll_y,
+                    max_scroll,
+                    editor.animated_document_height(),
+                    editor.layout_reflow_pending,
+                ));
+            });
+        }
+        view.run_until_parked();
+        editor.update(view, |editor, _| {
+            let viewport_height = f32::from(editor.viewport.unwrap().size.height);
+            let max_scroll = (editor.animated_document_height() - viewport_height).max(0.0);
+            samples.push((
+                editor.scroll_y,
+                max_scroll,
+                editor.animated_document_height(),
+                editor.layout_reflow_pending,
+            ));
+        });
+        for (index, (scroll_y, max_scroll, document_height, reflow_pending)) in
+            samples.iter().enumerate()
+        {
+            assert!(
+                *scroll_y <= max_scroll + 1.0,
+                "frame {index}: scroll left the pinned end (scroll {scroll_y:.1} > max {max_scroll:.1}); samples: {samples:?}",
+            );
+            if *reflow_pending {
+                assert!(
+                    (*document_height - stable_height).abs() <= 0.5,
+                    "frame {index}: pending reflow exposed an estimated layout height ({document_height:.1} != stable {stable_height:.1}); samples: {samples:?}",
+                );
+            }
+        }
     }
 }

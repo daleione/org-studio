@@ -299,6 +299,7 @@ impl SemanticEditor {
         self.selection_utf16_reversed = false;
         if self.scroll_y != 0.0 {
             self.scroll_y = 0.0;
+            self.scroll_at_end = false;
             self.minimap.note_viewport_changed();
         }
         cx.notify();
@@ -1146,12 +1147,12 @@ impl SemanticEditor {
         let amount = (viewport_height - self.base_line_height()).max(1.0);
         let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let previous_scroll = self.scroll_y;
-        self.scroll_y = if forward {
+        let target_scroll = if forward {
             self.scroll_y + amount
         } else {
             self.scroll_y - amount
-        }
-        .clamp(0.0, max_scroll);
+        };
+        self.set_user_scroll_y(target_scroll, max_scroll);
 
         let snapshot = self.snapshot(cx);
         let point = self.selection.head();
@@ -1400,7 +1401,7 @@ impl SemanticEditor {
             ratio * max_scroll_pixels
         };
         let previous_y = self.scroll_y;
-        self.scroll_y = target_y.clamp(0.0, max_scroll_pixels);
+        self.set_user_scroll_y(target_y, max_scroll_pixels);
         if (self.scroll_y - previous_y).abs() > 0.5 {
             self.minimap.note_viewport_changed();
         }
@@ -1546,7 +1547,7 @@ impl SemanticEditor {
                 (self.animated_document_height() - f32::from(viewport.size.height)).max(0.0);
             let speed = distance.signum() * (distance.abs() / 8.0).clamp(4.0, 64.0);
             let previous_y = self.scroll_y;
-            self.scroll_y = (self.scroll_y + speed).clamp(0.0, max_scroll);
+            self.set_user_scroll_y(self.scroll_y + speed, max_scroll);
             let scroll_delta = self.scroll_y - previous_y;
             if scroll_delta.abs() > 0.5 {
                 self.minimap.note_viewport_scrolled(scroll_delta);
@@ -1601,7 +1602,7 @@ impl SemanticEditor {
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
         let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let previous_y = self.scroll_y;
-        self.scroll_y = (self.scroll_y - delta_y).clamp(0.0, max_scroll);
+        self.set_user_scroll_y(self.scroll_y - delta_y, max_scroll);
         if !self.display_map.soft_wrap() {
             self.scroll_x = (self.scroll_x - delta_x).clamp(0.0, self.max_horizontal_scroll());
         }
@@ -1686,6 +1687,7 @@ impl SemanticEditor {
         } else if bottom > self.scroll_y + height {
             self.scroll_y = (bottom - height).max(0.0);
         }
+        self.scroll_at_end = self.scroll_y + height + 0.5 >= self.animated_document_height();
         if (self.scroll_y - previous_y).abs() > 0.5 {
             self.minimap.note_viewport_changed();
         }
@@ -1739,7 +1741,7 @@ impl SemanticEditor {
             .viewport
             .map_or(0.0, |viewport| f32::from(viewport.size.height));
         let max_scroll = (self.display_map.total_height() - viewport_height).max(0.0);
-        self.scroll_y = self.display_map.line_start_y(line).clamp(0.0, max_scroll);
+        self.set_user_scroll_y(self.display_map.line_start_y(line), max_scroll);
         self.minimap.note_viewport_changed();
         cx.notify();
         true
