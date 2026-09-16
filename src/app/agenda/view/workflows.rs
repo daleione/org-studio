@@ -11,6 +11,7 @@ fn action(
     intent: UiIntent,
     primary: bool,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .debug_selector(move || format!("agenda-workflow-{label}"))
         .h(px(34.))
@@ -20,16 +21,32 @@ fn action(
         .justify_center()
         .rounded(px(7.))
         .border_1()
-        .border_color(rgb(if primary { 0x7540c4 } else { 0xdfe1e4 }))
-        .bg(rgb(if primary { 0x7540c4 } else { 0xffffff }))
-        .text_color(rgb(if primary { 0xffffff } else { 0x454950 }))
+        .border_color(rgb(if primary {
+            theme.todo_active
+        } else {
+            theme.border
+        }))
+        .bg(rgb(if primary {
+            theme.todo_active
+        } else {
+            theme.background
+        }))
+        .text_color(rgb(if primary {
+            0xffffff
+        } else {
+            theme.foreground_dim
+        }))
         .text_size(px(11.))
         .cursor_pointer()
         .hover(move |style| {
             if primary {
-                style.bg(rgb(0x6835b5)).border_color(rgb(0x6835b5))
+                style
+                    .bg(rgb(theme.todo_active))
+                    .border_color(rgb(theme.todo_active))
             } else {
-                style.bg(rgb(0xf3f3f5)).border_color(rgb(0xcfd1d5))
+                style
+                    .bg(rgb(theme.hover))
+                    .border_color(rgb(theme.border_hover))
             }
         })
         .child(label)
@@ -60,6 +77,7 @@ pub(crate) fn capture_overlay(
     draft: &CaptureDraft,
     message: Option<&str>,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     let close = workspace.clone();
     div()
         .absolute()
@@ -76,7 +94,7 @@ pub(crate) fn capture_overlay(
                 .w(px(560.))
                 .p_5()
                 .rounded(px(12.))
-                .bg(rgb(0xffffff))
+                .bg(rgb(theme.background))
                 .shadow_lg()
                 .child(
                     div()
@@ -94,7 +112,7 @@ pub(crate) fn capture_overlay(
                                     div()
                                         .mt_1()
                                         .text_size(px(10.))
-                                        .text_color(rgb(0x858990))
+                                        .text_color(rgb(theme.foreground_dim))
                                         .child(language.text("agenda.capture_hint")),
                                 ),
                         )
@@ -138,7 +156,7 @@ pub(crate) fn capture_overlay(
                         .items_center()
                         .rounded(px(8.))
                         .border_1()
-                        .border_color(rgb(0xdfe1e4))
+                        .border_color(rgb(theme.border))
                         .text_size(px(13.))
                         .child(if draft.title.is_empty() {
                             language.text("agenda.title_hint").into()
@@ -151,7 +169,7 @@ pub(crate) fn capture_overlay(
                         div()
                             .mt_3()
                             .text_size(px(10.))
-                            .text_color(rgb(0xa45d18))
+                            .text_color(rgb(theme.warning))
                             .child(message),
                     )
                 })
@@ -185,6 +203,7 @@ pub(crate) fn refile_overlay(
     search: &str,
     message: Option<&str>,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .absolute()
         .inset_0()
@@ -201,7 +220,7 @@ pub(crate) fn refile_overlay(
                 .max_h(px(650.))
                 .p_5()
                 .rounded(px(12.))
-                .bg(rgb(0xffffff))
+                .bg(rgb(theme.background))
                 .shadow_lg()
                 .flex()
                 .flex_col()
@@ -215,7 +234,7 @@ pub(crate) fn refile_overlay(
                     div()
                         .mt_1()
                         .text_size(px(10.))
-                        .text_color(rgb(0x858990))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.refile_hint")),
                 )
                 .child(
@@ -227,7 +246,7 @@ pub(crate) fn refile_overlay(
                         .items_center()
                         .rounded(px(8.))
                         .border_1()
-                        .border_color(rgb(0xdfe1e4))
+                        .border_color(rgb(theme.border))
                         .text_size(px(12.))
                         .child(if search.is_empty() {
                             language.text("agenda.search_target").into()
@@ -253,13 +272,13 @@ pub(crate) fn refile_overlay(
                                 .flex()
                                 .items_center()
                                 .rounded(px(7.))
-                                .when(index == selected, |row| row.bg(rgb(0xf1eafb)))
+                                .when(index == selected, |row| row.bg(rgb(theme.accent_bg)))
                                 .cursor_pointer()
                                 .hover(move |style| {
                                     style.bg(rgb(if index == selected {
-                                        0xe4d8f4
+                                        theme.accent_border
                                     } else {
-                                        0xe6e7ea
+                                        theme.hover
                                     }))
                                 })
                                 .child(
@@ -275,7 +294,7 @@ pub(crate) fn refile_overlay(
                                             div()
                                                 .mt_1()
                                                 .text_size(px(9.))
-                                                .text_color(rgb(0x858990))
+                                                .text_color(rgb(theme.foreground_dim))
                                                 .child(
                                                     target
                                                         .path
@@ -299,7 +318,7 @@ pub(crate) fn refile_overlay(
                         div()
                             .mt_2()
                             .text_size(px(10.))
-                            .text_color(rgb(0xa45d18))
+                            .text_color(rgb(theme.warning))
                             .child(message),
                     )
                 })
@@ -361,6 +380,7 @@ fn repeat_overlay(
     language: crate::i18n::Language,
     workspace: Entity<WorkspaceWindow>,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .absolute()
         .inset_0()
@@ -376,7 +396,7 @@ fn repeat_overlay(
                 .w(px(460.))
                 .p_5()
                 .rounded(px(12.))
-                .bg(rgb(0xffffff))
+                .bg(rgb(theme.background))
                 .shadow_lg()
                 .child(
                     div()
@@ -388,7 +408,7 @@ fn repeat_overlay(
                     div()
                         .mt_2()
                         .text_size(px(11.))
-                        .text_color(rgb(0x858990))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.repeat_hint")),
                 )
                 .child(

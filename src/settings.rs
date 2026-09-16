@@ -1,11 +1,12 @@
 use crate::i18n::Language;
+use crate::theme::ThemeMode;
 use std::{
     fs, io,
     path::PathBuf,
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 6;
+const SETTINGS_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct WorkspaceSettings {
@@ -22,6 +23,8 @@ pub struct WorkspaceSettings {
     pub sidebar_width: u16,
     pub reading_style: crate::preview::PreviewStyleId,
     pub status_line: StatusLineSettings,
+    /// Titlebar theme switch: Auto follows the system appearance.
+    pub theme_mode: ThemeMode,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +65,7 @@ impl Default for WorkspaceSettings {
             sidebar_width: 240,
             reading_style: crate::preview::PreviewStyleId::Base,
             status_line: StatusLineSettings::default(),
+            theme_mode: ThemeMode::default(),
         }
     }
 }
@@ -126,6 +130,7 @@ impl WorkspaceSettings {
         let mut status_progress = None;
         let mut status_statistics = None;
         let mut status_format = None;
+        let mut theme_mode = None;
         for line in source.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -183,6 +188,7 @@ impl WorkspaceSettings {
                 "status_progress" => status_progress = value.trim().parse::<bool>().ok(),
                 "status_statistics" => status_statistics = value.trim().parse::<bool>().ok(),
                 "status_format" => status_format = value.trim().parse::<bool>().ok(),
+                "theme_mode" => theme_mode = ThemeMode::parse(value.trim()),
                 _ => {}
             }
         }
@@ -206,12 +212,13 @@ impl WorkspaceSettings {
                 statistics: status_statistics.unwrap_or(true),
                 format: status_format.unwrap_or(true),
             },
+            theme_mode: theme_mode.unwrap_or_default(),
         })
     }
 
     fn serialize(self) -> String {
         format!(
-            "version={SETTINGS_VERSION}\nsplit_ratio={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nreading_style={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\n",
+            "version={SETTINGS_VERSION}\nsplit_ratio={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nreading_style={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\ntheme_mode={}\n",
             self.split_ratio,
             match self.language {
                 Language::English => "en",
@@ -232,6 +239,7 @@ impl WorkspaceSettings {
             self.status_line.progress,
             self.status_line.statistics,
             self.status_line.format,
+            self.theme_mode.as_str(),
         )
     }
 }
@@ -331,6 +339,7 @@ mod tests {
                 statistics: true,
                 format: false,
             },
+            theme_mode: ThemeMode::Dark,
         };
         assert_eq!(
             WorkspaceSettings::parse(&settings.serialize()),

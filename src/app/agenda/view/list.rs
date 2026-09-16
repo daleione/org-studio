@@ -14,6 +14,7 @@ pub(crate) fn agenda_list(
     collapsed_days: std::collections::BTreeSet<Option<jiff::civil::Date>>,
     columns: super::super::component::TaskColumns,
 ) -> AnyElement {
+    let theme = crate::theme::current_theme();
     list(state, move |group_index, _, _| {
         let group = &result.placement_groups[group_index];
         let collapsed = collapsed_days.contains(&group.date);
@@ -87,7 +88,7 @@ pub(crate) fn agenda_list(
         });
         let card = div()
             .border_1()
-            .border_color(gpui::rgb(0xe8e9eb))
+            .border_color(gpui::rgb(theme.border))
             .relative()
             .rounded(gpui::px(7.))
             .overflow_hidden()
@@ -99,14 +100,14 @@ pub(crate) fn agenda_list(
                         .top_0()
                         .bottom_0()
                         .w(px(3.))
-                        .bg(rgb(0x1688ff)),
+                        .bg(rgb(theme.accent)),
                 )
             })
             .child(
                 div()
                     .id(("agenda-day-header", group_index))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xeee9f2)))
+                    .hover(|style| style.bg(rgb(theme.accent_bg)))
                     .on_click(move |_, _, cx| {
                         toggle_workspace.update(cx, |this, cx| {
                             this.dispatch_agenda_intent(
@@ -121,8 +122,8 @@ pub(crate) fn agenda_list(
                     .items_center()
                     .gap_2()
                     .when(!collapsed, |header| header.border_b_1())
-                    .border_color(gpui::rgb(0xececee))
-                    .text_color(rgb(super::super::style::PURPLE))
+                    .border_color(gpui::rgb(theme.divider))
+                    .text_color(rgb(super::super::style::PURPLE()))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
                     .child(
                         svg()
@@ -137,15 +138,20 @@ pub(crate) fn agenda_list(
                                     std::f32::consts::FRAC_PI_2
                                 },
                             )))
-                            .text_color(rgb(0x51565e)),
+                            .text_color(rgb(theme.foreground_dim)),
                     )
                     .child(div().text_size(px(13.)).child(day))
-                    .child(div().size(px(3.)).rounded_full().bg(rgb(0xa2a5aa)))
+                    .child(
+                        div()
+                            .size(px(3.))
+                            .rounded_full()
+                            .bg(rgb(theme.foreground_disabled)),
+                    )
                     .child(
                         div()
                             .text_size(px(12.))
                             .font_weight(gpui::FontWeight::NORMAL)
-                            .text_color(rgb(0x666b72))
+                            .text_color(rgb(theme.foreground_dim))
                             .child(date),
                     )
                     .when_some(marker, |header, marker| {
@@ -157,7 +163,7 @@ pub(crate) fn agenda_list(
                                 .flex()
                                 .items_center()
                                 .rounded_full()
-                                .bg(rgb(0x68adf5))
+                                .bg(rgb(theme.accent))
                                 .text_color(rgb(0xffffff))
                                 .text_size(px(10.))
                                 .child(marker),

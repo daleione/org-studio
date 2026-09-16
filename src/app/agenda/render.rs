@@ -19,6 +19,7 @@ impl super::AgendaHost {
         titlebar_inset: f32,
     ) -> gpui::Div {
         let language = self.language;
+        let theme = crate::theme::current_theme();
         let full_sidebar_width = super::host::expanded_sidebar_width(
             viewport_width,
             self.sidebar_resize
@@ -135,14 +136,14 @@ impl super::AgendaHost {
                                     .justify_center()
                                     .rounded(px(6.))
                                     .cursor_pointer()
-                                    .hover(|style| style.bg(gpui::rgb(0xeeeef1)))
+                                    .hover(|style| style.bg(gpui::rgb(theme.hover)))
                                     .child(
                                         gpui::svg()
                                             .data(super::icon::agenda_icon(
                                                 "assets/icons/agenda/plus.svg",
                                             ))
                                             .size(px(14.))
-                                            .text_color(rgb(0x555960)),
+                                            .text_color(rgb(theme.foreground_dim)),
                                     )
                                     .on_mouse_down(gpui::MouseButton::Left, {
                                         let target = workspace.clone();
@@ -286,7 +287,7 @@ impl super::AgendaHost {
                                 .px_3()
                                 .py_2()
                                 .text_size(px(12.))
-                                .text_color(rgb(0x9a9da3))
+                                .text_color(rgb(theme.foreground_muted))
                                 .child(language.text("agenda.no_saved_views")),
                         )
                     })
@@ -381,7 +382,7 @@ impl super::AgendaHost {
             .min_h_0()
             .flex()
             .flex_col()
-            .bg(rgb(super::style::SIDEBAR))
+            .bg(rgb(super::style::SIDEBAR()))
             .child(div().h(px(crate::app::TITLEBAR_HEIGHT)).flex_none())
             .child(sidebar_scroll_area);
         let sidebar = div()
@@ -474,7 +475,7 @@ impl super::AgendaHost {
         let columns = TaskColumns::row()
             .mx(px(content_gutter + 1.))
             .h(px(super::style::COLUMN_HEADER_HEIGHT))
-            .text_color(rgb(super::style::MUTED))
+            .text_color(rgb(super::style::MUTED()))
             .text_size(px(11.))
             .child(TaskColumns::cell(TaskColumns::CHECK))
             .when(task_columns.source, |h| {
@@ -522,7 +523,7 @@ impl super::AgendaHost {
             .relative()
             .flex()
             .font_family("SF Pro Text")
-            .text_color(rgb(super::style::INK))
+            .text_color(rgb(super::style::INK()))
             .on_scroll_wheel(move |event, _, cx| {
                 if !event.delta.precise() {
                     return;
@@ -563,7 +564,7 @@ impl super::AgendaHost {
                     .flex_none()
                     .flex()
                     .justify_center()
-                    .bg(rgb(super::style::SIDEBAR))
+                    .bg(rgb(super::style::SIDEBAR()))
                     .cursor(CursorStyle::ResizeLeftRight)
                     .on_mouse_down(MouseButton::Left, move |event, _, cx| {
                         cx.stop_propagation();
@@ -699,7 +700,7 @@ impl super::AgendaHost {
                     .left_0()
                     .right_0()
                     .h(px(1.))
-                    .bg(rgb(super::style::BORDER)),
+                    .bg(rgb(super::style::BORDER())),
             )
             .when_some(
                 {
@@ -739,8 +740,8 @@ impl super::AgendaHost {
                         .items_center()
                         .gap_2()
                         .rounded(px(8.))
-                        .bg(rgb(0xfff5e9))
-                        .text_color(rgb(0x8e5a16))
+                        .bg(rgb(theme.hover))
+                        .text_color(rgb(theme.warning))
                         .shadow_md()
                         .text_size(px(10.))
                         .child(language.text("agenda.recovery"))

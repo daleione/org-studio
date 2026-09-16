@@ -1979,7 +1979,9 @@ mod tests {
 
     #[test]
     fn official_org_palette_is_applied_to_source_markup() {
-        let theme = current_theme();
+        // Pinned to the light palette: this test asserts the canonical light
+        // markup colors and must not flip when the global mode is dark.
+        let theme = &crate::theme::ORG_STUDIO_LIGHT;
         assert_eq!(theme.foreground, 0x373942);
         assert_eq!(theme.heading[0], 0xe45549);
         assert_eq!(theme.heading[1], 0xd98547);

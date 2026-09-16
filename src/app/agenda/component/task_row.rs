@@ -7,6 +7,7 @@ use super::TaskColumns;
 use crate::{
     agenda::{AgendaDateKind, AgendaRow},
     app::WorkspaceWindow,
+    theme::current_theme,
 };
 
 pub(crate) fn task_row(
@@ -34,6 +35,7 @@ pub(crate) fn task_row(
         None => language.text("agenda.unscheduled"),
     };
     let waiting = row.todo.eq_ignore_ascii_case("WAITING") || row.todo.eq_ignore_ascii_case("WAIT");
+    let theme = current_theme();
     let select = |workspace: Entity<WorkspaceWindow>| {
         move |_: &gpui::MouseDownEvent, _: &mut gpui::Window, cx: &mut gpui::App| {
             cx.stop_propagation();
@@ -46,14 +48,20 @@ pub(crate) fn task_row(
         .id(("agenda-task-row", row_id))
         .h(px(super::super::style::TASK_ROW_HEIGHT))
         .border_t_1()
-        .border_color(rgb(0xf0f0f2))
+        .border_color(rgb(theme.divider))
         .bg(rgb(if selected {
-            super::super::style::BLUE_SELECTION
+            super::super::style::BLUE_SELECTION()
         } else {
-            0xffffff
+            theme.background
         }))
         .cursor_pointer()
-        .hover(move |style| style.bg(rgb(if selected { 0xddeeff } else { 0xeeeef1 })))
+        .hover(move |style| {
+            style.bg(rgb(if selected {
+                theme.accent_bg
+            } else {
+                theme.hover
+            }))
+        })
         .active(|style| style.opacity(0.78))
         .child(
             TaskColumns::cell(TaskColumns::CHECK)
@@ -61,8 +69,12 @@ pub(crate) fn task_row(
                 .h(px(18.))
                 .rounded_full()
                 .border_1()
-                .border_color(rgb(0xc7cad0))
-                .hover(|style| style.border_color(rgb(0x1688ff)).bg(rgb(0xe8f2ff)))
+                .border_color(rgb(theme.border_hover))
+                .hover(|style| {
+                    style
+                        .border_color(rgb(theme.accent))
+                        .bg(rgb(theme.accent_bg))
+                })
                 .active(|style| style.opacity(0.7))
                 .on_mouse_down(MouseButton::Left, select(workspace.clone())),
         )
@@ -81,8 +93,8 @@ pub(crate) fn task_row(
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .text_size(px(12.))
-                    .text_color(rgb(0x656a72))
-                    .hover(|style| style.bg(rgb(0xe4effc)).text_color(rgb(0x0876df)))
+                    .text_color(rgb(theme.foreground_dim))
+                    .hover(|style| style.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent)))
                     .active(|style| style.opacity(0.72))
                     .child(source.to_owned())
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -107,7 +119,7 @@ pub(crate) fn task_row(
                 .font_family("SFMono-Regular")
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .text_size(px(12.))
-                .hover(|style| style.bg(rgb(0xe4effc)).text_color(rgb(0x0876df)))
+                .hover(|style| style.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent)))
                 .active(|style| style.opacity(0.72))
                 .child(time)
                 .on_mouse_down(MouseButton::Left, select(workspace.clone())),
@@ -124,12 +136,12 @@ pub(crate) fn task_row(
                     .text_size(px(11.))
                     .text_color(rgb(
                         if matches!(row.date_kind, Some(AgendaDateKind::Deadline)) {
-                            0xa66a00
+                            theme.warning
                         } else {
-                            0x73777e
+                            theme.foreground_muted
                         },
                     ))
-                    .hover(|style| style.bg(rgb(0xf7eedc)))
+                    .hover(|style| style.bg(rgb(theme.hover)))
                     .active(|style| style.opacity(0.72))
                     .child(plan)
                     .on_mouse_down(MouseButton::Left, select(workspace.clone())),
@@ -152,13 +164,21 @@ pub(crate) fn task_row(
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .bg(rgb(if waiting { 0xebf3fb } else { 0xe8f4eb }))
-                        .text_color(rgb(if waiting { 0x2771b5 } else { 0x358342 }))
+                        .bg(rgb(if waiting {
+                            theme.accent_bg
+                        } else {
+                            theme.hover
+                        }))
+                        .text_color(rgb(if waiting { theme.accent } else { theme.success }))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_size(px(10.))
                         .hover(|style| {
                             style
-                                .bg(rgb(if waiting { 0xd8eafb } else { 0xd8eddc }))
+                                .bg(rgb(if waiting {
+                                    theme.accent_bg
+                                } else {
+                                    theme.hover
+                                }))
                                 .shadow_sm()
                         })
                         .active(|style| style.opacity(0.7))
@@ -183,9 +203,9 @@ pub(crate) fn task_row(
                                 .justify_center()
                                 .rounded(px(5.))
                                 .border_1()
-                                .border_color(rgb(0xf0d59c))
-                                .bg(rgb(0xfff8e9))
-                                .text_color(rgb(0xa36500))
+                                .border_color(rgb(theme.warning))
+                                .bg(rgb(theme.hover))
+                                .text_color(rgb(theme.warning))
                                 .text_size(px(10.))
                                 .child(priority.to_string()),
                         )
@@ -199,7 +219,7 @@ pub(crate) fn task_row(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_color(rgb(0x202329))
+                .text_color(rgb(theme.foreground))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_size(px(14.))
                 .child(row.title.to_string()),
@@ -220,10 +240,10 @@ pub(crate) fn task_row(
                             .flex()
                             .items_center()
                             .rounded_full()
-                            .bg(rgb(0xf3edf5))
-                            .text_color(rgb(0x754c7d))
+                            .bg(rgb(theme.accent_bg))
+                            .text_color(rgb(theme.todo_active))
                             .text_size(px(11.))
-                            .hover(|style| style.bg(rgb(0xe5d8eb)))
+                            .hover(|style| style.bg(rgb(theme.accent_bg)))
                             .active(|style| style.opacity(0.72))
                             .child(tag.to_string())
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {

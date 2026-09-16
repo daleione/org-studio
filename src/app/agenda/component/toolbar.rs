@@ -32,6 +32,7 @@ fn button(
     enabled: bool,
 ) -> Stateful<Div> {
     let label = label.into();
+    let theme = crate::theme::current_theme();
     div()
         .id(format!("agenda-toolbar-button-{label}"))
         .debug_selector({
@@ -46,27 +47,35 @@ fn button(
         .justify_center()
         .rounded(px(6.))
         .border_1()
-        .border_color(rgb(0xdfe0e3))
-        .bg(rgb(if selected { 0xe8f2ff } else { 0xffffff }))
-        .text_color(rgb(if !enabled {
-            0xa2a5aa
-        } else if selected {
-            0x1688ff
+        .border_color(rgb(theme.border))
+        .bg(rgb(if selected {
+            theme.accent_bg
         } else {
-            0x454950
+            theme.background
+        }))
+        .text_color(rgb(if !enabled {
+            theme.foreground_disabled
+        } else if selected {
+            theme.accent
+        } else {
+            theme.foreground_dim
         }))
         .text_size(px(12.))
         .child(label)
         .hover(move |style| {
             if selected {
-                style.bg(rgb(0xd8eaff)).border_color(rgb(0x76b6f2))
+                style
+                    .bg(rgb(theme.accent_bg))
+                    .border_color(rgb(theme.accent_border))
             } else if enabled {
-                style.bg(rgb(0xe9eaed)).border_color(rgb(0xbfc2c8))
+                style
+                    .bg(rgb(theme.hover))
+                    .border_color(rgb(theme.border_hover))
             } else {
                 style
-                    .bg(rgb(0xf1f2f4))
-                    .border_color(rgb(0xd1d3d7))
-                    .text_color(rgb(0x858990))
+                    .bg(rgb(theme.hover))
+                    .border_color(rgb(theme.border))
+                    .text_color(rgb(theme.foreground_muted))
             }
         })
         .active(|style| style.opacity(0.72))
@@ -100,17 +109,21 @@ fn edit_icon_button(workspace: Entity<WorkspaceWindow>) -> Stateful<Div> {
         .justify_center()
         .rounded_full()
         .border_1()
-        .border_color(rgb(super::super::style::BORDER))
-        .bg(rgb(super::super::style::TOOLBAR))
+        .border_color(rgb(super::super::style::BORDER()))
+        .bg(rgb(super::super::style::TOOLBAR()))
         .cursor_pointer()
-        .hover(move |style| style.bg(rgb(0xe9eaed)).border_color(rgb(0xbfc2c8)))
+        .hover(move |style| {
+            style
+                .bg(rgb(crate::theme::current_theme().hover))
+                .border_color(rgb(crate::theme::current_theme().border_hover))
+        })
         .active(|style| style.opacity(0.72))
         .child(
             svg()
                 .debug_selector(|| "agenda-titlebar-edit-icon".to_owned())
                 .data(include_bytes!("../../assets/edit.svg"))
                 .size(px(14.))
-                .text_color(rgb(super::super::style::INK)),
+                .text_color(rgb(super::super::style::INK())),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
@@ -130,6 +143,8 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
         motion_enabled,
         titlebar_inset,
     } = props;
+    // Theme mode is process-global state; the shared toggle icon reflects it.
+    let theme_mode = crate::theme::theme_mode();
     let narrow = window_width < 900.;
     let today = jiff::Zoned::now().date();
     let date_browsing = state.browses_dates();
@@ -213,9 +228,9 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
         .flex()
         .flex_col()
         .gap(px(10.))
-        .bg(rgb(super::super::style::TOOLBAR))
+        .bg(rgb(super::super::style::TOOLBAR()))
         .border_b_1()
-        .border_color(rgb(super::super::style::BORDER))
+        .border_color(rgb(super::super::style::BORDER()))
         .child(
             div()
                 .debug_selector(|| "agenda-titlebar-file-row".to_owned())
@@ -227,6 +242,10 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                 .items_center()
                 .gap(px(8.))
                 .child(edit_icon_button(workspace.clone()))
+                .child(crate::app::render::theme_toggle_button(
+                    workspace.clone(),
+                    theme_mode,
+                ))
                 .child(
                     div()
                         .debug_selector(|| "agenda-titlebar-file-name".to_owned())
@@ -239,7 +258,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                         .text_ellipsis()
                         .text_size(px(12.))
                         .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(super::super::style::MUTED))
+                        .text_color(rgb(super::super::style::MUTED()))
                         .child(window_title),
                 ),
         )
@@ -390,9 +409,14 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                             )
                             .w(px(32.))
                             .px_0()
-                            .when(date.month() != month.month(), |cell| {
-                                cell.text_color(rgb(0xa2a5aa))
-                            })
+                            .when(
+                                date.month() != month.month(),
+                                |cell| {
+                                    cell.text_color(rgb(
+                                        crate::theme::current_theme().foreground_disabled
+                                    ))
+                                },
+                            )
                         }),
                 ),
             );

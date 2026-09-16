@@ -113,48 +113,118 @@ const MORE_WIDTH: f32 = 36.0;
 
 // Status colors deliberately stay independent from document syntax colors. A status should
 // communicate state consistently even when the active theme uses red for its first heading.
-const STATUS_CLEAN: u32 = 0x079e70;
-const STATUS_CLEAN_HOVER: u32 = 0xeaf3f8;
-const STATUS_CLEAN_FOREGROUND: u32 = 0x34445b;
-const STATUS_DIRTY: u32 = 0xf5b718;
-const STATUS_DIRTY_HOVER: u32 = 0xeaf3f8;
-const STATUS_DIRTY_FOREGROUND: u32 = 0x34445b;
-const STATUS_WORKING_TEXT: u32 = 0x627795;
-const STATUS_SUCCESS_TEXT: u32 = 0x079e70;
-const STATUS_ERROR_TEXT: u32 = 0xa14f5d;
-const STATUS_PROGRESS: u32 = 0x079e70;
-const STATUS_BACKGROUND: u32 = 0xf7faff;
-const STATUS_BORDER: u32 = 0xdce4ee;
-const STATUS_FOREGROUND: u32 = 0x60718c;
+// Light values preserve the original hand-tuned palette; dark values follow the product
+// dark palette (status-bg #111A24, success #36D399, warning, error).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct StatusColors {
+    clean: u32,
+    clean_hover: u32,
+    dirty: u32,
+    dirty_hover: u32,
+    working_text: u32,
+    success_text: u32,
+    error_text: u32,
+    progress: u32,
+    progress_border: u32,
+    background: u32,
+    border: u32,
+    foreground: u32,
+    /// Text on the mode/save chips against the status-bar background. Light
+    /// uses the deep navy chip ink; dark must flip to a light tone because the
+    /// chips sit on the dark bar, not on a colored dot.
+    mode_text: u32,
+    hover_background: u32,
+    hover_foreground: u32,
+    active_background: u32,
+    active_foreground: u32,
+    badge_background: u32,
+    badge_foreground: u32,
+    floating_background: u32,
+}
+
+static STATUS_LIGHT: StatusColors = StatusColors {
+    clean: 0x079e70,
+    clean_hover: 0xeaf3f8,
+    dirty: 0xf5b718,
+    dirty_hover: 0xeaf3f8,
+    working_text: 0x627795,
+    success_text: 0x079e70,
+    error_text: 0xa14f5d,
+    progress: 0x079e70,
+    progress_border: 0xe3f1ed,
+    background: 0xf7faff,
+    border: 0xdce4ee,
+    foreground: 0x60718c,
+    mode_text: 0x34445b,
+    hover_background: 0xeaf0f8,
+    hover_foreground: 0x5278b5,
+    active_background: 0xdfe9f8,
+    active_foreground: 0x4977cf,
+    badge_background: 0xe4eaff,
+    badge_foreground: 0x4565cd,
+    floating_background: 0xf7f9fbf5,
+};
+
+static STATUS_DARK: StatusColors = StatusColors {
+    clean: 0x36d399,
+    clean_hover: 0x253444,
+    dirty: 0xf5b84b,
+    dirty_hover: 0x253444,
+    working_text: 0x8b98a7,
+    success_text: 0x36d399,
+    error_text: 0xf06a7a,
+    progress: 0x36d399,
+    progress_border: 0x253445,
+    // One step lighter than the window bottom so the bar reads as its own
+    // surface against the editor background.
+    background: 0x141f2b,
+    border: 0x2a3a4d,
+    foreground: 0x9fadc0,
+    mode_text: 0xe6edf3,
+    hover_background: 0x253444,
+    hover_foreground: 0x8b98a7,
+    active_background: 0x1b3a5c,
+    active_foreground: 0x66b3ff,
+    badge_background: 0x1b3a5c,
+    badge_foreground: 0x66b3ff,
+    floating_background: 0x1e2b39f5,
+};
+
+fn status_colors() -> &'static StatusColors {
+    if crate::theme::effective_theme_is_dark() {
+        &STATUS_DARK
+    } else {
+        &STATUS_LIGHT
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct ModeColors {
     background: u32,
     hover: u32,
-    foreground: u32,
 }
 
 fn mode_colors(dirty: bool) -> ModeColors {
+    let status = status_colors();
     if dirty {
         ModeColors {
-            background: STATUS_DIRTY,
-            hover: STATUS_DIRTY_HOVER,
-            foreground: STATUS_DIRTY_FOREGROUND,
+            background: status.dirty,
+            hover: status.dirty_hover,
         }
     } else {
         ModeColors {
-            background: STATUS_CLEAN,
-            hover: STATUS_CLEAN_HOVER,
-            foreground: STATUS_CLEAN_FOREGROUND,
+            background: status.clean,
+            hover: status.clean_hover,
         }
     }
 }
 
 fn status_tone_color(tone: StatusTone) -> u32 {
+    let status = status_colors();
     match tone {
-        StatusTone::Working => STATUS_WORKING_TEXT,
-        StatusTone::Success => STATUS_SUCCESS_TEXT,
-        StatusTone::Error => STATUS_ERROR_TEXT,
+        StatusTone::Working => status.working_text,
+        StatusTone::Success => status.success_text,
+        StatusTone::Error => status.error_text,
     }
 }
 
@@ -592,7 +662,7 @@ fn breadcrumb(path: &str, compact: bool) -> gpui::Div {
                     .data(include_bytes!("assets/status-chevron-right.svg"))
                     .size(px(14.0))
                     .flex_none()
-                    .text_color(rgb(STATUS_FOREGROUND)),
+                    .text_color(rgb(status_colors().foreground)),
             );
         }
         row = row.child(
@@ -655,8 +725,8 @@ pub(crate) fn floating_status_container(height: f32) -> gpui::Div {
         .h(px(height))
         .rounded(px(10.0))
         .border_1()
-        .border_color(rgb(STATUS_BORDER))
-        .bg(gpui::rgba(0xf7f9fbf5))
+        .border_color(rgb(status_colors().border))
+        .bg(gpui::rgba(status_colors().floating_background))
         .overflow_hidden()
         .shadow_lg()
 }
@@ -695,15 +765,21 @@ pub(crate) fn render_buffer_status_trigger(
                 .gap(px(5.0))
                 .rounded(px(5.0))
                 .text_size(px(11.0))
-                .text_color(rgb(STATUS_FOREGROUND))
+                .text_color(rgb(status_colors().foreground))
                 .cursor_pointer()
-                .hover(|s| s.bg(rgb(0xeaf0f8)).text_color(rgb(0x5278b5)))
-                .active(|s| s.bg(rgb(0xdfe9f8)).text_color(rgb(0x4977cf)))
+                .hover(|s| {
+                    s.bg(rgb(status_colors().hover_background))
+                        .text_color(rgb(status_colors().hover_foreground))
+                })
+                .active(|s| {
+                    s.bg(rgb(status_colors().active_background))
+                        .text_color(rgb(status_colors().active_foreground))
+                })
                 .tooltip(move |_, cx| cx.new(|_| popover::OutlineTooltip(title.clone())).into())
                 .child(
                     gpui::svg()
                         .data(include_bytes!("assets/status-documents.svg"))
-                        .text_color(rgb(STATUS_FOREGROUND))
+                        .text_color(rgb(status_colors().foreground))
                         .size(px(16.0))
                         .flex_none(),
                 )
@@ -744,14 +820,14 @@ pub(crate) fn render_status_line_content(
         .gap(px(6.0))
         .rounded_full()
         .border_1()
-        .border_color(rgb(STATUS_BORDER))
-        .bg(rgb(STATUS_BACKGROUND))
-        .text_color(rgb(mode_colors.foreground))
+        .border_color(rgb(status_colors().border))
+        .bg(rgb(status_colors().background))
+        .text_color(rgb(status_colors().mode_text))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .hover(move |style| {
             style
                 .bg(rgb(mode_colors.hover))
-                .text_color(rgb(mode_colors.foreground))
+                .text_color(rgb(status_colors().mode_text))
         })
         .child(
             div()
@@ -953,8 +1029,8 @@ pub(crate) fn render_status_line_content(
                 .w(px(slot_width))
                 .rounded_full()
                 .border_1()
-                .border_color(rgb(0xe3f1ed))
-                .text_color(rgb(STATUS_PROGRESS))
+                .border_color(rgb(status_colors().progress_border))
+                .text_color(rgb(status_colors().progress))
                 .overflow_hidden()
                 .when(layout.progress == Variant::Full, |button| {
                     button.child(progress_ring(progress))
@@ -993,7 +1069,7 @@ pub(crate) fn render_status_line_content(
             .child(
                 gpui::svg()
                     .data(include_bytes!("assets/status-settings.svg"))
-                    .text_color(rgb(STATUS_FOREGROUND))
+                    .text_color(rgb(status_colors().foreground))
                     .size(px(16.0))
                     .flex_none(),
             )
@@ -1010,8 +1086,8 @@ pub(crate) fn render_status_line_content(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .bg(rgb(0xe4eaff))
-                        .text_color(rgb(0x4565cd))
+                        .bg(rgb(status_colors().badge_background))
+                        .text_color(rgb(status_colors().badge_foreground))
                         .text_size(px(8.0))
                         .child(layout.overflow.len().to_string()),
                 )
@@ -1043,9 +1119,11 @@ pub(crate) fn render_status_line_content(
         .flex()
         .items_center()
         .overflow_hidden()
-        .when(!floating, |bar| bar.border_t_1().bg(rgb(STATUS_BACKGROUND)))
-        .border_color(rgb(STATUS_BORDER))
-        .text_color(rgb(STATUS_FOREGROUND))
+        .when(!floating, |bar| {
+            bar.border_t_1().bg(rgb(status_colors().background))
+        })
+        .border_color(rgb(status_colors().border))
+        .text_color(rgb(status_colors().foreground))
         .font_family(".SystemUIFont")
         .text_size(px(11.0))
         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
@@ -1081,11 +1159,15 @@ fn status_button(
         .gap(px(5.0))
         .cursor_pointer()
         .border_l_1()
-        .border_color(rgb(STATUS_BORDER));
+        .border_color(rgb(status_colors().border));
     let button = if segment == StatusSegment::Mode {
         button
     } else {
-        button.hover(|style| style.bg(rgb(0xeaf0f8)).text_color(rgb(theme.foreground)))
+        button.hover(|style| {
+            style
+                .bg(rgb(status_colors().hover_background))
+                .text_color(rgb(theme.foreground))
+        })
     };
     if segment == StatusSegment::More {
         return button;
@@ -1101,7 +1183,7 @@ fn status_button(
 fn progress_ring(progress: u8) -> impl gpui::IntoElement {
     let theme = current_theme();
     let background = rgb(theme.border);
-    let foreground = rgb(STATUS_PROGRESS);
+    let foreground = rgb(status_colors().progress);
     canvas(
         |_, _, _| {},
         move |bounds, _, window, _| {
@@ -1359,7 +1441,7 @@ fn status_separator() -> impl IntoElement {
         .w(px(1.0))
         .h(px(14.0))
         .mx(px(5.0))
-        .bg(rgb(STATUS_BORDER))
+        .bg(rgb(status_colors().border))
 }
 
 fn format_byte_count(bytes: u64) -> String {
@@ -1547,13 +1629,16 @@ mod tests {
         let clean = mode_colors(false);
         let dirty = mode_colors(true);
 
-        assert_eq!(clean.background, STATUS_CLEAN);
-        assert_eq!(dirty.background, STATUS_DIRTY);
+        assert_eq!(clean.background, status_colors().clean);
+        assert_eq!(dirty.background, status_colors().dirty);
         assert_ne!(clean.background, dirty.background);
         assert_ne!(clean.background, current_theme().heading[0]);
         assert_ne!(dirty.background, current_theme().heading[0]);
-        assert_ne!(STATUS_PROGRESS, current_theme().heading[0]);
-        assert_eq!(status_tone_color(StatusTone::Error), STATUS_ERROR_TEXT);
+        assert_ne!(status_colors().progress, current_theme().heading[0]);
+        assert_eq!(
+            status_tone_color(StatusTone::Error),
+            status_colors().error_text
+        );
     }
 
     #[test]

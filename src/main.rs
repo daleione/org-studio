@@ -77,6 +77,18 @@ impl ApplicationController {
                         );
                     })
                     .detach();
+                    // Follow system appearance changes so Auto mode repaints
+                    // with the matching palette without a restart. Events that
+                    // arrive while an explicit mode pins the native appearance
+                    // are ignored by the theme layer (they reflect our pin).
+                    window
+                        .observe_window_appearance(|window, cx| {
+                            org_studio::theme::note_system_appearance(is_dark_appearance(
+                                window.appearance(),
+                            ));
+                            cx.refresh_windows();
+                        })
+                        .detach();
                     preview
                 });
                 window.activate_window();
@@ -146,6 +158,13 @@ fn preview_window_options(cx: &mut App) -> WindowOptions {
     options
 }
 
+fn is_dark_appearance(appearance: WindowAppearance) -> bool {
+    matches!(
+        appearance,
+        WindowAppearance::Dark | WindowAppearance::VibrantDark
+    )
+}
+
 fn paths_from_urls(urls: Vec<String>) -> Vec<PathBuf> {
     urls.into_iter()
         .filter_map(|url| url::Url::parse(&url).ok())
@@ -168,9 +187,12 @@ fn main() {
     });
 
     application.run(move |cx: &mut App| {
-        // Until Org Studio ships a complete dark theme, keep native macOS chrome in sync with
-        // the application's light palette instead of inheriting a dark system titlebar.
-        cx.set_window_appearance(Some(WindowAppearance::Light));
+        // Restore the persisted theme mode (Auto/Light/Dark). Auto hands the
+        // native chrome back to the system; explicit modes pin the matching
+        // appearance so the traffic-light row stays in sync with the palette.
+        let theme_mode = org_studio::settings::WorkspaceSettings::load().theme_mode;
+        org_studio::theme::set_theme_mode(theme_mode);
+        cx.set_window_appearance(org_studio::app::native_window_appearance(theme_mode));
         // Give command-line documents a head start while menus, displays and the native window are
         // initialized. `open_initial` consumes an already-ready small document synchronously and
         // continues awaiting a large one without blocking the window.

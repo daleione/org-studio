@@ -225,6 +225,7 @@ impl WorkspaceWindow {
             minimap_width: crate::settings::initial_minimap_width(preview_settings.minimap_width),
             minimap_resize_preview: None,
             reading_style: benchmark_reading_style.unwrap_or(preview_settings.reading_style),
+            theme_mode: preview_settings.theme_mode,
             status: crate::app::status_line::StatusLineHost::new(preview_settings.status_line),
         }
     }
@@ -428,6 +429,7 @@ impl WorkspaceWindow {
             minimap_width: self.minimap_width,
             sidebar_width: self.file_manager.sidebar_width(),
             reading_style: self.reading_style,
+            theme_mode: self.theme_mode,
             status_line: self.status.settings(),
         };
         #[cfg(not(test))]
@@ -436,6 +438,22 @@ impl WorkspaceWindow {
 
     pub fn language(&self) -> crate::i18n::Language {
         self.language
+    }
+
+    pub fn theme_mode(&self) -> crate::theme::ThemeMode {
+        self.theme_mode
+    }
+
+    /// Titlebar toggle: rotate Auto -> Light -> Dark -> Auto, persist the
+    /// choice, keep the native macOS chrome in sync and repaint every window.
+    pub(crate) fn cycle_theme_mode(&mut self, cx: &mut Context<Self>) {
+        let next = self.theme_mode.next();
+        self.theme_mode = next;
+        crate::theme::set_theme_mode(next);
+        cx.set_window_appearance(crate::app::native_window_appearance(next));
+        self.save_preview_settings();
+        // The palette is process-global, so every window must redraw.
+        cx.refresh_windows();
     }
 
     pub(crate) fn set_language(&mut self, language: crate::i18n::Language, cx: &mut Context<Self>) {

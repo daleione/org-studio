@@ -1,10 +1,10 @@
 use crate::{
     editor::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     preview::{
-        DecreaseContentFontSize, ExportDocument, IncreaseContentFontSize, OpenDocument,
-        QuitApplication, ReloadDocument, ResetContentFontSize, SaveDocument, SaveDocumentAs,
-        ShowEditor, ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap,
-        UseChinese, UseEnglish,
+        CycleThemeMode, DecreaseContentFontSize, ExportDocument, IncreaseContentFontSize,
+        OpenDocument, QuitApplication, ReloadDocument, ResetContentFontSize, SaveDocument,
+        SaveDocumentAs, ShowEditor, ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar,
+        ToggleSoftWrap, UseChinese, UseEnglish,
     },
 };
 use gpui::{Menu, MenuItem, SystemMenuType};
@@ -69,6 +69,8 @@ pub fn application_menus(language: crate::i18n::Language) -> Vec<Menu> {
                 t("重置字号", "Reset Content Font Size"),
                 ResetContentFontSize,
             ),
+            MenuItem::separator(),
+            MenuItem::action(t("切换主题模式", "Cycle Theme Mode"), CycleThemeMode),
         ]),
         Menu::new(t("语言", "Language")).items([
             MenuItem::action(t("English", "English"), UseEnglish),

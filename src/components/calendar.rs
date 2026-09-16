@@ -76,6 +76,7 @@ pub(crate) fn month_days(month: Date) -> Vec<Date> {
 
 impl Calendar {
     pub(crate) fn render(self) -> impl IntoElement {
+        let theme = crate::theme::current_theme();
         let mut header = div().flex().items_center().mb_2().child(
             div()
                 .flex_1()
@@ -108,7 +109,7 @@ impl Calendar {
                     .justify_center()
                     .rounded_md()
                     .cursor_pointer()
-                    .hover(|s| s.bg(rgb(0xf0f3f8)))
+                    .hover(|s| s.bg(rgb(theme.hover)))
                     .child(label)
                     .on_click(move |_, window, cx| {
                         if let Some(date) = target {
@@ -141,7 +142,7 @@ impl Calendar {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(rgb(0x92949d))
+                    .text_color(rgb(theme.foreground_muted))
                     .text_size(px(11.))
                     .child(self.language.text(name)),
             );
@@ -189,7 +190,7 @@ impl Calendar {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .when(in_range, |s| s.bg(rgb(0xe3eeff)))
+                                .when(in_range, |s| s.bg(rgb(theme.accent_bg)))
                                 .when(in_range && (range_start || column == 0), |s| {
                                     s.rounded_l_full()
                                 })
@@ -206,15 +207,15 @@ impl Calendar {
                                         .justify_center()
                                         .when(range_mode, |s| s.rounded_full())
                                         .when(!range_mode, |s| s.rounded(px(8.)))
-                                        .when(selected, |s| s.bg(rgb(0x3f78f2)))
+                                        .when(selected, |s| s.bg(rgb(theme.accent)))
                                         .text_color(rgb(if selected {
-                                            0xffffff
+                                            0xffffff // text on accent fill: fixed for contrast
                                         } else if in_range {
-                                            0x3f78f2
+                                            theme.accent
                                         } else if date.month() != self.month.month() {
-                                            0xaeb2bd
+                                            theme.foreground_disabled
                                         } else {
-                                            0x373942
+                                            theme.foreground
                                         }))
                                         .child(date.day().to_string())
                                         .when(date == self.today, |s| {
@@ -225,9 +226,9 @@ impl Calendar {
                                                     .size(px(3.))
                                                     .rounded_full()
                                                     .bg(rgb(if selected {
-                                                        0xffffff
+                                                        0xffffff // today dot on accent fill
                                                     } else {
-                                                        0x3f78f2
+                                                        theme.accent
                                                     })),
                                             )
                                         }),

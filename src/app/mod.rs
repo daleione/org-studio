@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use gpui::{FocusHandle, Subscription, Task};
+use gpui::{FocusHandle, Subscription, Task, WindowAppearance};
 
 use crate::{
     command::CommandRegistry,
@@ -53,6 +53,17 @@ pub(crate) const TITLEBAR_LEADING_INSET: f32 = 78.0;
 #[cfg(not(target_os = "macos"))]
 pub(crate) const TITLEBAR_LEADING_INSET: f32 = 8.0;
 pub(crate) const TITLEBAR_TRAILING_INSET: f32 = 8.0;
+
+/// Native macOS chrome appearance for a theme mode. `Auto` hands control back
+/// to the system (`None`); explicit modes pin the matching appearance so the
+/// traffic-light row and native popovers stay in sync with the palette.
+pub fn native_window_appearance(mode: crate::theme::ThemeMode) -> Option<WindowAppearance> {
+    match mode {
+        crate::theme::ThemeMode::Auto => None,
+        crate::theme::ThemeMode::Light => Some(WindowAppearance::Light),
+        crate::theme::ThemeMode::Dark => Some(WindowAppearance::Dark),
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PaneSurface {
@@ -328,6 +339,7 @@ pub struct WorkspaceWindow {
     pub(crate) minimap_width: Option<u16>,
     pub(crate) minimap_resize_preview: Option<f32>,
     pub(crate) reading_style: crate::preview::PreviewStyleId,
+    pub(crate) theme_mode: crate::theme::ThemeMode,
     pub(crate) status: StatusLineHost,
 }
 

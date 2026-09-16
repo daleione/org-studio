@@ -8,6 +8,7 @@ use super::{
 use crate::app::{PaneSide, WorkspaceWindow, status_line};
 
 fn keycap(key: &str, active: bool) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     let label = key_label(key);
     div()
         .flex_none()
@@ -20,8 +21,13 @@ fn keycap(key: &str, active: bool) -> gpui::Div {
         .rounded(px(5.))
         .font_family(KEY_FONT)
         .text_size(px(KEY_SIZE))
-        .bg(rgb(if active { 0x4977cf } else { 0xeaf0fb }))
-        .text_color(rgb(if active { 0xffffff } else { 0x4977cf }))
+        .bg(rgb(if active {
+            theme.accent
+        } else {
+            theme.accent_bg
+        }))
+        // White on the active accent blue stays fixed for contrast.
+        .text_color(rgb(if active { 0xffffff } else { theme.accent }))
         .child(label.to_owned())
 }
 
@@ -96,7 +102,9 @@ impl WorkspaceWindow {
                                         .flex_none()
                                         .px(px(ROW_PADDING))
                                         .text_size(px(KEY_SIZE))
-                                        .text_color(rgb(0x8796a8))
+                                        .text_color(rgb(
+                                            crate::theme::current_theme().foreground_muted
+                                        ))
                                         .child(group.title(self.language)),
                                 )
                             })
@@ -117,7 +125,11 @@ impl WorkspaceWindow {
             .overflow_hidden();
         for (index, key) in prefix_keys.iter().enumerate() {
             if index > 0 {
-                breadcrumb = breadcrumb.child(div().text_color(rgb(0x9aa7b6)).child("›"));
+                breadcrumb = breadcrumb.child(
+                    div()
+                        .text_color(rgb(crate::theme::current_theme().foreground_muted))
+                        .child("›"),
+                );
             }
             breadcrumb = breadcrumb.child(keycap(key, index + 1 == prefix_keys.len()));
         }
@@ -126,11 +138,12 @@ impl WorkspaceWindow {
                 group.title(self.language)
             });
         let cancel = entity.clone();
+        let theme = crate::theme::current_theme();
         div()
             .size_full()
             .font_family(FONT)
             .text_size(px(FONT_SIZE))
-            .text_color(rgb(0x53657b))
+            .text_color(rgb(theme.foreground_dim))
             .flex()
             .flex_col()
             .child(
@@ -151,7 +164,7 @@ impl WorkspaceWindow {
                     .flex_none()
                     .mx(px(PADDING))
                     .border_t_1()
-                    .border_color(rgb(0xdce4ee))
+                    .border_color(rgb(theme.border))
                     .flex()
                     .items_center()
                     .gap(px(8.))
@@ -178,6 +191,7 @@ impl WorkspaceWindow {
     }
 
     fn prefix_item_row(&self, item: &Item, p: &Presentation, entity: Entity<Self>) -> AnyElement {
+        let theme = crate::theme::current_theme();
         let key = item.key.clone();
         let selector = format!("prefix-hint-key-{}", item.key);
         let prefix = p.prefix.clone();
@@ -196,7 +210,7 @@ impl WorkspaceWindow {
             .rounded(px(6.))
             .when(!enabled, |row| row.opacity(0.45))
             .when(enabled, |row| {
-                row.cursor_pointer().hover(|s| s.bg(rgb(0xeaf1fc)))
+                row.cursor_pointer().hover(|s| s.bg(rgb(theme.accent_bg)))
             })
             .child(keycap(&item.key, false).w(px(p.layout.key_width)))
             .child(
@@ -207,7 +221,11 @@ impl WorkspaceWindow {
                     .child(item.title.clone()),
             )
             .when(item.prefix, |row| {
-                row.child(div().text_color(rgb(0x8796a8)).child("›"))
+                row.child(
+                    div()
+                        .text_color(rgb(crate::theme::current_theme().foreground_muted))
+                        .child("›"),
+                )
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                 cx.stop_propagation();

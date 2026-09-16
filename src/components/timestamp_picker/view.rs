@@ -24,29 +24,30 @@ impl TimestampPicker {
             .text_color(rgb(if selected {
                 0xffffff
             } else {
-                SELECTED_BACKGROUND
+                SELECTED_BACKGROUND()
             }))
-            .when(selected, |s| s.bg(rgb(SELECTED_BACKGROUND)))
+            .when(selected, |s| s.bg(rgb(SELECTED_BACKGROUND())))
             .hover(|s| {
                 s.bg(rgb(if selected {
-                    SELECTED_HOVER_BACKGROUND
+                    SELECTED_HOVER_BACKGROUND()
                 } else {
-                    HOVER_BACKGROUND
+                    HOVER_BACKGROUND()
                 }))
             })
             .child(text.into())
             .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
     }
     fn segmented() -> gpui::Div {
+        let theme = crate::theme::current_theme();
         div()
             .flex()
             .w_full()
             .p(px(3.))
             .gap(px(3.))
             .rounded(px(9.))
-            .bg(rgb(0xf4f5f8))
+            .bg(rgb(theme.surface))
             .border_1()
-            .border_color(rgb(0xe9ebf0))
+            .border_color(rgb(theme.divider))
     }
     fn segment(
         &self,
@@ -56,20 +57,22 @@ impl TimestampPicker {
         cx: &Context<Self>,
         click: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
     ) -> gpui::Stateful<gpui::Div> {
+        let theme = crate::theme::current_theme();
         self.button(id, label, selected, cx, click)
             .flex_1()
             .min_w_0()
             .flex()
             .justify_center()
             .items_center()
-            .when(!selected, |s| s.text_color(rgb(0x555b68)))
+            .when(!selected, |s| s.text_color(rgb(theme.foreground_dim)))
     }
     fn icon(name: &'static str) -> gpui::Svg {
+        let theme = crate::theme::current_theme();
         gpui::svg()
             .path(format!("assets/icons/agenda/{name}.svg"))
             .size(px(16.))
             .flex_none()
-            .text_color(rgb(0x626c7d))
+            .text_color(rgb(theme.foreground_muted))
     }
     fn row(label: impl Into<gpui::SharedString>, icon: Option<&'static str>) -> gpui::Div {
         let label = label.into();
@@ -95,23 +98,25 @@ impl TimestampPicker {
         self.changed(cx);
     }
     fn group() -> gpui::Div {
+        let theme = crate::theme::current_theme();
         div()
             .p_2()
             .rounded(px(11.))
-            .bg(rgb(0xf5f6f8))
+            .bg(rgb(theme.surface))
             .flex()
             .flex_col()
             .gap_1()
     }
 
     fn date_editor(&self, cx: &Context<Self>) -> gpui::Div {
+        let theme = crate::theme::current_theme();
         let entity = cx.entity().downgrade();
         let month_entity = entity.clone();
         let mut panel = div()
             .debug_selector(|| "inline-calendar".into())
             .p_2()
             .border_t_1()
-            .border_color(rgb(0xe9ebf0))
+            .border_color(rgb(theme.divider))
             .child(
                 Calendar {
                     language: self.language,
@@ -249,11 +254,12 @@ impl TimestampPicker {
     }
 
     fn calendar_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = crate::theme::current_theme();
         let Some(endpoint) = self.endpoint() else {
             return div()
                 .p_3()
                 .rounded_lg()
-                .bg(rgb(0xf5f6f8))
+                .bg(rgb(theme.surface))
                 .child(self.t("timestamp.special"))
                 .into_any_element();
         };
@@ -296,7 +302,7 @@ impl TimestampPicker {
             .px_2()
             .rounded(px(11.))
             .border_1()
-            .border_color(rgb(0xe9ebf0));
+            .border_color(rgb(theme.divider));
         for (end, endpoint) in [(false, Some(&draft.start)), (true, draft.end.as_ref())] {
             let Some(endpoint) = endpoint else {
                 continue;
@@ -326,7 +332,7 @@ impl TimestampPicker {
                     None,
                 )
                 .min_h(px(48.))
-                .when(end, |s| s.border_t_1().border_color(rgb(0xe9ebf0)))
+                .when(end, |s| s.border_t_1().border_color(rgb(theme.divider)))
                 .child(
                     self.button(
                         if end { "end-date" } else { "start-date" },
@@ -337,7 +343,7 @@ impl TimestampPicker {
                     )
                     .when(
                         !(selected && self.expanded == Some(ExpandedField::Date)),
-                        |s| s.bg(rgb(0xf0f1f4)).text_color(rgb(0x373942)),
+                        |s| s.bg(rgb(theme.hover)).text_color(rgb(theme.foreground)),
                     ),
                 )
                 .child(
@@ -350,7 +356,7 @@ impl TimestampPicker {
                     )
                     .when(
                         !(selected && self.expanded == Some(ExpandedField::Time)),
-                        |s| s.bg(rgb(0xf0f1f4)).text_color(rgb(0x373942)),
+                        |s| s.bg(rgb(theme.hover)).text_color(rgb(theme.foreground)),
                     ),
                 ),
             );
@@ -373,7 +379,7 @@ impl TimestampPicker {
                         div()
                             .flex_1()
                             .text_size(px(11.))
-                            .text_color(rgb(0x92949d))
+                            .text_color(rgb(theme.foreground_muted))
                             .child(self.t("timestamp.endpoint_settings")),
                     )
                     .child(self.button(
@@ -451,12 +457,16 @@ impl TimestampPicker {
                         .flex()
                         .items_center()
                         .when(value.active, |s| s.justify_end())
-                        .bg(rgb(if value.active { 0x3f78f2 } else { 0xd9dce3 }))
+                        .bg(rgb(if value.active {
+                            theme.accent
+                        } else {
+                            theme.border_hover
+                        }))
                         .child(
                             div()
                                 .size(px(16.))
                                 .rounded_full()
-                                .bg(rgb(0xffffff))
+                                .bg(rgb(theme.background))
                                 .shadow_sm(),
                         )
                         .on_click(cx.listener(|this, _, _, cx| {
@@ -470,7 +480,7 @@ impl TimestampPicker {
             .child(
                 div()
                     .text_size(px(11.))
-                    .text_color(rgb(0x92949d))
+                    .text_color(rgb(theme.foreground_muted))
                     .child(if value.active {
                         self.t("timestamp.inactive_hint")
                     } else {
@@ -579,6 +589,7 @@ impl TimestampPicker {
     }
 
     fn repeat_page(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let theme = crate::theme::current_theme();
         let Some(value) = self.endpoint().map(|e| &e.value) else {
             return div().into_any_element();
         };
@@ -613,7 +624,7 @@ impl TimestampPicker {
             .child(
                 div()
                     .text_size(px(12.))
-                    .text_color(rgb(0x737782))
+                    .text_color(rgb(theme.foreground_muted))
                     .child(if restart {
                         self.t("timestamp.restart_hint")
                     } else {
@@ -676,7 +687,7 @@ impl TimestampPicker {
                 .child(
                     Self::row(self.t("timestamp.start_date"), None)
                         .border_t_1()
-                        .border_color(rgb(0xe6e8ed))
+                        .border_color(rgb(theme.divider))
                         .child(self.button(
                             "repeat-start-date",
                             format!(
@@ -703,7 +714,7 @@ impl TimestampPicker {
                 })
                 .child(
                     Self::row(self.t("timestamp.weekday"), None)
-                        .text_color(rgb(0x92949d))
+                        .text_color(rgb(theme.foreground_muted))
                         .child(
                             [
                                 self.t("timestamp.monday"),
@@ -742,14 +753,14 @@ impl TimestampPicker {
                         .rounded_lg()
                         .cursor_pointer()
                         .when(mode == RepeaterMode::CatchUp, |s| {
-                            s.border_t_1().border_color(rgb(0xe6e8ed))
+                            s.border_t_1().border_color(rgb(theme.divider))
                         })
                         .child(
                             div()
                                 .text_color(rgb(if repeater.mode == mode {
-                                    0x3f78f2
+                                    theme.accent
                                 } else {
-                                    0x373942
+                                    theme.foreground
                                 }))
                                 .child(format!(
                                     "{}  {title}",
@@ -761,7 +772,7 @@ impl TimestampPicker {
                                 .pl_4()
                                 .mt_1()
                                 .text_size(px(11.))
-                                .text_color(rgb(0x737782))
+                                .text_color(rgb(theme.foreground_muted))
                                 .child(subtitle),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx))),
@@ -776,20 +787,20 @@ impl TimestampPicker {
             div()
                 .p_3()
                 .rounded_lg()
-                .bg(rgb(0xeaf2ff))
-                .text_color(rgb(0x3f78f2))
+                .bg(rgb(theme.accent_bg))
+                .text_color(rgb(theme.accent))
                 .child(self.t("timestamp.example"))
                 .child(
                     div()
                         .mt_2()
                         .text_size(px(12.))
-                        .text_color(rgb(0x737782))
+                        .text_color(rgb(theme.foreground_muted))
                         .children(example.lines().enumerate().map(|(i, line)| {
                             div()
                                 .when(i == 2, |s| {
                                     s.mt_1()
                                         .text_size(px(15.))
-                                        .text_color(rgb(0x3f78f2))
+                                        .text_color(rgb(theme.accent))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                 })
                                 .child(line.to_owned())
@@ -817,6 +828,7 @@ impl TimestampPicker {
 
 impl Render for TimestampPicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = crate::theme::current_theme();
         let max_height = (f32::from(window.viewport_size().height) - 24.).max(100.);
         let valid = self.valid(cx);
         div()
@@ -842,14 +854,14 @@ impl Render for TimestampPicker {
             .p_4()
             .rounded(px(14.))
             .border_1()
-            .border_color(rgb(0xdedfe3))
-            .bg(rgb(0xffffff))
+            .border_color(rgb(theme.border))
+            .bg(rgb(theme.background))
             .shadow_lg()
             .font_family(".SystemUIFont")
             .font_weight(gpui::FontWeight::NORMAL)
             .text_size(px(13.))
             .line_height(px(20.))
-            .text_color(rgb(0x373942))
+            .text_color(rgb(theme.foreground))
             .cursor_default()
             .flex()
             .flex_col()
@@ -928,7 +940,7 @@ impl Render for TimestampPicker {
                         self.button("close", "×", false, cx, |_, _, cx| {
                             cx.emit(TimestampPickerEvent::Cancelled)
                         })
-                        .text_color(rgb(0x92949d)),
+                        .text_color(rgb(theme.foreground_muted)),
                     )
             })
             .child(if self.repeat_page {
@@ -959,7 +971,7 @@ impl Render for TimestampPicker {
                 s.child(
                     div()
                         .text_size(px(11.))
-                        .text_color(rgb(0xd54848))
+                        .text_color(rgb(theme.error))
                         .child(self.t("timestamp.invalid")),
                 )
             })
@@ -970,7 +982,7 @@ impl Render for TimestampPicker {
                         .justify_between()
                         .items_center()
                         .border_t_1()
-                        .border_color(rgb(0xe9ebf0))
+                        .border_color(rgb(theme.divider))
                         .pt_3()
                         .child(self.button(
                             "cancel",

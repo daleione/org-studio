@@ -103,7 +103,7 @@ pub(super) fn status_icon(icon: StatusIcon) -> impl IntoElement {
                 }
             }
             if let Ok(path) = path.build() {
-                window.paint_path(path, rgb(super::STATUS_FOREGROUND));
+                window.paint_path(path, rgb(super::status_colors().foreground));
             }
         },
     )

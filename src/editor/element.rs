@@ -1223,7 +1223,7 @@ impl Element for EditorElement {
                         (frames[frame], theme.meta)
                     }
                     Some(super::SourceRunPhase::Success) => ("✓", theme.heading[2]),
-                    Some(super::SourceRunPhase::Failure) => ("!", 0xb23a63),
+                    Some(super::SourceRunPhase::Failure) => ("!", theme.error),
                     None => ("▶", theme.meta),
                 };
                 let icon: gpui::SharedString = icon_text.into();
@@ -1875,6 +1875,7 @@ fn shape_key(
         syntax_key,
         code_language,
         marked: marked.map(|range| (range.start, range.end)),
+        theme_generation: crate::theme::theme_generation(),
     }
 }
 
@@ -1950,6 +1951,7 @@ fn build_minimap(
         width: f32::from(bounds.size.width).ceil().min(u16::MAX as f32) as u16,
         scale_x100: (scale_factor.max(1.0) * 100.0).round().min(u16::MAX as f32) as u16,
         density,
+        theme_generation: crate::theme::theme_generation(),
     };
     #[cfg(feature = "benchmarks")]
     {
@@ -3178,7 +3180,7 @@ fn push_selection_quads(
                         hit.origin_y + px((row + 1) as f32 * line_height_px),
                     ),
                 ),
-                rgba(0x3f78f24a),
+                rgba((crate::theme::current_theme().accent << 8) | 0x4a),
             ));
         }
     }

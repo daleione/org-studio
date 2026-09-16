@@ -8,6 +8,7 @@ fn button_base(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
+    let theme = crate::theme::current_theme();
     div()
         .id(id)
         .flex_none()
@@ -18,7 +19,7 @@ fn button_base(
         .justify_center()
         .rounded(px(5.))
         .text_size(px(12.))
-        .text_color(rgb(0x71829a))
+        .text_color(rgb(theme.foreground_dim))
         .cursor_pointer()
         .child(label.into())
 }
@@ -27,7 +28,7 @@ fn button(
     id: impl Into<gpui::ElementId>,
     label: impl Into<gpui::SharedString>,
 ) -> gpui::Stateful<gpui::Div> {
-    button_base(id, label).hover(|s| s.bg(rgb(HOVER_BACKGROUND)))
+    button_base(id, label).hover(|s| s.bg(rgb(HOVER_BACKGROUND())))
 }
 
 fn review_button(
@@ -36,12 +37,18 @@ fn review_button(
     selected: bool,
     disabled: bool,
 ) -> gpui::Stateful<gpui::Div> {
+    let theme = crate::theme::current_theme();
     let background = if selected {
-        SELECTED_BACKGROUND
+        SELECTED_BACKGROUND()
     } else {
-        0xffffff
+        theme.background
     };
-    let foreground = if selected { 0xffffff } else { 0x506178 };
+    // White on the saturated selected blue stays fixed for contrast.
+    let foreground = if selected {
+        0xffffff
+    } else {
+        theme.foreground_dim
+    };
     button_base(id, label)
         .bg(rgb(background))
         .text_color(rgb(foreground))
@@ -50,9 +57,9 @@ fn review_button(
             s.bg(rgb(if disabled {
                 background
             } else if selected {
-                SELECTED_HOVER_BACKGROUND
+                SELECTED_HOVER_BACKGROUND()
             } else {
-                HOVER_BACKGROUND
+                HOVER_BACKGROUND()
             }))
             .text_color(rgb(foreground))
         })
@@ -111,6 +118,7 @@ impl WorkspaceWindow {
     }
 
     fn picker_view(&self, p: &Picker, entity: Entity<Self>, cx: &App) -> AnyElement {
+        let theme = crate::theme::current_theme();
         let close_entity = entity.clone();
         let close = button("buffer-panel-close", "×")
             .text_size(px(19.))
@@ -136,7 +144,7 @@ impl WorkspaceWindow {
                             .items_center()
                             .justify_between()
                             .text_size(px(12.))
-                            .text_color(rgb(0x71829a))
+                            .text_color(rgb(theme.foreground_dim))
                             .child(self.buffer_text("新建", "New"))
                             .child(close),
                     )
@@ -165,7 +173,7 @@ impl WorkspaceWindow {
                                     },
                                 ),
                             )
-                            .child(div().text_color(rgb(0x9aa7b6)).child("↵")),
+                            .child(div().text_color(rgb(theme.foreground_muted)).child("↵")),
                     )
                     .into_any_element();
             }
@@ -179,7 +187,7 @@ impl WorkspaceWindow {
                     div()
                         .flex_none()
                         .text_size(px(12.))
-                        .text_color(rgb(0x71829a))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(self.buffer_text("新建", "New")),
                 )
                 .child(div().flex_1().min_w_0().h(px(34.)).child(p.input.clone()))
@@ -198,7 +206,7 @@ impl WorkspaceWindow {
                         });
                     }),
                 )
-                .child(div().text_color(rgb(0x9aa7b6)).child("↵"))
+                .child(div().text_color(rgb(theme.foreground_muted)).child("↵"))
                 .child(close)
                 .into_any_element();
         }
@@ -245,8 +253,8 @@ impl WorkspaceWindow {
                     .items_center()
                     .gap(px(12.))
                     .cursor_pointer()
-                    .when(selected, |s| s.bg(rgb(0xebf1fd)))
-                    .hover(|s| s.bg(rgb(0xeff3f9)))
+                    .when(selected, |s| s.bg(rgb(theme.accent_bg)))
+                    .hover(|s| s.bg(rgb(theme.hover)))
                     .child(
                         div()
                             .flex_1()
@@ -257,14 +265,14 @@ impl WorkspaceWindow {
                                 div()
                                     .truncate()
                                     .text_size(px(13.))
-                                    .text_color(rgb(0x48596e))
+                                    .text_color(rgb(theme.foreground))
                                     .child(c.name),
                             )
                             .child(
                                 div()
                                     .truncate()
                                     .text_size(px(10.))
-                                    .text_color(rgb(0x98a5b6))
+                                    .text_color(rgb(theme.foreground_muted))
                                     .child(path),
                             ),
                     )
@@ -273,7 +281,11 @@ impl WorkspaceWindow {
                             .w(px(66.))
                             .flex_none()
                             .text_size(px(11.))
-                            .text_color(rgb(if c.dirty { 0xad8a4e } else { 0x94a2b4 }))
+                            .text_color(rgb(if c.dirty {
+                                theme.warning
+                            } else {
+                                theme.foreground_muted
+                            }))
                             .child(state),
                     )
                     .when_some(id, |row, id| {
@@ -333,9 +345,13 @@ impl WorkspaceWindow {
                     .items_center()
                     .gap(px(10.))
                     .text_size(px(12.))
-                    .text_color(rgb(0x596b81))
+                    .text_color(rgb(theme.foreground_dim))
                     .child(heading)
-                    .child(div().text_color(rgb(0x9ca9b9)).child(total.to_string()))
+                    .child(
+                        div()
+                            .text_color(rgb(theme.foreground_muted))
+                            .child(total.to_string()),
+                    )
                     .child(div().flex_1())
                     .child(close),
             )
@@ -355,7 +371,7 @@ impl WorkspaceWindow {
                                 .items_center()
                                 .justify_center()
                                 .text_size(px(12.))
-                                .text_color(rgb(0x96a4b6))
+                                .text_color(rgb(theme.foreground_muted))
                                 .child(self.buffer_text("没有匹配的文档", "No matching documents")),
                         )
                     })
@@ -369,7 +385,7 @@ impl WorkspaceWindow {
                     .flex()
                     .items_center()
                     .text_size(px(10.))
-                    .text_color(rgb(0x97a4b6))
+                    .text_color(rgb(theme.foreground_muted))
                     .child(hint),
             )
             .child(
@@ -378,8 +394,8 @@ impl WorkspaceWindow {
                     .flex_none()
                     .px(px(12.))
                     .border_t_1()
-                    .border_color(rgb(0xe5ebf3))
-                    .bg(rgb(0xf3f6fa))
+                    .border_color(rgb(theme.border))
+                    .bg(rgb(theme.surface))
                     .flex()
                     .items_center()
                     .gap(px(12.))
@@ -390,7 +406,7 @@ impl WorkspaceWindow {
                                 .flex_none()
                                 .p(px(2.))
                                 .rounded(px(6.))
-                                .bg(rgb(0xeaf0f5))
+                                .bg(rgb(theme.hover))
                                 .children(tabs.into_iter().map(|(recent, label)| {
                                     let entity = entity.clone();
                                     button(
@@ -402,7 +418,7 @@ impl WorkspaceWindow {
                                         label,
                                     )
                                     .when(recent == p.recent, |b| {
-                                        b.bg(rgb(0xffffff)).text_color(rgb(0x5278b5))
+                                        b.bg(rgb(theme.background)).text_color(rgb(theme.accent))
                                     })
                                     .on_mouse_down(
                                         MouseButton::Left,
@@ -429,6 +445,7 @@ impl WorkspaceWindow {
     }
 
     fn review_view(&self, r: &SaveReview, entity: Entity<Self>, cx: &App) -> AnyElement {
+        let theme = crate::theme::current_theme();
         let title = match r.kind {
             ReviewKind::Save => self.buffer_text("保存未完成的工作", "Save your work"),
             ReviewKind::Close(_) => {
@@ -451,7 +468,7 @@ impl WorkspaceWindow {
                 let choices = if e.done {
                     div()
                         .text_size(px(12.))
-                        .text_color(rgb(0x71829a))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(self.buffer_text("已保存", "Saved"))
                 } else {
                     div()
@@ -460,7 +477,7 @@ impl WorkspaceWindow {
                         .gap(px(3.))
                         .p(px(2.))
                         .rounded(px(6.))
-                        .bg(rgb(0xeaf0f5))
+                        .bg(rgb(theme.hover))
                         .children([true, false].into_iter().map(|save| {
                             let choice_entity = entity.clone();
                             let id = e.id;
@@ -505,14 +522,14 @@ impl WorkspaceWindow {
                     div()
                         .h(px(54.))
                         .when(index == r.selected, |row| {
-                            row.bg(rgb(0xebf1fd)).rounded(px(6.))
+                            row.bg(rgb(theme.accent_bg)).rounded(px(6.))
                         })
                         .flex_none()
                         .flex()
                         .items_center()
                         .gap(px(12.))
                         .border_b_1()
-                        .border_color(rgb(0xe9eef5))
+                        .border_color(rgb(theme.divider))
                         .child(
                             div()
                                 .flex_1()
@@ -523,14 +540,14 @@ impl WorkspaceWindow {
                                     div()
                                         .truncate()
                                         .text_size(px(13.))
-                                        .text_color(rgb(0x506178))
+                                        .text_color(rgb(theme.foreground_dim))
                                         .child(s.display_name()),
                                 )
                                 .child(
                                     div()
                                         .truncate()
                                         .text_size(px(10.))
-                                        .text_color(rgb(0x9ca9ba))
+                                        .text_color(rgb(theme.foreground_muted))
                                         .child(
                                             s.file_path()
                                                 .map(|p| p.to_string_lossy().into_owned())
@@ -575,10 +592,10 @@ impl WorkspaceWindow {
                     .flex()
                     .items_center()
                     .text_size(px(13.))
-                    .text_color(rgb(0x576a82))
+                    .text_color(rgb(theme.foreground_dim))
                     .child(title),
             )
-            .child(div().px(px(18.)).pb(px(12.)).flex_none().text_size(px(12.)).text_color(rgb(0x71829a))
+            .child(div().px(px(18.)).pb(px(12.)).flex_none().text_size(px(12.)).text_color(rgb(theme.foreground_dim))
                 .child(if r.kind == ReviewKind::Save {
                     self.buffer_text("选择要保存的文档；跳过的修改会保留。", "Choose documents to save. Skipped edits will be kept.")
                 } else {
@@ -603,9 +620,9 @@ impl WorkspaceWindow {
                     .items_center()
                     .text_size(px(10.))
                     .text_color(rgb(if r.error.is_some() {
-                        0xad5960
+                        theme.error
                     } else {
-                        0x97a4b5
+                        theme.foreground_muted
                     }))
                     .child(r.error.clone().unwrap_or_else(|| {
                         self.buffer_text(
@@ -627,7 +644,7 @@ impl WorkspaceWindow {
                     .justify_end()
                     .gap(px(10.))
                     .border_t_1()
-                    .border_color(rgb(0xe4ebf4))
+                    .border_color(rgb(theme.border))
                     .when(r.kind != ReviewKind::Save && has_save, |footer| footer.child(
                         review_button("buffer-review-discard-all", if matches!(r.kind, ReviewKind::Close(_)) {
                             self.buffer_text("不保存关闭", "Close without saving")

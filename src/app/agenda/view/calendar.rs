@@ -25,13 +25,14 @@ struct CalendarDrag {
 
 impl Render for CalendarDrag {
     fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+        let theme = crate::theme::current_theme();
         div().pl(self.position.x).pt(self.position.y).child(
             div()
                 .w(px(170.))
                 .p_2()
                 .rounded(px(6.))
-                .bg(rgb(0xeaf5ec))
-                .text_color(rgb(0x286f35))
+                .bg(rgb(theme.hover))
+                .text_color(rgb(theme.success))
                 .text_size(px(10.))
                 .shadow_md()
                 .child(self.title.to_string()),
@@ -98,14 +99,15 @@ pub(super) fn weekday(language: crate::i18n::Language, date: Date) -> &'static s
 }
 
 fn tone(row: &AgendaRow) -> (u32, u32) {
+    let theme = crate::theme::current_theme();
     if row.todo.eq_ignore_ascii_case("WAITING") || row.todo.eq_ignore_ascii_case("WAIT") {
-        (0xeaf2fb, 0x27699f)
+        (theme.accent_bg, theme.accent)
     } else if row.todo.eq_ignore_ascii_case("NEXT") {
-        (0xe5f3e9, 0x246632)
+        (theme.hover, theme.success)
     } else if matches!(row.date_kind, Some(crate::agenda::AgendaDateKind::Deadline)) {
-        (0xfbf4e8, 0x9a6815)
+        (theme.hover, theme.warning)
     } else {
-        (0xeaf5ec, 0x286f35)
+        (theme.hover, theme.success)
     }
 }
 
@@ -154,6 +156,7 @@ fn month_view(
     result: &Arc<AgendaResultSnapshot>,
     days: &[Date],
 ) -> gpui::AnyElement {
+    let theme = crate::theme::current_theme();
     let week_count = days.len().div_ceil(7).max(1) as f32;
     let mut grid = div()
         .flex_1()
@@ -186,14 +189,14 @@ fn month_view(
             .p_2()
             .border_r_1()
             .border_b_1()
-            .border_color(rgb(0xe8e9eb))
+            .border_color(rgb(theme.divider))
             .flex()
             .flex_col()
             .gap_1()
             .child(
                 div()
                     .text_size(px(10.))
-                    .text_color(rgb(0x777b82))
+                    .text_color(rgb(theme.foreground_dim))
                     .child(format!("{} · {}", weekday(language, *date), date.day())),
             );
         for (index, row) in rows.into_iter().take(3) {
@@ -215,21 +218,27 @@ fn time_view(
     days: &[Date],
     all_day: bool,
 ) -> gpui::AnyElement {
+    let theme = crate::theme::current_theme();
     let mut header = div()
         .flex_none()
         .min_w_0()
         .h(px(72.))
         .flex()
         .border_b_1()
-        .border_color(rgb(0xdedfe2))
-        .child(div().w(px(58.)).border_r_1().border_color(rgb(0xe5e6e8)));
+        .border_color(rgb(theme.border))
+        .child(
+            div()
+                .w(px(58.))
+                .border_r_1()
+                .border_color(rgb(theme.divider)),
+        );
     for date in days {
         header = header.child(
             div()
                 .flex_1()
                 .min_w_0()
                 .border_r_1()
-                .border_color(rgb(0xececef))
+                .border_color(rgb(theme.divider))
                 .flex()
                 .flex_col()
                 .items_center()
@@ -238,7 +247,7 @@ fn time_view(
                 .child(
                     div()
                         .text_size(px(10.))
-                        .text_color(rgb(0x70747b))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(weekday(language, *date)),
                 )
                 .child(
@@ -262,7 +271,7 @@ fn time_view(
             .min_h(px(72.))
             .flex()
             .border_b_1()
-            .border_color(rgb(0xd9dade))
+            .border_color(rgb(theme.border))
             .child(
                 div()
                     .w(px(58.))
@@ -270,9 +279,9 @@ fn time_view(
                     .pr_2()
                     .text_right()
                     .text_size(px(10.))
-                    .text_color(rgb(0x9a9da3))
+                    .text_color(rgb(theme.foreground_muted))
                     .border_r_1()
-                    .border_color(rgb(0xe5e6e8))
+                    .border_color(rgb(theme.divider))
                     .child(language.text("agenda.all_day")),
             );
         for date in days {
@@ -286,7 +295,7 @@ fn time_view(
                 .flex_col()
                 .gap_1()
                 .border_r_1()
-                .border_color(rgb(0xececef));
+                .border_color(rgb(theme.divider));
             for (index, task) in result
                 .placements
                 .iter()
@@ -343,7 +352,7 @@ fn time_view(
                         .pr_2()
                         .text_right()
                         .text_size(px(9.))
-                        .text_color(rgb(0x9a9da3))
+                        .text_color(rgb(theme.foreground_muted))
                         .child(format!("{hour:02}:00"))
                 })),
         );
@@ -354,7 +363,7 @@ fn time_view(
             .min_w_0()
             .h(px(702.))
             .border_l_1()
-            .border_color(rgb(0xececef));
+            .border_color(rgb(theme.divider));
         for hour in 0..13 {
             let drop_workspace = workspace.clone();
             let drop_date = *date;
@@ -367,7 +376,7 @@ fn time_view(
                     .right_0()
                     .h(px(54.))
                     .border_t_1()
-                    .border_color(rgb(0xf0f0f2))
+                    .border_color(rgb(theme.divider))
                     .on_drop(move |drag: &CalendarDrag, _, cx| {
                         let time = jiff::civil::Time::new((hour + 8) as i8, 0, 0, 0).ok();
                         drop_workspace.update(cx, |this, cx| {
@@ -467,6 +476,7 @@ pub(crate) fn agenda_calendar(
     window: (Date, Date),
     all_day: bool,
 ) -> Div {
+    let theme = crate::theme::current_theme();
     let mut days = Vec::new();
     let mut date = window.0;
     while date <= window.1 {
@@ -483,7 +493,7 @@ pub(crate) fn agenda_calendar(
         .min_h_0()
         .flex()
         .flex_col()
-        .bg(rgb(0xffffff))
+        .bg(rgb(theme.background))
         .child(
             div()
                 .flex_none()
@@ -493,15 +503,15 @@ pub(crate) fn agenda_calendar(
                 .items_center()
                 .justify_between()
                 .border_b_1()
-                .border_color(rgb(0xe1e2e5))
-                .bg(rgb(0xfbfbfc))
+                .border_color(rgb(theme.border))
+                .bg(rgb(theme.surface))
                 .child(
                     div()
                         .flex()
                         .items_center()
                         .gap_4()
                         .text_size(px(10.))
-                        .text_color(rgb(0x979aa0))
+                        .text_color(rgb(theme.foreground_muted))
                         .child(
                             div()
                                 .id("calendar-toggle-all-day")
@@ -511,9 +521,9 @@ pub(crate) fn agenda_calendar(
                                 .items_center()
                                 .rounded(px(6.))
                                 .cursor_pointer()
-                                .hover(|style| style.bg(rgb(0xeeeef1)))
+                                .hover(|style| style.bg(rgb(theme.hover)))
                                 .active(|style| style.opacity(0.72))
-                                .text_color(rgb(0x62666d))
+                                .text_color(rgb(theme.foreground_dim))
                                 .child(if all_day {
                                     language.text("agenda.collapse_all_day")
                                 } else {

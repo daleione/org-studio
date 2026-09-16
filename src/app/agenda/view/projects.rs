@@ -8,6 +8,7 @@ pub(crate) fn projects_view(
     projects: Vec<ProjectSummary>,
     selected: usize,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     let active = projects.get(selected).or_else(|| projects.first());
     let stuck = projects.iter().filter(|project| project.stuck).count();
     let summary = div()
@@ -31,8 +32,8 @@ pub(crate) fn projects_view(
             .flex_col()
             .gap_1()
             .border_r_1()
-            .border_color(rgb(0xe2e3e6))
-            .bg(rgb(0xf7f7f8)),
+            .border_color(rgb(theme.border))
+            .bg(rgb(theme.surface)),
         |list, (index, project)| {
             let target = workspace.clone();
             list.child(
@@ -42,12 +43,14 @@ pub(crate) fn projects_view(
                     .p_3()
                     .rounded(px(8.))
                     .cursor_pointer()
-                    .when(index == selected, |row| row.bg(rgb(0xffffff)).shadow_sm())
+                    .when(index == selected, |row| {
+                        row.bg(rgb(theme.background)).shadow_sm()
+                    })
                     .hover(move |style| {
                         style.bg(rgb(if index == selected {
-                            0xebe7f1
+                            theme.accent_bg
                         } else {
-                            0xe5e6e9
+                            theme.hover
                         }))
                     })
                     .child(
@@ -60,7 +63,11 @@ pub(crate) fn projects_view(
                         div()
                             .mt_2()
                             .text_size(px(9.))
-                            .text_color(rgb(if project.stuck { 0xa56617 } else { 0x858990 }))
+                            .text_color(rgb(if project.stuck {
+                                theme.warning
+                            } else {
+                                theme.foreground_dim
+                            }))
                             .child(if project.stuck {
                                 project
                                     .blocked_reason
@@ -98,9 +105,9 @@ pub(crate) fn projects_view(
                         .items_center()
                         .gap_3()
                         .border_t_1()
-                        .border_color(rgb(0xeeeeef))
+                        .border_color(rgb(theme.divider))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0xf5f5f7)))
+                        .hover(|style| style.bg(rgb(theme.hover)))
                         .child(
                             div()
                                 .w(px(70.))
@@ -114,11 +121,11 @@ pub(crate) fn projects_view(
                                         task.todo_kind,
                                         crate::org_semantic::TodoStateKind::Done
                                     ) {
-                                        0xececef
+                                        theme.hover
                                     } else if task.todo.eq_ignore_ascii_case("WAITING") {
-                                        0xeaf2fb
+                                        theme.accent_bg
                                     } else {
-                                        0xe8f4eb
+                                        theme.hover
                                     },
                                 ))
                                 .text_size(px(9.))
@@ -152,7 +159,7 @@ pub(crate) fn projects_view(
                             .child(
                                 div()
                                     .text_size(px(10.))
-                                    .text_color(rgb(0x7b4e85))
+                                    .text_color(rgb(theme.todo_active))
                                     .child(language.text("agenda.project_details")),
                             )
                             .child(
@@ -176,8 +183,8 @@ pub(crate) fn projects_view(
                         .mt_4()
                         .p_3()
                         .rounded(px(8.))
-                        .bg(rgb(0xfff5e9))
-                        .text_color(rgb(0x8e5a16))
+                        .bg(rgb(theme.hover))
+                        .text_color(rgb(theme.warning))
                         .text_size(px(10.))
                         .child(
                             project
@@ -192,7 +199,7 @@ pub(crate) fn projects_view(
                 div()
                     .mt_4()
                     .text_size(px(10.))
-                    .text_color(rgb(0x858990))
+                    .text_color(rgb(theme.foreground_dim))
                     .child(
                         language
                             .text("agenda.project_progress")
@@ -208,7 +215,7 @@ pub(crate) fn projects_view(
             .flex()
             .items_center()
             .justify_center()
-            .text_color(rgb(0x858990))
+            .text_color(rgb(theme.foreground_dim))
             .child(language.text("agenda.no_projects"))
     };
     div()
@@ -217,7 +224,7 @@ pub(crate) fn projects_view(
         .pt_6()
         .flex()
         .flex_col()
-        .bg(rgb(0xfdfdfe))
+        .bg(rgb(theme.surface))
         .child(summary)
         .child(
             div()
@@ -228,20 +235,21 @@ pub(crate) fn projects_view(
                 .overflow_hidden()
                 .rounded(px(10.))
                 .border_1()
-                .border_color(rgb(0xdfe1e4))
+                .border_color(rgb(theme.border))
                 .child(list)
                 .child(detail),
         )
 }
 
 fn metric(value: usize, label: &'static str) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .flex_1()
         .p_3()
         .rounded(px(9.))
         .border_1()
-        .border_color(rgb(0xe4e5e8))
-        .bg(rgb(0xfafafb))
+        .border_color(rgb(theme.border))
+        .bg(rgb(theme.surface))
         .child(
             div()
                 .text_size(px(18.))
@@ -252,7 +260,7 @@ fn metric(value: usize, label: &'static str) -> gpui::Div {
             div()
                 .mt_1()
                 .text_size(px(10.))
-                .text_color(rgb(0x858990))
+                .text_color(rgb(theme.foreground_dim))
                 .child(label),
         )
 }

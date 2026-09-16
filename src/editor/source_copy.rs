@@ -72,7 +72,7 @@ impl CopyButtonPaint {
             window.paint_quad(quad(
                 self.hit.bounds,
                 Corners::all(px(5.)),
-                rgb(HOVER_BACKGROUND),
+                rgb(HOVER_BACKGROUND()),
                 Edges::default(),
                 gpui::transparent_black(),
                 gpui::BorderStyle::default(),

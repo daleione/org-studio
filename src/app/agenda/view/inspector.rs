@@ -10,18 +10,20 @@ use gpui::{
 };
 
 fn section_title(title: &'static str) -> Div {
+    let theme = crate::theme::current_theme();
     div()
         .flex_none()
         .pt_4()
         .border_t_1()
-        .border_color(rgb(0xe4e5e7))
+        .border_color(rgb(theme.divider))
         .text_size(px(10.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_color(rgb(0x8b8e94))
+        .text_color(rgb(theme.foreground_dim))
         .child(title)
 }
 
 fn inspector_field(label: &'static str, value: &'static str) -> Div {
+    let theme = crate::theme::current_theme();
     div()
         .flex_none()
         .h(px(38.))
@@ -32,7 +34,7 @@ fn inspector_field(label: &'static str, value: &'static str) -> Div {
             div()
                 .w(px(82.))
                 .text_size(px(11.))
-                .text_color(rgb(0x555960))
+                .text_color(rgb(theme.foreground_dim))
                 .child(label),
         )
         .child(
@@ -43,9 +45,9 @@ fn inspector_field(label: &'static str, value: &'static str) -> Div {
                 .flex()
                 .items_center()
                 .rounded(px(6.))
-                .bg(rgb(0xf0f0f2))
+                .bg(rgb(theme.elevated))
                 .text_size(px(11.))
-                .text_color(rgb(0x363940))
+                .text_color(rgb(theme.foreground))
                 .child(value),
         )
 }
@@ -70,6 +72,7 @@ pub(crate) struct InspectorProps {
 
 pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
     let language = props.language;
+    let theme = crate::theme::current_theme();
     let state_buttons = props.allowed_todo_states.iter().fold(
         div().flex_none().flex().flex_wrap().gap_1(),
         |row, state| {
@@ -85,19 +88,19 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .justify_center()
                     .rounded(px(6.))
                     .bg(rgb(if state.as_ref() == props.todo.as_ref() {
-                        0xe8f4eb
+                        theme.hover
                     } else {
-                        0xf0f0f2
+                        theme.elevated
                     }))
                     .text_color(rgb(if state.as_ref() == props.todo.as_ref() {
-                        0x358342
+                        theme.success
                     } else {
-                        0x71757c
+                        theme.foreground_muted
                     }))
                     .text_size(px(10.))
                     .font_weight(gpui::FontWeight::BOLD)
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xe5e6e9)))
+                    .hover(|style| style.bg(rgb(theme.hover)))
                     .child(state.to_string())
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         workspace.update(cx, |this, cx| {
@@ -124,18 +127,18 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .justify_center()
                     .rounded(px(5.))
                     .bg(rgb(if priority == props.priority {
-                        0xffffff
+                        theme.background
                     } else {
-                        0xededf0
+                        theme.hover
                     }))
                     .text_color(rgb(if priority == props.priority {
-                        0xa36500
+                        theme.warning
                     } else {
-                        0x7b7f86
+                        theme.foreground_muted
                     }))
                     .text_size(px(10.))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xffffff)).shadow_sm())
+                    .hover(|style| style.bg(rgb(theme.background)).shadow_sm())
                     .child(
                         priority.map_or(language.text("agenda.clear").into(), |value| {
                             value.to_string()
@@ -166,9 +169,9 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 div()
                     .px_2()
                     .py_1()
-                    .bg(rgb(0x6b2525))
+                    .bg(rgb(theme.error))
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0x812d2d)))
+                    .hover(|style| style.bg(rgb(theme.error)))
                     .child(language.text("agenda.confirm_delete"))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         confirm.update(cx, |this, cx| {
@@ -184,7 +187,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     .px_2()
                     .py_1()
                     .cursor_pointer()
-                    .hover(|style| style.bg(rgb(0xeeeef1)))
+                    .hover(|style| style.bg(rgb(theme.hover)))
                     .child(language.text("agenda.cancel"))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cancel.update(cx, |this, cx| {
@@ -198,10 +201,10 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
             div()
                 .px_2()
                 .py_1()
-                .text_color(rgb(0xd85c5c))
+                .text_color(rgb(theme.error))
                 .cursor_pointer()
                 .rounded(px(5.))
-                .hover(|style| style.bg(rgb(0xffeeee)))
+                .hover(|style| style.bg(rgb(theme.hover)))
                 .child(language.text("agenda.delete_subtree"))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     workspace.update(cx, |this, cx| {
@@ -216,8 +219,8 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
         .flex()
         .flex_col()
         .border_l_1()
-        .border_color(rgb(0xd9dadd))
-        .bg(rgb(0xfcfcfd))
+        .border_color(rgb(theme.border))
+        .bg(rgb(theme.surface))
         .child(
             div()
                 .flex_none()
@@ -226,7 +229,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .flex()
                 .items_center()
                 .border_b_1()
-                .border_color(rgb(0xdedfe2))
+                .border_color(rgb(theme.border))
                 .child(
                     div()
                         .text_size(px(12.))
@@ -243,12 +246,12 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .justify_center()
                         .rounded(px(6.))
                         .cursor_pointer()
-                        .hover(|style| style.bg(rgb(0xeeeef1)))
+                        .hover(|style| style.bg(rgb(theme.hover)))
                         .child(
                             svg()
                                 .data(super::super::icon::agenda_icon("assets/icons/agenda/x.svg"))
                                 .size(px(16.))
-                                .text_color(rgb(0x656a72)),
+                                .text_color(rgb(theme.foreground_dim)),
                         )
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             workspace.update(cx, |this, cx| {
@@ -283,14 +286,14 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .flex_none()
                         .text_size(px(20.))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .text_color(rgb(0x22252b))
+                        .text_color(rgb(theme.foreground))
                         .child(props.title.to_string()),
                 )
                 .child(
                     div()
                         .flex_none()
                         .text_size(px(10.))
-                        .text_color(rgb(0x8a8e95))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.status")),
                 )
                 .child(state_buttons)
@@ -298,7 +301,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     div()
                         .flex_none()
                         .text_size(px(10.))
-                        .text_color(rgb(0x8a8e95))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.priority")),
                 )
                 .child(priorities)
@@ -306,7 +309,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     div()
                         .flex_none()
                         .text_size(px(10.))
-                        .text_color(rgb(0x8a8e95))
+                        .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.tags")),
                 )
                 .child(
@@ -376,7 +379,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                             div()
                                                 .mt_1()
                                                 .text_size(px(9.))
-                                                .text_color(rgb(0x8a8e95))
+                                                .text_color(rgb(theme.foreground_dim))
                                                 .child(label),
                                         )
                                 }),
@@ -391,9 +394,9 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                 .children((0..28).map(|index| {
                                     div().size(px(13.)).rounded(px(3.)).bg(rgb(
                                         if index < usize::from(stats.completed) {
-                                            0x78b884
+                                            theme.success
                                         } else {
-                                            0xcfd2d7
+                                            theme.border
                                         },
                                     ))
                                 })),
@@ -411,16 +414,16 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .gap_3()
                         .rounded(px(8.))
                         .bg(rgb(if props.clock_active {
-                            0xedf7ef
+                            theme.hover
                         } else {
-                            0xf1f2f4
+                            theme.elevated
                         }))
                         .cursor_pointer()
                         .hover(|style| {
                             style.bg(rgb(if props.clock_active {
-                                0xe2f1e6
+                                theme.selected
                             } else {
-                                0xe7e8eb
+                                theme.hover
                             }))
                         })
                         .child(
@@ -431,9 +434,9 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                 .items_center()
                                 .justify_center()
                                 .bg(rgb(if props.clock_active {
-                                    0x3d8b4c
+                                    theme.success
                                 } else {
-                                    0x7540c4
+                                    theme.todo_active
                                 }))
                                 .child(
                                     svg()
@@ -464,7 +467,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                     div()
                                         .mt_1()
                                         .text_size(px(9.))
-                                        .text_color(rgb(0x858990))
+                                        .text_color(rgb(theme.foreground_muted))
                                         .child(if props.clock_active {
                                             language.text("agenda.clock_stop")
                                         } else {
@@ -492,10 +495,10 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .p_3()
                         .rounded(px(8.))
                         .border_1()
-                        .border_color(rgb(0xdedfe2))
-                        .bg(rgb(0xffffff))
+                        .border_color(rgb(theme.border))
+                        .bg(rgb(theme.background))
                         .text_size(px(11.))
-                        .text_color(rgb(0x8a8e95))
+                        .text_color(rgb(theme.foreground_muted))
                         .child(language.text("agenda.notes_hint")),
                 )
                 .child(section_title(language.text("agenda.source")))
@@ -505,8 +508,8 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .mt_2()
                         .p_3()
                         .rounded(px(8.))
-                        .bg(rgb(0xf0f4f9))
-                        .text_color(rgb(0x246cae))
+                        .bg(rgb(theme.accent_bg))
+                        .text_color(rgb(theme.accent))
                         .text_size(px(11.))
                         .flex()
                         .items_center()
@@ -517,7 +520,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                     "assets/icons/agenda/file-text.svg",
                                 ))
                                 .size(px(15.))
-                                .text_color(rgb(0x246cae)),
+                                .text_color(rgb(theme.accent)),
                         )
                         .child(language.text("agenda.open_original")),
                 )
@@ -527,11 +530,11 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
         .when(props.pending, |panel| {
             panel.child(
                 div()
-                    .text_color(rgb(0xd9a441))
+                    .text_color(rgb(theme.warning))
                     .child(language.text("agenda.saving")),
             )
         })
         .when_some(props.error, |panel, error| {
-            panel.child(div().text_color(rgb(0xd85c5c)).child(error.to_string()))
+            panel.child(div().text_color(rgb(theme.error)).child(error.to_string()))
         })
 }

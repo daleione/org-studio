@@ -16,9 +16,10 @@ pub(crate) fn render_home(
 ) -> gpui::Div {
     let drop_entity = entity.clone();
     let clear_entity = entity.clone();
+    let theme = crate::theme::current_theme();
     div()
         .size_full()
-        .bg(rgb(0xf7f7f8))
+        .bg(rgb(theme.surface))
         .font_family(".SystemUIFont")
         .child(
             div()
@@ -46,8 +47,8 @@ pub(crate) fn render_home(
                                 .rounded(px(18.0))
                                 .overflow_hidden()
                                 .border_1()
-                                .border_color(rgb(0xd8cec4))
-                                .bg(rgb(0xeee7df))
+                                .border_color(rgb(theme.border))
+                                .bg(rgb(theme.surface))
                                 .shadow_sm()
                                 .child(img(home_icon_path()).size_full()),
                         )
@@ -57,14 +58,14 @@ pub(crate) fn render_home(
                                 .text_size(px(27.0))
                                 .line_height(px(32.0))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0x242428))
+                                .text_color(rgb(theme.foreground))
                                 .child("Org Studio"),
                         )
                         .child(
                             div()
                                 .mt_2()
                                 .text_size(px(14.0))
-                                .text_color(rgb(0x7b7b83))
+                                .text_color(rgb(theme.foreground_dim))
                                 .child(language.text("home.tagline")),
                         )
                         .child(
@@ -76,8 +77,8 @@ pub(crate) fn render_home(
                                 .h(px(88.0))
                                 .rounded(px(13.0))
                                 .border_1()
-                                .border_color(rgb(0xe1e1e4))
-                                .bg(rgb(0xffffff))
+                                .border_color(rgb(theme.border))
+                                .bg(rgb(theme.background))
                                 .shadow_sm()
                                 .flex()
                                 .items_center()
@@ -103,8 +104,8 @@ pub(crate) fn render_home(
                                         .unwrap_or_else(|| {
                                             language.text("home.open_hint").to_owned()
                                         }),
-                                    0x242428,
-                                    0x7b7b83,
+                                    theme.foreground,
+                                    theme.foreground_dim,
                                 ))
                                 .child(
                                     div()
@@ -113,8 +114,8 @@ pub(crate) fn render_home(
                                         .inset_0()
                                         .rounded(px(13.0))
                                         .border_2()
-                                        .border_color(rgb(0x78a6d6))
-                                        .bg(rgb(0xedf5fd))
+                                        .border_color(rgb(theme.accent_border))
+                                        .bg(rgb(theme.accent_bg))
                                         .drag_over::<ExternalPaths>(|style, _, _, _| {
                                             style.visible()
                                         })
@@ -124,8 +125,8 @@ pub(crate) fn render_home(
                                         .child(picker_copy(
                                             language.text("home.drop"),
                                             language.text("home.drop_hint"),
-                                            0x2868a8,
-                                            0x6684a3,
+                                            theme.accent,
+                                            theme.foreground_dim,
                                         )),
                                 ),
                         ),
@@ -137,12 +138,12 @@ pub(crate) fn render_home(
                             .mt_4()
                             .rounded(px(8.0))
                             .border_1()
-                            .border_color(rgb(0xf2c8c2))
-                            .bg(rgb(0xfff2f0))
+                            .border_color(rgb(theme.error))
+                            .bg(rgb(theme.hover))
                             .px_4()
                             .py_3()
                             .text_size(px(13.0))
-                            .text_color(rgb(0xa12b1f))
+                            .text_color(rgb(theme.error))
                             .child(error),
                     )
                 })
@@ -159,7 +160,7 @@ pub(crate) fn render_home(
                             div()
                                 .text_size(px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .text_color(rgb(0x626268))
+                                .text_color(rgb(theme.foreground_dim))
                                 .child(language.text("home.recent")),
                         )
                         .when(!recent_documents.is_empty(), |view| {
@@ -171,9 +172,9 @@ pub(crate) fn render_home(
                                     .py_1()
                                     .rounded(px(5.0))
                                     .text_size(px(12.0))
-                                    .text_color(rgb(0xa1a1a8))
+                                    .text_color(rgb(theme.foreground_muted))
                                     .hover(|style| {
-                                        style.bg(rgb(0xeeeeef)).text_color(rgb(0x49494f))
+                                        style.bg(rgb(theme.hover)).text_color(rgb(theme.foreground))
                                     })
                                     .on_click(move |_, _, cx| {
                                         clear_entity
@@ -194,7 +195,7 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
         .unwrap_or_else(|| path.display().to_string());
     div()
         .size_full()
-        .bg(rgb(0xf7f7f8))
+        .bg(rgb(crate::theme::current_theme().surface))
         .font_family(".SystemUIFont")
         .flex()
         .items_center()
@@ -210,14 +211,14 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
                     div()
                         .text_size(px(14.0))
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(0x303034))
+                        .text_color(rgb(crate::theme::current_theme().foreground))
                         .child(format!("{} {name}", language.text("home.opening"))),
                 )
                 .child(
                     div()
                         .mt_2()
                         .text_size(px(12.0))
-                        .text_color(rgb(0x83838a))
+                        .text_color(rgb(crate::theme::current_theme().foreground_muted))
                         .overflow_hidden()
                         .child(path.display().to_string()),
                 ),
@@ -255,6 +256,7 @@ fn render_recents(
     documents: &[RecentDocument],
     language: Language,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     let list = div()
         .w_full()
         // `home-scroll` owns vertical scrolling. Keep the card at its intrinsic
@@ -263,8 +265,8 @@ fn render_recents(
         .flex_none()
         .rounded(px(13.0))
         .border_1()
-        .border_color(rgb(0xe1e1e4))
-        .bg(rgb(0xffffff))
+        .border_color(rgb(theme.border))
+        .bg(rgb(theme.background))
         .shadow_sm()
         .overflow_hidden();
     if documents.is_empty() {
@@ -273,10 +275,11 @@ fn render_recents(
                 .py_6()
                 .text_align(gpui::TextAlign::Center)
                 .text_size(px(13.0))
-                .text_color(rgb(0x8d8d94))
+                .text_color(rgb(theme.foreground_muted))
                 .child(language.text("home.empty")),
         );
     }
+    let theme = crate::theme::current_theme();
     documents
         .iter()
         .enumerate()
@@ -293,7 +296,11 @@ fn render_recents(
                 .and_then(|value| value.to_str())
                 .map(str::to_ascii_uppercase)
                 .unwrap_or_else(|| "DOC".to_owned());
-            let kind_color = if kind == "ORG" { 0xa45c3e } else { 0x588bc1 };
+            let kind_color = if kind == "ORG" {
+                theme.warning
+            } else {
+                theme.accent
+            };
             list.child(
                 div()
                     .id(("recent-document", index))
@@ -304,9 +311,9 @@ fn render_recents(
                     .items_center()
                     .gap_3()
                     .when(index > 0, |row| {
-                        row.border_t_1().border_color(rgb(0xe8e8ea))
+                        row.border_t_1().border_color(rgb(theme.divider))
                     })
-                    .hover(|style| style.bg(rgb(0xf3f3f4)))
+                    .hover(|style| style.bg(rgb(theme.hover)))
                     .on_click(move |_, _, cx| {
                         row_entity.update(cx, |this, cx| this.open_recent(path.clone(), cx));
                     })
@@ -316,8 +323,8 @@ fn render_recents(
                             .h(px(35.0))
                             .rounded(px(4.0))
                             .border_1()
-                            .border_color(rgb(0xd9dadd))
-                            .bg(rgb(0xf6f7f9))
+                            .border_color(rgb(theme.border))
+                            .bg(rgb(theme.surface))
                             .flex()
                             .items_end()
                             .justify_center()
@@ -337,7 +344,7 @@ fn render_recents(
                                 div()
                                     .text_size(px(14.0))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(0x303034))
+                                    .text_color(rgb(theme.foreground))
                                     .overflow_hidden()
                                     .child(name),
                             )
@@ -345,7 +352,7 @@ fn render_recents(
                                 div()
                                     .mt_1()
                                     .text_size(px(12.0))
-                                    .text_color(rgb(0x83838a))
+                                    .text_color(rgb(theme.foreground_muted))
                                     .overflow_hidden()
                                     .child(parent),
                             ),
@@ -354,7 +361,7 @@ fn render_recents(
                         div()
                             .flex_none()
                             .text_size(px(11.0))
-                            .text_color(rgb(0xa1a1a8))
+                            .text_color(rgb(theme.foreground_muted))
                             .child(relative_time(document.opened_at)),
                     ),
             )

@@ -59,7 +59,7 @@ fn search_icon(icon: SearchIcon) -> gpui::Svg {
         .data(data)
         .size(px(16.))
         .flex_none()
-        .text_color(rgb(0x626e80))
+        .text_color(rgb(crate::theme::current_theme().foreground_muted))
 }
 
 #[cfg(test)]
@@ -83,16 +83,17 @@ fn search_icons_supply_the_color_required_by_gpui_svg_painting() {
 struct SearchTooltip(&'static str);
 impl gpui::Render for SearchTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let theme = crate::theme::current_theme();
         div()
             .px(px(9.))
             .py(px(6.))
             .rounded(px(6.))
             .border_1()
-            .border_color(rgb(0xdce4ee))
-            .bg(rgb(0xffffff))
+            .border_color(rgb(theme.border))
+            .bg(rgb(theme.background))
             .shadow_md()
             .text_size(px(12.))
-            .text_color(rgb(0x626e80))
+            .text_color(rgb(theme.foreground_muted))
             .child(self.0)
     }
 }
@@ -106,6 +107,7 @@ impl WorkspaceWindow {
         cx: &gpui::App,
         status_content: Option<gpui::AnyElement>,
     ) -> Option<gpui::Div> {
+        let theme = crate::theme::current_theme();
         if !self
             .status
             .shell_owns(crate::app::status_line::shell::ShellKind::Search, pane)
@@ -167,7 +169,11 @@ impl WorkspaceWindow {
                 };
                 crate::app::native_input::input_frame(true, !replacement && s.failed)
                     .text_size(px(13.))
-                    .text_color(rgb(if empty { 0x858990 } else { 0x34373d }))
+                    .text_color(rgb(if empty {
+                        theme.foreground_muted
+                    } else {
+                        theme.foreground
+                    }))
                     .child(
                         div()
                             .min_w_0()
@@ -242,17 +248,17 @@ impl WorkspaceWindow {
                 .justify_center()
                 .rounded(px(5.))
                 .text_size(px(12.))
-                .text_color(rgb(0x626e80))
+                .text_color(rgb(theme.foreground_muted))
                 .when(matches!(action, Action::ReplaceAll), |b| {
-                    b.bg(rgb(0x3266d5)).text_color(rgb(0xffffff))
+                    b.bg(rgb(theme.accent)).text_color(rgb(theme.background))
                 })
                 .when(!enabled, |b| b.opacity(0.35))
                 .when(matches!(action, Action::More) && s.more_open, |b| {
-                    b.bg(rgb(0xedf2ff)).text_color(rgb(0x3266d5))
+                    b.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent))
                 })
                 .when(enabled && interactive, |b| {
                     b.cursor_pointer()
-                        .hover(|style| style.bg(rgb(0xe4ebf8)).text_color(rgb(0x3266d5)))
+                        .hover(|style| style.bg(rgb(theme.hover)).text_color(rgb(theme.accent)))
                 })
                 .when_some(icon, |b, icon| b.child(search_icon(icon)))
                 .when(icon.is_none(), |b| b.child(label))
@@ -333,7 +339,11 @@ impl WorkspaceWindow {
                             .overflow_hidden()
                             .text_ellipsis()
                             .text_size(px(12.))
-                            .text_color(rgb(if s.failed { 0xb43b42 } else { 0x60718c }))
+                            .text_color(rgb(if s.failed {
+                                theme.error
+                            } else {
+                                theme.foreground_muted
+                            }))
                             .child(s.count.clone()),
                     )
                     .child(button(ToolbarButton::Previous, can_navigate))
@@ -370,7 +380,7 @@ impl WorkspaceWindow {
                             .flex_none()
                             .w(px(mode_width))
                             .text_size(px(12.))
-                            .text_color(rgb(0x737986))
+                            .text_color(rgb(theme.foreground_muted))
                             .text_center()
                             .child(self.language.text("search.replace_with")),
                     )
@@ -414,7 +424,11 @@ impl WorkspaceWindow {
                     .px(px(12.))
                     .overflow_hidden()
                     .text_size(px(11.))
-                    .text_color(rgb(if s.range_blocked { 0xb43b42 } else { 0x737986 }))
+                    .text_color(rgb(if s.range_blocked {
+                        theme.error
+                    } else {
+                        theme.foreground_muted
+                    }))
                     .child(detail.to_owned()),
             );
         }
@@ -458,6 +472,7 @@ impl WorkspaceWindow {
         window: &Window,
         cx: &gpui::App,
     ) -> Option<gpui::Div> {
+        let theme = crate::theme::current_theme();
         if !self
             .status
             .shell_owns(crate::app::status_line::shell::ShellKind::Search, pane)
@@ -493,13 +508,14 @@ impl WorkspaceWindow {
                 .gap(px(8.))
                 .rounded(px(5.))
                 .text_size(px(12.))
-                .text_color(rgb(0x3f4958))
+                .text_color(rgb(theme.foreground))
                 .when(!enabled, |row| row.opacity(0.35))
                 .when(enabled, |row| {
-                    row.cursor_pointer().hover(|style| style.bg(rgb(0xedf2ff)))
+                    row.cursor_pointer()
+                        .hover(|style| style.bg(rgb(theme.accent_bg)))
                 })
                 .child(div().w(px(16.)).h(px(16.)).when(selected, |slot| {
-                    slot.child(search_icon(SearchIcon::Check).text_color(rgb(0x3266d5)))
+                    slot.child(search_icon(SearchIcon::Check).text_color(rgb(theme.accent)))
                 }))
                 .child(label)
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -516,10 +532,10 @@ impl WorkspaceWindow {
                 .flex()
                 .items_center()
                 .text_size(px(11.))
-                .text_color(rgb(0x7e8795))
+                .text_color(rgb(theme.foreground_muted))
                 .child(label)
         };
-        let separator = || div().h(px(1.)).mx(px(8.)).my(px(5.)).bg(rgb(0xe9edf2));
+        let separator = || div().h(px(1.)).mx(px(8.)).my(px(5.)).bg(rgb(theme.divider));
         let mut menu = div()
             .id("search-options")
             .debug_selector(|| "search-options-menu".to_owned())
@@ -537,8 +553,8 @@ impl WorkspaceWindow {
             .p(px(6.))
             .rounded(px(10.))
             .border_1()
-            .border_color(rgb(0xdce4ee))
-            .bg(rgb(0xffffff))
+            .border_color(rgb(theme.border))
+            .bg(rgb(theme.background))
             .shadow_lg()
             .font_family(".SystemUIFont")
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -612,7 +628,7 @@ impl WorkspaceWindow {
                         .px(px(8.))
                         .py(px(5.))
                         .text_size(px(11.))
-                        .text_color(rgb(0x7e8795))
+                        .text_color(rgb(theme.foreground_muted))
                         .overflow_hidden()
                         .child(
                             self.language

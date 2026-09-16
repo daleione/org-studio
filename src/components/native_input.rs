@@ -447,13 +447,20 @@ impl EntityInputHandler for NativeInput {
 
 impl Render for NativeInput {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = crate::theme::current_theme();
         let input = cx.entity();
         let id = self.config.id;
         input_frame(self.config.outlined, self.invalid)
             .id(id)
             .debug_selector(move || id.to_owned())
             .when(self.enabled, |input| input.track_focus(&self.focus))
-            .focus(|style| style.border_color(rgb(if self.invalid { 0xb43b42 } else { 0x3266d5 })))
+            .focus(|style| {
+                style.border_color(rgb(if self.invalid {
+                    theme.error
+                } else {
+                    theme.accent
+                }))
+            })
             .cursor_text()
             .on_key_down(cx.listener(Self::key_down))
             .on_mouse_down(
@@ -496,9 +503,9 @@ impl Render for NativeInput {
                                 font: style.font(),
                                 color: rgb(if this.config.outlined {
                                     if this.text.is_empty() {
-                                        0x858990
+                                        theme.foreground_muted
                                     } else {
-                                        0x34373d
+                                        theme.foreground
                                     }
                                 } else if this.text.is_empty() {
                                     crate::theme::current_theme().foreground_dim
@@ -539,7 +546,7 @@ impl Render for NativeInput {
                                         ),
                                         point(origin.x + caret, bounds.bottom()),
                                     ),
-                                    rgba(0x1688ff30),
+                                    rgba((theme.accent << 8) | 0x30),
                                 ));
                             }
                             let _ = line.paint(
@@ -556,7 +563,7 @@ impl Render for NativeInput {
                                         point(origin.x + caret, bounds.top() + px(3.)),
                                         size(px(1.), px(16.)),
                                     ),
-                                    rgb(0x1688ff),
+                                    rgb(theme.accent),
                                 ));
                             }
                             if let Some(marked) = &this.marked {
@@ -575,7 +582,7 @@ impl Render for NativeInput {
                                             px(1.),
                                         ),
                                     ),
-                                    rgb(0x34373d),
+                                    rgb(theme.foreground),
                                 ));
                             }
                             if this.enabled {
@@ -597,6 +604,7 @@ impl Render for NativeInput {
 }
 
 pub(crate) fn input_frame(outlined: bool, invalid: bool) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .w_full()
         .min_w_0()
@@ -609,7 +617,7 @@ pub(crate) fn input_frame(outlined: bool, invalid: bool) -> gpui::Div {
                 .px(px(8.))
                 .rounded(px(5.))
                 .border_1()
-                .border_color(rgb(if invalid { 0xb43b42 } else { 0xdce4ee }))
-                .bg(rgb(0xffffff))
+                .border_color(rgb(if invalid { theme.error } else { theme.border }))
+                .bg(rgb(theme.background))
         })
 }

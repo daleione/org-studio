@@ -475,6 +475,9 @@ pub(super) struct ShapeKey {
     pub(super) syntax_key: u8,
     pub(super) code_language: Option<Arc<str>>,
     pub(super) marked: Option<(usize, usize)>,
+    /// Shaped lines bake TextRun colors into the layout, so the cache key must
+    /// change whenever the palette generation changes.
+    pub(super) theme_generation: u64,
 }
 
 #[cfg(feature = "benchmarks")]

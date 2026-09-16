@@ -168,7 +168,8 @@ actions!(
         DecreaseContentFontSize,
         ResetContentFontSize,
         UseEnglish,
-        UseChinese
+        UseChinese,
+        CycleThemeMode
     ]
 );
 

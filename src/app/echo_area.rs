@@ -162,7 +162,7 @@ fn render_echo_content(
                 .flex_none()
                 .border_t_1()
                 .border_color(rgb(theme.border))
-                .bg(rgb(0xf7faff))
+                .bg(rgb(theme.echo_area))
         })
         .when(inline, |area| area.h_full().flex_1().min_w_0())
         .flex()
@@ -174,10 +174,10 @@ fn render_echo_content(
         .text_size(px(11.0))
         .when_some(message, |area, message| {
             let (icon, color) = match message.tone {
-                EchoTone::Working => ("ⓘ", 0x3477bb),
+                EchoTone::Working => ("ⓘ", theme.info),
                 EchoTone::Success => ("✓", theme.heading[2]),
                 EchoTone::Warning => ("!", theme.heading[1]),
-                EchoTone::Error => ("×", 0xb23a63),
+                EchoTone::Error => ("×", theme.error),
             };
             let is_prefix = pending_keys == Some(message.text.as_ref());
             area.child(
@@ -195,7 +195,7 @@ fn render_echo_content(
                             .px(px(7.0))
                             .py(px(2.0))
                             .rounded(px(6.0))
-                            .bg(rgb(0xe9eef5))
+                            .bg(rgb(theme.hover))
                     })
                     .min_w_0()
                     .overflow_hidden()
@@ -207,7 +207,7 @@ fn render_echo_content(
             .child(
                 div()
                     .flex_1()
-                    .text_color(rgb(0x8391a6))
+                    .text_color(rgb(theme.foreground_muted))
                     .when(is_prefix, |hint| {
                         hint.child(match language {
                             crate::i18n::Language::Chinese => "（按下组合键…）",
@@ -221,8 +221,8 @@ fn render_echo_content(
                     .px(px(7.0))
                     .rounded(px(5.0))
                     .cursor_pointer()
-                    .text_color(rgb(0x8391a6))
-                    .hover(|style| style.bg(rgb(0xe9eef5)))
+                    .text_color(rgb(theme.foreground_muted))
+                    .hover(|style| style.bg(rgb(theme.hover)))
                     .child("×")
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();

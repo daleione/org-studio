@@ -4,7 +4,10 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, rgb, svg,
 };
 
+use crate::theme::current_theme;
+
 pub(crate) fn badge(text: impl Into<String>) -> Div {
+    let theme = current_theme();
     div()
         .min_w(px(23.))
         .h(px(23.))
@@ -13,13 +16,14 @@ pub(crate) fn badge(text: impl Into<String>) -> Div {
         .items_center()
         .justify_center()
         .rounded_full()
-        .bg(rgb(0xdeedff))
-        .text_color(rgb(0x0a6ed1))
+        .bg(rgb(theme.accent_bg))
+        .text_color(rgb(theme.accent))
         .text_size(px(11.))
         .child(text.into())
 }
 
 pub(crate) fn compact_badge(text: impl Into<String>) -> Div {
+    let theme = current_theme();
     div()
         .min_w(px(18.))
         .h(px(17.))
@@ -28,25 +32,27 @@ pub(crate) fn compact_badge(text: impl Into<String>) -> Div {
         .items_center()
         .justify_center()
         .rounded_full()
-        .bg(rgb(0xdeedff))
-        .text_color(rgb(0x0a6ed1))
+        .bg(rgb(theme.accent_bg))
+        .text_color(rgb(theme.accent))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_size(px(9.))
         .child(text.into())
 }
 pub(crate) fn pill(text: impl Into<String>) -> Div {
+    let theme = current_theme();
     div()
         .h(px(24.))
         .px_3()
         .flex()
         .items_center()
         .rounded_full()
-        .bg(rgb(0xf3edf5))
-        .text_color(rgb(0x754c7d))
+        .bg(rgb(theme.accent_bg))
+        .text_color(rgb(theme.todo_active))
         .text_size(px(11.))
         .child(text.into())
 }
 pub(crate) fn icon_button(path: &'static str) -> Div {
+    let theme = current_theme();
     div()
         .flex_none()
         .size(px(38.0))
@@ -55,14 +61,14 @@ pub(crate) fn icon_button(path: &'static str) -> Div {
         .justify_center()
         .rounded(px(8.))
         .border_1()
-        .border_color(rgb(0xdfe0e3))
-        .bg(rgb(0xffffff))
-        .text_color(rgb(0x34373d))
+        .border_color(rgb(theme.border))
+        .bg(rgb(theme.background))
+        .text_color(rgb(theme.foreground))
         .child(
             svg()
                 .data(super::super::icon::agenda_icon(path))
                 .size(px(16.))
-                .text_color(rgb(0x34373d)),
+                .text_color(rgb(theme.foreground)),
         )
 }
 pub(crate) fn action_icon_button(
@@ -71,17 +77,24 @@ pub(crate) fn action_icon_button(
     intent: super::super::UiIntent,
     selected: bool,
 ) -> Stateful<Div> {
+    let theme = current_theme();
     icon_button(path)
         .id(format!("agenda-action-icon-{path}"))
         .cursor_pointer()
         .when(selected, |button| {
-            button.bg(rgb(0xf1eafb)).text_color(rgb(0x7540c4))
+            button
+                .bg(rgb(theme.accent_bg))
+                .text_color(rgb(theme.todo_active))
         })
         .hover(move |style| {
             if selected {
-                style.bg(rgb(0xe5d9f7)).border_color(rgb(0xa98ad5))
+                style
+                    .bg(rgb(theme.accent_bg))
+                    .border_color(rgb(theme.todo_active))
             } else {
-                style.bg(rgb(0xe9eaed)).border_color(rgb(0xbfc2c8))
+                style
+                    .bg(rgb(theme.hover))
+                    .border_color(rgb(theme.border_hover))
             }
         })
         .active(|style| style.opacity(0.72))
@@ -96,6 +109,7 @@ pub(crate) fn text_action_button(
     label: &'static str,
     intent: super::super::UiIntent,
 ) -> Stateful<Div> {
+    let theme = current_theme();
     div()
         .id(format!("agenda-text-action-{label}"))
         .h(px(28.))
@@ -104,11 +118,11 @@ pub(crate) fn text_action_button(
         .items_center()
         .rounded(px(6.))
         .border_1()
-        .border_color(rgb(0xd9c18e))
-        .bg(rgb(0xffffff))
+        .border_color(rgb(theme.warning))
+        .bg(rgb(theme.background))
         .text_size(px(10.))
         .cursor_pointer()
-        .hover(|style| style.bg(rgb(0xfff8e9)).border_color(rgb(0xcaa75e)))
+        .hover(|style| style.bg(rgb(theme.hover)).border_color(rgb(theme.warning)))
         .active(|style| style.opacity(0.72))
         .child(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -117,6 +131,7 @@ pub(crate) fn text_action_button(
         })
 }
 pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
+    let theme = current_theme();
     div()
         .id("agenda-search-field")
         .w(px(250.))
@@ -126,36 +141,41 @@ pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
         .items_center()
         .rounded(px(8.))
         .border_1()
-        .border_color(rgb(0xdfe0e3))
-        .bg(rgb(0xffffff))
-        .text_color(rgb(0x858990))
+        .border_color(rgb(theme.border))
+        .bg(rgb(theme.background))
+        .text_color(rgb(theme.foreground_muted))
         .text_size(px(12.))
         .gap_2()
         .cursor_text()
-        .hover(|style| style.bg(rgb(0xf8fbff)).border_color(rgb(0x8eb9df)))
-        .active(|style| style.border_color(rgb(0x1688ff)))
+        .hover(|style| {
+            style
+                .bg(rgb(theme.accent_bg))
+                .border_color(rgb(theme.accent_border))
+        })
+        .active(|style| style.border_color(rgb(theme.accent)))
         .child(
             svg()
                 .data(super::super::icon::agenda_icon(
                     "assets/icons/agenda/search.svg",
                 ))
                 .size(px(15.))
-                .text_color(rgb(0x777b82)),
+                .text_color(rgb(theme.foreground_muted)),
         )
         .child(div().flex_1().min_w_0().child(value))
         .child(
             div()
                 .text_size(px(10.))
-                .text_color(rgb(0xa2a5aa))
+                .text_color(rgb(theme.foreground_disabled))
                 .child("⌘K"),
         )
 }
 pub(crate) fn empty_state(text: impl Into<String>) -> Div {
+    let theme = current_theme();
     div()
         .size_full()
         .flex()
         .items_center()
         .justify_center()
-        .text_color(rgb(0x7f8998))
+        .text_color(rgb(theme.foreground_muted))
         .child(text.into())
 }

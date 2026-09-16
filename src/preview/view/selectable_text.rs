@@ -445,7 +445,7 @@ fn paint_selection(
         let height = layout.line_height().min(bounds.size.height).max(px(1.0));
         window.paint_quad(fill(
             Bounds::from_corners(position, point(position.x + px(8.0), position.y + height)),
-            rgba(0x3a81c34a),
+            rgba((crate::theme::current_theme().accent << 8) | 0x4a),
         ));
         return;
     }
@@ -482,7 +482,7 @@ fn paint_selection(
         let top = bounds.top() + px(line as f32 * line_height);
         window.paint_quad(fill(
             Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
-            rgba(0x3a81c34a),
+            rgba((crate::theme::current_theme().accent << 8) | 0x4a),
         ));
     }
 }

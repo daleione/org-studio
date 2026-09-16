@@ -460,10 +460,97 @@ const WARM_CLAY_STYLE: PreviewStyle = PreviewStyle {
     },
 };
 
+// The reading styles own their document-identity palettes (typography, accent
+// hues, spacing). Dark mode keeps each style's accent identity but swaps the
+// neutral ramps to the product dark palette: cold blue-grey for Base, a warm
+// dark ramp for Warm Clay so its character survives.
+const BASE_STYLE_DARK: PreviewStyle = PreviewStyle {
+    palette: PreviewPalette {
+        background: 0x121d28,
+        surface: 0x18232f,
+        surface_elevated: 0x1e2b39,
+        hover: 0x253444,
+        foreground: 0xe6edf3,
+        foreground_dim: 0x8b98a7,
+        border: 0x253445,
+        border_strong: 0x33455c,
+        heading: [0x5cb8ff, 0x36d399, 0xc3e88d, 0xffcb6b],
+        accent: 0x4da3ff,
+        accent_text: 0x66b3ff,
+        accent_contrast: 0x0b1118,
+        code_background: 0x16222e,
+        code_boundary_background: 0x1a2635,
+        code_block_accent: 0x2f6394,
+        code_foreground: 0xe6edf3,
+        code_boundary: 0x536171,
+        quote: 0xc5ced8,
+        quote_border: 0x4da3ff,
+        link: 0x4da3ff,
+        meta: 0xf5b84b,
+        inline_code: 0xffcb6b,
+        inline_code_background: 0x18232f,
+        date: 0x66b3ff,
+        keyword: 0xc792ea,
+        string: 0xc3e88d,
+        comment: 0x637587,
+        type_name: 0xffcb6b,
+        function: 0x82aaff,
+        constant: 0xf78c6c,
+        number: 0xf78c6c,
+        variable: 0x66b3ff,
+        operator: 0x89ddff,
+        attribute: 0x82aaff,
+    },
+    ..BASE_STYLE
+};
+
+const WARM_CLAY_STYLE_DARK: PreviewStyle = PreviewStyle {
+    palette: PreviewPalette {
+        background: 0x151210,
+        surface: 0x1c1815,
+        surface_elevated: 0x231e1a,
+        hover: 0x2a241f,
+        foreground: 0xe8e2da,
+        foreground_dim: 0x9a938a,
+        border: 0x332c26,
+        border_strong: 0x4a413a,
+        heading: [0xe8e2da, 0xded7cd, 0xd3cbbf, 0xc7bfb1],
+        accent: 0xd98b6a,
+        accent_text: 0xe0977a,
+        accent_contrast: 0x151210,
+        code_background: 0x1c1815,
+        code_boundary_background: 0x262019,
+        code_block_accent: 0xd98b6a,
+        code_foreground: 0xe8e2da,
+        code_boundary: 0x9a938a,
+        quote: 0xcfc8bf,
+        quote_border: 0xe6c1b2,
+        link: 0xe0977a,
+        meta: 0x9a938a,
+        inline_code: 0xe88a63,
+        inline_code_background: 0x231f1b,
+        date: 0xd4a054,
+        keyword: 0xd46a4a,
+        string: 0x4fb87a,
+        comment: 0x8a837a,
+        type_name: 0xc4574a,
+        function: 0x5f8fd4,
+        constant: 0xd4a054,
+        number: 0xd4a054,
+        variable: 0xb08a54,
+        operator: 0xcfc8bf,
+        attribute: 0xe0977a,
+    },
+    ..WARM_CLAY_STYLE
+};
+
 pub(crate) fn preview_style(id: PreviewStyleId) -> &'static PreviewStyle {
-    match id {
-        PreviewStyleId::Base => &BASE_STYLE,
-        PreviewStyleId::WarmClay => &WARM_CLAY_STYLE,
+    let dark = crate::theme::effective_theme_is_dark();
+    match (id, dark) {
+        (PreviewStyleId::Base, false) => &BASE_STYLE,
+        (PreviewStyleId::Base, true) => &BASE_STYLE_DARK,
+        (PreviewStyleId::WarmClay, false) => &WARM_CLAY_STYLE,
+        (PreviewStyleId::WarmClay, true) => &WARM_CLAY_STYLE_DARK,
     }
 }
 
@@ -481,15 +568,15 @@ mod tests {
 
     #[test]
     fn built_in_style_keys_are_distinct() {
-        let base = *preview_style(PreviewStyleId::Base);
-        let warm = *preview_style(PreviewStyleId::WarmClay);
+        let base = BASE_STYLE;
+        let warm = WARM_CLAY_STYLE;
         assert_ne!(base.paint_key(), warm.paint_key());
         assert_ne!(base.layout_key(), warm.layout_key());
     }
 
     #[test]
     fn style_identity_does_not_hide_layout_rules() {
-        let base = *preview_style(PreviewStyleId::Base);
+        let base = BASE_STYLE;
         let mut renamed = base;
         renamed.id = PreviewStyleId::WarmClay;
         assert_eq!(base.layout_key(), renamed.layout_key());
@@ -508,7 +595,7 @@ mod tests {
 
     #[test]
     fn warm_clay_contract_and_readable_text_contrast_are_stable() {
-        let style = *preview_style(PreviewStyleId::WarmClay);
+        let style = WARM_CLAY_STYLE;
         assert_eq!(style.name(Language::Chinese), "暖陶");
         assert_eq!(style.name(Language::English), "Warm Clay");
         assert_eq!(style.palette.background, 0xf9f9f7);
@@ -524,6 +611,51 @@ mod tests {
         assert!(contrast(style.palette.foreground, style.palette.background) >= 7.0);
         assert!(contrast(style.palette.accent_text, style.palette.background) >= 4.5);
         assert!(contrast(style.palette.accent_contrast, style.palette.accent) >= 4.5);
+    }
+
+    #[test]
+    fn dark_variants_swap_the_neutral_ramp_and_keep_readable_contrast() {
+        let base = BASE_STYLE_DARK;
+        let warm = WARM_CLAY_STYLE_DARK;
+        // Identity survives: same typography, spacing, variants and style ids.
+        assert_eq!(base.typography, BASE_STYLE.typography);
+        assert_eq!(base.spacing, BASE_STYLE.spacing);
+        assert_eq!(base.variants, BASE_STYLE.variants);
+        assert_eq!(warm.typography, WARM_CLAY_STYLE.typography);
+        assert_eq!(warm.spacing, WARM_CLAY_STYLE.spacing);
+        // Dark canvases must actually be dark.
+        assert_eq!(base.palette.background, 0x121d28);
+        assert_eq!(warm.palette.background, 0x151210);
+        // Text and accent contrast stay readable on the dark ramp.
+        for style in [base, warm] {
+            assert!(contrast(style.palette.foreground, style.palette.background) >= 7.0);
+            assert!(contrast(style.palette.accent_text, style.palette.background) >= 4.5);
+            assert!(contrast(style.palette.accent_contrast, style.palette.accent) >= 4.5);
+            assert!(contrast(style.palette.foreground, style.palette.code_background) >= 7.0);
+        }
+    }
+
+    #[test]
+    fn preview_style_dispatch_follows_the_effective_theme() {
+        let _guard = crate::theme::THEME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::theme::set_theme_mode(crate::theme::ThemeMode::Auto);
+        crate::theme::set_system_dark(false);
+        assert_eq!(
+            preview_style(PreviewStyleId::Base).palette.background,
+            0xffffff
+        );
+        crate::theme::set_system_dark(true);
+        assert_eq!(
+            preview_style(PreviewStyleId::Base).palette.background,
+            0x121d28
+        );
+        assert_eq!(
+            preview_style(PreviewStyleId::WarmClay).palette.background,
+            0x151210
+        );
+        crate::theme::set_system_dark(false);
     }
 
     fn contrast(left: u32, right: u32) -> f64 {

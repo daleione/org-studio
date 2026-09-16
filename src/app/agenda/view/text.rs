@@ -16,6 +16,7 @@ pub(crate) fn agenda_text(
     language: Language,
     window: Option<(Date, Date)>,
 ) -> AgendaTextBuffer {
+    let theme = crate::theme::current_theme();
     let today = result.query.today;
     let lines = project_agenda_text(
         result,
@@ -39,11 +40,11 @@ pub(crate) fn agenda_text(
                     HighlightStyle {
                         color: Some(
                             rgb(if date == Some(today) {
-                                0xd291d8
+                                super::super::style::HEADER_TODAY()
                             } else if weekend {
-                                0x732b79
+                                super::super::style::HEADER_WEEKEND()
                             } else {
-                                0xb54cbd
+                                super::super::style::HEADER_DATE()
                             })
                             .into(),
                         ),
@@ -76,11 +77,11 @@ pub(crate) fn agenda_text(
                         HighlightStyle {
                             color: Some(
                                 rgb(if overdue {
-                                    0xff4a40
+                                    theme.error
                                 } else if deadline {
-                                    0x986801
+                                    theme.warning
                                 } else {
-                                    0x383a42
+                                    theme.foreground
                                 })
                                 .into(),
                             ),
@@ -91,7 +92,7 @@ pub(crate) fn agenda_text(
                     (
                         line.todo.clone(),
                         HighlightStyle {
-                            color: Some(rgb(0x50a14f).into()),
+                            color: Some(rgb(theme.success).into()),
                             font_weight: Some(FontWeight::BOLD),
                             ..Default::default()
                         },
@@ -103,9 +104,9 @@ pub(crate) fn agenda_text(
                         HighlightStyle {
                             color: Some(
                                 rgb(match row.priority {
-                                    Some('A') => 0xff4a40,
-                                    Some('B') => 0x986801,
-                                    _ => 0x50a14f,
+                                    Some('A') => theme.error,
+                                    Some('B') => theme.warning,
+                                    _ => theme.success,
                                 })
                                 .into(),
                             ),
@@ -117,7 +118,7 @@ pub(crate) fn agenda_text(
                     highlights.push((
                         range.clone(),
                         HighlightStyle {
-                            color: Some(rgb(0x986801).into()),
+                            color: Some(rgb(theme.warning).into()),
                             ..Default::default()
                         },
                     ));

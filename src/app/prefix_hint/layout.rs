@@ -51,7 +51,7 @@ fn measure(window: &Window, text: &str, family: &str, size: f32) -> f32 {
     let run = TextRun {
         len: text.len(),
         font: font(family),
-        color: rgb(0x53657b).into(),
+        color: rgb(crate::theme::current_theme().foreground_dim).into(),
         background_color: None,
         underline: None,
         strikethrough: None,

@@ -712,6 +712,9 @@ pub(super) struct RasterKey {
     pub(super) width: u16,
     pub(super) scale_x100: u16,
     pub(super) density: crate::minimap::Density,
+    /// Minimap rasters bake palette colors into the image; the theme
+    /// generation keeps them from outliving a theme switch.
+    pub(super) theme_generation: u64,
 }
 
 #[derive(Clone)]
@@ -2068,6 +2071,7 @@ mod tests {
             width: 96,
             scale_x100: 200,
             density: crate::minimap::Density::Compact,
+            theme_generation: 0,
         };
         let next = RasterKey {
             first_unit: 64,
@@ -2204,6 +2208,7 @@ mod tests {
             width: 96,
             scale_x100: 100,
             density: crate::minimap::Density::Compact,
+            theme_generation: 0,
         }));
         host.invalidate_raster();
         assert_ne!(host.raster_epoch.load(Ordering::Acquire), epoch);
@@ -2254,6 +2259,7 @@ mod tests {
             width: 1,
             scale_x100: 100,
             density: crate::minimap::Density::Compact,
+            theme_generation: 0,
         };
         let image = Arc::new(RenderImage::new(SmallVec::from_elem(
             Frame::new(RgbaImage::new(1, 1)),
@@ -2294,6 +2300,7 @@ mod tests {
             width: 1,
             scale_x100: 100,
             density: crate::minimap::Density::Compact,
+            theme_generation: 0,
         };
         let image = Arc::new(RenderImage::new(SmallVec::from_elem(
             Frame::new(RgbaImage::new(1, 1)),
@@ -2330,6 +2337,7 @@ mod tests {
                     width: 1,
                     scale_x100: 100,
                     density: crate::minimap::Density::Compact,
+                    theme_generation: 0,
                 },
                 image: Arc::new(RenderImage::new(SmallVec::from_elem(
                     Frame::new(RgbaImage::new(1, 1)),
@@ -2443,6 +2451,7 @@ mod tests {
             width: 1,
             scale_x100: 100,
             density: crate::minimap::Density::Compact,
+            theme_generation: 0,
         };
         let image = Arc::new(RenderImage::new(SmallVec::from_elem(
             Frame::new(RgbaImage::new(1, 1)),

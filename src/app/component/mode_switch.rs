@@ -42,6 +42,7 @@ impl ModeSwitch {
     where
         E: IntoElement,
     {
+        let theme = crate::theme::current_theme();
         let selected = index == self.selected_index;
         let foreground = foreground(selected);
         div()
@@ -56,8 +57,8 @@ impl ModeSwitch {
             .text_color(foreground)
             .cursor_pointer()
             .when(!selected, |item| {
-                // Keep the moving white indicator visible below the hover treatment.
-                item.hover(|style| style.bg(rgba(0xffffff80)))
+                // Keep the hover wash translucent so the moving indicator stays visible.
+                item.hover(|style| style.bg(rgba((theme.hover << 8) | 0x80)))
             })
             .active(|style| style.opacity(0.72))
             .child(content(foreground))
@@ -68,6 +69,7 @@ impl ModeSwitch {
         I: IntoIterator<Item = E>,
         E: IntoElement,
     {
+        let theme = crate::theme::current_theme();
         let items = items.into_iter().collect::<Vec<_>>();
         let mut control = div()
             .flex_none()
@@ -77,8 +79,8 @@ impl ModeSwitch {
             .items_center()
             .rounded(px(8.))
             .border_1()
-            .border_color(rgb(0xdfe0e3))
-            .bg(rgb(0xf4f4f5))
+            .border_color(rgb(theme.border))
+            .bg(rgb(theme.surface))
             .relative();
 
         if self.selected_index < items.len() {
@@ -92,7 +94,7 @@ impl ModeSwitch {
                 .w(self.item_width)
                 .h(px(26.))
                 .rounded(px(6.))
-                .bg(rgb(0xffffff))
+                .bg(rgb(theme.elevated))
                 .shadow_sm();
             control = if self.motion_enabled {
                 control.child(
@@ -114,7 +116,12 @@ impl ModeSwitch {
 }
 
 fn foreground(selected: bool) -> Rgba {
-    rgb(if selected { 0x1688ff } else { 0x34373d })
+    let theme = crate::theme::current_theme();
+    rgb(if selected {
+        theme.accent
+    } else {
+        theme.foreground
+    })
 }
 
 fn indicator_left(selected_index: usize, item_width: Pixels) -> Pixels {
@@ -128,8 +135,9 @@ mod tests {
 
     #[test]
     fn selected_and_unselected_content_have_visible_foregrounds() {
-        assert_eq!(foreground(true), rgb(0x1688ff));
-        assert_eq!(foreground(false), rgb(0x34373d));
+        let theme = crate::theme::current_theme();
+        assert_eq!(foreground(true), rgb(theme.accent));
+        assert_eq!(foreground(false), rgb(theme.foreground));
         assert_ne!(foreground(true), foreground(false));
     }
 

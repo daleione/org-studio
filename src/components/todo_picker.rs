@@ -251,7 +251,7 @@ impl Render for TodoPicker {
                         .gap(px(6.))
                         .cursor_pointer()
                         .when(current, |s| {
-                            s.bg(rgb(SELECTED_BACKGROUND)).text_color(rgb(0xffffff))
+                            s.bg(rgb(SELECTED_BACKGROUND())).text_color(rgb(0xffffff))
                         })
                         .when(!current, |s| s.text_color(rgb(color)))
                         .when(
@@ -260,15 +260,15 @@ impl Render for TodoPicker {
                                 && index == self.selected
                                 && !self.more_open,
                             |s| {
-                                s.bg(rgb(HOVER_BACKGROUND))
+                                s.bg(rgb(HOVER_BACKGROUND()))
                                     .border_color(rgba((color << 8) | 0x80))
                             },
                         )
                         .hover(move |s| {
                             s.bg(rgb(if current {
-                                SELECTED_HOVER_BACKGROUND
+                                SELECTED_HOVER_BACKGROUND()
                             } else {
-                                HOVER_BACKGROUND
+                                HOVER_BACKGROUND()
                             }))
                             .border_color(rgba(if current { 0 } else { (color << 8) | 0x80 }))
                         })
@@ -333,9 +333,9 @@ impl Render for TodoPicker {
                     .when(
                         self.more_open
                             || (self.keyboard_navigation && self.selected == self.states.len()),
-                        |s| s.bg(rgb(HOVER_BACKGROUND)),
+                        |s| s.bg(rgb(HOVER_BACKGROUND())),
                     )
-                    .hover(|s| s.bg(rgb(HOVER_BACKGROUND)))
+                    .hover(|s| s.bg(rgb(HOVER_BACKGROUND())))
                     .text_color(rgb(theme.foreground_dim))
                     .child("···")
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -379,9 +379,9 @@ impl Render for TodoPicker {
                         .cursor_pointer()
                         .when(
                             self.keyboard_navigation && self.more_selected == index,
-                            |s| s.bg(rgb(HOVER_BACKGROUND)),
+                            |s| s.bg(rgb(HOVER_BACKGROUND())),
                         )
-                        .hover(|s| s.bg(rgb(HOVER_BACKGROUND)))
+                        .hover(|s| s.bg(rgb(HOVER_BACKGROUND())))
                         .child(icon)
                         .child(self.language.text(key))
                         .on_click(cx.listener(move |_, _, _, cx| {

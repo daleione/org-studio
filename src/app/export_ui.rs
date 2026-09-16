@@ -298,14 +298,18 @@ pub(crate) fn render_export_panel(
             .justify_center()
             .rounded(px(7.0))
             .border_1()
-            .border_color(rgb(if selected { 0x3a81c3 } else { palette.border }))
+            .border_color(rgb(if selected {
+                palette.accent
+            } else {
+                palette.border
+            }))
             .bg(rgb(if selected {
                 palette.background
             } else {
                 palette.background_alt
             }))
             .when(selected, |button| button.shadow_sm())
-            .hover(|style| style.border_color(rgb(0x8eb9df)))
+            .hover(|style| style.border_color(rgb(palette.accent_border)))
             .cursor_pointer()
             .child(label)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -325,14 +329,18 @@ pub(crate) fn render_export_panel(
             .justify_center()
             .rounded(px(7.0))
             .border_1()
-            .border_color(rgb(if selected { 0x3a81c3 } else { palette.border }))
+            .border_color(rgb(if selected {
+                palette.accent
+            } else {
+                palette.border
+            }))
             .bg(rgb(if selected {
                 palette.background
             } else {
                 palette.background_alt
             }))
             .when(selected, |button| button.shadow_sm())
-            .hover(|style| style.border_color(rgb(0x8eb9df)))
+            .hover(|style| style.border_color(rgb(palette.accent_border)))
             .cursor_pointer()
             .child(label)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -352,10 +360,14 @@ pub(crate) fn render_export_panel(
                     .overflow_hidden()
                     .rounded_lg()
                     .border_1()
-                    .border_color(rgb(if selected { 0x3a81c3 } else { palette.border }))
+                    .border_color(rgb(if selected {
+                        palette.accent
+                    } else {
+                        palette.border
+                    }))
                     .bg(rgb(palette.background))
                     .when(selected, |card| card.shadow_sm())
-                    .hover(|style| style.border_color(rgb(0x8eb9df)))
+                    .hover(|style| style.border_color(rgb(palette.accent_border)))
                     .cursor_pointer()
                     .child(
                         div()
@@ -384,7 +396,7 @@ pub(crate) fn render_export_panel(
                                 div()
                                     .text_size(px(12.0))
                                     .text_color(rgb(if selected {
-                                        0x246ca9
+                                        palette.accent
                                     } else {
                                         palette.foreground
                                     }))
@@ -534,7 +546,7 @@ pub(crate) fn render_export_panel(
                                             .justify_center()
                                             .rounded(px(7.0))
                                             .border_1()
-                                            .border_color(rgb(0x3a81c3))
+                                            .border_color(rgb(palette.accent))
                                             .bg(rgb(palette.background))
                                             .shadow_sm()
                                             .child(language.text("export.long_image")),
@@ -566,7 +578,7 @@ pub(crate) fn render_export_panel(
                                                     .border_1()
                                                     .border_color(rgb(
                                                         if panel.options.png_ppi == 144.0 {
-                                                            0x3a81c3
+                                                            palette.accent
                                                         } else {
                                                             palette.border
                                                         },
@@ -600,7 +612,7 @@ pub(crate) fn render_export_panel(
                                                     .border_1()
                                                     .border_color(rgb(
                                                         if panel.options.png_ppi == 300.0 {
-                                                            0x3a81c3
+                                                            palette.accent
                                                         } else {
                                                             palette.border
                                                         },
@@ -638,13 +650,17 @@ pub(crate) fn render_export_panel(
                                         .text_color(rgb(palette.foreground_dim))
                                         .child(language.text("export.templates")),
                                 )
-                                .child(div().text_size(px(11.0)).text_color(rgb(0x3a81c3)).child(
-                                    format!(
-                                        "{} · {}",
-                                        export_templates()[panel.template_index].name(language),
-                                        export_templates()[panel.template_index].family(language)
-                                    ),
-                                )),
+                                .child(
+                                    div()
+                                        .text_size(px(11.0))
+                                        .text_color(rgb(palette.accent))
+                                        .child(format!(
+                                            "{} · {}",
+                                            export_templates()[panel.template_index].name(language),
+                                            export_templates()[panel.template_index]
+                                                .family(language)
+                                        )),
+                                ),
                         )
                         .child(
                             div()
@@ -676,11 +692,13 @@ pub(crate) fn render_export_panel(
                                 })
                                 .when_some(status.clone(), |view, status| {
                                     let (message, color) = match status {
-                                        ExportRunState::Working(message) => (message, 0x656d76),
-                                        ExportRunState::Success { message, .. } => {
-                                            (message, 0x2d7d46)
+                                        ExportRunState::Working(message) => {
+                                            (message, palette.foreground_muted)
                                         }
-                                        ExportRunState::Error(message) => (message, 0xb42318),
+                                        ExportRunState::Success { message, .. } => {
+                                            (message, palette.success)
+                                        }
+                                        ExportRunState::Error(message) => (message, palette.error),
                                     };
                                     view.text_color(rgb(color)).child(message.to_string())
                                 }),
@@ -749,7 +767,11 @@ pub(crate) fn render_export_panel(
                                         .items_center()
                                         .justify_center()
                                         .rounded_md()
-                                        .bg(rgb(if working { 0xaeb4ba } else { 0x3a81c3 }))
+                                        .bg(rgb(if working {
+                                            palette.foreground_disabled
+                                        } else {
+                                            palette.accent
+                                        }))
                                         .text_color(rgb(0xffffff))
                                         .when(!working, |button| {
                                             button.cursor_pointer().on_mouse_down(

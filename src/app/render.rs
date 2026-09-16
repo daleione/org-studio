@@ -9,14 +9,15 @@ use crate::{
     app::{WorkspaceLoadState, WorkspaceWindow},
     editor::Copy,
     preview::{
-        DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, EXPORT_DOCUMENT_COMMAND,
-        ExportDocument, IncreaseContentFontSize, OpenDocument, OpenFileManager,
-        QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND, ReloadDocument,
-        ResetContentFontSize, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND,
-        SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome, ShowReading,
-        ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish,
+        CycleThemeMode, DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize,
+        EXPORT_DOCUMENT_COMMAND, ExportDocument, IncreaseContentFontSize, OpenDocument,
+        OpenFileManager, QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND,
+        ReloadDocument, ResetContentFontSize, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
+        SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor,
+        ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
+        UseEnglish,
     },
-    theme::current_theme,
+    theme::{ThemeMode, current_theme},
 };
 
 use super::export_ui::render_export_panel;
@@ -58,12 +59,54 @@ fn agenda_icon(color: u32) -> gpui::Svg {
         .text_color(rgb(color))
 }
 
+fn theme_icon(mode: ThemeMode, color: u32) -> gpui::Svg {
+    let data: &'static [u8] = match mode {
+        ThemeMode::Auto => include_bytes!("assets/theme-auto.svg"),
+        ThemeMode::Light => include_bytes!("assets/theme-light.svg"),
+        ThemeMode::Dark => include_bytes!("assets/theme-dark.svg"),
+    };
+    svg()
+        .debug_selector(|| "document-titlebar-theme-icon".to_owned())
+        .data(data)
+        // Square: the 24x24 icon grid must scale uniformly to stay recognizable.
+        .size(px(16.0))
+        .text_color(rgb(color))
+}
+
+/// Window-chrome theme switch shared by the document titlebar and the agenda
+/// toolbar: one mode is always in effect, so the icon is always painted with
+/// the active foreground color.
+pub(crate) fn theme_toggle_button(
+    workspace: gpui::Entity<WorkspaceWindow>,
+    mode: ThemeMode,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = current_theme();
+    let toggle_workspace = workspace;
+    div()
+        .id("document-titlebar-theme-toggle")
+        .debug_selector(|| "document-titlebar-theme-toggle".to_owned())
+        .size(px(32.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded_full()
+        .bg(rgb(theme.background_alt))
+        .cursor_pointer()
+        .hover(move |style| style.bg(rgb(theme.code_active_background)))
+        .child(theme_icon(mode, theme.foreground))
+        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+            cx.stop_propagation();
+            toggle_workspace.update(cx, |this, cx| this.cycle_theme_mode(cx));
+        })
+}
+
 fn document_titlebar(
     workspace: gpui::Entity<WorkspaceWindow>,
     sidebar_visible: bool,
     minimap_visible: bool,
     export_open: bool,
     titlebar_inset: f32,
+    theme_mode: ThemeMode,
 ) -> gpui::Div {
     let theme = current_theme();
     let sidebar_workspace = workspace.clone();
@@ -176,11 +219,15 @@ fn document_titlebar(
                 })
                 .hover(move |style| style.bg(rgb(theme.code_active_background)))
                 .child(minimap_icon(minimap_icon_color))
-                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                    cx.stop_propagation();
-                    workspace.update(cx, |this, cx| this.toggle_minimap(cx));
+                .on_mouse_down(MouseButton::Left, {
+                    let workspace = workspace.clone();
+                    move |_, _, cx| {
+                        cx.stop_propagation();
+                        workspace.update(cx, |this, cx| this.toggle_minimap(cx));
+                    }
                 }),
         )
+        .child(theme_toggle_button(workspace, theme_mode))
 }
 
 impl Render for WorkspaceWindow {
@@ -497,6 +544,7 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &UseChinese, _, cx| {
                 this.set_language(crate::i18n::Language::Chinese, cx)
             }))
+            .on_action(cx.listener(|this, _: &CycleThemeMode, _, cx| this.cycle_theme_mode(cx)))
             .on_action(cx.listener(|this, _: &Copy, _, cx| {
                 this.copy_reading_selection(cx);
             }))
@@ -510,6 +558,7 @@ impl Render for WorkspaceWindow {
                     minimap_visible,
                     self.export.is_open(),
                     titlebar_inset,
+                    self.theme_mode(),
                 ))
             })
             .child(
@@ -706,12 +755,14 @@ mod tests {
             let sidebar_visible = self.0.read(cx).sidebar_visible();
             let minimap_visible = self.0.read(cx).minimap_visible();
             let export_open = self.0.read(cx).export.is_open();
+            let theme_mode = self.0.read(cx).theme_mode();
             document_titlebar(
                 self.0.clone(),
                 sidebar_visible,
                 minimap_visible,
                 export_open,
                 crate::app::TITLEBAR_LEADING_INSET,
+                theme_mode,
             )
         }
     }
@@ -783,6 +834,43 @@ mod tests {
             workspace.read_with(cx, |workspace, _| workspace.minimap_visible()),
             minimap_was_visible
         );
+    }
+
+    #[gpui::test]
+    fn titlebar_theme_toggle_cycles_modes(cx: &mut gpui::TestAppContext) {
+        let _guard = crate::theme::THEME_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        crate::theme::set_theme_mode(crate::theme::ThemeMode::Auto);
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        let workspace_for_view = workspace.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| TitlebarHarness(workspace_for_view));
+
+        let button = cx
+            .debug_bounds("document-titlebar-theme-toggle")
+            .expect("theme toggle should be rendered");
+        let icon = cx
+            .debug_bounds("document-titlebar-theme-icon")
+            .expect("theme icon should be rendered");
+        assert_eq!(button.size, gpui::size(px(32.0), px(32.0)));
+        assert_eq!(icon.size, gpui::size(px(16.0), px(16.0)));
+
+        // Fixed three-state rotation: Auto -> Light -> Dark -> Auto. On a
+        // light test system the Auto->Light step changes only the icon (the
+        // palette is identical), which is the documented trade-off.
+        for expected in [
+            crate::theme::ThemeMode::Light,
+            crate::theme::ThemeMode::Dark,
+            crate::theme::ThemeMode::Auto,
+        ] {
+            cx.simulate_mouse_move(button.center(), None, Modifiers::default());
+            cx.simulate_click(button.center(), Modifiers::default());
+            assert_eq!(
+                workspace.read_with(cx, |workspace, _| workspace.theme_mode()),
+                expected
+            );
+        }
+        crate::theme::set_theme_mode(crate::theme::ThemeMode::Auto);
     }
 
     #[gpui::test]

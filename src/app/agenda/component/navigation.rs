@@ -8,18 +8,21 @@ use gpui::{
 };
 use std::sync::Arc;
 
+use crate::theme::current_theme;
+
 use super::{badge, compact_badge};
 
 struct AgendaTooltip(SharedString);
 
 impl Render for AgendaTooltip {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        let theme = current_theme();
         div()
             .px_3()
             .py_2()
             .rounded(px(7.))
-            .bg(gpui::rgb(0x303238))
-            .text_color(gpui::rgb(0xffffff))
+            .bg(gpui::rgb(theme.foreground))
+            .text_color(gpui::rgb(theme.background))
             .text_size(px(11.))
             .shadow_md()
             .child(self.0.clone())
@@ -38,6 +41,7 @@ pub(crate) fn sidebar_section_header(
     reveal: f32,
 ) -> Stateful<Div> {
     let reveal = reveal.clamp(0.0, 1.0);
+    let theme = current_theme();
     div()
         .id(format!("agenda-sidebar-section-{label}"))
         .h(px(29.))
@@ -46,16 +50,16 @@ pub(crate) fn sidebar_section_header(
         .items_center()
         .gap_2()
         .text_size(px(11.))
-        .text_color(gpui::rgb(0x8a8d93))
+        .text_color(gpui::rgb(theme.foreground_muted))
         .cursor_pointer()
         .rounded(px(6.))
-        .hover(|style| style.bg(gpui::rgb(0xe2e3e7)))
+        .hover(|style| style.bg(gpui::rgb(theme.hover)))
         .child(
             svg()
                 .data(&b"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'><path d='M4 2L9 6L4 10Z'/></svg>"[..])
                 .size(px(10.))
                 .flex_none()
-                .text_color(gpui::rgb(0x777b82))
+                .text_color(gpui::rgb(theme.foreground_muted))
                 .with_transformation(gpui::Transformation::rotate(gpui::radians(
                     std::f32::consts::FRAC_PI_2 * reveal,
                 ))),
@@ -109,6 +113,7 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
         compact,
         query,
     } = props;
+    let theme = current_theme();
     let display_label = language.text(match label {
         "收件箱" => "agenda.inbox",
         "Tasks" => "agenda.tasks",
@@ -126,9 +131,13 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
         .gap_2()
         .rounded(px(8.))
         .text_size(px(14.))
-        .text_color(gpui::rgb(if selected { 0x6632bd } else { 0x2f3238 }))
+        .text_color(gpui::rgb(if selected {
+            theme.todo_active
+        } else {
+            theme.foreground
+        }))
         .when(selected, |item| {
-            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION))
+            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION()))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
         })
         .child(
@@ -141,7 +150,11 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
                     svg()
                         .data(super::super::icon::agenda_icon(icon))
                         .size(px(17.))
-                        .text_color(gpui::rgb(if selected { 0x7c3bd1 } else { 0x51565e })),
+                        .text_color(gpui::rgb(if selected {
+                            theme.todo_active
+                        } else {
+                            theme.foreground_dim
+                        })),
                 ),
         )
         .when(!compact, |item| {
@@ -158,7 +171,13 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
             })
         })
         .cursor_pointer()
-        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .hover(move |style| {
+            style.bg(gpui::rgb(if selected {
+                theme.accent_bg
+            } else {
+                theme.hover
+            }))
+        })
         .active(|style| style.opacity(0.72))
         .when(compact, |item| item.tooltip(tooltip(display_label)))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -180,6 +199,7 @@ pub(crate) fn sidebar_filter_item(
     selected: bool,
     is_source: bool,
 ) -> Stateful<Div> {
+    let theme = current_theme();
     let context_workspace = workspace.clone();
     let context_source = source;
     let element_id = label.clone();
@@ -196,10 +216,10 @@ pub(crate) fn sidebar_filter_item(
             .flex()
             .items_center()
             .rounded(px(12.))
-            .bg(gpui::rgb(if selected { 0xe6d9ee } else { 0xf2eaf5 }))
+            .bg(gpui::rgb(theme.accent_bg))
             .text_size(px(11.))
             .font_weight(gpui::FontWeight::MEDIUM)
-            .text_color(gpui::rgb(0x7d438d))
+            .text_color(gpui::rgb(theme.todo_active))
             .child(label)
     };
     div()
@@ -215,12 +235,18 @@ pub(crate) fn sidebar_filter_item(
         .gap_2()
         .rounded(px(7.))
         .when(selected, |item| {
-            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION))
+            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION()))
         })
         .text_size(px(12.))
-        .text_color(gpui::rgb(0x555960))
+        .text_color(gpui::rgb(theme.foreground_dim))
         .cursor_pointer()
-        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .hover(move |style| {
+            style.bg(gpui::rgb(if selected {
+                theme.accent_bg
+            } else {
+                theme.hover
+            }))
+        })
         .active(|style| style.opacity(0.72))
         .child(
             div()
@@ -233,7 +259,7 @@ pub(crate) fn sidebar_filter_item(
         .child(
             div()
                 .text_size(px(10.))
-                .text_color(gpui::rgb(0x777b82))
+                .text_color(gpui::rgb(theme.foreground_muted))
                 .child(count.to_string()),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -269,6 +295,7 @@ pub(crate) fn source_context_menu(
     workspace: Entity<WorkspaceWindow>,
     menu: super::super::state::SourceContextMenu,
 ) -> impl gpui::IntoElement {
+    let theme = current_theme();
     div()
         .id("agenda-source-context-menu")
         .absolute()
@@ -278,8 +305,8 @@ pub(crate) fn source_context_menu(
         .py_1()
         .rounded(px(7.))
         .border_1()
-        .border_color(gpui::rgb(0xdedfe2))
-        .bg(gpui::rgb(0xffffff))
+        .border_color(gpui::rgb(theme.border))
+        .bg(gpui::rgb(theme.background))
         .shadow_lg()
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
@@ -292,8 +319,8 @@ pub(crate) fn source_context_menu(
                 .rounded(px(5.))
                 .cursor_pointer()
                 .text_size(px(12.))
-                .text_color(gpui::rgb(0x2f3238))
-                .hover(|style| style.bg(gpui::rgb(0xf1eff8)))
+                .text_color(gpui::rgb(theme.foreground))
+                .hover(|style| style.bg(gpui::rgb(theme.hover)))
                 .child(
                     svg()
                         .data(super::super::icon::agenda_icon(
@@ -315,6 +342,7 @@ pub(crate) fn saved_view_item(
     index: usize,
     selected: bool,
 ) -> Stateful<Div> {
+    let theme = current_theme();
     div()
         .id(("agenda-saved-view", index))
         .h(px(super::super::style::SIDEBAR_SAVED_VIEW_HEIGHT))
@@ -324,12 +352,22 @@ pub(crate) fn saved_view_item(
         .gap_2()
         .rounded(px(7.))
         .when(selected, |item| {
-            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION))
+            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION()))
         })
         .text_size(px(12.))
-        .text_color(gpui::rgb(if selected { 0x6632bd } else { 0x555960 }))
+        .text_color(gpui::rgb(if selected {
+            theme.todo_active
+        } else {
+            theme.foreground_dim
+        }))
         .cursor_pointer()
-        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .hover(move |style| {
+            style.bg(gpui::rgb(if selected {
+                theme.accent_bg
+            } else {
+                theme.hover
+            }))
+        })
         .active(|style| style.opacity(0.72))
         .child(
             svg()
@@ -370,6 +408,7 @@ pub(crate) fn sidebar_item(
     } else {
         badge(count.to_string())
     };
+    let theme = current_theme();
     div()
         .id(format!("agenda-sidebar-item-{label}"))
         .relative()
@@ -381,13 +420,23 @@ pub(crate) fn sidebar_item(
         .gap_2()
         .rounded(px(8.))
         .text_size(px(14.))
-        .text_color(gpui::rgb(if selected { 0x6632bd } else { 0x2f3238 }))
+        .text_color(gpui::rgb(if selected {
+            theme.todo_active
+        } else {
+            theme.foreground
+        }))
         .when(selected, |item| {
-            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION))
+            item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION()))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
         })
         .cursor_pointer()
-        .hover(move |style| style.bg(gpui::rgb(if selected { 0xe2d8f2 } else { 0xe4e5e8 })))
+        .hover(move |style| {
+            style.bg(gpui::rgb(if selected {
+                theme.accent_bg
+            } else {
+                theme.hover
+            }))
+        })
         .active(|style| style.opacity(0.72))
         .when(compact, |item| item.tooltip(tooltip(label)))
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -408,7 +457,11 @@ pub(crate) fn sidebar_item(
                     svg()
                         .data(super::super::icon::agenda_icon(icon))
                         .size(px(17.))
-                        .text_color(gpui::rgb(if selected { 0x7c3bd1 } else { 0x51565e })),
+                        .text_color(gpui::rgb(if selected {
+                            theme.todo_active
+                        } else {
+                            theme.foreground_dim
+                        })),
                 ),
         )
         .when(!compact, |item| item.child(div().flex_1().child(label)))

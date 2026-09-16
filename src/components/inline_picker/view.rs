@@ -19,7 +19,7 @@ fn button(
         .border_1()
         .border_color(rgba(0))
         .bg(rgba(if selected {
-            (SELECTED_BACKGROUND << 8) | 0xff
+            (SELECTED_BACKGROUND() << 8) | 0xff
         } else {
             0
         }))
@@ -30,9 +30,9 @@ fn button(
         }))
         .hover(move |s| {
             s.bg(rgb(if selected {
-                SELECTED_HOVER_BACKGROUND
+                SELECTED_HOVER_BACKGROUND()
             } else {
-                HOVER_BACKGROUND
+                HOVER_BACKGROUND()
             }))
         })
         .when(!label.is_empty(), |s| s.child(label))
@@ -184,7 +184,7 @@ impl InlinePicker {
                 .text_size(px(11.))
                 .text_color(rgb(theme.foreground_dim))
                 .when(self.keyboard_navigation && self.selected == count, |s| {
-                    s.bg(rgb(HOVER_BACKGROUND))
+                    s.bg(rgb(HOVER_BACKGROUND()))
                 })
                 .debug_selector(|| "priority-remove".into())
                 .on_click(cx.listener(|_, _, _, cx| cx.emit(InlineEvent::Priority(None)))),
@@ -372,7 +372,7 @@ impl InlinePicker {
                     div()
                         .size(px(24.))
                         .rounded(px(6.))
-                        .bg(rgb(HOVER_BACKGROUND))
+                        .bg(rgb(HOVER_BACKGROUND()))
                         .flex_none()
                         .flex()
                         .items_center()

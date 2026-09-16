@@ -11,6 +11,7 @@ pub(super) fn button(
     intent: UiIntent,
     primary: bool,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .h(px(34.))
         .px_4()
@@ -19,16 +20,32 @@ pub(super) fn button(
         .justify_center()
         .rounded(px(7.))
         .border_1()
-        .border_color(rgb(if primary { 0x6f39c1 } else { 0xdfe1e4 }))
-        .bg(rgb(if primary { 0x7540c4 } else { 0xffffff }))
-        .text_color(rgb(if primary { 0xffffff } else { 0x454950 }))
+        .border_color(rgb(if primary {
+            theme.todo_active
+        } else {
+            theme.border
+        }))
+        .bg(rgb(if primary {
+            theme.todo_active
+        } else {
+            theme.background
+        }))
+        .text_color(rgb(if primary {
+            0xffffff
+        } else {
+            theme.foreground_dim
+        }))
         .text_size(px(11.))
         .cursor_pointer()
         .hover(move |style| {
             if primary {
-                style.bg(rgb(0x6835b5)).border_color(rgb(0x6835b5))
+                style
+                    .bg(rgb(theme.todo_active))
+                    .border_color(rgb(theme.todo_active))
             } else {
-                style.bg(rgb(0xf3f3f5)).border_color(rgb(0xcfd1d5))
+                style
+                    .bg(rgb(theme.hover))
+                    .border_color(rgb(theme.border_hover))
             }
         })
         .child(label)
@@ -44,16 +61,20 @@ pub(crate) fn inbox_view(
     tasks: Vec<TaskRecord>,
     session: Option<&InboxSession>,
 ) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     let header = div()
         .flex()
         .items_center()
         .justify_between()
         .child(
-            div().text_size(px(11.)).text_color(rgb(0x858990)).child(
-                language
-                    .text("agenda.items_pending")
-                    .replace("{count}", &tasks.len().to_string()),
-            ),
+            div()
+                .text_size(px(11.))
+                .text_color(rgb(theme.foreground_dim))
+                .child(
+                    language
+                        .text("agenda.items_pending")
+                        .replace("{count}", &tasks.len().to_string()),
+                ),
         )
         .child(button(
             workspace.clone(),
@@ -100,15 +121,18 @@ pub(crate) fn inbox_view(
                             .p_6()
                             .rounded(px(9.))
                             .border_1()
-                            .border_color(rgb(0xdfe1e4))
-                            .bg(rgb(0xffffff))
+                            .border_color(rgb(theme.border))
+                            .bg(rgb(theme.background))
                             .child(
-                                div().text_size(px(10.)).text_color(rgb(0x858990)).child(
-                                    language
-                                        .text("agenda.item_position")
-                                        .replace("{index}", &(done + 1).to_string())
-                                        .replace("{total}", &total.to_string()),
-                                ),
+                                div()
+                                    .text_size(px(10.))
+                                    .text_color(rgb(theme.foreground_dim))
+                                    .child(
+                                        language
+                                            .text("agenda.item_position")
+                                            .replace("{index}", &(done + 1).to_string())
+                                            .replace("{total}", &total.to_string()),
+                                    ),
                             )
                             .child(
                                 div()
@@ -121,7 +145,7 @@ pub(crate) fn inbox_view(
                                 div()
                                     .mt_4()
                                     .text_size(px(11.))
-                                    .text_color(rgb(0x8a8e95))
+                                    .text_color(rgb(theme.foreground_dim))
                                     .child(language.text("agenda.add_note")),
                             )
                             .child(
@@ -129,9 +153,9 @@ pub(crate) fn inbox_view(
                                     .mt_8()
                                     .pt_4()
                                     .border_t_1()
-                                    .border_color(rgb(0xececef))
+                                    .border_color(rgb(theme.divider))
                                     .text_size(px(10.))
-                                    .text_color(rgb(0x8a8e95))
+                                    .text_color(rgb(theme.foreground_dim))
                                     .child(format!("{source} · Capture template: task")),
                             ),
                     )
@@ -148,8 +172,8 @@ pub(crate) fn inbox_view(
                     .flex_none()
                     .rounded(px(9.))
                     .border_1()
-                    .border_color(rgb(0xdfe1e4))
-                    .bg(rgb(0xfafafb))
+                    .border_color(rgb(theme.border))
+                    .bg(rgb(theme.surface))
                     .flex()
                     .flex_col()
                     .child(
@@ -201,7 +225,7 @@ pub(crate) fn inbox_view(
                             .items_center()
                             .justify_end()
                             .border_t_1()
-                            .border_color(rgb(0xdfe1e4))
+                            .border_color(rgb(theme.border))
                             .child(button(
                                 workspace.clone(),
                                 language.text("agenda.move_next"),
@@ -222,7 +246,7 @@ pub(crate) fn inbox_view(
                 div()
                     .rounded(px(9.))
                     .border_1()
-                    .border_color(rgb(0xe1e2e5))
+                    .border_color(rgb(theme.border))
                     .overflow_hidden()
                     .children(tasks.into_iter().map(|task| {
                         let open = workspace.clone();
@@ -238,10 +262,10 @@ pub(crate) fn inbox_view(
                             .items_center()
                             .gap_4()
                             .border_t_1()
-                            .border_color(rgb(0xeeeeef))
-                            .bg(rgb(0xffffff))
+                            .border_color(rgb(theme.divider))
+                            .bg(rgb(theme.background))
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(0xf6f6f7)))
+                            .hover(|style| style.bg(rgb(theme.hover)))
                             .child(
                                 div()
                                     .size(px(24.))
@@ -251,8 +275,8 @@ pub(crate) fn inbox_view(
                                     .justify_center()
                                     .rounded(px(6.))
                                     .border_1()
-                                    .border_color(rgb(0xc9ccd1))
-                                    .text_color(rgb(0x8d9299))
+                                    .border_color(rgb(theme.border_hover))
+                                    .text_color(rgb(theme.foreground_muted))
                                     .text_size(px(12.))
                                     .child("✓"),
                             )
@@ -267,7 +291,7 @@ pub(crate) fn inbox_view(
                                             .text_ellipsis()
                                             .text_size(px(12.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                                            .text_color(rgb(0x2f3339))
+                                            .text_color(rgb(theme.foreground))
                                             .child(task.title.to_string()),
                                     )
                                     .child(
@@ -277,7 +301,7 @@ pub(crate) fn inbox_view(
                                             .whitespace_nowrap()
                                             .text_ellipsis()
                                             .text_size(px(10.))
-                                            .text_color(rgb(0x858990))
+                                            .text_color(rgb(theme.foreground_muted))
                                             .child(format!(
                                                 "{} · {} · {}",
                                                 task.source
@@ -296,14 +320,14 @@ pub(crate) fn inbox_view(
                                     .flex_none()
                                     .text_right()
                                     .text_size(px(10.))
-                                    .text_color(rgb(0x8a8e95))
+                                    .text_color(rgb(theme.foreground_dim))
                                     .child(language.text("agenda.just_now")),
                             )
                             .child(
                                 div()
                                     .w(px(18.))
                                     .flex_none()
-                                    .text_color(rgb(0xa5a8ae))
+                                    .text_color(rgb(theme.foreground_disabled))
                                     .text_size(px(16.))
                                     .child("›"),
                             )
@@ -319,7 +343,7 @@ pub(crate) fn inbox_view(
                     .mt_3()
                     .px_4()
                     .text_size(px(9.))
-                    .text_color(rgb(0x9699a0))
+                    .text_color(rgb(theme.foreground_muted))
                     .child(language.text("agenda.inbox_hint")),
             )
             .into_any_element()
@@ -330,19 +354,20 @@ pub(crate) fn inbox_view(
         .pt_6()
         .flex()
         .flex_col()
-        .bg(rgb(0xfdfdfe))
+        .bg(rgb(theme.surface))
         .child(header)
         .child(body)
 }
 
 fn choice_group(label: &'static str, values: &[&'static str]) -> gpui::Div {
+    let theme = crate::theme::current_theme();
     div()
         .mb_5()
         .child(
             div()
                 .mb_2()
                 .text_size(px(10.))
-                .text_color(rgb(0x777b82))
+                .text_color(rgb(theme.foreground_dim))
                 .child(label),
         )
         .child(
@@ -358,9 +383,21 @@ fn choice_group(label: &'static str, values: &[&'static str]) -> gpui::Div {
                         .items_center()
                         .rounded(px(7.))
                         .border_1()
-                        .border_color(rgb(if index == 1 { 0xcab0e9 } else { 0xdfe1e4 }))
-                        .bg(rgb(if index == 1 { 0xf1eafa } else { 0xffffff }))
-                        .text_color(rgb(if index == 1 { 0x6f39b8 } else { 0x555960 }))
+                        .border_color(rgb(if index == 1 {
+                            theme.accent_border
+                        } else {
+                            theme.border
+                        }))
+                        .bg(rgb(if index == 1 {
+                            theme.accent_bg
+                        } else {
+                            theme.background
+                        }))
+                        .text_color(rgb(if index == 1 {
+                            theme.todo_active
+                        } else {
+                            theme.foreground_dim
+                        }))
                         .text_size(px(10.))
                         .child(*value)
                 })),
