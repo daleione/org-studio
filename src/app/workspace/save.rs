@@ -1,9 +1,5 @@
 use crate::{
-    app::{
-        WorkspaceWindow,
-        buffers::ReviewKind,
-        save::{SaveInteraction, SaveStatus},
-    },
+    app::{WorkspaceWindow, buffers::ReviewKind, save::SaveInteraction},
     document::{DocumentSession, SaveError, SaveStartError, write_atomic},
 };
 use gpui::{Context, Entity, PromptButton, PromptLevel, Window};
@@ -195,8 +191,7 @@ impl WorkspaceWindow {
         })?;
         let revision = request.revision();
         let from_review = self.buffer_busy();
-        self.save.feedback_task = None;
-        self.save.status = Some(SaveStatus::Saving);
+        self.save.error = None;
         self.save.interaction = SaveInteraction::Saving;
         let background = cx
             .background_executor()
@@ -236,7 +231,7 @@ impl WorkspaceWindow {
                             return;
                         }
                         let id = session.read(cx).id();
-                        this.show_save_success(id, revision, cx);
+                        this.save.error = None;
                         if from_review
                             && let Some(review) = this.buffers.review_mut()
                             && review.running
@@ -279,36 +274,10 @@ impl WorkspaceWindow {
         Ok(())
     }
     fn save_failed(&mut self, message: String, cx: &mut Context<Self>) {
-        self.save.status = Some(SaveStatus::Error(message.clone().into()));
+        self.save.error = Some(message.clone().into());
         if self.buffer_busy() {
             self.fail_buffer_review(message, cx);
         }
-        cx.notify();
-    }
-    pub(crate) fn show_save_success(
-        &mut self,
-        document: crate::document::DocumentId,
-        revision: crate::document::Revision,
-        cx: &mut Context<Self>,
-    ) {
-        let at = std::time::Instant::now();
-        self.save.status = Some(SaveStatus::Success {
-            document,
-            revision,
-            at,
-        });
-        let delay = cx
-            .background_executor()
-            .timer(std::time::Duration::from_secs(3));
-        self.save.feedback_task = Some(cx.spawn(async move |this, cx| {
-            delay.await;
-            let _ = this.update(cx, |this, cx| {
-                if matches!(this.save.status, Some(SaveStatus::Success { at: current, .. }) if current == at) {
-                    this.save.status = None;
-                    cx.notify();
-                }
-            });
-        }));
         cx.notify();
     }
     pub(crate) fn request_open_at(

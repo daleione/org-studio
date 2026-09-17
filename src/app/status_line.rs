@@ -2046,7 +2046,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn save_feedback_expires_and_does_not_cover_new_edits(cx: &mut gpui::TestAppContext) {
+    fn save_only_surfaces_errors_in_the_status_line(cx: &mut gpui::TestAppContext) {
         use gpui::AppContext;
         let path =
             std::env::temp_dir().join(format!("status-save-feedback-{}.org", std::process::id()));
@@ -2058,59 +2058,19 @@ mod tests {
             app.language = Language::Chinese;
             app.generation = 1;
             assert!(app.apply_load_result(1, Ok(loaded), cx));
-            let session = app.document_session().unwrap().clone();
-            let (id, revision) = {
-                let session = session.read(cx);
-                (session.id(), session.revision())
-            };
+            // Neither finishing a save nor editing shows save text: the mode button's color
+            // is the only save feedback.
             assert!(app.status_snapshot(cx).unwrap().transient.is_none());
-            app.show_save_success(id, revision, cx);
+            app.save.error = None;
+            assert!(app.status_snapshot(cx).unwrap().transient.is_none());
+
+            app.save.error = Some("failed".into());
+            let snapshot = app.status_snapshot(cx).unwrap();
+            assert_eq!(snapshot.transient_text(), Some("failed"));
             assert_eq!(
-                app.status_snapshot(cx).unwrap().transient_text(),
-                Some("保存成功")
+                snapshot.transient.as_ref().map(|message| message.tone),
+                Some(StatusTone::Error)
             );
-        });
-        cx.run_until_parked();
-        cx.background_executor
-            .advance_clock(std::time::Duration::from_secs(3));
-        cx.run_until_parked();
-        app.update(cx, |app, cx| {
-            assert!(app.save.status.is_none());
-            let session = app.document_session().unwrap().clone();
-            let (id, revision) = {
-                let session = session.read(cx);
-                (session.id(), session.revision())
-            };
-            app.show_save_success(id, revision, cx);
-            session.update(cx, |session, cx| {
-                session
-                    .apply_transient_edit(
-                        crate::document::EditTransaction::new(
-                            revision,
-                            vec![crate::document::TextEdit::new(
-                                crate::document::ByteRange::new(0, 0),
-                                "new ",
-                            )],
-                        ),
-                        cx,
-                    )
-                    .unwrap();
-            });
-            assert_ne!(
-                app.status_snapshot(cx).unwrap().transient_text(),
-                Some("保存成功")
-            );
-            app.save.status = Some(crate::app::save::SaveStatus::Error("failed".into()));
-        });
-        cx.run_until_parked();
-        cx.background_executor
-            .advance_clock(std::time::Duration::from_secs(3));
-        cx.run_until_parked();
-        app.update(cx, |app, cx| {
-            assert_eq!(
-                app.status_snapshot(cx).unwrap().transient_text(),
-                Some("failed")
-            )
         });
     }
 

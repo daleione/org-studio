@@ -231,9 +231,7 @@ impl WorkspaceWindow {
                     Ok(_) => unreachable!("source-only load"),
                     Err((path, error)) => {
                         this.home_error = Some(format!("{}: {error}", path.display()).into());
-                        this.save.status = Some(crate::app::save::SaveStatus::Error(
-                            format!("{}: {error}", path.display()).into(),
-                        ));
+                        this.save.error = Some(format!("{}: {error}", path.display()).into());
                     }
                 }
                 cx.notify();

@@ -38,7 +38,7 @@ impl WorkspaceWindow {
         self.load_task = None;
         self.stop_document_watch();
         self.editor_minimap_width_subscriptions.clear();
-        self.save.status = None;
+        self.save.error = None;
         self.state = WorkspaceLoadState::Empty;
         self.opened_at = None;
         self.first_frame_scheduled = None;
@@ -67,7 +67,7 @@ impl WorkspaceWindow {
         preserve_previous: bool,
     ) -> u64 {
         self.home_error = None;
-        self.save.status = None;
+        self.save.error = None;
         self.pending_navigation = None;
         self.pending_surface_anchors = PanePair {
             left: None,

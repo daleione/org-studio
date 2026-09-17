@@ -3,7 +3,6 @@ use std::sync::Arc;
 use gpui::{ListState, px};
 
 use crate::app::export_ui::ExportRunState;
-use crate::app::save::SaveStatus;
 use crate::{
     document::{ByteOffset, DocumentSession},
     i18n::Language,
@@ -276,39 +275,11 @@ impl WorkspaceWindow {
                 },
             });
         }
-        match &self.save.status {
-            Some(SaveStatus::Error(message)) => {
-                return Some(StatusMessage {
-                    text: message.clone(),
-                    tone: StatusTone::Error,
-                });
-            }
-            Some(SaveStatus::Saving) => {
-                return Some(StatusMessage {
-                    text: match self.language {
-                        Language::Chinese => "正在保存…",
-                        Language::English => "Saving…",
-                    }
-                    .into(),
-                    tone: StatusTone::Working,
-                });
-            }
-            Some(SaveStatus::Success {
-                document, revision, ..
-            }) if session.is_some_and(|session| {
-                session.id() == *document && session.revision() == *revision && !session.is_dirty()
-            }) =>
-            {
-                return Some(StatusMessage {
-                    text: match self.language {
-                        Language::Chinese => "保存成功",
-                        Language::English => "Saved",
-                    }
-                    .into(),
-                    tone: StatusTone::Success,
-                });
-            }
-            _ => {}
+        if let Some(message) = &self.save.error {
+            return Some(StatusMessage {
+                text: message.clone(),
+                tone: StatusTone::Error,
+            });
         }
         None
     }
