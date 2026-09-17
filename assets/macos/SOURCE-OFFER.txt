@@ -1,0 +1,19 @@
+Org Studio — GNU General Public License v3 or later
+
+The program in this folder is free software: you can redistribute it and/or
+modify it under the terms of the GNU General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your option)
+any later version.
+
+The full license text ships next to this file, in LICENSE.
+
+Corresponding source
+--------------------
+
+The complete corresponding source code for this build — including the exact
+revision of every dependency pinned by the project — is available on request
+from the maintainer:
+
+    guoyunlei <guoyunlei@live.com>
+
+This offer is valid for three years from the date this build was distributed.

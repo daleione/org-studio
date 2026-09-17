@@ -3,6 +3,8 @@ name = "org-studio"
 version = "0.1.0"
 edition = "2024"
 publish = false
+description = "A native macOS studio for Org mode and Markdown"
+license = "GPL-3.0-or-later"
 
 [features]
 benchmarks = []
