@@ -9,6 +9,7 @@ use crate::document::{
 };
 
 pub(crate) mod command;
+pub(crate) mod cookie;
 pub mod inline;
 pub(crate) mod list;
 

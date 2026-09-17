@@ -1322,6 +1322,19 @@ pub(super) fn semantic_spans(
                 &opaque_inline_ranges,
                 &mut spans,
             );
+            // The cookie shares the meta face its progress bar uses; heading hue and
+            // meta only agree in the light palette.
+            if matches!(line_style.id, EditorStyleId::Heading(_))
+                && let Some((range, _)) = crate::org_syntax::cookie::trailing_progress(text)
+            {
+                spans.push((
+                    range,
+                    SpanStyle {
+                        color: Some(EditorColorToken::Meta),
+                        ..SpanStyle::default()
+                    },
+                ));
+            }
         }
         Language::Markdown | Language::Org => {}
     }
@@ -2197,6 +2210,41 @@ mod tests {
             );
             assert_eq!(run_at(&direct, offset).font, run_at(&ordinary, offset).font);
         }
+    }
+
+    #[test]
+    fn heading_statistics_cookie_takes_the_meta_face_its_progress_bar_uses() {
+        let text = "** DONE Phase 3：颜色收敛与深色验收 [4/7]";
+        let theme = current_theme();
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let direct = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
+        // The cookie is meta-coloured so it matches the bar the editor paints under
+        // it; the heading hue and meta only agree in the light palette.
+        assert_eq!(
+            run_at(&direct, text.find("[4/7]").expect("cookie")).color,
+            rgb(theme.meta).into()
+        );
+        assert_eq!(
+            run_at(&direct, text.find("颜色").expect("title")).color,
+            rgb(theme.heading[1]).into()
+        );
+
+        // A cookie in running text is not a heading progress token.
+        let plain = "see [4/7] for details";
+        let plain_style = line_style(plain, &mut CodeContext::default());
+        let plain_spans = semantic_spans(Path::new("a.org"), plain, &plain_style);
+        let plain_runs = runs_from_spans(
+            &plain_spans,
+            base_run(plain.len()),
+            &plain_style,
+            None,
+            theme,
+        );
+        assert_eq!(
+            run_at(&plain_runs, plain.find("[4/7]").expect("cookie")).color,
+            run_at(&plain_runs, 0).color
+        );
     }
 
     #[test]

@@ -7,7 +7,7 @@ use gpui::{
     App, BorderStyle, Bounds, ContentMask, Corners, CursorStyle, Edges, Element, ElementId,
     ElementInputHandler, FontWeight, GlobalElementId, Hitbox, HitboxBehavior, LayoutId, PaintQuad,
     Pixels, RenderImage, ShapedLine, Style, TextAlign, TextRun, Window, WrappedLine, fill, outline,
-    point, px, quad, relative, rgba, size,
+    point, px, quad, relative, rgb, rgba, size,
 };
 
 use crate::{
@@ -45,6 +45,16 @@ const BLOCK_RADIUS: f32 = 7.0;
 const TAG_PILL_PAD_X: f32 = 3.0;
 const TAG_PILL_INSET_Y: f32 = 2.0;
 const TAG_PILL_RADIUS: f32 = 5.0;
+// Statistics-cookie progress bar. Height and gap are em-derived so the bar scales with
+// the content font, and the gap clears the brackets, which descend below the baseline.
+const COOKIE_BAR_HEIGHT_EM: f32 = 0.15;
+const COOKIE_BAR_MIN_HEIGHT: f32 = 2.0;
+const COOKIE_BAR_MAX_HEIGHT: f32 = 4.0;
+const COOKIE_BAR_GAP_EM: f32 = 0.22;
+// Stand-in when the text system cannot report the bracket ink boxes.
+const COOKIE_BAR_SIDE_INSET_EM: f32 = 0.12;
+const COOKIE_BAR_TRACK_ALPHA: u32 = 0x59;
+const COOKIE_BAR_TRACK_ALPHA_DARK: u32 = 0x66;
 const INLINE_IMAGE_VERTICAL_PADDING: f32 = 6.0;
 const INLINE_IMAGE_MAX_WIDTH: f32 = 640.0;
 
@@ -903,6 +913,17 @@ impl Element for EditorElement {
                     theme,
                     editor.inline_tag_highlight(),
                 );
+            }
+
+            // Heading statistics cookie: progress rides on a thin bar under the digits.
+            if matches!(line_style.id, syntax::EditorStyleId::Heading(_))
+                && !folded
+                && inline_image.is_none()
+                && line_animation_scale >= 0.999
+                && let Some((range, ratio)) =
+                    crate::org_syntax::cookie::trailing_progress(&hit.layout.text)
+            {
+                push_cookie_progress_quads(&mut hover_quads, &hit, range, ratio, theme, window);
             }
 
             for span in &semantic_row {
@@ -3246,6 +3267,140 @@ fn push_tag_pill_quads(
     }
 }
 
+/// Draws the statistics-cookie progress bar: a track under the digits plus the
+/// meta-colored fill for `ratio`.
+fn push_cookie_progress_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    range: Range<usize>,
+    ratio: f32,
+    theme: &crate::theme::Theme,
+    window: &gpui::Window,
+) {
+    let Some(start) = hit.position_for_display_index(range.start) else {
+        return;
+    };
+    let Some(end) = hit.position_for_display_index(range.end) else {
+        return;
+    };
+    // A wrapped cookie would need its fill sliced per visual row; skip that rare case.
+    if (f32::from(start.y) - f32::from(end.y)).abs() > f32::EPSILON {
+        return;
+    }
+    let (left_inset, right_inset) = cookie_bar_insets(hit, &range, end.x - start.x, window);
+    let left = hit.text_origin_x + start.x + left_inset;
+    let right = hit.text_origin_x + end.x - right_inset;
+    if right - left <= px(1.0) {
+        return;
+    }
+    let row_top = hit.origin_y + start.y;
+    let line_height = hit.line_height;
+    let ascent = hit.layout.ascent();
+    let descent = hit.layout.descent();
+    let font_size = hit.layout.font_size();
+    let (top, bottom) = cookie_bar_bounds(row_top, line_height, ascent, descent, font_size);
+    let height = bottom - top;
+    let radius = height / 2.0;
+    let corners = Corners {
+        top_left: radius,
+        top_right: radius,
+        bottom_right: radius,
+        bottom_left: radius,
+    };
+    let track_alpha = if is_dark_theme(theme) {
+        COOKIE_BAR_TRACK_ALPHA_DARK
+    } else {
+        COOKIE_BAR_TRACK_ALPHA
+    };
+    quads.push(quad(
+        Bounds::from_corners(point(left, top), point(right, bottom)),
+        corners,
+        rgba((theme.meta << 8) | track_alpha),
+        Edges::default(),
+        rgba(0),
+        BorderStyle::default(),
+    ));
+    let ratio = ratio.clamp(0.0, 1.0);
+    let filled = left + px(f32::from(right - left) * ratio);
+    if filled > left {
+        quads.push(quad(
+            Bounds::from_corners(point(left, top), point(filled, bottom)),
+            corners,
+            rgb(theme.meta),
+            Edges::default(),
+            rgba(0),
+            BorderStyle::default(),
+        ));
+    }
+}
+
+/// Pulls the bar's ends from the bracket cells to the bracket strokes. The ink boxes
+/// come from the shaped run's own font; the em inset stands in when they are missing.
+fn cookie_bar_insets(
+    hit: &HitRow,
+    range: &Range<usize>,
+    token_width: Pixels,
+    window: &gpui::Window,
+) -> (Pixels, Pixels) {
+    let font_size = hit.layout.font_size();
+    // Never eat more than a third of the token per side.
+    let max_inset = token_width * 0.35;
+    let fallback = (font_size * COOKIE_BAR_SIDE_INSET_EM).min(max_inset);
+    let ink = hit
+        .layout
+        .runs()
+        .iter()
+        .find(|run| run.glyphs.iter().any(|glyph| glyph.index == range.start))
+        .and_then(|run| {
+            let text_system = window.text_system();
+            let open = text_system
+                .typographic_bounds(run.font_id, font_size, '[')
+                .ok()?;
+            let close = text_system
+                .typographic_bounds(run.font_id, font_size, ']')
+                .ok()?;
+            let advance = text_system.advance(run.font_id, font_size, ']').ok()?.width;
+            Some((open.origin.x, advance - close.right()))
+        });
+    let (left, right) = ink.unwrap_or((fallback, fallback));
+    // A font reporting nothing useful must not collapse or invert the bar.
+    (
+        left.clamp(px(0.0), max_inset),
+        right.clamp(px(0.0), max_inset),
+    )
+}
+
+/// Vertical placement: a gap below the digit baseline, bounded by the row's leading.
+fn cookie_bar_bounds(
+    row_top: Pixels,
+    line_height: Pixels,
+    ascent: Pixels,
+    descent: Pixels,
+    font_size: Pixels,
+) -> (Pixels, Pixels) {
+    let line_height = line_height.max(px(1.0));
+    let leading = ((line_height - ascent - descent) / 2.0).max(px(0.0));
+    let height = (font_size * COOKIE_BAR_HEIGHT_EM)
+        .clamp(px(COOKIE_BAR_MIN_HEIGHT), px(COOKIE_BAR_MAX_HEIGHT))
+        .min(line_height);
+    let baseline = row_top + leading + ascent;
+    // The leading below the glyph box belongs to this row, so the bar may use it.
+    let max_bottom = row_top + line_height + leading;
+    let top = (baseline + font_size * COOKIE_BAR_GAP_EM)
+        .min(max_bottom - height)
+        .max(row_top);
+    (top, top + height)
+}
+
+/// Whether the editor background is dark enough to need the stronger track alpha.
+fn is_dark_theme(theme: &crate::theme::Theme) -> bool {
+    let background = theme.editor_background;
+    let luminance = 0.2126 * f32::from((background >> 16) as u8)
+        + 0.7152 * f32::from((background >> 8) as u8)
+        + 0.0722 * f32::from(background as u8);
+    luminance < 128.0
+}
+
 /// Highlights the link currently under the pointer.
 fn push_link_hover_quad(
     quads: &mut Vec<PaintQuad>,
@@ -3378,10 +3533,11 @@ fn push_search_quads(
 #[cfg(test)]
 mod tests {
     use super::{
-        EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES, animated_paint_lines,
-        apply_editor_minimap_media_dimensions, editor_block_horizontal_bounds,
-        editor_block_segments, editor_block_text_inset, folded_display_text, minimap_text_row,
-        scroll_is_at_end, stabilized_scroll_y,
+        COOKIE_BAR_GAP_EM, COOKIE_BAR_MAX_HEIGHT, EditorBlockPaintRow, MAX_ANIMATED_PAINT_LINES,
+        animated_paint_lines, apply_editor_minimap_media_dimensions, cookie_bar_bounds,
+        cookie_bar_insets, editor_block_horizontal_bounds, editor_block_segments,
+        editor_block_text_inset, folded_display_text, minimap_text_row, scroll_is_at_end,
+        stabilized_scroll_y,
     };
     use crate::document::{DocumentSession, DocumentSnapshot, TextSnapshot};
     use crate::editor::{
@@ -3603,6 +3759,119 @@ mod tests {
             folded_display_text("* Heading".to_owned(), false),
             "* Heading"
         );
+    }
+
+    #[test]
+    fn cookie_bar_hangs_below_the_baseline_inside_its_row() {
+        // Level-two heading at the default content size: a 30px row of 20.1px type.
+        let line_height = 30.0_f32;
+        let font_size = 20.1_f32;
+        let ascent = 18.65_f32;
+        let descent = 4.74_f32;
+        let leading = (line_height - ascent - descent) / 2.0;
+        let baseline = leading + ascent;
+        let (top, bottom) = cookie_bar_bounds(
+            px(0.0),
+            px(line_height),
+            px(ascent),
+            px(descent),
+            px(font_size),
+        );
+        assert!(
+            (f32::from(top) - (baseline + font_size * COOKIE_BAR_GAP_EM)).abs() < 0.01,
+            "the bar hangs a gap below the digits: {top:?}"
+        );
+        // Clear of the brackets, whose glyphs descend below the baseline.
+        assert!(f32::from(top) > baseline + 3.0);
+        assert!(f32::from(bottom) <= line_height + leading + 0.001);
+        assert!(f32::from(bottom - top) > 2.0);
+
+        // Tight rows clamp the bar rather than let it reach the next row.
+        for line_height in [10.0_f32, 12.0, 15.6, 18.0, 24.0, 40.0] {
+            let leading = ((line_height - ascent - descent) / 2.0).max(0.0);
+            let (top, bottom) = cookie_bar_bounds(
+                px(40.0),
+                px(line_height),
+                px(ascent),
+                px(descent),
+                px(font_size),
+            );
+            assert!(f32::from(top) >= 40.0, "line_height {line_height}: {top:?}");
+            assert!(
+                f32::from(bottom) <= 40.0 + line_height + leading + 0.001,
+                "line_height {line_height}: {bottom:?}"
+            );
+            let height = f32::from(bottom - top);
+            assert!(height > 0.0 && height <= COOKIE_BAR_MAX_HEIGHT + 0.001);
+        }
+    }
+
+    #[gpui::test]
+    fn cookie_bar_clears_the_real_heading_metrics(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::editor::init);
+        let source = "** DONE Phase 3：颜色收敛与深色验收 [4/7]\nbody\n";
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                Path::new("cookie.org").to_path_buf(),
+                source.as_bytes().to_vec(),
+            )
+            .unwrap()
+        });
+        let (editor, cx) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        cx.simulate_resize(gpui::size(px(900.0), px(400.0)));
+        cx.run_until_parked();
+        let (line_height, font_size, ascent, descent) = cx.read(|cx| {
+            let editor = editor.read(cx);
+            let row = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 0)
+                .expect("the heading row is rendered");
+            (
+                row.line_height,
+                row.layout.font_size(),
+                row.layout.ascent(),
+                row.layout.descent(),
+            )
+        });
+        let (top, bottom) = cookie_bar_bounds(px(0.0), line_height, ascent, descent, font_size);
+        let line_height = f32::from(line_height);
+        let ascent = f32::from(ascent);
+        let descent = f32::from(descent);
+        let leading = ((line_height - ascent - descent) / 2.0).max(0.0);
+        let baseline = leading + ascent;
+        // The real font must leave room for the gap under the digits.
+        assert!(
+            f32::from(top) > baseline + 3.0,
+            "bar top {top:?} against baseline {baseline} (line height {line_height})"
+        );
+        assert!(f32::from(bottom) <= line_height + leading + 0.001);
+        assert!(f32::from(bottom - top) >= 2.0);
+
+        // Insets come from the real font's ink boxes and must never invert the bar.
+        let (left_inset, right_inset, token_width) = cx.update(|window, cx| {
+            let editor = editor.read(cx);
+            let row = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 0)
+                .expect("the heading row is rendered");
+            let range = crate::org_syntax::cookie::trailing_progress(&row.layout.text)
+                .expect("trailing cookie")
+                .0;
+            let start = row
+                .position_for_display_index(range.start)
+                .expect("cookie start");
+            let end = row
+                .position_for_display_index(range.end)
+                .expect("cookie end");
+            let width = end.x - start.x;
+            let (left, right) = cookie_bar_insets(row, &range, width, window);
+            (left, right, width)
+        });
+        assert!(f32::from(left_inset) > 0.0, "left inset {left_inset:?}");
+        assert!(f32::from(right_inset) > 0.0, "right inset {right_inset:?}");
+        assert!(left_inset + right_inset < token_width * 0.7);
     }
 
     #[gpui::test]
