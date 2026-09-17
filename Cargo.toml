@@ -8,30 +8,22 @@ publish = false
 benchmarks = []
 
 [dependencies]
-async-channel = "2"
-gpui = { path = "../zed/crates/gpui" }
-gpui_platform = { path = "../zed/crates/gpui_platform", features = ["font-kit"] }
-image = "0.25.10"
+# GPUI and the macOS platform backend (zed repo, pinned rev)
+gpui = { git = "https://github.com/zed-industries/zed", rev = "e0f913b07d6a4c4ee4ee27119ec4ea3aadcd35e4" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "e0f913b07d6a4c4ee4ee27119ec4ea3aadcd35e4", features = ["font-kit"] }
+
+# Document model and parsing
 jiff = { version = "0.2", default-features = false, features = ["std"] }
-notify = "8"
-profiling = { version = "1", features = ["profile-with-tracing"] }
 pulldown-cmark = "0.13"
-ropey = "1.6.1"
 regex-syntax = "0.8"
+ropey = "1.6.1"
 roxmltree = "0.21"
-rustix = { version = "1.1", features = ["fs"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tracing = "0.1"
-typst = "=0.15.0"
-typst-kit = { version = "=0.15.0", default-features = false, features = ["scan-fonts"] }
-typst-layout = "=0.15.0"
-typst-pdf = "=0.15.0"
-typst-render = "=0.15.0"
-typst-svg = "=0.15.0"
-typstuml = { path = "../TypstUML", default-features = false, features = ["embed-typst"] }
+unicode-segmentation = "1.13"
+unicode-width = "0.2"
+url = "2"
+
+# Syntax highlighting (engine + language grammars)
 tree-sitter-highlight = "0.26.7"
-tree-sitter-sequel = "0.3.11"
 tree-sitter-bash = "0.25.1"
 tree-sitter-c = "0.24.2"
 tree-sitter-cpp = "0.23.4"
@@ -40,18 +32,40 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-json = "0.24.8"
 tree-sitter-python = "0.25.0"
 tree-sitter-rust = "0.24.2"
+tree-sitter-sequel = "0.3.11"
 tree-sitter-typescript = "0.23.2"
-trash = { git = "https://github.com/zed-industries/trash-rs", rev = "41c6c800d884a89351f3b8856d12894cccee261d" }
-unicode-width = "0.2"
-unicode-segmentation = "1.13"
-smallvec = "1.15"
-url = "2"
+
+# Typesetting, diagrams and export (the typst crates must share one version)
+typst = "=0.15.0"
+typst-kit = { version = "=0.15.0", default-features = false, features = ["scan-fonts"] }
+typst-layout = "=0.15.0"
+typst-pdf = "=0.15.0"
+typst-render = "=0.15.0"
+typst-svg = "=0.15.0"
+typstuml = { git = "https://github.com/daleione/typstuml", rev = "3efe4dea81a2db93aa5534b2e8b382bb31f9dbdf", default-features = false, features = ["embed-typst"] }
+
+# Text shaping and fonts
 cosmic-text = { version = "0.19", features = ["monospace_fallback", "shape-run-cache"] }
 fontdb = "0.23"
 sys-locale = "0.3.2"
 
+# Files, system and media
+image = "0.25.10"
+notify = "8"
+rustix = { version = "1.1", features = ["fs"] }
+trash = { git = "https://github.com/zed-industries/trash-rs", rev = "41c6c800d884a89351f3b8856d12894cccee261d" }
+
+# Shared infrastructure (serialization, async, profiling)
+async-channel = "2"
+profiling = { version = "1", features = ["profile-with-tracing"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+smallvec = "1.15"
+tracing = "0.1"
+
 [dev-dependencies]
-gpui = { path = "../zed/crates/gpui", features = ["test-support"] }
+# Same rev as the gpui entry above: bump both together.
+gpui = { git = "https://github.com/zed-industries/zed", rev = "e0f913b07d6a4c4ee4ee27119ec4ea3aadcd35e4", features = ["test-support"] }
 syn = { version = "2", features = ["full", "visit"] }
 
 [build-dependencies]
