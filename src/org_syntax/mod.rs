@@ -8,6 +8,7 @@ use crate::document::{
     ByteOffset, ByteRange, LineCursor, RevisionDelta, RevisionRange, TextSnapshot,
 };
 
+pub(crate) mod attributes;
 pub(crate) mod color;
 pub(crate) mod command;
 pub(crate) mod cookie;

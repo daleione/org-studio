@@ -69,7 +69,7 @@ use quads::{
 };
 use rows::animated_paint_lines;
 use scroll::{scroll_is_at_end, stabilized_scroll_y};
-use state::{InlineImagePaint, PaintRow, SourceRunButtonPaint};
+use state::{InlineImagePaint, InlineImageResizeHandlePaint, PaintRow, SourceRunButtonPaint};
 use text::{
     folded_display_text, local_marked, lower_fence_backticks, markdown_fence_backticks, shape_key,
     table_visual_layout,
@@ -89,8 +89,12 @@ const SOURCE_RUN_BUTTON_HIT_SLOP: f32 = 4.0;
 const SOURCE_RUN_ICON_FONT_SCALE: f32 = 0.82;
 const BLOCK_VERTICAL_INSET: f32 = 2.0;
 const BLOCK_RADIUS: f32 = 7.0;
-const INLINE_IMAGE_VERTICAL_PADDING: f32 = 6.0;
-const INLINE_IMAGE_MAX_WIDTH: f32 = 640.0;
+/// Bottom-right grip of an inline image, plus the slack around its hit area.
+const INLINE_IMAGE_RESIZE_HANDLE_SIZE: f32 = 24.0;
+const INLINE_IMAGE_RESIZE_HANDLE_SLOP: f32 = 6.0;
+/// gpui exposes the diagonal resize cursor as an enum variant only. If a
+/// platform turns out not to back it, this constant is the single knob.
+const INLINE_IMAGE_RESIZE_CURSOR: CursorStyle = CursorStyle::ResizeUpLeftDownRight;
 
 pub struct EditorElement {
     editor: gpui::Entity<SemanticEditor>,
@@ -121,6 +125,7 @@ pub struct PrepaintState {
     link_hits: Vec<super::LinkHit>,
     source_run_buttons: Vec<SourceRunButtonPaint>,
     source_copy_buttons: Vec<super::source_copy::CopyButtonPaint>,
+    image_resize_handles: Vec<InlineImageResizeHandlePaint>,
     selection: Vec<PaintQuad>,
     caret: Option<PaintQuad>,
     gutter: PaintQuad,

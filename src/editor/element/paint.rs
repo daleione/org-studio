@@ -1,5 +1,11 @@
 //! Element paint: gutter, text layer and the prepared minimap frame, painted
 //! inside the element's content mask.
+//!
+//! The inline-image resize grip is an SVG icon rendered once per process.
+use std::sync::{Arc, OnceLock};
+
+use gpui::RenderImage;
+
 use super::minimap::paint_minimap_layer;
 use super::scroll::publish_frame;
 use super::*;
@@ -223,6 +229,34 @@ pub(super) fn paint_frame(
                         paint(window);
                     }
                 }
+                let grip_icon = resize_grip_icon(cx);
+                for handle in &state.image_resize_handles {
+                    let dragging = host
+                        .read(cx)
+                        .inline_image_resize_width(handle.line_start)
+                        .is_some();
+                    if handle.hitbox.is_hovered(window) || dragging {
+                        window.set_cursor_style(INLINE_IMAGE_RESIZE_CURSOR, &handle.hitbox);
+                    }
+                    // The icon only appears while the pointer is over the image (or
+                    // while dragging it).
+                    if !(dragging
+                        || handle.image_hitbox.is_hovered(window)
+                        || handle.hitbox.is_hovered(window))
+                    {
+                        continue;
+                    }
+                    if let Some(icon) = grip_icon.as_ref() {
+                        let _ = window.paint_image(
+                            handle.bounds,
+                            handle.bounds,
+                            Corners::default(),
+                            icon.clone(),
+                            0,
+                            false,
+                        );
+                    }
+                }
                 for button in &state.source_copy_buttons {
                     button.paint(window, cx);
                 }
@@ -261,4 +295,18 @@ pub(super) fn paint_frame(
             }
         }
     }
+}
+
+/// Rounded resize grip drawn at the bottom-right corner of a resizable image.
+const RESIZE_GRIP_SVG: &[u8] = include_bytes!("../../../assets/editor/resize.svg");
+
+/// The grip icon, rasterized from the bundled SVG once per process.
+fn resize_grip_icon(cx: &mut App) -> Option<Arc<RenderImage>> {
+    static ICON: OnceLock<Option<Arc<RenderImage>>> = OnceLock::new();
+    ICON.get_or_init(|| {
+        crate::editor::image_loader::decode_svg(RESIZE_GRIP_SVG, &cx.svg_renderer())
+            .ok()
+            .map(|loaded| loaded.image)
+    })
+    .clone()
 }

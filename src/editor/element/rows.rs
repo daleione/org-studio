@@ -9,6 +9,8 @@ use crate::document::{DocumentFormat, DocumentSnapshot, Selection};
 use crate::editor::layout_map::EditorLayoutMap;
 use crate::theme::Theme;
 
+use crate::editor::inline_image::INLINE_IMAGE_VERTICAL_PADDING;
+
 use super::state::InlineImage;
 use super::*;
 
@@ -124,6 +126,7 @@ pub(super) struct RowShaping<'a> {
     pub(super) selection_quads: Vec<PaintQuad>,
     pub(super) link_hits: Vec<crate::editor::LinkHit>,
     pub(super) caret: Option<PaintQuad>,
+    pub(super) image_resize_handles: Vec<InlineImageResizeHandlePaint>,
 }
 
 impl RowShaping<'_> {
@@ -194,9 +197,9 @@ impl RowShaping<'_> {
         let inline_image_source = (!folded)
             .then(|| self.inline_images.get(&line_number).cloned())
             .flatten();
-        if let Some((_, _, height, _)) = &inline_image_source {
+        if let Some(image) = &inline_image_source {
             metrics.before = INLINE_IMAGE_VERTICAL_PADDING;
-            metrics.line_height = *height;
+            metrics.line_height = image.height;
             metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
         }
         let text: gpui::SharedString = display_text.into();
@@ -355,13 +358,13 @@ impl RowShaping<'_> {
         let animated_height = total_height * line_animation_scale;
         let animation_clip_y =
             (line_animation_scale < 0.999).then_some((block_top, block_top + px(animated_height)));
-        let inline_image = inline_image_source.map(|(image, width, height, _)| {
+        let inline_image = inline_image_source.as_ref().map(|image| {
             let image_bounds = Bounds::new(
                 point(row_text_origin_x, origin_y),
-                size(px(width), px(height)),
+                size(px(image.width), px(image.height)),
             );
             InlineImagePaint {
-                image,
+                image: image.image.clone(),
                 bounds: image_bounds,
             }
         });
@@ -378,6 +381,47 @@ impl RowShaping<'_> {
             table_layout,
             inline_image_preview: inline_image.is_some(),
         };
+
+        // The grip sits inside the image's bottom-right corner; a fold
+        // transition skips it because the row is only partially painted.
+        if let (Some(preview), Some(source)) = (inline_image.as_ref(), inline_image_source.as_ref())
+            && line_animation_scale >= 0.999
+        {
+            let grip = Bounds::new(
+                point(
+                    preview.bounds.right() - px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
+                    preview.bounds.bottom() - px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
+                ),
+                size(
+                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
+                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
+                ),
+            );
+            let interaction_bounds = Bounds::new(
+                point(
+                    grip.left() - px(INLINE_IMAGE_RESIZE_HANDLE_SLOP),
+                    grip.top() - px(INLINE_IMAGE_RESIZE_HANDLE_SLOP),
+                ),
+                size(
+                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE + INLINE_IMAGE_RESIZE_HANDLE_SLOP * 2.0),
+                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE + INLINE_IMAGE_RESIZE_HANDLE_SLOP * 2.0),
+                ),
+            );
+            self.image_resize_handles
+                .push(InlineImageResizeHandlePaint {
+                    bounds: grip,
+                    interaction_bounds,
+                    hitbox: self
+                        .window
+                        .insert_hitbox(interaction_bounds, HitboxBehavior::Normal),
+                    image_bounds: preview.bounds,
+                    image_hitbox: self
+                        .window
+                        .insert_hitbox(preview.bounds, HitboxBehavior::Normal),
+                    line: line_number,
+                    line_start: source.line_start,
+                });
+        }
 
         if !semantic_row.is_empty() && inline_image.is_none() && line_animation_scale >= 0.999 {
             push_tag_pill_quads(

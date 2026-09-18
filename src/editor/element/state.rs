@@ -1,5 +1,4 @@
 //! Frame state produced by prepaint and consumed by paint.
-use std::path::Path;
 use std::sync::Arc;
 
 use gpui::{Bounds, Hitbox, PaintQuad, Pixels, RenderImage, ShapedLine};
@@ -7,9 +6,30 @@ use gpui::{Bounds, Hitbox, PaintQuad, Pixels, RenderImage, ShapedLine};
 use crate::document::ByteOffset;
 use crate::editor::{HitRow, ShapeKey, syntax};
 
-/// A resolved inline image preview: the render image, its painted size and the
-/// source path it was loaded from.
-pub(super) type InlineImage = (Arc<RenderImage>, f32, f32, Arc<Path>);
+/// A resolved inline image preview: the render image plus the geometry the
+/// paint pass and the resize handle need.
+#[derive(Clone)]
+pub(super) struct InlineImage {
+    pub(super) image: Arc<RenderImage>,
+    pub(super) width: f32,
+    pub(super) height: f32,
+    pub(super) line_start: ByteOffset,
+}
+
+/// The bottom-right drag grip of one painted inline image.
+pub(super) struct InlineImageResizeHandlePaint {
+    /// Painted grip quad.
+    pub(super) bounds: Bounds<Pixels>,
+    /// Grip plus hit slop; the editor hit-tests against this.
+    pub(super) interaction_bounds: Bounds<Pixels>,
+    pub(super) hitbox: Hitbox,
+    /// Painted image rect the drag starts from, and the hover box that reveals
+    /// this grip.
+    pub(super) image_bounds: Bounds<Pixels>,
+    pub(super) image_hitbox: Hitbox,
+    pub(super) line: u64,
+    pub(super) line_start: ByteOffset,
+}
 
 pub(super) struct PaintRow {
     pub(super) hit: HitRow,

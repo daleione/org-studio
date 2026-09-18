@@ -448,6 +448,7 @@ impl EditorLayoutMap {
                 index += index & index.wrapping_neg();
             }
         }
+
         height_changed
     }
 

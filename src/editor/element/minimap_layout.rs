@@ -13,10 +13,9 @@ use super::blocks::editor_block_text_inset;
 use super::rows::visible_source_lines;
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
 use super::text::{folded_display_text, table_visual_layout};
-use super::{
-    BLOCK_RIGHT_INSET, BLOCK_TEXT_RIGHT_PADDING, INLINE_IMAGE_MAX_WIDTH,
-    INLINE_IMAGE_VERTICAL_PADDING,
-};
+use crate::editor::inline_image::{INLINE_IMAGE_VERTICAL_PADDING, image_sizing};
+
+use super::{BLOCK_RIGHT_INSET, BLOCK_TEXT_RIGHT_PADDING};
 
 pub(super) struct MinimapLayoutPreparationRequest {
     pub(super) key: crate::editor::minimap::PreparedLayoutKey,
@@ -196,12 +195,17 @@ pub(super) fn schedule_minimap_layout_preparation(
                         crate::preview::image_dimensions(&path).ok()
                     })
                     .map(|(width, height)| {
-                        crate::preview::fitted_image_size(
-                            width,
-                            height,
-                            layout.wrap_width().min(INLINE_IMAGE_MAX_WIDTH),
-                        )
-                        .1
+                        // The same rule as the editor's own frame, so an authored
+                        // `:width`/`:scale` cannot make the two disagree. There is
+                        // no viewport here, so the pathological height cap stays
+                        // with the frame that paints the row.
+                        let spec = crate::org_syntax::attributes::image_attributes_at(
+                            &request.snapshot,
+                            line_number,
+                        );
+                        let sizing =
+                            image_sizing(layout.wrap_width(), 0.0, f32::from(request.font_size));
+                        crate::preview::resolve_image_size((width, height), Some(&spec), &sizing).1
                     });
 
                 let (visual_rows, wrap_starts) = if let Some(height) = inline_image_height {

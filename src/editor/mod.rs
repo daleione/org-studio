@@ -4,6 +4,7 @@ mod folding;
 mod highlight;
 mod image_loader;
 mod inline_actions;
+mod inline_image;
 mod input;
 mod layout_map;
 mod links;
@@ -639,7 +640,12 @@ pub struct SemanticEditor {
     inline_image_previews: bool,
     inline_image_preview_overrides: HashMap<u64, bool>,
     inline_image_cache: RefCell<InlineImageCache>,
-    inline_image_line_dimensions: RefCell<HashMap<u64, (u64, u32, u32)>>,
+    inline_image_line_dimensions: RefCell<HashMap<u64, InlineImageMetrics>>,
+    inline_image_handles: Arc<[InlineImageResizeHandle]>,
+    image_resize: Option<ImageResizeSession>,
+    /// Our own image-attribute edit, recorded before its document event so the
+    /// handler can repair the affected rows once the line splice has run.
+    pending_image_edit: Option<inline_image::PendingImageEdit>,
     caret_blink: Option<(Selection, Revision, Instant)>,
     caret_blink_task: Option<Task<()>>,
     pending_reveal_caret: bool,
@@ -658,6 +664,40 @@ pub struct SemanticEditor {
 pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
 
 impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
+
+/// Everything needed to recompute an inline image's painted size without
+/// reading the document again.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct InlineImageMetrics {
+    pub(crate) line_start: u64,
+    /// Source dimensions in logical pixels.
+    pub(crate) source: (u32, u32),
+    /// Authored `#+ATTR_ORG:` attributes; a drag is layered on top at resolve time.
+    pub(crate) spec: crate::org_syntax::attributes::ImageAttributeSpec,
+}
+
+/// The drag grip published for one painted inline image.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct InlineImageResizeHandle {
+    /// Grip plus hit slop; mouse hit-testing uses this.
+    pub(crate) bounds: Bounds<Pixels>,
+    pub(crate) line: u64,
+    pub(crate) line_start: ByteOffset,
+    /// Painted width the drag starts from.
+    pub(crate) width: f32,
+}
+
+/// An in-flight drag of an inline image's bottom-right grip.
+#[derive(Clone, Copy, Debug)]
+struct ImageResizeSession {
+    line: u64,
+    line_start: ByteOffset,
+    start_pointer_x: f32,
+    start_width: f32,
+    current_width: f32,
+    /// A press without movement must not turn into a document edit.
+    moved: bool,
+}
 
 impl SemanticEditor {
     pub(crate) fn set_ui_language(
@@ -874,15 +914,25 @@ impl SemanticEditor {
                     .map(|line| line.0)
                     .max()
                     .unwrap_or(first_line);
-                let edited_inline_image_lines = this
-                    .inline_image_line_dimensions
-                    .borrow()
-                    .keys()
-                    .copied()
-                    .filter(|line| (first_line..=last_line).contains(line))
-                    .collect::<Vec<_>>();
-                for line in edited_inline_image_lines {
-                    this.display_map.invalidate_line_layout(line);
+                // Our own attribute edit already repaired the affected image row,
+                // so invalidating it here would collapse the document height for a
+                // frame and the end/scroll anchor would visibly jump.
+                let pending_image_edit = this.pending_image_edit.take();
+                let image_edit_applied = pending_image_edit.is_some();
+                let edited_inline_image_lines = if image_edit_applied {
+                    Vec::new()
+                } else {
+                    this.inline_image_line_dimensions
+                        .borrow()
+                        .keys()
+                        .copied()
+                        .filter(|line| (first_line..=last_line).contains(line))
+                        .collect::<Vec<_>>()
+                };
+                if !image_edit_applied {
+                    for line in edited_inline_image_lines {
+                        this.display_map.invalidate_line_layout(line);
+                    }
                 }
                 this.syntax_service.invalidate_from(
                     snapshot.document_id(),
@@ -906,6 +956,11 @@ impl SemanticEditor {
                 } else {
                     this.display_map.configure(snapshot.len_lines(), wrap_width);
                 }
+                if let Some(pending) = pending_image_edit {
+                    // Runs after the splice so the repaired line numbers match the
+                    // document, and before any frame can paint the new geometry.
+                    this.apply_pending_image_edit(pending, &snapshot, viewport_height);
+                }
                 if delta.edits.len() != 1 && !retain_inline_geometry {
                     this.display_map.invalidate_layout_from(first_line);
                 }
@@ -924,11 +979,22 @@ impl SemanticEditor {
                     + anchor_fraction.clamp(0.0, 1.0)
                         * this.display_map.line_height_px(anchor_line);
                 let max_scroll = (this.display_map.total_height() - viewport_height).max(0.0);
-                this.scroll_y = if was_at_end {
-                    max_scroll
+                // An image-attribute edit already moved the viewport itself, so
+                // recomputing `scroll_y` from this event's pre-edit anchor would
+                // undo that and make the page jump. Everything else still runs.
+                if image_edit_applied {
+                    // The edit already moved the viewport; only re-pin it to the
+                    // document end, which is now measured correctly.
+                    if was_at_end {
+                        this.scroll_y = max_scroll;
+                    }
                 } else {
-                    anchored.clamp(0.0, max_scroll)
-                };
+                    this.scroll_y = if was_at_end {
+                        max_scroll
+                    } else {
+                        anchored.clamp(0.0, max_scroll)
+                    };
+                }
                 this.scroll_at_end = was_at_end;
                 this.layout_anchor = snapshot
                     .line_content_range(LineIndex(anchor_line))
@@ -945,6 +1011,7 @@ impl SemanticEditor {
                 this.source_copy.buttons.clear();
                 this.source_run_button_hovered = false;
                 this.inline_image_line_dimensions.borrow_mut().clear();
+                this.cancel_inline_image_resize();
                 this.map_source_run_feedback(delta);
                 this.vertical_goal_x = None;
             } else if let DocumentEvent::ResourceChanged { path, .. } = event {
@@ -1052,6 +1119,9 @@ impl SemanticEditor {
             inline_image_preview_overrides: HashMap::new(),
             inline_image_cache: RefCell::new(InlineImageCache::default()),
             inline_image_line_dimensions: RefCell::new(HashMap::new()),
+            inline_image_handles: Arc::from([]),
+            image_resize: None,
+            pending_image_edit: None,
             caret_blink: None,
             caret_blink_task: None,
             pending_reveal_caret: false,
@@ -1397,6 +1467,22 @@ impl SemanticEditor {
             .get(&line_start.0)
             .copied()
             .unwrap_or(self.inline_image_previews)
+    }
+
+    /// Drops an in-flight drag, e.g. when the document changes underneath it.
+    /// Returns whether a drag was cancelled so callers can repaint.
+    pub(super) fn cancel_inline_image_resize(&mut self) -> bool {
+        let Some(session) = self.image_resize.take() else {
+            return false;
+        };
+        // Restore the authored height instead of invalidating the row, which
+        // would drop it to an estimate and make the viewport jump.
+        let column_width = self.display_map.wrap_width();
+        let viewport_height = self
+            .viewport
+            .map_or(0.0, |bounds| f32::from(bounds.size.height));
+        self.apply_inline_image_row_height(session.line, column_width, viewport_height);
+        true
     }
 
     pub(crate) fn refresh_inline_image(&mut self, path: &Path, cx: &mut Context<Self>) {
@@ -1958,17 +2044,25 @@ mod tests {
             let link = snapshot.line_content_range(LineIndex(1)).unwrap();
             editor.display_map.configure(snapshot.len_lines(), 320.0);
             editor.display_map.update_line_layout(1, 1, 180.0, 6.0, 6.0);
-            editor
-                .inline_image_line_dimensions
-                .borrow_mut()
-                .insert(1, (link.start.0, 320, 180));
+            editor.inline_image_line_dimensions.borrow_mut().insert(
+                1,
+                InlineImageMetrics {
+                    line_start: link.start.0,
+                    source: (320, 180),
+                    spec: Default::default(),
+                },
+            );
 
             editor.refresh_inline_image(Path::new("result.svg"), cx);
 
             assert_eq!(editor.display_map.line_height_px(1), 192.0);
             assert_eq!(
                 editor.inline_image_line_dimensions.borrow().get(&1),
-                Some(&(link.start.0, 320, 180))
+                Some(&InlineImageMetrics {
+                    line_start: link.start.0,
+                    source: (320, 180),
+                    spec: Default::default(),
+                })
             );
         });
     }
@@ -2003,10 +2097,14 @@ mod tests {
             editor
                 .display_map
                 .update_line_layout(66, 1, 300.0, 8.0, 8.0);
-            editor
-                .inline_image_line_dimensions
-                .borrow_mut()
-                .insert(66, (link.start.0, 1200, 800));
+            editor.inline_image_line_dimensions.borrow_mut().insert(
+                66,
+                InlineImageMetrics {
+                    line_start: link.start.0,
+                    source: (1200, 800),
+                    spec: Default::default(),
+                },
+            );
             editor.set_selection(Selection::new(ByteOffset(link.end.0 - 1), link.end), cx);
             editor.scroll_y = editor.display_map.line_start_y(65);
             editor.replace_selection("", EditOrigin::DeleteBackward, cx);

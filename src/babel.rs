@@ -185,8 +185,18 @@ pub(crate) fn prepare_source_block_execution(
     let result_edit = (!silent)
         .then(|| {
             let range = existing_result_range(snapshot, &blocks, block_index);
-            let replacement = format!("{newline}#+RESULTS:{newline}{result_link}{newline}");
-            (snapshot.copy_range(range) != replacement).then(|| TextEdit::new(range, replacement))
+            let existing = snapshot.copy_range(range);
+            // Re-running a block must not drop attributes the user attached to
+            // the results image, such as the width set by the resize grip.
+            let replacement = match preserved_result_attributes(&existing) {
+                Some(attributes) => {
+                    format!(
+                        "{newline}#+RESULTS:{newline}{attributes}{newline}{result_link}{newline}"
+                    )
+                }
+                None => format!("{newline}#+RESULTS:{newline}{result_link}{newline}"),
+            };
+            (existing != replacement).then(|| TextEdit::new(range, replacement))
         })
         .flatten();
 
@@ -410,9 +420,25 @@ fn existing_result_range(
         return ByteRange::new(source.source.end.0, source.source.end.0);
     };
     let mut end = marker.source.end;
-    if let Some(payload) = blocks.nodes().get(index + 1).filter(|candidate| {
-        candidate.parent == source.parent && candidate.source.start >= marker.source.end
+    let mut payload_index = index + 1;
+    // Affiliated keywords such as `#+ATTR_ORG:` sit between the marker and the
+    // image; they belong to the results block so a re-run may rewrite them.
+    while let Some(keyword) = blocks.nodes().get(payload_index).filter(|candidate| {
+        candidate.parent == source.parent
+            && matches!(candidate.kind, BlockKind::Keyword)
+            && candidate.source.start >= end
+            && crate::org_syntax::attributes::is_affiliated_keyword(
+                &snapshot.copy_range(candidate.content),
+            )
     }) {
+        end = keyword.source.end;
+        payload_index += 1;
+    }
+    if let Some(payload) = blocks
+        .nodes()
+        .get(payload_index)
+        .filter(|candidate| candidate.parent == source.parent && candidate.source.start >= end)
+    {
         let payload_source = snapshot.copy_range(payload.source);
         let line = payload_source
             .split_inclusive('\n')
@@ -427,6 +453,15 @@ fn existing_result_range(
         start: source.source.end,
         end,
     }
+}
+
+/// Keeps an `#+ATTR_ORG:` line attached to the results image.
+fn preserved_result_attributes(existing: &str) -> Option<String> {
+    existing
+        .lines()
+        .map(str::trim_end)
+        .find(|line| crate::org_syntax::attributes::is_attr_org_line(line))
+        .map(str::to_owned)
 }
 
 fn is_results_marker(source: &str) -> bool {
@@ -693,6 +728,27 @@ mod tests {
             "\n#+RESULTS:\n[[file:old.svg]]\n"
         );
         assert_eq!(edit.replacement, "\n#+RESULTS:\n[[file:diagram.svg]]\n");
+    }
+
+    #[test]
+    fn repeated_execution_preserves_the_results_image_attributes() {
+        let source = "#+begin_src plantuml :file diagram.svg\nA -> B\n#+end_src\n\n#+RESULTS:\n#+ATTR_ORG: :width 320\n[[file:old.svg]]\n\nafter\n";
+        let text = snapshot(source);
+        let request = prepare_source_block_execution(
+            &text,
+            Path::new("notes.org"),
+            Selection::caret(ByteOffset(source.find("A -> B").unwrap() as u64)),
+        )
+        .unwrap();
+        let edit = request.result_edit.unwrap();
+        assert_eq!(
+            &source[edit.range.as_usize()],
+            "\n#+RESULTS:\n#+ATTR_ORG: :width 320\n[[file:old.svg]]\n"
+        );
+        assert_eq!(
+            edit.replacement,
+            "\n#+RESULTS:\n#+ATTR_ORG: :width 320\n[[file:diagram.svg]]\n"
+        );
     }
 
     #[test]

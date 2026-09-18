@@ -46,6 +46,16 @@ pub(super) fn publish_frame(
             source_offset: button.source_offset,
         })
         .collect::<std::sync::Arc<[_]>>();
+    let image_resize_handles = state
+        .image_resize_handles
+        .iter()
+        .map(|handle| crate::editor::InlineImageResizeHandle {
+            bounds: handle.interaction_bounds,
+            line: handle.line,
+            line_start: handle.line_start,
+            width: f32::from(handle.image_bounds.size.width),
+        })
+        .collect::<std::sync::Arc<[_]>>();
     let shaped = state
         .rows
         .iter()
@@ -85,6 +95,7 @@ pub(super) fn publish_frame(
         editor.hit_rows = hits;
         editor.link_hits = std::sync::Arc::from(std::mem::take(&mut state.link_hits));
         editor.source_run_buttons = source_run_button_hits;
+        editor.inline_image_handles = image_resize_handles;
         editor.source_copy.buttons = state
             .source_copy_buttons
             .iter()

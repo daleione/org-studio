@@ -1121,6 +1121,9 @@ impl SemanticEditor {
         self.todo.hover_range = None;
         self.dismiss_timestamp(cx);
         self.finish_composition(cx);
+        if self.cancel_inline_image_resize() {
+            cx.notify();
+        }
         self.emacs_mark_active = false;
         self.command_feedback = None;
         self.selection = Selection::caret(self.selection.head());
@@ -1199,6 +1202,9 @@ impl SemanticEditor {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         self.emacs_mark_active = false;
+        if self.image_resize_down(event, cx) {
+            return;
+        }
         if self.source_copy_down(event) {
             return;
         }
@@ -1313,6 +1319,9 @@ impl SemanticEditor {
             self.hover_position = hovered_link.map(|_| event.position);
             cx.notify();
         }
+        if self.image_resize_move(event.position, cx) {
+            return;
+        }
         if let Some((start_x, start_width)) = self.minimap.resizing {
             self.minimap.width = (start_width + start_x - f32::from(event.position.x))
                 .clamp(super::minimap::MIN_WIDTH, super::minimap::MAX_WIDTH);
@@ -1359,6 +1368,7 @@ impl SemanticEditor {
         self.is_selecting = false;
         self.drag_position = None;
         self.autoscroll_task = None;
+        self.image_resize_up(cx);
         self.source_copy_up(event.position, cx);
         self.inline_mouse_up(event.position, cx);
     }

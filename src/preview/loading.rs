@@ -11,6 +11,7 @@ use crate::{
         TextSnapshot, TextStatistics,
     },
     org_semantic,
+    org_syntax::attributes::{ImageAttributeSpec, ImageLength},
     org_syntax::{BlockArena, BlockId, BlockKind, SyntaxPatch, parse, parse_incremental},
 };
 
@@ -164,6 +165,88 @@ pub(crate) fn fitted_image_size(
         .min(480.0 / source_height as f32)
         .min(1.0);
     (source_width as f32 * scale, source_height as f32 * scale)
+}
+
+/// Geometry limits for one inline image surface (editor column or reading pane).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ImageSizing {
+    /// Width handed to the auto fitter, preserving each surface's legacy cap.
+    pub(crate) auto_width: f32,
+    /// Largest width an explicit `:width`, `:scale` or drag may use.
+    pub(crate) max_width: f32,
+    /// Pathological-only height cap applied to explicit sizes.
+    pub(crate) max_height: f32,
+    /// Content font size, used to resolve `em` lengths.
+    pub(crate) font_size: f32,
+}
+
+/// Smallest width a drag may produce, so an image can never vanish.
+fn min_image_width(max_width: f32) -> f32 {
+    (max_width * 0.1).max(48.0).min(max_width)
+}
+
+/// Clamps a dragged width into the surface's draggable range.
+pub(crate) fn clamp_image_width(width: f32, max_width: f32) -> f32 {
+    let min = min_image_width(max_width);
+    if width.is_finite() {
+        width.clamp(min, max_width.max(min))
+    } else {
+        min
+    }
+}
+
+/// Resolves the painted size of one inline image.
+///
+/// Without usable attributes this is exactly [`fitted_image_size`], so every
+/// surface keeps its current default behaviour. Explicit attributes honour
+/// `:scale` above `:width` above `:height`, keep the source aspect ratio and
+/// never exceed the surface's column width.
+pub(crate) fn resolve_image_size(
+    source: (u32, u32),
+    spec: Option<&ImageAttributeSpec>,
+    sizing: &ImageSizing,
+) -> (f32, f32) {
+    let source_width = source.0.max(1) as f32;
+    let source_height = source.1.max(1) as f32;
+    let ratio = source_height / source_width;
+    let explicit = spec
+        .filter(|spec| !spec.is_empty())
+        .and_then(|spec| explicit_image_width(spec, sizing, source_width, ratio));
+    // Authored values are respected even when small; only the column width and
+    // the pathological height cap bound them (dragging clamps separately).
+    let Some(width) = explicit.map(|width| width.min(sizing.max_width).max(1.0)) else {
+        return fitted_image_size(source.0, source.1, sizing.auto_width);
+    };
+    let height = width * ratio;
+    if sizing.max_height > 0.0 && height > sizing.max_height {
+        (sizing.max_height / ratio, sizing.max_height)
+    } else {
+        (width, height)
+    }
+}
+
+fn explicit_image_width(
+    spec: &ImageAttributeSpec,
+    sizing: &ImageSizing,
+    source_width: f32,
+    ratio: f32,
+) -> Option<f32> {
+    if let Some(scale) = spec.scale {
+        return Some(source_width * scale);
+    }
+    if let Some(length) = spec.width {
+        return Some(length_to_px(length, sizing));
+    }
+    spec.height
+        .map(|length| length_to_px(length, sizing) / ratio)
+}
+
+fn length_to_px(length: ImageLength, sizing: &ImageSizing) -> f32 {
+    match length {
+        ImageLength::Px(value) => value,
+        ImageLength::Percent(percent) => sizing.max_width * percent / 100.0,
+        ImageLength::Em(value) => value * sizing.font_size,
+    }
 }
 
 pub fn load_document(path: PathBuf) -> Result<LoadedDocument, (PathBuf, String)> {
@@ -1026,6 +1109,121 @@ fn build_outline_paths(
 mod tests {
     use super::*;
     use crate::document::{ByteRange, DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit};
+
+    fn sizing(max_width: f32) -> ImageSizing {
+        ImageSizing {
+            auto_width: max_width.min(640.0),
+            max_width,
+            max_height: 1_200.0,
+            font_size: 15.0,
+        }
+    }
+
+    #[test]
+    fn auto_image_size_keeps_the_legacy_fit() {
+        for source in [(853, 368), (100, 400), (2000, 100)] {
+            let sizing = sizing(900.0);
+            let expected = fitted_image_size(source.0, source.1, sizing.auto_width);
+            assert_eq!(resolve_image_size(source, None, &sizing), expected);
+            // A keyword line without a usable key behaves like no attribute.
+            let empty = ImageAttributeSpec::default();
+            assert_eq!(resolve_image_size(source, Some(&empty), &sizing), expected);
+        }
+    }
+
+    #[test]
+    fn explicit_width_scales_both_axes_and_never_exceeds_the_column() {
+        let sizing = sizing(900.0);
+        let width = |px: f32| ImageAttributeSpec {
+            width: Some(ImageLength::Px(px)),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_size((600, 300), Some(&width(300.0)), &sizing),
+            (300.0, 150.0)
+        );
+        // Wider than the column clamps to the column, aspect preserved.
+        assert_eq!(
+            resolve_image_size((600, 300), Some(&width(5000.0)), &sizing),
+            (900.0, 450.0)
+        );
+        // A tiny authored width is respected: only dragging clamps to a minimum.
+        assert_eq!(
+            resolve_image_size((600, 300), Some(&width(20.0)), &sizing),
+            (20.0, 10.0)
+        );
+        // Explicit sizes may upscale, unlike the auto fit.
+        assert_eq!(
+            resolve_image_size((100, 50), Some(&width(800.0)), &sizing),
+            (800.0, 400.0)
+        );
+    }
+
+    #[test]
+    fn scale_wins_and_percent_and_em_resolve_against_the_surface() {
+        let sizing = sizing(1000.0);
+        let spec = ImageAttributeSpec {
+            width: Some(ImageLength::Px(100.0)),
+            scale: Some(0.5),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_size((400, 200), Some(&spec), &sizing),
+            (200.0, 100.0)
+        );
+        let percent = ImageAttributeSpec {
+            width: Some(ImageLength::Percent(25.0)),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_size((400, 200), Some(&percent), &sizing),
+            (250.0, 125.0)
+        );
+        let em = ImageAttributeSpec {
+            width: Some(ImageLength::Em(10.0)),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_size((400, 200), Some(&em), &sizing),
+            (150.0, 75.0)
+        );
+        // Height alone derives the width from the source ratio.
+        let height = ImageAttributeSpec {
+            height: Some(ImageLength::Px(80.0)),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_image_size((400, 200), Some(&height), &sizing),
+            (160.0, 80.0)
+        );
+    }
+
+    #[test]
+    fn pathological_explicit_height_is_capped() {
+        let sizing = ImageSizing {
+            auto_width: 640.0,
+            max_width: 900.0,
+            max_height: 400.0,
+            font_size: 15.0,
+        };
+        let spec = ImageAttributeSpec {
+            width: Some(ImageLength::Px(900.0)),
+            ..Default::default()
+        };
+        let (width, height) = resolve_image_size((100, 1000), Some(&spec), &sizing);
+        assert_eq!(height, 400.0);
+        assert!((width - 40.0).abs() < 0.001, "width was {width}");
+    }
+
+    #[test]
+    fn dragging_clamps_into_the_surface_range() {
+        assert_eq!(clamp_image_width(10.0, 900.0), 90.0);
+        assert_eq!(clamp_image_width(4000.0, 900.0), 900.0);
+        assert_eq!(clamp_image_width(f32::NAN, 900.0), 90.0);
+        // Narrow columns keep a usable minimum instead of collapsing.
+        assert_eq!(min_image_width(200.0), 48.0);
+        assert_eq!(clamp_image_width(10.0, 200.0), 48.0);
+    }
 
     #[test]
     fn svg_dimensions_prefer_absolute_viewport_lengths_over_view_box_units() {

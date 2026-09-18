@@ -8,6 +8,9 @@ use super::buttons::{prepare_copy_buttons, prepare_run_buttons};
 use super::inline_images::resolve_inline_images;
 use super::rows::RowShaping;
 use super::*;
+use crate::editor::inline_image::{
+    INLINE_IMAGE_VERTICAL_PADDING, image_sizing, resolved_image_size,
+};
 
 pub(super) fn build_frame(
     host: &gpui::Entity<SemanticEditor>,
@@ -114,7 +117,16 @@ pub(super) fn build_frame(
         ),
     );
 
-    let (rows, tag_pill_quads, swatch_quads, hover_quads, selection_quads, link_hits, caret) = {
+    let (
+        rows,
+        tag_pill_quads,
+        swatch_quads,
+        hover_quads,
+        selection_quads,
+        link_hits,
+        caret,
+        image_resize_handles,
+    ) = {
         let mut shaping = RowShaping {
             editor,
             snapshot: &snapshot,
@@ -146,6 +158,7 @@ pub(super) fn build_frame(
             selection_quads: Vec::new(),
             link_hits: Vec::new(),
             caret: None,
+            image_resize_handles: Vec::new(),
         };
         for line_number in paint_lines {
             shaping.shape_row(line_number);
@@ -158,6 +171,7 @@ pub(super) fn build_frame(
             shaping.selection_quads,
             shaping.link_hits,
             shaping.caret,
+            shaping.image_resize_handles,
         )
     };
 
@@ -231,6 +245,9 @@ pub(super) fn build_frame(
         source_copy_buttons,
         selection: selection_quads,
         caret,
+        // Drag grips for the frame's inline images, consumed by paint and by
+        // the editor's resize hit-testing.
+        image_resize_handles,
         content_left: block_left,
         gutter: fill(
             Bounds::new(
@@ -355,17 +372,14 @@ fn reconfigure_layout(
                 .inline_image_line_dimensions
                 .borrow()
                 .iter()
-                .map(|(&line, &(line_start, width, height))| (line, line_start, width, height))
+                .map(|(&line, metrics)| (line, metrics.clone()))
                 .collect::<Vec<_>>();
-            for (line, line_start, width, height) in inline_image_lines {
-                if !editor.previews_inline_image_at(ByteOffset(line_start)) {
+            let sizing = image_sizing(target_wrap_width, viewport_height, editor.font_size_px());
+            for (line, metrics) in inline_image_lines {
+                if !editor.previews_inline_image_at(ByteOffset(metrics.line_start)) {
                     continue;
                 }
-                let (_, height) = crate::preview::fitted_image_size(
-                    width,
-                    height,
-                    target_wrap_width.min(INLINE_IMAGE_MAX_WIDTH),
-                );
+                let (_, height) = resolved_image_size(editor, &metrics, &sizing);
                 editor.display_map.update_line_layout(
                     line,
                     1,

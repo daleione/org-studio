@@ -27,8 +27,9 @@ pub use document::{
 };
 pub(crate) use input::*;
 pub(crate) use loading::{
-    derive_preview_incremental, fitted_image_size, image_dimensions, load_workspace_document,
-    reload_workspace_document, resolve_image_path, svg_dimensions,
+    ImageSizing, clamp_image_width, derive_preview_incremental, fitted_image_size,
+    image_dimensions, load_workspace_document, reload_workspace_document, resolve_image_path,
+    resolve_image_size, svg_dimensions,
 };
 pub use loading::{
     load_document, load_document_profiled, load_document_profiled_without_display_map,

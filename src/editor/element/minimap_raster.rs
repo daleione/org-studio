@@ -14,7 +14,9 @@ use crate::editor::{
 use super::blocks::editor_block_accent;
 use super::minimap::MinimapMediaCandidate;
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
-use super::{INLINE_IMAGE_MAX_WIDTH, INLINE_IMAGE_VERTICAL_PADDING};
+use crate::editor::inline_image::{
+    INLINE_IMAGE_VERTICAL_PADDING, image_sizing, resolved_image_size,
+};
 
 pub(super) struct MinimapRasterRequest {
     pub(super) key: crate::editor::minimap::RasterKey,
@@ -55,12 +57,13 @@ pub(super) fn apply_editor_minimap_media_dimensions(
         discovered
             .into_iter()
             .filter(|(line, line_start, (width, height))| {
-                if known.get(line) == Some(&(*line_start, *width, *height)) {
-                    false
-                } else {
-                    known.insert(*line, (*line_start, *width, *height));
-                    true
-                }
+                // Discovery only supplies the source size; the authored
+                // attributes already stored for the line must survive.
+                let entry = known.entry(*line).or_default();
+                let changed = entry.line_start != *line_start || entry.source != (*width, *height);
+                entry.line_start = *line_start;
+                entry.source = (*width, *height);
+                changed
             })
             .collect::<Vec<_>>()
     };
@@ -82,14 +85,24 @@ pub(super) fn apply_editor_minimap_media_dimensions(
     let anchor_fraction = ((editor.scroll_y - anchor_start)
         / editor.animated_line_height_px(anchor_line).max(1.0))
     .clamp(0.0, 1.0);
-    let wrap_width = editor.display_map.wrap_width().min(INLINE_IMAGE_MAX_WIDTH);
+    let sizing = image_sizing(
+        editor.display_map.wrap_width(),
+        viewport_height,
+        editor.font_size_px(),
+    );
     let mut layout_changed = false;
-    for (line, _, (width, height)) in changed_dimensions {
-        let (_, fitted_height) = crate::preview::fitted_image_size(width, height, wrap_width);
+    for (line, _, _) in changed_dimensions {
+        let metrics = editor
+            .inline_image_line_dimensions
+            .borrow()
+            .get(&line)
+            .cloned()
+            .unwrap_or_default();
+        let (_, height) = resolved_image_size(editor, &metrics, &sizing);
         layout_changed |= editor.display_map.update_line_layout(
             line,
             1,
-            fitted_height,
+            height,
             INLINE_IMAGE_VERTICAL_PADDING,
             INLINE_IMAGE_VERTICAL_PADDING,
         );
