@@ -339,9 +339,12 @@ impl RichSpanBudget {
     pub(super) fn adapt(
         &mut self,
         text: &str,
-        spans: Vec<super::syntax::EditorSemanticSpan>,
+        mut spans: Vec<super::syntax::EditorSemanticSpan>,
         theme: &crate::theme::Theme,
     ) -> Vec<TextSpan> {
+        // Swatches are editor-only geometry with no minimap representation, so
+        // they must not consume the rich-span budget.
+        spans.retain(|span| span.swatch.is_none());
         let valid = spans.iter().all(|span| {
             span.bytes.start < span.bytes.end
                 && span.bytes.end <= text.len()
@@ -2016,6 +2019,7 @@ mod tests {
             underline: false,
             strikethrough: false,
             pill: false,
+            swatch: None,
             link: None,
         }
     }

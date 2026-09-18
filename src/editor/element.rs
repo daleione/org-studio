@@ -19,6 +19,7 @@ use crate::{
 use super::FrameBenchmarkAction;
 use super::{
     HitRow, SemanticEditor, ShapeKey, TableVisualFragment, TableVisualLayout,
+    highlight::RangeHighlight,
     layout_map::EditorLayoutMap,
     minimap_media::{
         MinimapImagePaint, geometry as editor_minimap_media_geometry,
@@ -42,9 +43,6 @@ const SOURCE_RUN_BUTTON_HIT_SLOP: f32 = 4.0;
 const SOURCE_RUN_ICON_FONT_SCALE: f32 = 0.82;
 const BLOCK_VERTICAL_INSET: f32 = 2.0;
 const BLOCK_RADIUS: f32 = 7.0;
-const TAG_PILL_PAD_X: f32 = 3.0;
-const TAG_PILL_INSET_Y: f32 = 2.0;
-const TAG_PILL_RADIUS: f32 = 5.0;
 // Statistics-cookie progress bar. Height and gap are em-derived so the bar scales with
 // the content font, and the gap clears the brackets, which descend below the baseline.
 const COOKIE_BAR_HEIGHT_EM: f32 = 0.15;
@@ -82,6 +80,7 @@ pub struct PrepaintState {
     rows: Vec<PaintRow>,
     block_backgrounds: Vec<PaintQuad>,
     tag_pills: Vec<PaintQuad>,
+    swatches: Vec<PaintQuad>,
     hover_quads: Vec<PaintQuad>,
     link_hits: Vec<super::LinkHit>,
     source_run_buttons: Vec<SourceRunButtonPaint>,
@@ -657,6 +656,7 @@ impl Element for EditorElement {
         let mut rows = Vec::with_capacity(paint_lines.len());
         let mut selection_quads = Vec::new();
         let mut tag_pill_quads = Vec::new();
+        let mut swatch_quads = Vec::new();
         let mut hover_quads = Vec::new();
         let mut link_hits = Vec::new();
         let mut caret = None;
@@ -754,13 +754,15 @@ impl Element for EditorElement {
                     &text,
                     line_style,
                 );
-                syntax::runs_from_spans(
+                let mut runs = syntax::runs_from_spans(
                     &semantic_row,
                     base_run,
                     line_style,
                     marked_display.clone(),
                     theme,
-                )
+                );
+                syntax::apply_swatch_text(&mut runs, &semantic_row, theme);
+                runs
             };
             let shaped_font_size = px(f32::from(font_size) * metrics.font_scale);
             let table_layout = table_columns
@@ -915,6 +917,18 @@ impl Element for EditorElement {
                 );
             }
 
+            // Document-authored hex colors ride in the background layer, below
+            // hover, search and selection, so those highlights stay visible.
+            if inline_image.is_none() && line_animation_scale >= 0.999 {
+                push_swatch_quads(
+                    &mut swatch_quads,
+                    &hit,
+                    &semantic_row,
+                    px(row_wrap_width),
+                    theme,
+                );
+            }
+
             // Heading statistics cookie: progress rides on a thin bar under the digits.
             if matches!(line_style.id, syntax::EditorStyleId::Heading(_))
                 && !folded
@@ -995,14 +1009,11 @@ impl Element for EditorElement {
                     .saturating_sub(content_range.start.0)
                     .min(content_range.len()) as usize;
                 if start < end && inline_image.is_none() {
-                    push_pill_quads(
+                    RangeHighlight::rounded(rgba((theme.date << 8) | 0x22).into()).paint(
                         &mut hover_quads,
                         &hit,
-                        hit.display.source_to_display(start),
-                        hit.display.source_to_display(end),
+                        hit.display.source_to_display(start)..hit.display.source_to_display(end),
                         px(row_wrap_width),
-                        theme.date,
-                        0x22,
                     );
                 }
             }
@@ -1020,14 +1031,11 @@ impl Element for EditorElement {
                     .saturating_sub(content_range.start.0)
                     .min(content_range.len()) as usize;
                 if start < end && inline_image.is_none() {
-                    push_pill_quads(
+                    RangeHighlight::rounded(rgba((theme.todo << 8) | 0x22).into()).paint(
                         &mut hover_quads,
                         &hit,
-                        hit.display.source_to_display(start),
-                        hit.display.source_to_display(end),
+                        hit.display.source_to_display(start)..hit.display.source_to_display(end),
                         px(row_wrap_width),
-                        theme.todo,
-                        0x22,
                     );
                 }
             }
@@ -1045,14 +1053,11 @@ impl Element for EditorElement {
                     .saturating_sub(content_range.start.0)
                     .min(content_range.len()) as usize;
                 if start < end && inline_image.is_none() {
-                    push_pill_quads(
+                    RangeHighlight::rounded(rgba((theme.link << 8) | 0x22).into()).paint(
                         &mut hover_quads,
                         &hit,
-                        hit.display.source_to_display(start),
-                        hit.display.source_to_display(end),
+                        hit.display.source_to_display(start)..hit.display.source_to_display(end),
                         px(row_wrap_width),
-                        theme.link,
-                        0x22,
                     );
                 }
             }
@@ -1342,6 +1347,7 @@ impl Element for EditorElement {
             rows,
             block_backgrounds,
             tag_pills: tag_pill_quads,
+            swatches: swatch_quads,
             hover_quads,
             link_hits,
             source_run_buttons,
@@ -1513,6 +1519,9 @@ impl Element for EditorElement {
                     }
                     for pill in state.tag_pills.drain(..) {
                         window.paint_quad(pill);
+                    }
+                    for swatch in state.swatches.drain(..) {
+                        window.paint_quad(swatch);
                     }
                     for pill in state.hover_quads.drain(..) {
                         window.paint_quad(pill);
@@ -3234,6 +3243,32 @@ fn push_selection_quads(
     }
 }
 
+/// Paints the opaque swatch behind every hex literal in the row. Quads stay
+/// in the background layer, so hover, search and selection highlights still
+/// paint on top. Fill and glyph color are per-literal, while radius and padding
+/// come from [`RangeHighlight`].
+fn push_swatch_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    spans: &[syntax::EditorSemanticSpan],
+    wrap_width: Pixels,
+    theme: &crate::theme::Theme,
+) {
+    for span in spans {
+        let Some(literal) = span.swatch else {
+            continue;
+        };
+        if span.bytes.start >= span.bytes.end {
+            continue;
+        }
+        let fill = rgba(crate::org_syntax::color::swatch_fill(
+            literal,
+            theme.background,
+        ));
+        RangeHighlight::rounded(fill.into()).paint(quads, hit, span.bytes.clone(), wrap_width);
+    }
+}
+
 /// Paints one rounded pill behind each Org tag span, keeping the `:` source
 /// separators outside the fill so every byte of the raw heading stays visible.
 fn push_tag_pill_quads(
@@ -3255,15 +3290,8 @@ fn push_tag_pill_quads(
         let hovered =
             active.is_some_and(|range| range.start.0 < source_end && range.end.0 > source_start);
         // Change the existing pill's fill, never paint a second rounded rectangle.
-        push_pill_quads(
-            quads,
-            hit,
-            start,
-            end,
-            wrap_width,
-            theme.attribute,
-            if hovered { 0x2a } else { 0x16 },
-        );
+        let fill = rgba((theme.attribute << 8) | if hovered { 0x2a } else { 0x16 });
+        RangeHighlight::rounded(fill.into()).paint(quads, hit, start..end, wrap_width);
     }
 }
 
@@ -3409,77 +3437,10 @@ fn push_link_hover_quad(
     wrap_width: Pixels,
     theme: &crate::theme::Theme,
 ) {
-    push_pill_quads(
-        quads,
-        hit,
-        link.display_range.start,
-        link.display_range.end,
-        wrap_width,
-        syntax::link_accent(&link.meta.kind, theme),
-        0x26,
-    );
+    RangeHighlight::rounded(rgba((syntax::link_accent(&link.meta.kind, theme) << 8) | 0x26).into())
+        .paint(quads, hit, link.display_range.clone(), wrap_width);
 }
 
-/// Shared wrap-aware pill geometry: one rounded rect per visual row of
-/// `start..end`, padded horizontally and inset vertically.
-fn push_pill_quads(
-    quads: &mut Vec<PaintQuad>,
-    hit: &HitRow,
-    start: usize,
-    end: usize,
-    wrap_width: Pixels,
-    accent: u32,
-    fill_alpha: u32,
-) {
-    let start_position = hit.position_for_display_index(start).unwrap_or_default();
-    let end_position = hit
-        .position_for_display_index(end.max(start.saturating_add(1)))
-        .unwrap_or(start_position);
-    let line_height_px = f32::from(hit.line_height).max(1.0);
-    let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
-    let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;
-    for row in first_row..=last_row {
-        let left = if row == first_row {
-            start_position.x
-        } else {
-            Pixels::ZERO
-        } - px(TAG_PILL_PAD_X);
-        let right = if row == last_row {
-            end_position.x
-        } else {
-            wrap_width
-        } + px(TAG_PILL_PAD_X);
-        if right <= left {
-            continue;
-        }
-        let top = hit.origin_y + px(row as f32 * line_height_px) + px(TAG_PILL_INSET_Y);
-        let bottom = hit.origin_y + px((row + 1) as f32 * line_height_px) - px(TAG_PILL_INSET_Y);
-        if bottom <= top {
-            continue;
-        }
-        let radius = if first_row == last_row {
-            px(TAG_PILL_RADIUS)
-        } else {
-            px(2.0)
-        };
-        quads.push(quad(
-            Bounds::from_corners(
-                point(hit.text_origin_x + left, top),
-                point(hit.text_origin_x + right, bottom),
-            ),
-            Corners {
-                top_left: radius,
-                top_right: radius,
-                bottom_right: radius,
-                bottom_left: radius,
-            },
-            rgba((accent << 8) | fill_alpha),
-            Edges::default(),
-            rgba(0),
-            BorderStyle::default(),
-        ));
-    }
-}
 fn push_search_quads(
     quads: &mut Vec<PaintQuad>,
     hit: &HitRow,
@@ -4105,6 +4066,95 @@ mod tests {
         assert_eq!(lines.last(), Some(&999));
         assert!(lines.contains(&1));
         assert!(lines.contains(&998));
+    }
+
+    #[gpui::test]
+    fn swatch_quads_follow_the_literal_glyph_box(cx: &mut gpui::TestAppContext) {
+        cx.update(crate::editor::init);
+        let source = "palette: #ff0000 done\nbody\n";
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(
+                Path::new("swatch.org").to_path_buf(),
+                source.as_bytes().to_vec(),
+            )
+            .unwrap()
+        });
+        let (editor, cx) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        cx.simulate_resize(gpui::size(px(900.0), px(400.0)));
+        cx.run_until_parked();
+        let theme = crate::theme::current_theme();
+
+        let span = |swatch: Option<u32>, bytes: std::ops::Range<usize>| {
+            crate::editor::syntax::EditorSemanticSpan {
+                bytes,
+                color: None,
+                weight: crate::editor::syntax::EditorSemanticWeight::Normal,
+                italic: false,
+                underline: false,
+                strikethrough: false,
+                pill: false,
+                swatch,
+                link: None,
+            }
+        };
+
+        // A span without a swatch must not paint anything.
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let row = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 0)
+                .expect("the palette row is rendered");
+            let mut quads = Vec::new();
+            super::push_swatch_quads(
+                &mut quads,
+                row,
+                std::slice::from_ref(&span(None, 0..1)),
+                px(800.0),
+                theme,
+            );
+            assert!(quads.is_empty());
+        });
+
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let row = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 0)
+                .expect("the palette row is rendered");
+            let text = row.layout.text.clone();
+            let start = text.find("#ff0000").expect("hex literal");
+            let end = start + "#ff0000".len();
+            let mut quads = Vec::new();
+            super::push_swatch_quads(
+                &mut quads,
+                row,
+                std::slice::from_ref(&span(Some(0xff0000ff), start..end)),
+                px(800.0),
+                theme,
+            );
+            assert_eq!(quads.len(), 1);
+            let quad = &quads[0];
+            let start_x = row.position_for_display_index(start).unwrap().x;
+            let end_x = row.position_for_display_index(end).unwrap().x;
+            // The shared pill geometry pads the glyph box on both sides.
+            let pad = px(super::RangeHighlight::PAD_X);
+            let inset = px(super::RangeHighlight::INSET_Y);
+            assert_eq!(quad.bounds.left(), row.text_origin_x + start_x - pad);
+            assert_eq!(quad.bounds.right(), row.text_origin_x + end_x + pad);
+            assert_eq!(quad.bounds.top(), row.origin_y + inset);
+            assert_eq!(quad.bounds.bottom(), row.origin_y + row.line_height - inset);
+            assert_eq!(
+                quad.corner_radii.top_left,
+                px(super::RangeHighlight::RADIUS)
+            );
+            assert_eq!(
+                quad.corner_radii.bottom_right,
+                px(super::RangeHighlight::RADIUS)
+            );
+        });
     }
 }
 

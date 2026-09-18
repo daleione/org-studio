@@ -5,7 +5,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use gpui::{FontStyle, FontWeight, TextRun, UnderlineStyle, px, rgb};
+use gpui::{FontStyle, FontWeight, TextRun, UnderlineStyle, px, rgb, rgba};
 
 use crate::{
     document::{
@@ -1000,6 +1000,8 @@ struct SpanStyle {
     strikethrough: bool,
     /// Painted as a rounded pill behind the source text (Org trailing tags).
     pill: bool,
+    /// `0xRRGGBBAA` document-authored hex literal, painted as an opaque swatch.
+    swatch: Option<u32>,
     /// Classified link metadata (type + raw target) for hover/activation.
     link: Option<crate::links::LinkInfo>,
 }
@@ -1087,6 +1089,8 @@ pub(super) struct EditorSemanticSpan {
     pub(super) strikethrough: bool,
     /// Paint a rounded pill behind the span while keeping every source byte visible.
     pub(super) pill: bool,
+    /// `0xRRGGBBAA` hex literal painted as an opaque swatch behind the span.
+    pub(super) swatch: Option<u32>,
     /// Classified link metadata when this span is a link (hover/activation).
     pub(super) link: Option<crate::links::LinkInfo>,
 }
@@ -1200,6 +1204,32 @@ pub(super) fn runs_from_spans(
             Some(run)
         })
         .collect()
+}
+
+/// Recolors the glyphs that sit on a swatch so the literal stays readable on
+/// its own fill. Kept separate from [`runs_from_spans`] because consumers that
+/// never paint the swatch (the minimap raster, for example) must keep their
+/// original text colors.
+pub(super) fn apply_swatch_text(runs: &mut [TextRun], spans: &[EditorSemanticSpan], theme: &Theme) {
+    if !spans.iter().any(|span| span.swatch.is_some()) {
+        return;
+    }
+    let mut offset = 0usize;
+    for run in runs.iter_mut() {
+        let range = offset..offset + run.len;
+        offset = range.end;
+        let literal = spans.iter().find_map(|span| {
+            span.swatch
+                .filter(|_| span.bytes.start < range.end && range.start < span.bytes.end)
+        });
+        if let Some(literal) = literal {
+            run.color = rgba(crate::org_syntax::color::swatch_text_color(
+                literal,
+                theme.background,
+            ))
+            .into();
+        }
+    }
 }
 
 /// Returns theme-independent inline and code semantics for both the editor and
@@ -1368,6 +1398,32 @@ pub(super) fn semantic_spans(
         }
     }
 
+    // Document-authored hex colors get an opaque swatch behind the literal. The
+    // scan is deliberately unfiltered by opaque ranges: colors written inside
+    // inline code, verbatim text or a source block are exactly the ones worth
+    // previewing.
+    let literals = crate::org_syntax::color::scan_line(text);
+    if !literals.is_empty() {
+        // Org tags may legally contain `#`, so skip ranges already pilled.
+        let pill_ranges: Vec<Range<usize>> = spans
+            .iter()
+            .filter(|(_, style)| style.pill)
+            .map(|(range, _)| range.clone())
+            .collect();
+        for literal in literals {
+            if range_intersects_any(&literal.range, &pill_ranges) {
+                continue;
+            }
+            spans.push((
+                literal.range,
+                SpanStyle {
+                    swatch: Some(literal.rgba),
+                    ..SpanStyle::default()
+                },
+            ));
+        }
+    }
+
     spans
         .into_iter()
         .filter(|(range, _)| {
@@ -1388,6 +1444,7 @@ pub(super) fn semantic_spans(
             underline: style.underline,
             strikethrough: style.strikethrough,
             pill: style.pill,
+            swatch: style.swatch,
             link: style.link,
         })
         .collect()
@@ -2684,6 +2741,97 @@ mod tests {
                 text.is_char_boundary(span.bytes.start) && text.is_char_boundary(span.bytes.end),
                 "pill range is not on char boundaries: {:?}",
                 span.bytes
+            );
+        }
+    }
+
+    #[test]
+    fn hex_literals_get_a_swatch_span_without_recoloring_the_run() {
+        let theme = &crate::theme::ORG_STUDIO_LIGHT;
+        let text = "palette: #ff0000 and #11223344 done";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let swatches: Vec<(Range<usize>, u32)> = spans
+            .iter()
+            .filter_map(|span| span.swatch.map(|rgba| (span.bytes.clone(), rgba)))
+            .collect();
+        assert_eq!(swatches, vec![(9..16, 0xff0000ff), (21..30, 0x11223344)]);
+
+        // The swatch is geometry only: it must not tint or underline the run.
+        let runs = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
+        let run = run_at(&runs, text.find("#ff0000").unwrap());
+        assert_eq!(run.color, rgb(0).into());
+        assert!(run.background_color.is_none());
+    }
+
+    #[test]
+    fn swatch_glyphs_switch_to_a_readable_ink_on_every_theme() {
+        let text = "light #ffffff dark #000000";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        for theme in [
+            &crate::theme::ORG_STUDIO_LIGHT,
+            &crate::theme::ORG_STUDIO_DARK,
+        ] {
+            let mut runs = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
+            apply_swatch_text(&mut runs, &spans, theme);
+            assert_eq!(
+                run_at(&runs, text.find("#ffffff").unwrap()).color,
+                rgb(0x000000).into(),
+                "a white swatch needs dark ink"
+            );
+            assert_eq!(
+                run_at(&runs, text.find("#000000").unwrap()).color,
+                rgb(0xffffff).into(),
+                "a black swatch needs light ink"
+            );
+            // Text outside the literals keeps the base color.
+            assert_eq!(run_at(&runs, 0).color, rgb(0).into());
+        }
+    }
+
+    #[test]
+    fn hex_literals_are_swatched_inside_code_verbatim_and_source_blocks() {
+        // Verbatim/code markup deliberately hides nothing, so a literal inside
+        // it still gets a swatch.
+        let text = "=#ff0000= and ~#00ff00~";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        let mut ranges: Vec<Range<usize>> = spans
+            .iter()
+            .filter_map(|span| span.swatch.map(|_| span.bytes.clone()))
+            .collect();
+        ranges.sort_by_key(|range| range.start);
+        assert_eq!(ranges, vec![1..8, 15..22]);
+
+        let text = "let fill = #ff0000;";
+        let style = EditorLineStyle {
+            source_range: ByteRange::new(0, text.len() as u64),
+            id: EditorStyleId::Code,
+            code_language: Some(Arc::from("rust")),
+            block: None,
+            todo: None,
+            metrics: metrics_for(EditorStyleId::Code),
+        };
+        let spans = semantic_spans(Path::new("code.org"), text, &style);
+        assert!(spans.iter().any(|span| span.swatch == Some(0xff0000ff)));
+    }
+
+    #[test]
+    fn hashed_org_tags_and_keywords_do_not_gain_a_swatch() {
+        let text = "* H :#ff0000:";
+        let style = line_style(text, &mut CodeContext::default());
+        let spans = semantic_spans(Path::new("a.org"), text, &style);
+        assert!(spans.iter().any(|span| span.pill));
+        assert!(spans.iter().all(|span| span.swatch.is_none()));
+
+        for text in ["#+begin_src rust", "#+attr_html: :style bg"] {
+            let style = line_style(text, &mut CodeContext::default());
+            assert!(
+                semantic_spans(Path::new("a.org"), text, &style)
+                    .iter()
+                    .all(|span| span.swatch.is_none()),
+                "{text}"
             );
         }
     }

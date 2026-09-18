@@ -1,6 +1,7 @@
 mod commands;
 mod element;
 mod folding;
+mod highlight;
 mod image_loader;
 mod inline_actions;
 mod input;
