@@ -235,6 +235,21 @@ mod tests {
     }
 
     #[test]
+    fn bundled_fonts_supply_the_typst_default_families() {
+        // The compiler's default text and math families ship with the binary, not
+        // with the host. Losing them silently changes every document's metrics and
+        // degrades math layout, so pin them on the shared engine.
+        let families = shared_engine().font_families();
+        for family in ["Libertinus Serif", "New Computer Modern Math"] {
+            assert!(
+                families.iter().any(|available| available == family),
+                "bundled Typst family `{family}` is missing; the default text and math \
+                 families must come from typst-assets"
+            );
+        }
+    }
+
+    #[test]
     fn source_cannot_read_outside_the_document_root() {
         let base =
             std::env::temp_dir().join(format!("org-studio-world-test-{}", std::process::id()));

@@ -4431,6 +4431,7 @@ dependencies = [
  "tree-sitter-sequel",
  "tree-sitter-typescript",
  "typst",
+ "typst-assets",
  "typst-kit",
  "typst-layout",
  "typst-pdf",

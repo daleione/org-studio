@@ -39,6 +39,7 @@ tree-sitter-typescript = "0.23.2"
 
 # Typesetting, diagrams and export (the typst crates must share one version)
 typst = "=0.15.0"
+typst-assets = { version = "=0.15.0", features = ["fonts"] }
 typst-kit = { version = "=0.15.0", default-features = false, features = ["scan-fonts"] }
 typst-layout = "=0.15.0"
 typst-pdf = "=0.15.0"

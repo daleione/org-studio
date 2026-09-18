@@ -23,12 +23,15 @@ pub(super) struct SharedResources {
 impl SharedResources {
     pub(super) fn new(custom_font_data: &[Vec<u8>]) -> Self {
         let mut fonts = typst_kit::fonts::FontStore::new();
+        // Typst's bundled faces come first so the compiler's default text, math
+        // and mono families always resolve, even on hosts that do not ship them.
+        // System fonts stay available for fallback and user-chosen families.
+        for data in typst_assets::fonts() {
+            push_faces(&mut fonts, Bytes::new(data));
+        }
         fonts.extend(typst_kit::fonts::system());
         for data in custom_font_data {
-            for font in Font::iter(Bytes::new(data.clone())) {
-                let info = font.info().clone();
-                fonts.push((font, info));
-            }
+            push_faces(&mut fonts, Bytes::new(data.clone()));
         }
         Self {
             library: LazyHash::new(Library::builder().build()),
@@ -46,6 +49,14 @@ impl SharedResources {
             names.insert(family.to_string());
         }
         names.into_iter().collect()
+    }
+}
+
+/// Adds every face contained in one font file to the store.
+fn push_faces(fonts: &mut typst_kit::fonts::FontStore, bytes: Bytes) {
+    for font in Font::iter(bytes) {
+        let info = font.info().clone();
+        fonts.push((font, info));
     }
 }
 
