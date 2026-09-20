@@ -39,8 +39,8 @@ use gpui::{
 };
 
 use crate::export::{
-    ExportFormat, ExportOptions, ExportSourceFormat, LayoutMode, PaperSize, export_snapshot,
-    export_templates, shared_engine, write_artifacts,
+    ExportFormat, ExportOptions, ExportSourceFormat, LayoutMode, Orientation, PaperSize,
+    export_snapshot, export_templates, shared_engine, write_artifacts,
 };
 use crate::i18n::Language;
 
@@ -151,6 +151,18 @@ impl WorkspaceWindow {
             panel.options.paper = paper;
             panel.options.layout = LayoutMode::Paged;
             panel.options.per_page = false;
+            self.export.status = None;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn select_export_orientation(
+        &mut self,
+        orientation: Orientation,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(panel) = self.export.panel.as_mut() {
+            panel.options.orientation = orientation;
             self.export.status = None;
             cx.notify();
         }
@@ -279,7 +291,17 @@ pub(crate) fn render_export_panel(
     language: Language,
 ) -> impl IntoElement {
     let palette = current_theme();
-    let working = matches!(status, Some(ExportRunState::Working(_)));
+    let working = matches!(status.as_ref(), Some(ExportRunState::Working(_)));
+    let selected_template = &export_templates()[panel.template_index];
+
+    let section_label = |label: &'static str| {
+        div()
+            .text_size(px(12.0))
+            .font_weight(gpui::FontWeight::SEMIBOLD)
+            .text_color(rgb(palette.foreground))
+            .child(label)
+    };
+
     let format_button = |label: &'static str, format: ExportFormat| {
         let selected = panel.options.format == format;
         let id = match format {
@@ -292,22 +314,31 @@ pub(crate) fn render_export_panel(
             .id(("export-format", id))
             .h(px(36.0))
             .flex_1()
-            .px_3()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(7.0))
+            .rounded(px(8.0))
             .border_1()
             .border_color(rgb(if selected {
                 palette.accent
             } else {
-                palette.border
+                palette.background_alt
             }))
             .bg(rgb(if selected {
                 palette.background
             } else {
                 palette.background_alt
             }))
+            .text_color(rgb(if selected {
+                palette.accent
+            } else {
+                palette.foreground
+            }))
+            .font_weight(if selected {
+                gpui::FontWeight::SEMIBOLD
+            } else {
+                gpui::FontWeight::NORMAL
+            })
             .when(selected, |button| button.shadow_sm())
             .hover(|style| style.border_color(rgb(palette.accent_border)))
             .cursor_pointer()
@@ -316,6 +347,7 @@ pub(crate) fn render_export_panel(
                 button_entity.update(cx, |this, cx| this.select_export_format(format, cx));
             })
     };
+
     let paper_button = |id: usize, label: &'static str, paper: PaperSize| {
         let selected = panel.options.paper == paper;
         let paper_entity = entity.clone();
@@ -323,21 +355,21 @@ pub(crate) fn render_export_panel(
             .id(("export-paper", id))
             .h(px(36.0))
             .flex_1()
-            .px_3()
             .flex()
             .items_center()
             .justify_center()
-            .rounded(px(7.0))
+            .rounded(px(8.0))
             .border_1()
             .border_color(rgb(if selected {
                 palette.accent
             } else {
                 palette.border
             }))
-            .bg(rgb(if selected {
-                palette.background
+            .bg(rgb(palette.background))
+            .text_color(rgb(if selected {
+                palette.accent
             } else {
-                palette.background_alt
+                palette.foreground
             }))
             .when(selected, |button| button.shadow_sm())
             .hover(|style| style.border_color(rgb(palette.accent_border)))
@@ -347,19 +379,55 @@ pub(crate) fn render_export_panel(
                 paper_entity.update(cx, |this, cx| this.select_export_paper(paper, cx));
             })
     };
+
+    let orientation_button = |id: usize, label: &'static str, orientation: Orientation| {
+        let selected = panel.options.orientation == orientation
+            || (orientation == Orientation::Portrait
+                && panel.options.orientation == Orientation::TemplateDefault);
+        let orientation_entity = entity.clone();
+        div()
+            .id(("export-orientation", id))
+            .h(px(36.0))
+            .flex_1()
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(8.0))
+            .border_1()
+            .border_color(rgb(if selected {
+                palette.accent
+            } else {
+                palette.border
+            }))
+            .bg(rgb(palette.background))
+            .text_color(rgb(if selected {
+                palette.accent
+            } else {
+                palette.foreground
+            }))
+            .when(selected, |button| button.shadow_sm())
+            .hover(|style| style.border_color(rgb(palette.accent_border)))
+            .cursor_pointer()
+            .child(label)
+            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                orientation_entity.update(cx, |this, cx| {
+                    this.select_export_orientation(orientation, cx)
+                });
+            })
+    };
+
     let theme_grid = export_templates().iter().enumerate().fold(
-        div().flex().flex_wrap().gap_3().pb_2(),
+        div().flex().flex_wrap().gap_2().pb_2(),
         |grid, (index, template)| {
             let selected = panel.template_index == index;
             let theme_entity = entity.clone();
             grid.child(
                 div()
                     .id(("export-template", index))
-                    .w(px(168.0))
+                    .w(px(104.0))
                     .flex_none()
-                    .overflow_hidden()
-                    .rounded_lg()
-                    .border_1()
+                    .when(selected, |card| card.border_2())
+                    .when(!selected, |card| card.border_1())
                     .border_color(rgb(if selected {
                         palette.accent
                     } else {
@@ -370,44 +438,37 @@ pub(crate) fn render_export_panel(
                     .hover(|style| style.border_color(rgb(palette.accent_border)))
                     .cursor_pointer()
                     .child(
-                        div()
-                            .h(px(190.0))
-                            .w_full()
-                            .overflow_hidden()
-                            .bg(rgb(0xffffff))
-                            .child(
-                                img(Arc::new(Image::from_bytes(
-                                    ImageFormat::Png,
-                                    template.thumbnail.to_vec(),
-                                )))
-                                .size_full()
-                                .object_fit(ObjectFit::Cover),
-                            ),
+                        div().h(px(116.0)).w_full().bg(rgb(0xffffff)).child(
+                            img(Arc::new(Image::from_bytes(
+                                ImageFormat::Png,
+                                template.thumbnail.to_vec(),
+                            )))
+                            .size_full()
+                            .object_fit(ObjectFit::Cover),
+                        ),
                     )
                     .child(
                         div()
-                            .h(px(48.0))
-                            .px_3()
+                            .h(px(32.0))
+                            .px_2()
                             .flex()
-                            .flex_col()
+                            .items_center()
                             .justify_center()
                             .overflow_hidden()
                             .child(
                                 div()
-                                    .text_size(px(12.0))
+                                    .w_full()
+                                    .overflow_hidden()
+                                    .whitespace_nowrap()
+                                    .text_ellipsis()
+                                    .text_align(gpui::TextAlign::Center)
+                                    .text_size(px(10.0))
                                     .text_color(rgb(if selected {
                                         palette.accent
                                     } else {
                                         palette.foreground
                                     }))
                                     .child(template.name(language)),
-                            )
-                            .child(
-                                div()
-                                    .mt_1()
-                                    .text_size(px(10.0))
-                                    .text_color(rgb(palette.foreground_dim))
-                                    .child(template.family(language)),
                             ),
                     )
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -416,12 +477,19 @@ pub(crate) fn render_export_panel(
             )
         },
     );
+
     let close_entity = entity.clone();
-    let export_entity = entity.clone();
     let cancel_entity = entity.clone();
+    let export_entity = entity.clone();
     let reveal_entity = entity.clone();
     let ppi_144_entity = entity.clone();
     let ppi_300_entity = entity.clone();
+    let format_name = match panel.options.format {
+        ExportFormat::Pdf => "PDF",
+        ExportFormat::Png => "PNG",
+        ExportFormat::Svg => "SVG",
+    };
+    let action_label = format!("{} {format_name}", language.text("export.action"));
 
     div()
         .absolute()
@@ -429,6 +497,7 @@ pub(crate) fn render_export_panel(
         .right_0()
         .bottom_0()
         .left_0()
+        .p_4()
         .flex()
         .items_center()
         .justify_center()
@@ -438,34 +507,40 @@ pub(crate) fn render_export_panel(
         .child(
             div()
                 .id("export-panel-card")
-                .w(px(580.0))
+                .debug_selector(|| "export-panel-card".to_owned())
+                .w(px(880.0))
+                .h(px(640.0))
                 .max_w_full()
-                .max_h(px(740.0))
-                .overflow_y_scroll()
-                .rounded_lg()
+                .max_h_full()
+                .overflow_hidden()
+                .rounded(px(14.0))
                 .border_1()
                 .border_color(rgb(palette.border))
                 .bg(rgb(palette.background))
                 .shadow_lg()
-                .p_5()
                 .flex()
                 .flex_col()
-                .gap_4()
                 .child(
                     div()
+                        .h(px(74.0))
+                        .flex_none()
+                        .px_5()
                         .flex()
                         .items_center()
                         .justify_between()
+                        .border_b_1()
+                        .border_color(rgb(palette.divider))
                         .child(
                             div()
                                 .child(
                                     div()
-                                        .text_size(px(20.0))
+                                        .text_size(px(21.0))
+                                        .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(language.text("export.title")),
                                 )
                                 .child(
                                     div()
-                                        .mt_1()
+                                        .mt(px(3.0))
                                         .text_size(px(11.0))
                                         .text_color(rgb(palette.foreground_dim))
                                         .child(language.text("export.subtitle")),
@@ -474,13 +549,21 @@ pub(crate) fn render_export_panel(
                         .child(
                             div()
                                 .id("export-close")
-                                .size(px(28.0))
+                                .size(px(38.0))
                                 .flex()
                                 .items_center()
                                 .justify_center()
                                 .rounded_full()
+                                .border_1()
+                                .border_color(rgb(palette.border))
+                                .bg(rgb(palette.background_alt))
+                                .text_size(px(19.0))
                                 .text_color(rgb(palette.foreground_dim))
-                                .hover(|style| style.bg(rgb(palette.background_alt)))
+                                .hover(|style| {
+                                    style
+                                        .bg(rgb(palette.hover))
+                                        .border_color(rgb(palette.border_hover))
+                                })
                                 .cursor_pointer()
                                 .child("×")
                                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -490,196 +573,366 @@ pub(crate) fn render_export_panel(
                 )
                 .child(
                     div()
+                        .flex_1()
+                        .min_h_0()
+                        .p_4()
+                        .flex()
+                        .gap_4()
                         .child(
                             div()
-                                .text_size(px(12.0))
-                                .text_color(rgb(palette.foreground_dim))
-                                .child(language.text("export.format")),
-                        )
-                        .child(
-                            div()
-                                .mt_2()
-                                .p_1()
-                                .flex()
-                                .gap_1()
-                                .rounded_lg()
-                                .bg(rgb(palette.background_alt))
-                                .child(format_button("PDF", ExportFormat::Pdf))
-                                .child(format_button("PNG", ExportFormat::Png))
-                                .child(format_button("SVG", ExportFormat::Svg)),
-                        ),
-                )
-                .child(
-                    div()
-                        .child(
-                            div()
-                                .text_size(px(12.0))
-                                .text_color(rgb(palette.foreground_dim))
-                                .child(if panel.options.format == ExportFormat::Pdf {
-                                    language.text("export.paper")
-                                } else {
-                                    language.text("export.output")
-                                }),
-                        )
-                        .child(
-                            div()
-                                .mt_2()
-                                .p_1()
-                                .flex()
-                                .gap_1()
-                                .rounded_lg()
-                                .bg(rgb(palette.background_alt))
-                                .when(panel.options.format == ExportFormat::Pdf, |row| {
-                                    row.child(paper_button(0, "A4", PaperSize::A4))
-                                        .child(paper_button(1, "A5", PaperSize::A5))
-                                        .child(paper_button(2, "B5", PaperSize::B5))
-                                })
-                                .when(panel.options.format != ExportFormat::Pdf, |row| {
-                                    row.child(
-                                        div()
-                                            .id("export-long-image")
-                                            .h(px(36.0))
-                                            .min_w(px(100.0))
-                                            .px_4()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .rounded(px(7.0))
-                                            .border_1()
-                                            .border_color(rgb(palette.accent))
-                                            .bg(rgb(palette.background))
-                                            .shadow_sm()
-                                            .child(language.text("export.long_image")),
-                                    )
-                                })
-                                .when(panel.options.format == ExportFormat::Png, |row| {
-                                    row.child(
-                                        div()
-                                            .ml_3()
-                                            .flex()
-                                            .items_center()
-                                            .gap_2()
-                                            .child(
-                                                div()
-                                                    .text_size(px(12.0))
-                                                    .text_color(rgb(palette.foreground_dim))
-                                                    .child(language.text("export.quality")),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("export-ppi-144")
-                                                    .h(px(36.0))
-                                                    .min_w(px(64.0))
-                                                    .px_3()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .rounded_md()
-                                                    .border_1()
-                                                    .border_color(rgb(
-                                                        if panel.options.png_ppi == 144.0 {
-                                                            palette.accent
-                                                        } else {
-                                                            palette.border
-                                                        },
-                                                    ))
-                                                    .cursor_pointer()
-                                                    .child(language.text("export.standard"))
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        move |_, _, cx| {
-                                                            ppi_144_entity.update(
-                                                                cx,
-                                                                |this, cx| {
-                                                                    this.select_export_ppi(
-                                                                        144.0, cx,
-                                                                    )
-                                                                },
-                                                            );
-                                                        },
-                                                    ),
-                                            )
-                                            .child(
-                                                div()
-                                                    .id("export-ppi-300")
-                                                    .h(px(36.0))
-                                                    .min_w(px(64.0))
-                                                    .px_3()
-                                                    .flex()
-                                                    .items_center()
-                                                    .justify_center()
-                                                    .rounded_md()
-                                                    .border_1()
-                                                    .border_color(rgb(
-                                                        if panel.options.png_ppi == 300.0 {
-                                                            palette.accent
-                                                        } else {
-                                                            palette.border
-                                                        },
-                                                    ))
-                                                    .cursor_pointer()
-                                                    .child(language.text("export.high"))
-                                                    .on_mouse_down(
-                                                        MouseButton::Left,
-                                                        move |_, _, cx| {
-                                                            ppi_300_entity.update(
-                                                                cx,
-                                                                |this, cx| {
-                                                                    this.select_export_ppi(
-                                                                        300.0, cx,
-                                                                    )
-                                                                },
-                                                            );
-                                                        },
-                                                    ),
-                                            ),
-                                    )
-                                }),
-                        ),
-                )
-                .child(
-                    div()
-                        .child(
-                            div()
+                                .id("export-preview-stage")
+                                .debug_selector(|| "export-preview-stage".to_owned())
+                                .w(px(350.0))
+                                .h_full()
+                                .flex_none()
                                 .flex()
                                 .items_center()
-                                .justify_between()
+                                .justify_center()
                                 .child(
-                                    div()
-                                        .text_size(px(12.0))
-                                        .text_color(rgb(palette.foreground_dim))
-                                        .child(language.text("export.templates")),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(11.0))
-                                        .text_color(rgb(palette.accent))
-                                        .child(format!(
-                                            "{} · {}",
-                                            export_templates()[panel.template_index].name(language),
-                                            export_templates()[panel.template_index]
-                                                .family(language)
-                                        )),
+                                    img(Arc::new(Image::from_bytes(
+                                        ImageFormat::Png,
+                                        selected_template.thumbnail.to_vec(),
+                                    )))
+                                    .w(px(324.0))
+                                    .h(px(458.0))
+                                    .object_fit(ObjectFit::Contain)
+                                    .shadow(vec![
+                                        gpui::BoxShadow {
+                                            color: gpui::hsla(0.0, 0.0, 0.0, 0.14),
+                                            offset: gpui::point(px(0.0), px(0.0)),
+                                            blur_radius: px(16.0),
+                                            spread_radius: px(-2.0),
+                                            inset: false,
+                                        },
+                                        gpui::BoxShadow {
+                                            color: gpui::hsla(0.0, 0.0, 0.0, 0.08),
+                                            offset: gpui::point(px(0.0), px(1.0)),
+                                            blur_radius: px(4.0),
+                                            spread_radius: px(-1.0),
+                                            inset: false,
+                                        },
+                                    ]),
                                 ),
                         )
                         .child(
                             div()
-                                .id("export-template-grid")
-                                .mt_2()
-                                .h(px(292.0))
-                                .p_1()
-                                .overflow_y_scroll()
-                                .child(theme_grid),
+                                .id("export-settings-panel")
+                                .debug_selector(|| "export-settings-panel".to_owned())
+                                .flex_1()
+                                .min_w_0()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                .child(
+                                    div()
+                                        .child(section_label(language.text("export.format")))
+                                        .child(
+                                            div()
+                                                .mt_2()
+                                                .p_1()
+                                                .flex()
+                                                .gap_1()
+                                                .rounded(px(10.0))
+                                                .bg(rgb(palette.background_alt))
+                                                .child(format_button("PDF", ExportFormat::Pdf))
+                                                .child(format_button("PNG", ExportFormat::Png))
+                                                .child(format_button("SVG", ExportFormat::Svg)),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .child(section_label(if panel.options.format
+                                            == ExportFormat::Pdf
+                                        {
+                                            language.text("export.page")
+                                        } else {
+                                            language.text("export.output")
+                                        }))
+                                        .child(
+                                            div()
+                                                .mt_2()
+                                                .flex()
+                                                .gap_2()
+                                                .when(
+                                                    panel.options.format == ExportFormat::Pdf,
+                                                    |row| {
+                                                        row.child(
+                                                            div()
+                                                                .flex_1()
+                                                                .p_1()
+                                                                .flex()
+                                                                .gap_1()
+                                                                .rounded(px(10.0))
+                                                                .bg(rgb(palette.background_alt))
+                                                                .child(paper_button(
+                                                                    0,
+                                                                    "A4",
+                                                                    PaperSize::A4,
+                                                                ))
+                                                                .child(paper_button(
+                                                                    1,
+                                                                    "A5",
+                                                                    PaperSize::A5,
+                                                                ))
+                                                                .child(paper_button(
+                                                                    2,
+                                                                    "B5",
+                                                                    PaperSize::B5,
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .w(px(168.0))
+                                                                .p_1()
+                                                                .flex()
+                                                                .gap_1()
+                                                                .rounded(px(10.0))
+                                                                .bg(rgb(palette.background_alt))
+                                                                .child(orientation_button(
+                                                                    0,
+                                                                    language.text(
+                                                                        "export.portrait",
+                                                                    ),
+                                                                    Orientation::Portrait,
+                                                                ))
+                                                                .child(orientation_button(
+                                                                    1,
+                                                                    language.text(
+                                                                        "export.landscape",
+                                                                    ),
+                                                                    Orientation::Landscape,
+                                                                )),
+                                                        )
+                                                    },
+                                                )
+                                                .when(
+                                                    panel.options.format != ExportFormat::Pdf,
+                                                    |row| {
+                                                        row.child(
+                                                            div()
+                                                                .id("export-long-image")
+                                                                .h(px(44.0))
+                                                                .flex_1()
+                                                                .px_4()
+                                                                .flex()
+                                                                .items_center()
+                                                                .justify_between()
+                                                                .rounded(px(10.0))
+                                                                .border_1()
+                                                                .border_color(rgb(palette.accent))
+                                                                .bg(rgb(palette.background))
+                                                                .text_color(rgb(palette.accent))
+                                                                .child(language.text(
+                                                                    "export.long_image",
+                                                                ))
+                                                                .child("✓"),
+                                                        )
+                                                    },
+                                                ),
+                                        )
+                                        .when(
+                                            panel.options.format == ExportFormat::Png,
+                                            |section| {
+                                                section.child(
+                                                    div()
+                                                        .mt_2()
+                                                        .flex()
+                                                        .items_center()
+                                                        .justify_between()
+                                                        .child(
+                                                            div()
+                                                                .text_size(px(11.0))
+                                                                .text_color(rgb(
+                                                                    palette.foreground_dim,
+                                                                ))
+                                                                .child(language.text(
+                                                                    "export.quality",
+                                                                )),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex()
+                                                                .gap_2()
+                                                                .child(
+                                                                    div()
+                                                                        .id("export-ppi-144")
+                                                                        .h(px(32.0))
+                                                                        .px_3()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .rounded(px(8.0))
+                                                                        .border_1()
+                                                                        .border_color(rgb(
+                                                                            if panel.options.png_ppi
+                                                                                == 144.0
+                                                                            {
+                                                                                palette.accent
+                                                                            } else {
+                                                                                palette.border
+                                                                            },
+                                                                        ))
+                                                                        .text_color(rgb(
+                                                                            if panel.options.png_ppi
+                                                                                == 144.0
+                                                                            {
+                                                                                palette.accent
+                                                                            } else {
+                                                                                palette.foreground
+                                                                            },
+                                                                        ))
+                                                                        .cursor_pointer()
+                                                                        .child(format!(
+                                                                            "{} · 144 PPI",
+                                                                            language.text(
+                                                                                "export.standard"
+                                                                            )
+                                                                        ))
+                                                                        .on_mouse_down(
+                                                                            MouseButton::Left,
+                                                                            move |_, _, cx| {
+                                                                                ppi_144_entity.update(
+                                                                                    cx,
+                                                                                    |this, cx| {
+                                                                                        this.select_export_ppi(144.0, cx)
+                                                                                    },
+                                                                                );
+                                                                            },
+                                                                        ),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .id("export-ppi-300")
+                                                                        .h(px(32.0))
+                                                                        .px_3()
+                                                                        .flex()
+                                                                        .items_center()
+                                                                        .rounded(px(8.0))
+                                                                        .border_1()
+                                                                        .border_color(rgb(
+                                                                            if panel.options.png_ppi
+                                                                                == 300.0
+                                                                            {
+                                                                                palette.accent
+                                                                            } else {
+                                                                                palette.border
+                                                                            },
+                                                                        ))
+                                                                        .text_color(rgb(
+                                                                            if panel.options.png_ppi
+                                                                                == 300.0
+                                                                            {
+                                                                                palette.accent
+                                                                            } else {
+                                                                                palette.foreground
+                                                                            },
+                                                                        ))
+                                                                        .cursor_pointer()
+                                                                        .child(format!(
+                                                                            "{} · 300 PPI",
+                                                                            language.text(
+                                                                                "export.high"
+                                                                            )
+                                                                        ))
+                                                                        .on_mouse_down(
+                                                                            MouseButton::Left,
+                                                                            move |_, _, cx| {
+                                                                                ppi_300_entity.update(
+                                                                                    cx,
+                                                                                    |this, cx| {
+                                                                                        this.select_export_ppi(300.0, cx)
+                                                                                    },
+                                                                                );
+                                                                            },
+                                                                        ),
+                                                                ),
+                                                        ),
+                                                )
+                                            },
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .items_center()
+                                                .justify_between()
+                                                .child(section_label(language.text(
+                                                    "export.templates",
+                                                )))
+                                                .child(
+                                                    div()
+                                                        .text_size(px(10.0))
+                                                        .text_color(rgb(palette.accent))
+                                                        .child(format!(
+                                                            "{} · {}",
+                                                            export_templates().len(),
+                                                            language.text("export.themes")
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .id("export-template-grid")
+                                                .mt_2()
+                                                .w_full()
+                                                .h(px(178.0))
+                                                .overflow_y_scroll()
+                                                .restrict_scroll_to_axis()
+                                                .child(theme_grid),
+                                        ),
+                                )
+                                .child(
+                                    div()
+                                        .rounded(px(10.0))
+                                        .border_1()
+                                        .border_color(rgb(palette.divider))
+                                        .bg(rgb(palette.background_alt))
+                                        .p_3()
+                                        .flex()
+                                        .items_center()
+                                        .justify_between()
+                                        .child(
+                                            div()
+                                                .min_w_0()
+                                                .child(
+                                                    div()
+                                                        .text_size(px(11.0))
+                                                        .font_weight(gpui::FontWeight::SEMIBOLD)
+                                                        .child(language.text("export.advanced")),
+                                                )
+                                                .child(
+                                                    div()
+                                                        .mt(px(3.0))
+                                                        .text_size(px(10.0))
+                                                        .text_color(rgb(palette.foreground_dim))
+                                                        .child(language.text(
+                                                            "export.advanced_summary",
+                                                        )),
+                                                ),
+                                        )
+                                        .child(
+                                            div()
+                                                .ml_3()
+                                                .flex_none()
+                                                .text_size(px(10.0))
+                                                .text_color(rgb(palette.foreground_dim))
+                                                .child(language.text("export.template_default")),
+                                        ),
+                                ),
                         ),
                 )
                 .child(
                     div()
+                        .h(px(66.0))
+                        .flex_none()
+                        .px_5()
                         .flex()
                         .items_center()
                         .justify_between()
                         .border_t_1()
-                        .border_color(rgb(palette.border))
-                        .pt_4()
+                        .border_color(rgb(palette.divider))
                         .gap_3()
                         .child(
                             div()
@@ -688,7 +941,10 @@ pub(crate) fn render_export_panel(
                                 .text_size(px(11.0))
                                 .text_color(rgb(palette.foreground_dim))
                                 .when(status.is_none(), |view| {
-                                    view.child(language.text("export.snapshot_hint"))
+                                    view.child(format!(
+                                        "{} · {format_name}",
+                                        language.text("export.snapshot_hint")
+                                    ))
                                 })
                                 .when_some(status.clone(), |view, status| {
                                     let (message, color) = match status {
@@ -709,7 +965,7 @@ pub(crate) fn render_export_panel(
                                 .items_center()
                                 .gap_2()
                                 .when(
-                                    matches!(status, Some(ExportRunState::Success { .. })),
+                                    matches!(status.as_ref(), Some(ExportRunState::Success { .. })),
                                     |view| {
                                         view.child(
                                             div()
@@ -718,7 +974,7 @@ pub(crate) fn render_export_panel(
                                                 .px_4()
                                                 .flex()
                                                 .items_center()
-                                                .rounded_md()
+                                                .rounded(px(9.0))
                                                 .border_1()
                                                 .border_color(rgb(palette.border))
                                                 .hover(|style| {
@@ -737,36 +993,34 @@ pub(crate) fn render_export_panel(
                                         )
                                     },
                                 )
-                                .when(working, |view| {
-                                    view.child(
-                                        div()
-                                            .id("export-cancel")
-                                            .h(px(38.0))
-                                            .px_4()
-                                            .flex()
-                                            .items_center()
-                                            .rounded_md()
-                                            .border_1()
-                                            .border_color(rgb(palette.border))
-                                            .cursor_pointer()
-                                            .child(language.text("export.cancel"))
-                                            .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                                                cancel_entity.update(cx, |this, cx| {
-                                                    this.close_export_panel(cx)
-                                                });
-                                            }),
-                                    )
-                                })
+                                .child(
+                                    div()
+                                        .id("export-cancel")
+                                        .h(px(38.0))
+                                        .px_4()
+                                        .flex()
+                                        .items_center()
+                                        .rounded(px(9.0))
+                                        .bg(rgb(palette.background_alt))
+                                        .hover(|style| style.bg(rgb(palette.hover)))
+                                        .cursor_pointer()
+                                        .child(language.text("export.cancel"))
+                                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                                            cancel_entity.update(cx, |this, cx| {
+                                                this.close_export_panel(cx)
+                                            });
+                                        }),
+                                )
                                 .child(
                                     div()
                                         .id("export-confirm")
                                         .h(px(38.0))
-                                        .min_w(px(88.0))
+                                        .min_w(px(112.0))
                                         .px_5()
                                         .flex()
                                         .items_center()
                                         .justify_center()
-                                        .rounded_md()
+                                        .rounded(px(9.0))
                                         .bg(rgb(if working {
                                             palette.foreground_disabled
                                         } else {
@@ -784,9 +1038,9 @@ pub(crate) fn render_export_panel(
                                             )
                                         })
                                         .child(if working {
-                                            language.text("export.working_action")
+                                            language.text("export.working_action").to_owned()
                                         } else {
-                                            language.text("export.action")
+                                            action_label
                                         }),
                                 ),
                         ),

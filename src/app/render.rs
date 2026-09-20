@@ -750,6 +750,8 @@ mod tests {
 
     struct TitlebarHarness(gpui::Entity<WorkspaceWindow>);
 
+    struct ExportPanelHarness(gpui::Entity<WorkspaceWindow>);
+
     impl Render for TitlebarHarness {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
             let sidebar_visible = self.0.read(cx).sidebar_visible();
@@ -763,6 +765,17 @@ mod tests {
                 export_open,
                 crate::app::TITLEBAR_LEADING_INSET,
                 theme_mode,
+            )
+        }
+    }
+
+    impl Render for ExportPanelHarness {
+        fn render(&mut self, _: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+            render_export_panel(
+                self.0.clone(),
+                super::super::export_ui::ExportPanelState::default(),
+                None,
+                crate::i18n::Language::English,
             )
         }
     }
@@ -897,10 +910,25 @@ mod tests {
         );
         cx.simulate_mouse_move(export_button.center(), None, Modifiers::default());
         cx.simulate_click(export_button.center(), Modifiers::default());
+        cx.run_until_parked();
         assert!(
             workspace.read_with(cx, |workspace, _| workspace.export.is_open()),
             "clicking the titlebar export toggle must open the export panel"
         );
+        let panel_workspace = workspace.clone();
+        let (_, cx) = cx.add_window_view(move |_, _| ExportPanelHarness(panel_workspace));
+        let panel = cx
+            .debug_bounds("export-panel-card")
+            .expect("export panel should render after opening");
+        let preview = cx
+            .debug_bounds("export-preview-stage")
+            .expect("redesigned export panel should render its preview stage");
+        let settings = cx
+            .debug_bounds("export-settings-panel")
+            .expect("redesigned export panel should render its settings column");
+        assert!(preview.size.width > px(300.0));
+        assert!(settings.size.width > px(300.0));
+        assert!(panel.size.width > preview.size.width + settings.size.width);
     }
 
     #[gpui::test]
