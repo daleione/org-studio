@@ -250,13 +250,17 @@
   )
   show raw.where(block: true): it => block(
     width: 100%, above: px(24), below: px(24),
-    fill: color-ink,
-    stroke: (left: px(10) + color-emerald, rest: none),
-    radius: px(14), inset: (left: px(20), rest: px(20)),
+    fill: color-emerald, radius: px(16), clip: true,
+    inset: (left: px(8), rest: px(0)),
   )[
-    #set par(leading: 0.5em, justify: false)
-    #set text(font: font-mono, size: tx(size-code), fill: color-mint)
-    #it
+    #block(
+      width: 100%, fill: color-ink,
+      radius: (left: px(8), right: px(16)), inset: px(20),
+    )[
+      #set par(leading: 0.5em, justify: false)
+      #set text(font: font-mono, size: tx(size-code), fill: color-mint)
+      #it
+    ]
   ]
 
   set list(marker: text(fill: color-orange, weight: 700)[●], body-indent: px(8), spacing: px(8))

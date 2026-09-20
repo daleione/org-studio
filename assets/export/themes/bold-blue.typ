@@ -153,13 +153,18 @@
   show heading.where(level: 2): it => h2-block(it.body)
   show heading.where(level: 3): it => block(
     width: 100%, above: px(28), below: px(20),
-    fill: rgb(75, 110, 245, 10%), radius: px(6),
-    stroke: (left: px(3) + color-blue),
-    inset: (x: px(12), y: px(6)),
+    fill: color-blue, radius: px(6), clip: true,
+    inset: (left: px(3), rest: px(0)),
   )[
-    #set text(font: hf(3, font-bold), size: tx(size-h3), weight: 600, fill: color-blue)
-    #set par(leading: 0.45em)
-    #it.body
+    #block(
+      width: 100%, fill: rgb("#edf0fe"),
+      radius: (left: px(3), right: px(6)),
+      inset: (left: px(9), right: px(12), y: px(6)),
+    )[
+      #set text(font: hf(3, font-bold), size: tx(size-h3), weight: 600, fill: color-blue)
+      #set par(leading: 0.45em)
+      #it.body
+    ]
   ]
   show heading.where(level: 4): it => block(above: px(24), below: px(12))[
     #set text(font: hf(4, font-text), size: tx(size-h4), weight: 600, fill: color-blue); #set par(leading: 0.4em); #it.body
