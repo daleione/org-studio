@@ -38,8 +38,8 @@
 ))
 #let theme-accent = rgb(sys.inputs.at("theme-color-accent", default: "#E4573D"))
 
-#let long-page-width = 540pt
-#let margin-x = 38pt
+#let long-page-width = float(sys.inputs.at("long-page-width-pt", default: "540")) * 1pt
+#let margin-x = float(sys.inputs.at("long-page-margin-x-pt", default: "38")) * 1pt
 #let margin-top = 34pt
 #let margin-bot = 38pt
 #let long-page-min-height = 720pt
@@ -119,7 +119,7 @@
       tracking: -0.035em,
       fill: color-ink,
     )
-    #set par(leading: 0.36em)
+    #set par(leading: 0.36em, justify: false)
     #title
   ]
 ]

@@ -38,8 +38,8 @@
 
 #let px(n) = n * 1.6pt * p-layout-scale
 #let tx(n) = px(n) * p-fscale
-#let long-page-width = 540pt
-#let margin-x = 39pt
+#let long-page-width = float(sys.inputs.at("long-page-width-pt", default: "540")) * 1pt
+#let margin-x = float(sys.inputs.at("long-page-margin-x-pt", default: "39")) * 1pt
 #let margin-top = 60pt
 #let margin-bot = 48pt
 #let long-page-min-height = 720pt
@@ -100,7 +100,7 @@
         tracking: 0.01em,
         fill: white,
       )
-      #set par(leading: 0.3em)
+      #set par(leading: 0.3em, justify: false)
       #body
     ]
     let h = measure(card).height

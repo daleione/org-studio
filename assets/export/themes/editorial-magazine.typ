@@ -39,8 +39,8 @@
 #let size-body = float(sys.inputs.at("theme-size-body", default: "15"))
 #let size-caption = float(sys.inputs.at("theme-size-caption", default: "12"))
 #let size-code = float(sys.inputs.at("theme-size-code", default: "14"))
-#let long-page-width = 540pt
-#let margin-x = 39pt
+#let long-page-width = float(sys.inputs.at("long-page-width-pt", default: "540")) * 1pt
+#let margin-x = float(sys.inputs.at("long-page-margin-x-pt", default: "39")) * 1pt
 #let margin-top = 60pt
 #let margin-bot = 48pt
 #let long-page-min-height = 720pt
@@ -95,7 +95,7 @@
     tracking: -0.02em,
     fill: color-text,
   )
-  #set par(leading: 0.42em)
+  #set par(leading: 0.42em, justify: false)
   #body
   #v(px(14))
   #box(width: px(48), height: px(4), radius: px(2), fill: color-red)
@@ -175,7 +175,7 @@
       tracking: -0.02em,
       fill: white,
     )
-    #set par(leading: 0.38em)
+    #set par(leading: 0.38em, justify: false)
     #title
   ]
   block(width: 100%, above: px(16), below: px(26))[

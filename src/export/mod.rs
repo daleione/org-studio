@@ -91,6 +91,8 @@ pub struct ExportOptions {
     pub font_scale: f32,
     pub margin_scale: f32,
     pub line_height_scale: f32,
+    pub long_image_width_pt: Option<f32>,
+    pub long_image_margin_pt: Option<f32>,
     pub toc: Option<bool>,
     pub byline: Option<bool>,
     pub page_numbers: Option<bool>,
@@ -111,6 +113,8 @@ impl Default for ExportOptions {
             font_scale: 1.0,
             margin_scale: 1.0,
             line_height_scale: 1.0,
+            long_image_width_pt: Some(585.0),
+            long_image_margin_pt: Some(24.0),
             toc: None,
             byline: None,
             page_numbers: None,
@@ -238,6 +242,26 @@ fn template_inputs(options: &ExportOptions) -> BTreeMap<String, String> {
         "line-height-scale".into(),
         options.line_height_scale.clamp(0.8, 1.6).to_string(),
     );
+    if options.layout == LayoutMode::Continuous {
+        if let Some(width) = options
+            .long_image_width_pt
+            .filter(|value| value.is_finite())
+        {
+            inputs.insert(
+                "long-page-width-pt".into(),
+                width.clamp(480.0, 900.0).to_string(),
+            );
+        }
+        if let Some(margin) = options
+            .long_image_margin_pt
+            .filter(|value| value.is_finite())
+        {
+            inputs.insert(
+                "long-page-margin-x-pt".into(),
+                margin.clamp(18.0, 72.0).to_string(),
+            );
+        }
+    }
     if print_layout {
         for (name, size) in [
             ("theme-size-h1", "28"),
@@ -362,6 +386,8 @@ mod tests {
         assert_eq!(print["layout-scale"], "0.65");
         assert_eq!(print["theme-size-body"], "15");
         assert_eq!(print["font-scale"], "0.7");
+        assert!(!print.contains_key("long-page-width-pt"));
+        assert!(!print.contains_key("long-page-margin-x-pt"));
 
         let long_image = template_inputs(&ExportOptions {
             format: ExportFormat::Png,
@@ -371,6 +397,18 @@ mod tests {
         });
         assert_eq!(long_image["layout-scale"], "1.0");
         assert!(!long_image.contains_key("theme-size-body"));
+        assert_eq!(long_image["long-page-width-pt"], "585");
+        assert_eq!(long_image["long-page-margin-x-pt"], "24");
+
+        let sized_long_image = template_inputs(&ExportOptions {
+            layout: LayoutMode::Continuous,
+            paper: PaperSize::TemplateDefault,
+            long_image_width_pt: Some(645.0),
+            long_image_margin_pt: Some(30.0),
+            ..ExportOptions::default()
+        });
+        assert_eq!(sized_long_image["long-page-width-pt"], "645");
+        assert_eq!(sized_long_image["long-page-margin-x-pt"], "30");
     }
 
     #[cfg(target_os = "macos")]
@@ -407,6 +445,65 @@ mod tests {
             }
         }
         assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    #[test]
+    fn every_bundled_theme_uses_mobile_width_for_continuous_images() {
+        let markdown = "# 手机阅读标题\n\n一段正文 with **bold** and `code`.\n\n```json\n{\"sku_attributes\": [\"颜色\", \"尺寸\"]}\n```\n";
+        let (document, _) = markdown::parse(markdown);
+        let document = document.unwrap();
+        let engine = TypstEngine::default();
+        for template in export_templates() {
+            let options = ExportOptions {
+                format: ExportFormat::Svg,
+                template_id: template.id.into(),
+                layout: LayoutMode::Continuous,
+                paper: PaperSize::TemplateDefault,
+                ..ExportOptions::default()
+            };
+            let mut diagnostics = Vec::new();
+            let source = emit::emit(&document, template, &options, &mut diagnostics);
+            let inputs = template_inputs(&options);
+            let output = engine
+                .compile_with_inputs(
+                    source.clone(),
+                    options.format.into(),
+                    false,
+                    options.png_ppi,
+                    None,
+                    &inputs,
+                )
+                .unwrap_or_else(|error| panic!("{}: {error}", template.id));
+            let svg = std::str::from_utf8(&output.pages[0]).unwrap();
+            assert!(
+                svg.starts_with("<svg viewBox=\"0 0 585 "),
+                "{} has an unexpected SVG width",
+                template.id
+            );
+
+            let png = engine
+                .compile_with_inputs(
+                    source,
+                    ExportFormat::Png.into(),
+                    false,
+                    144.0,
+                    None,
+                    &inputs,
+                )
+                .unwrap_or_else(|error| panic!("{} PNG: {error}", template.id));
+            let bytes = &png.pages[0];
+            assert!(
+                bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+                "{} is not PNG",
+                template.id
+            );
+            assert_eq!(
+                u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
+                1170,
+                "{} has an unexpected PNG width",
+                template.id
+            );
+        }
     }
 
     #[test]

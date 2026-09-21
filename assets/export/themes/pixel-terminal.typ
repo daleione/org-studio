@@ -30,7 +30,7 @@
 
 #let px(n) = n * 1.6pt * p-layout-scale
 #let tx(n) = px(n) * p-fscale
-#let size-h1 = float(sys.inputs.at("theme-size-h1", default: "32"))
+#let size-h1 = float(sys.inputs.at("theme-size-h1", default: "26"))
 #let size-h2 = float(sys.inputs.at("theme-size-h2", default: "22"))
 #let size-h3 = float(sys.inputs.at("theme-size-h3", default: "22"))
 #let size-h4 = float(sys.inputs.at("theme-size-h4", default: "19"))
@@ -39,8 +39,8 @@
 #let size-body = float(sys.inputs.at("theme-size-body", default: "17"))
 #let size-code = float(sys.inputs.at("theme-size-code", default: "14"))
 #let size-caption = float(sys.inputs.at("theme-size-caption", default: "12"))
-#let long-page-width = 540pt
-#let margin-x = 39pt
+#let long-page-width = float(sys.inputs.at("long-page-width-pt", default: "540")) * 1pt
+#let margin-x = float(sys.inputs.at("long-page-margin-x-pt", default: "39")) * 1pt
 #let margin-top = 60pt
 #let margin-bot = 48pt
 #let long-page-min-height = 720pt
@@ -155,7 +155,7 @@
   #grid(
     columns: (auto, 1fr),
     column-gutter: px(10),
-    align: horizon,
+    align: top,
     text(font: font-bold, size: tx(34), weight: 500, fill: color-neon-dim, "#"),
     {
       set text(
@@ -165,7 +165,7 @@
         fill: color-green,
         tracking: 0.02em,
       )
-      set par(leading: 0.4em)
+      set par(leading: 0.4em, justify: false)
       body
     },
   )

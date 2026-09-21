@@ -12,7 +12,7 @@
       "appearance": "light",
       "source": "field-note.typ",
       "thumbnail": "field-note.svg",
-      "sha256": "ab3116032e609ae7f137cf4ea1f287fda0165f9102d3fb87474592e6522c5f68"
+      "sha256": "0c7b1cfff984c038e6537fa71dfab5f268fccb7bb541d2f3bf13f1aa9a4be12e"
     },
     {
       "id": "minimal-blue",
@@ -25,7 +25,7 @@
       "appearance": "light",
       "source": "minimal-blue.typ",
       "thumbnail": "minimal-blue.svg",
-      "sha256": "df68786c9fef3227c0085a291b6d6db61da746c26970befb529484294584e546"
+      "sha256": "5fbe199954871725bcdaea05de3e040c4a86eacf0917b6e9182d145e58eab8d5"
     },
     {
       "id": "pixel-terminal",
@@ -39,7 +39,7 @@
       "appearance": "dark",
       "source": "pixel-terminal.typ",
       "thumbnail": "pixel-terminal.svg",
-      "sha256": "2b2958c777ae99d572a7d07bbcf543a49caf2dde9c1ab28bada09e39a40c76f9"
+      "sha256": "1389f8ed5bd4d8271443c387148d8c400677e454d5358320ef48f7f5dc93cfad"
     },
     {
       "id": "clash-collage",
@@ -52,7 +52,7 @@
       "appearance": "light",
       "source": "clash-collage.typ",
       "thumbnail": "clash-collage.svg",
-      "sha256": "4a4655f232e19c1e9082028cb46985eeb379fba20a5e2923ae5c956dcd86d170"
+      "sha256": "478acf962559fce029200ec2dadda589ec94e776cf5393d231c62a568ddb4020"
     },
     {
       "id": "matisse-cutout",
@@ -65,7 +65,7 @@
       "appearance": "light",
       "source": "matisse-cutout.typ",
       "thumbnail": "matisse-cutout.svg",
-      "sha256": "66ce43c8f056e92ea3b2ed9f507d7de00db26d46f0a6fc59b2af9a00729d7311"
+      "sha256": "6fa899c3a052110f67a0a308c0aa67b159d3d7293e7d7e68de59fc835be4035c"
     },
     {
       "id": "high-volt",
@@ -78,7 +78,7 @@
       "appearance": "dark",
       "source": "high-volt.typ",
       "thumbnail": "high-volt.svg",
-      "sha256": "bc9b6ac0b40e71b4f26e8596782f950529e5cb6adef0d2e7a72e2948b1e297fe"
+      "sha256": "e7dad2e1f5f2aa4de2a0346635aa8bcbb7190ff4945ec10170324b45beee61aa"
     },
     {
       "id": "classified-brief",
@@ -91,7 +91,7 @@
       "appearance": "light",
       "source": "classified-brief.typ",
       "thumbnail": "classified-brief.svg",
-      "sha256": "6a4b9030e3a199f9bd3508cf63807782e47c6c39eebba64529e031c854c89f93"
+      "sha256": "b2304e173c7126a8430e903102f24b86413346198532f68ed09ad4750f67bb7f"
     },
     {
       "id": "letterpress",
@@ -104,7 +104,7 @@
       "appearance": "light",
       "source": "letterpress.typ",
       "thumbnail": "letterpress.svg",
-      "sha256": "0a0f6cabc875ba75f3bb1d9b413e9efe9105e561c8ec48f84167029c36e3eb3f"
+      "sha256": "627cd18f68c215273621039b39b07ac025657ccf4f3c0df3a8c2bd25a2ffcb78"
     },
     {
       "id": "pin-waterfall",
@@ -117,7 +117,7 @@
       "appearance": "light",
       "source": "pin-waterfall.typ",
       "thumbnail": "pin-waterfall.svg",
-      "sha256": "ece409f8168126b2dcb71f8c746238bcf508ed99860b9b2150e05277a0dde7ec"
+      "sha256": "5076a0b5d54b213fa86153b3033d18e671b4258610ff5c0dcb94f7030b1e82b9"
     },
     {
       "id": "editorial-magazine",
@@ -130,7 +130,7 @@
       "appearance": "light",
       "source": "editorial-magazine.typ",
       "thumbnail": "editorial-magazine.svg",
-      "sha256": "c074a821fe55066d84f5d1ff0a326bcb0165698e4115c9893dde7820ac668eb8"
+      "sha256": "4242ad11b46d2495c9a039d5aca88a9a7a21bf3e73d2e958ea2d9678d93b9371"
     },
     {
       "id": "orange-journal",
@@ -143,7 +143,7 @@
       "appearance": "light",
       "source": "orange-journal.typ",
       "thumbnail": "orange-journal.svg",
-      "sha256": "0407ba387ccb5098e46b6563a1e25af5536cb022d8f24845c96b5bfe1049c3bf"
+      "sha256": "234daf5b5a3d1b2e70b8060cdd78f460cb9c80dee246bf0962cf59c13dc651f4"
     },
     {
       "id": "github-style",
@@ -156,7 +156,7 @@
       "appearance": "light",
       "source": "github-style.typ",
       "thumbnail": "github-style.svg",
-      "sha256": "d5b86d347113a86cad2d126b7c784102a12ecdf4cd4b129ffdd5f781aa142f46"
+      "sha256": "5a4ca45d04de0765afdae7e6226e28a331a0346866c2ee5099f64c244de96d47"
     },
     {
       "id": "bauhaus",
@@ -169,7 +169,7 @@
       "appearance": "light",
       "source": "bauhaus.typ",
       "thumbnail": "bauhaus.svg",
-      "sha256": "212bac8d273fcd70493f263b826be42be0abcbb7b5718165a0f6276ba707568f"
+      "sha256": "6af4b0809458f7918b626ba1623b7e028472cb472f56c7d13a97a6fb2d961ff2"
     },
     {
       "id": "ink-rhyme",
@@ -182,7 +182,7 @@
       "appearance": "light",
       "source": "ink-rhyme.typ",
       "thumbnail": "ink-rhyme.svg",
-      "sha256": "74cc5928ad4fbdee2af677f9f24e75ac7a6b8a6683a4e8bfb12220ede15be3c6"
+      "sha256": "f6dbc4048704d0274935f4dfa29dfca5650e2eb6bfb4fd96a2c85fc53b95f3dd"
     }
   ]
 }

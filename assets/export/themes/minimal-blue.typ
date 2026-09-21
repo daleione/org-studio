@@ -39,8 +39,8 @@
 #let size-body = float(sys.inputs.at("theme-size-body", default: "15"))
 #let size-code = float(sys.inputs.at("theme-size-code", default: "14"))
 #let size-caption = float(sys.inputs.at("theme-size-caption", default: "12"))
-#let long-page-width = 540pt
-#let margin-x = 39pt
+#let long-page-width = float(sys.inputs.at("long-page-width-pt", default: "540")) * 1pt
+#let margin-x = float(sys.inputs.at("long-page-margin-x-pt", default: "39")) * 1pt
 #let margin-top = 60pt
 #let margin-bot = 48pt
 #let long-page-min-height = 720pt
@@ -73,6 +73,7 @@
 #let color-muted = rgb(0, 0, 0, 45%)
 #let color-faint = rgb(0, 0, 0, 25%)
 #let color-accent = theme-primary
+#let color-title = rgb("#173D72")
 #let color-chip = rgb(0, 117, 222, 6%)
 #let color-chip2 = rgb(0, 117, 222, 10%)
 #let color-panel = theme-panel
@@ -88,22 +89,21 @@
   line(length: 100%, stroke: px(1) + color-hair),
 )
 
-#let h1-block(body) = block(width: 100%, above: px(34), below: px(20))[
-  #set text(
-    font: hf(1, font-bold),
-    size: tx(size-h1),
-    weight: 600,
-    tracking: 0.02em,
-    fill: color-ink,
-  )
-  #set par(leading: 0.42em)
-  #body
-  #v(px(14))
-  #line(length: 100%, stroke: px(1) + color-hair)
+#let h1-block(body) = block(width: 100%, above: px(30), below: px(28))[
+  #align(center)[
+    #set text(
+      font: hf(1, font-bold),
+      size: tx(size-h1 + 4),
+      weight: 600,
+      tracking: 0.01em,
+      fill: color-title,
+    )
+    #set par(leading: 0.38em, justify: false)
+    #body
+  ]
 ]
 
-#let h2-block(body) = block(width: 100%, above: px(36), below: px(16))[
-  #hairline(below: px(12))
+#let h2-block(body) = block(width: 100%, above: px(30), below: px(16))[
   #set text(
     font: hf(2, font-bold),
     size: tx(size-h2),
@@ -159,7 +159,7 @@
       size: tx(size-h1 + 4),
       weight: 600,
       tracking: 0.01em,
-      fill: color-ink,
+      fill: color-title,
     )
     #set par(leading: 0.38em, justify: false)
     #title
