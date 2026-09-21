@@ -45,7 +45,13 @@ pub(super) fn parse(
                     ));
                 }
             }
-            BlockKind::Paragraph | BlockKind::FixedWidth | BlockKind::FootnoteDefinition => {
+            BlockKind::Paragraph | BlockKind::FootnoteDefinition => {
+                document.blocks.push(ExportBlock::Paragraph {
+                    content: org_prose_inlines(text.trim_end()),
+                    source: range,
+                });
+            }
+            BlockKind::FixedWidth => {
                 document.blocks.push(ExportBlock::Paragraph {
                     content: org_inlines(text.trim_end()),
                     source: range,
@@ -71,7 +77,16 @@ pub(super) fn parse(
                     source: range,
                 });
             }
-            BlockKind::QuoteBlock | BlockKind::VerseBlock | BlockKind::CenterBlock => {
+            BlockKind::QuoteBlock | BlockKind::CenterBlock => {
+                document.blocks.push(ExportBlock::Quote {
+                    blocks: vec![ExportBlock::Paragraph {
+                        content: org_prose_inlines(text.trim()),
+                        source: range.clone(),
+                    }],
+                    source: range,
+                });
+            }
+            BlockKind::VerseBlock => {
                 document.blocks.push(ExportBlock::Quote {
                     blocks: vec![ExportBlock::Paragraph {
                         content: org_inlines(text.trim()),
@@ -87,7 +102,7 @@ pub(super) fn parse(
                     let item_text = snapshot.copy_range(nodes[index].content);
                     let body = clean_list_item(item_text.trim_end());
                     items.push(vec![ExportBlock::Paragraph {
-                        content: org_inlines(&body),
+                        content: org_prose_inlines(&body),
                         source: nodes[index].content.as_usize(),
                     }]);
                     index += 1;
@@ -202,6 +217,11 @@ fn org_inlines(source: &str) -> Vec<ExportInline> {
         parsed.text.len(),
         &[],
     )
+}
+
+fn org_prose_inlines(source: &str) -> Vec<ExportInline> {
+    // A single newline in an Org paragraph is a soft wrap, not a forced line break.
+    org_inlines(&source.replace('\n', " "))
 }
 
 fn build_inlines(
@@ -348,5 +368,26 @@ mod tests {
             inline,
             ExportInline::Link { target, .. } if target == "notes.org"
         )));
+    }
+
+    #[test]
+    fn joins_soft_wrapped_org_paragraphs_without_losing_inline_styles() {
+        let (document, diagnostics) = parse("* Heading\nFirst =code=,\nthen *bold* text.\n", true);
+        let document = document.unwrap();
+        assert!(diagnostics.is_empty());
+        let ExportBlock::Paragraph { content, .. } = &document.blocks[1] else {
+            panic!("expected paragraph");
+        };
+        assert!(
+            content
+                .iter()
+                .any(|inline| matches!(inline, ExportInline::Code(code) if code == "code"))
+        );
+        assert!(
+            content
+                .iter()
+                .any(|inline| matches!(inline, ExportInline::Strong(_)))
+        );
+        assert!(!format!("{content:?}").contains("\\n"));
     }
 }

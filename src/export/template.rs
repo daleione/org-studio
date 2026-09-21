@@ -43,12 +43,20 @@ macro_rules! export_template {
             family_zh: $family_zh,
             appearance: TemplateAppearance::$appearance,
             source: include_str!(concat!("../../assets/export/themes/", $id, ".typ")),
-            thumbnail: include_bytes!(concat!("../../assets/export/thumbnails/", $id, ".png")),
+            thumbnail: include_bytes!(concat!("../../assets/export/thumbnails/", $id, ".svg")),
         }
     };
 }
 
 static EXPORT_TEMPLATES: &[ExportTemplate] = &[
+    export_template!(
+        "field-note",
+        "Field Note",
+        "知识期刊",
+        "Brand Longform",
+        "品牌长图系",
+        Light
+    ),
     export_template!(
         "minimal-blue",
         "Minimal Blue",
@@ -58,35 +66,11 @@ static EXPORT_TEMPLATES: &[ExportTemplate] = &[
         Light
     ),
     export_template!(
-        "lavender-dream",
-        "Lavender Dream",
-        "薰衣草梦",
-        "Nature & Arts",
-        "自然文艺系",
-        Light
-    ),
-    export_template!(
         "pixel-terminal",
         "Pixel Terminal",
         "像素终端",
         "Geek",
         "极客系",
-        Dark
-    ),
-    export_template!(
-        "dedao-light",
-        "Brand Light",
-        "白色主题长图",
-        "Brand Longform",
-        "品牌长图系",
-        Light
-    ),
-    export_template!(
-        "dedao-dark",
-        "Brand Dark",
-        "暗黑主题长图",
-        "Brand Longform",
-        "品牌长图系",
         Dark
     ),
     export_template!(
@@ -105,31 +89,7 @@ static EXPORT_TEMPLATES: &[ExportTemplate] = &[
         "艺术拼贴系",
         Light
     ),
-    export_template!(
-        "ember-glow",
-        "Ember Glow",
-        "余烬暖焰",
-        "Dark",
-        "暗调系",
-        Dark
-    ),
-    export_template!(
-        "rational-grid",
-        "Rational Grid",
-        "理性格栅",
-        "Art Collage",
-        "艺术拼贴系",
-        Light
-    ),
     export_template!("high-volt", "High Volt", "高压伏特", "Dark", "暗调系", Dark),
-    export_template!(
-        "terra-nature",
-        "Terra Nature",
-        "大地自然",
-        "Nature & Arts",
-        "自然文艺系",
-        Light
-    ),
     export_template!(
         "classified-brief",
         "Classified Brief",
@@ -147,35 +107,11 @@ static EXPORT_TEMPLATES: &[ExportTemplate] = &[
         Light
     ),
     export_template!(
-        "hockney-pool",
-        "Hockney Pool",
-        "霍克尼泳池",
-        "Art Collage",
-        "艺术拼贴系",
-        Light
-    ),
-    export_template!(
-        "glacier-glass",
-        "Glacier Glass",
-        "冰川玻璃",
-        "Dark",
-        "暗调系",
-        Dark
-    ),
-    export_template!(
         "pin-waterfall",
         "Pin Waterfall",
         "拼趣瀑布",
         "Art Collage",
         "艺术拼贴系",
-        Light
-    ),
-    export_template!(
-        "warm-editorial",
-        "Warm Editorial",
-        "暖调编辑",
-        "Editorial",
-        "编辑杂志系",
         Light
     ),
     export_template!(
@@ -195,14 +131,6 @@ static EXPORT_TEMPLATES: &[ExportTemplate] = &[
         Light
     ),
     export_template!(
-        "bold-blue",
-        "Bold Blue",
-        "醒目蓝",
-        "Minimal",
-        "简约文档系",
-        Light
-    ),
-    export_template!(
         "github-style",
         "GitHub Style",
         "GitHub 风",
@@ -219,25 +147,9 @@ static EXPORT_TEMPLATES: &[ExportTemplate] = &[
         Light
     ),
     export_template!(
-        "chinoiserie",
-        "Chinoiserie",
-        "中国风",
-        "Nature & Arts",
-        "自然文艺系",
-        Light
-    ),
-    export_template!(
         "ink-rhyme",
         "Ink Rhyme",
         "墨韵",
-        "Nature & Arts",
-        "自然文艺系",
-        Light
-    ),
-    export_template!(
-        "sunset-orange",
-        "Sunset Orange",
-        "日落暖橙",
         "Nature & Arts",
         "自然文艺系",
         Light
@@ -258,7 +170,20 @@ mod tests {
 
     #[test]
     fn catalog_contains_all_copied_export_templates() {
-        assert_eq!(export_templates().len(), 25);
+        assert_eq!(export_templates().len(), 14);
+        assert_eq!(
+            export_templates()
+                .iter()
+                .take(4)
+                .map(|template| template.id)
+                .collect::<Vec<_>>(),
+            [
+                "field-note",
+                "minimal-blue",
+                "pixel-terminal",
+                "clash-collage"
+            ]
+        );
         for template in export_templates() {
             assert!(
                 template.source.contains("#let conf"),
@@ -272,6 +197,10 @@ mod tests {
         assert_eq!(entries.len(), export_templates().len());
         for template in export_templates() {
             assert!(entries.iter().any(|entry| entry["id"] == template.id));
+            assert!(
+                std::str::from_utf8(template.thumbnail)
+                    .is_ok_and(|thumbnail| thumbnail.contains("<svg"))
+            );
         }
     }
 }

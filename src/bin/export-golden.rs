@@ -9,6 +9,12 @@ use org_studio::{
 };
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let requested = std::env::args().nth(1);
+    if let Some(id) = requested.as_deref()
+        && !export_templates().iter().any(|template| template.id == id)
+    {
+        return Err(format!("unknown export template: {id}").into());
+    }
     let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let fixture_path = workspace.join("assets/export/fixtures/theme-preview.org");
     let fixture = fs::read(&fixture_path)?;
@@ -16,9 +22,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output_dir = workspace.join("assets/export/thumbnails");
     fs::create_dir_all(&output_dir)?;
 
-    for template in export_templates() {
+    for template in export_templates()
+        .iter()
+        .filter(|template| requested.as_deref().is_none_or(|id| template.id == id))
+    {
         let options = ExportOptions {
-            format: ExportFormat::Png,
+            format: ExportFormat::Svg,
             template_id: template.id.into(),
             layout: LayoutMode::Paged,
             per_page: true,
@@ -33,7 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &fixture_path,
             &options,
         )?;
-        let path = output_dir.join(format!("{}.png", template.id));
+        let path = output_dir.join(format!("{}.svg", template.id));
         fs::write(&path, &output.files[0])?;
         println!("{}", path.display());
     }

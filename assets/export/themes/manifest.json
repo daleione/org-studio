@@ -2,17 +2,30 @@
   "schema_version": 1,
   "themes": [
     {
-      "id": "lavender-dream",
-      "name": "薰衣草梦",
-      "family": "自然文艺系",
+      "id": "field-note",
+      "name": "知识期刊",
+      "family": "品牌长图系",
       "tags": [
-        "文艺",
-        "温润"
+        "知识",
+        "期刊"
       ],
       "appearance": "light",
-      "source": "lavender-dream.typ",
-      "thumbnail": "lavender-dream.png",
-      "sha256": "247e4f8ec5c5ef767910746bb17711e41532ea7d487f6054629a0c17a3e9a2c9"
+      "source": "field-note.typ",
+      "thumbnail": "field-note.svg",
+      "sha256": "ab3116032e609ae7f137cf4ea1f287fda0165f9102d3fb87474592e6522c5f68"
+    },
+    {
+      "id": "minimal-blue",
+      "name": "简约蓝",
+      "family": "简约文档系",
+      "tags": [
+        "简约",
+        "文档"
+      ],
+      "appearance": "light",
+      "source": "minimal-blue.typ",
+      "thumbnail": "minimal-blue.svg",
+      "sha256": "df68786c9fef3227c0085a291b6d6db61da746c26970befb529484294584e546"
     },
     {
       "id": "pixel-terminal",
@@ -25,35 +38,8 @@
       ],
       "appearance": "dark",
       "source": "pixel-terminal.typ",
-      "thumbnail": "pixel-terminal.png",
-      "sha256": "36361ecb4b7052338041a9bf6ee66f0ed8c5b687ea410af51843d530dce9ce41"
-    },
-    {
-      "id": "dedao-light",
-      "name": "白色主题长图",
-      "family": "品牌长图系",
-      "tags": [
-        "书卷",
-        "品牌"
-      ],
-      "appearance": "light",
-      "source": "dedao-light.typ",
-      "thumbnail": "dedao-light.png",
-      "sha256": "f064d4fef7b9a230d71f5db91e8b8028456bad6fa7af6afb5b979ea82dc5db7b"
-    },
-    {
-      "id": "dedao-dark",
-      "name": "暗黑主题长图",
-      "family": "品牌长图系",
-      "tags": [
-        "书卷",
-        "品牌",
-        "暗色"
-      ],
-      "appearance": "dark",
-      "source": "dedao-dark.typ",
-      "thumbnail": "dedao-dark.png",
-      "sha256": "f571f2e8f1a9a72ee3fadada3733d1a9e8446fa84160096ef10c42b31d3dcb18"
+      "thumbnail": "pixel-terminal.svg",
+      "sha256": "2b2958c777ae99d572a7d07bbcf543a49caf2dde9c1ab28bada09e39a40c76f9"
     },
     {
       "id": "clash-collage",
@@ -65,21 +51,8 @@
       ],
       "appearance": "light",
       "source": "clash-collage.typ",
-      "thumbnail": "clash-collage.png",
-      "sha256": "c8efcb9b946913aeacb37f87614c0ceb29ca6fe7dec11ed9d827a7ee52671b56"
-    },
-    {
-      "id": "minimal-blue",
-      "name": "简约蓝",
-      "family": "简约文档系",
-      "tags": [
-        "简约",
-        "文档"
-      ],
-      "appearance": "light",
-      "source": "minimal-blue.typ",
-      "thumbnail": "minimal-blue.png",
-      "sha256": "834f0f60c8dfddc62d4570f047d7b1d6bb04fc9a9bad31dd38739d5fbc3979c5"
+      "thumbnail": "clash-collage.svg",
+      "sha256": "4a4655f232e19c1e9082028cb46985eeb379fba20a5e2923ae5c956dcd86d170"
     },
     {
       "id": "matisse-cutout",
@@ -91,34 +64,8 @@
       ],
       "appearance": "light",
       "source": "matisse-cutout.typ",
-      "thumbnail": "matisse-cutout.png",
-      "sha256": "06386b102838476f83e9212f8aec8ee921b5effb6582a6bc57261105ce10913a"
-    },
-    {
-      "id": "ember-glow",
-      "name": "余烬暖焰",
-      "family": "暗调系",
-      "tags": [
-        "暗色",
-        "高级"
-      ],
-      "appearance": "dark",
-      "source": "ember-glow.typ",
-      "thumbnail": "ember-glow.png",
-      "sha256": "ca8683e6a40767051b8306c1a45e44576a3ff7f029c967cc2308d2626150fd1c"
-    },
-    {
-      "id": "rational-grid",
-      "name": "理性格栅",
-      "family": "艺术拼贴系",
-      "tags": [
-        "艺术",
-        "活泼"
-      ],
-      "appearance": "light",
-      "source": "rational-grid.typ",
-      "thumbnail": "rational-grid.png",
-      "sha256": "7a5fc540fc3c7f2547a3d4cb8d55f43772320bae9f6847232c1d5806b01c652f"
+      "thumbnail": "matisse-cutout.svg",
+      "sha256": "66ce43c8f056e92ea3b2ed9f507d7de00db26d46f0a6fc59b2af9a00729d7311"
     },
     {
       "id": "high-volt",
@@ -130,21 +77,8 @@
       ],
       "appearance": "dark",
       "source": "high-volt.typ",
-      "thumbnail": "high-volt.png",
-      "sha256": "ba94c40104bb21f2c15e3be65b1020a5c69f52a68a1a6c239fb73443bdea56ff"
-    },
-    {
-      "id": "terra-nature",
-      "name": "大地自然",
-      "family": "自然文艺系",
-      "tags": [
-        "文艺",
-        "温润"
-      ],
-      "appearance": "light",
-      "source": "terra-nature.typ",
-      "thumbnail": "terra-nature.png",
-      "sha256": "95bda2ee4fd0b37c294c5e5fdf85e34a35c05cde60fcbbdf1266c47cd59983ef"
+      "thumbnail": "high-volt.svg",
+      "sha256": "bc9b6ac0b40e71b4f26e8596782f950529e5cb6adef0d2e7a72e2948b1e297fe"
     },
     {
       "id": "classified-brief",
@@ -156,8 +90,8 @@
       ],
       "appearance": "light",
       "source": "classified-brief.typ",
-      "thumbnail": "classified-brief.png",
-      "sha256": "d884833b3a003c9d75a6daded406c7595d37bf6880f0076aba12c669b4669e78"
+      "thumbnail": "classified-brief.svg",
+      "sha256": "6a4b9030e3a199f9bd3508cf63807782e47c6c39eebba64529e031c854c89f93"
     },
     {
       "id": "letterpress",
@@ -169,34 +103,8 @@
       ],
       "appearance": "light",
       "source": "letterpress.typ",
-      "thumbnail": "letterpress.png",
-      "sha256": "78d5912d76bf4f9f36c3f4cdccb6e7a99974758456c3a79bd61a24e3e19f18ea"
-    },
-    {
-      "id": "hockney-pool",
-      "name": "霍克尼泳池",
-      "family": "艺术拼贴系",
-      "tags": [
-        "艺术",
-        "活泼"
-      ],
-      "appearance": "light",
-      "source": "hockney-pool.typ",
-      "thumbnail": "hockney-pool.png",
-      "sha256": "39db755574f4491790f1bd6a59f54267209315fcba633ac88687aa2bae756d22"
-    },
-    {
-      "id": "glacier-glass",
-      "name": "冰川玻璃",
-      "family": "暗调系",
-      "tags": [
-        "暗色",
-        "高级"
-      ],
-      "appearance": "dark",
-      "source": "glacier-glass.typ",
-      "thumbnail": "glacier-glass.png",
-      "sha256": "4e4c3b1ddbf18515796dd508abc9abdf0968929c77435cafb3625f96ae4dcd89"
+      "thumbnail": "letterpress.svg",
+      "sha256": "0a0f6cabc875ba75f3bb1d9b413e9efe9105e561c8ec48f84167029c36e3eb3f"
     },
     {
       "id": "pin-waterfall",
@@ -208,21 +116,8 @@
       ],
       "appearance": "light",
       "source": "pin-waterfall.typ",
-      "thumbnail": "pin-waterfall.png",
-      "sha256": "1ee3454c86345b0084c0f6749d8daf89286fc26ce7ffdfe8e75784617da59ad1"
-    },
-    {
-      "id": "warm-editorial",
-      "name": "暖调编辑",
-      "family": "编辑杂志系",
-      "tags": [
-        "杂志",
-        "编辑"
-      ],
-      "appearance": "light",
-      "source": "warm-editorial.typ",
-      "thumbnail": "warm-editorial.png",
-      "sha256": "16cb883eb33d007c4ee3110041f1c8d23a0880fcdcc7de7647535dd40438d695"
+      "thumbnail": "pin-waterfall.svg",
+      "sha256": "ece409f8168126b2dcb71f8c746238bcf508ed99860b9b2150e05277a0dde7ec"
     },
     {
       "id": "editorial-magazine",
@@ -234,8 +129,8 @@
       ],
       "appearance": "light",
       "source": "editorial-magazine.typ",
-      "thumbnail": "editorial-magazine.png",
-      "sha256": "3b15f4431dc6f7f2b0cf550035e504e6d9fed8adb9f43037c723db1154460424"
+      "thumbnail": "editorial-magazine.svg",
+      "sha256": "c074a821fe55066d84f5d1ff0a326bcb0165698e4115c9893dde7820ac668eb8"
     },
     {
       "id": "orange-journal",
@@ -247,21 +142,8 @@
       ],
       "appearance": "light",
       "source": "orange-journal.typ",
-      "thumbnail": "orange-journal.png",
-      "sha256": "9a652949cd019fa320706c004ce57a6eeaa20ddab3586ea05a4e246b1b89d8af"
-    },
-    {
-      "id": "bold-blue",
-      "name": "醒目蓝",
-      "family": "简约文档系",
-      "tags": [
-        "简约",
-        "文档"
-      ],
-      "appearance": "light",
-      "source": "bold-blue.typ",
-      "thumbnail": "bold-blue.png",
-      "sha256": "a31da5bda856dd556970c5039383cc85637da825586356adee80f7529f165a00"
+      "thumbnail": "orange-journal.svg",
+      "sha256": "0407ba387ccb5098e46b6563a1e25af5536cb022d8f24845c96b5bfe1049c3bf"
     },
     {
       "id": "github-style",
@@ -273,8 +155,8 @@
       ],
       "appearance": "light",
       "source": "github-style.typ",
-      "thumbnail": "github-style.png",
-      "sha256": "c9a319aec02e43c99188b13eb670e1efc1535ead44fc8baa1cd599d46b6b6294"
+      "thumbnail": "github-style.svg",
+      "sha256": "d5b86d347113a86cad2d126b7c784102a12ecdf4cd4b129ffdd5f781aa142f46"
     },
     {
       "id": "bauhaus",
@@ -286,21 +168,8 @@
       ],
       "appearance": "light",
       "source": "bauhaus.typ",
-      "thumbnail": "bauhaus.png",
-      "sha256": "40f1e20ab09f345ed09186fa7559c74600d4ae320e80f30af614fb574500caa7"
-    },
-    {
-      "id": "chinoiserie",
-      "name": "中国风",
-      "family": "自然文艺系",
-      "tags": [
-        "文艺",
-        "温润"
-      ],
-      "appearance": "light",
-      "source": "chinoiserie.typ",
-      "thumbnail": "chinoiserie.png",
-      "sha256": "518c96f18388e0c2897d0c2b08c3f86d587f2ff8b95296ec0bb5fedbe853aace"
+      "thumbnail": "bauhaus.svg",
+      "sha256": "212bac8d273fcd70493f263b826be42be0abcbb7b5718165a0f6276ba707568f"
     },
     {
       "id": "ink-rhyme",
@@ -312,21 +181,8 @@
       ],
       "appearance": "light",
       "source": "ink-rhyme.typ",
-      "thumbnail": "ink-rhyme.png",
-      "sha256": "5bf8c56ac7cb72f1941bfdae7f248e61febcbaf2b3dade38a503291d727d5665"
-    },
-    {
-      "id": "sunset-orange",
-      "name": "日落暖橙",
-      "family": "自然文艺系",
-      "tags": [
-        "文艺",
-        "温润"
-      ],
-      "appearance": "light",
-      "source": "sunset-orange.typ",
-      "thumbnail": "sunset-orange.png",
-      "sha256": "6618dace16e1791777dfc8eec284aabcc5c927a994c4fe45cc88f41c16b99b4d"
+      "thumbnail": "ink-rhyme.svg",
+      "sha256": "74cc5928ad4fbdee2af677f9f24e75ac7a6b8a6683a4e8bfb12220ede15be3c6"
     }
   ]
 }

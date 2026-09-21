@@ -15,9 +15,13 @@ pub(super) fn emit(
     let paged = matches!(options.layout, LayoutMode::Paged);
     let _ = writeln!(output, "#let divider() = line(length: 100%)");
     let _ = writeln!(output, "#let md-toc() = none");
+    // Inline code must go through `raw` so each theme's own
+    // `show raw.where(block: false)` rules style it. The old stub painted a
+    // fixed `luma(245)` chip and left the text colour inherited, which made
+    // inline code invisible on every dark theme.
     let _ = writeln!(
         output,
-        "#let inline-code(body) = box(fill: luma(245), inset: (x: 3pt, y: 1pt), outset: (y: 1pt), radius: 2pt, text(font: \"DejaVu Sans Mono\", size: 0.82em, body))"
+        "#let inline-code(body) = raw(body.text, block: false)"
     );
     let _ = writeln!(
         output,

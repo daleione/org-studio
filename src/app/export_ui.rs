@@ -440,7 +440,7 @@ pub(crate) fn render_export_panel(
                     .child(
                         div().h(px(116.0)).w_full().bg(rgb(0xffffff)).child(
                             img(Arc::new(Image::from_bytes(
-                                ImageFormat::Png,
+                                ImageFormat::Svg,
                                 template.thumbnail.to_vec(),
                             )))
                             .size_full()
@@ -590,7 +590,7 @@ pub(crate) fn render_export_panel(
                                 .justify_center()
                                 .child(
                                     img(Arc::new(Image::from_bytes(
-                                        ImageFormat::Png,
+                                        ImageFormat::Svg,
                                         selected_template.thumbnail.to_vec(),
                                     )))
                                     .w(px(324.0))

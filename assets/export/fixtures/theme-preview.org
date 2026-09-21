@@ -1,19 +1,43 @@
 #+TITLE: Org Mode
 #+AUTHOR: Org Mode Project
+#+DATE: 2026-09-20
 
 * A system for structured plain text
 
 Org Mode is an authoring tool and TODO list manager built around a lightweight,
-human-readable plain-text format.
+human-readable plain-text format. 它是一套结构化纯文本系统，可用于写作、笔记、
+任务管理、项目规划与发布。
 
-Org Mode 是一套结构化纯文本系统，可用于写作、笔记、任务管理、项目规划与发布。
+Inline code such as =[4/7]= stays readable, *bold text* carries the accent, and
+/emphasis/ marks the quieter voice. See [[https://orgmode.org][orgmode.org]] for
+the full manual.
 
 ** One file, many workflows
 
 - Foldable outlines and structured writing
 - TODO items, schedules, and Agenda views
-- Publishing and literate programming
+  - Nested detail stays aligned
+  - Publishing and literate programming
+- 中文列表项与英文条目共用同一套版式
+
+1. Parse the document incrementally
+2. Render only what is on screen
+3. Write results back to the file
 
 #+begin_quote
 Simple enough for a beginner, powerful enough for an expert.
 #+end_quote
+
+** Rich inline detail
+
+#+begin_src rust
+fn main() {
+    println!("hello, org");
+}
+#+end_src
+
+| Aspect   | Org Mode | Markdown  |
+|----------+----------+-----------|
+| Outlines | yes      | no        |
+| Tables   | native   | extension |
+| Agenda   | built in | external  |
