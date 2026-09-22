@@ -148,8 +148,6 @@ impl WorkspaceWindow {
             status_line::floating_status_container(shape.height)
                 .id("command-line-shell")
                 .debug_selector(|| "command-line-shell".into())
-                .bg(rgb(theme.elevated))
-                .border_color(rgb(theme.border))
                 .occlude()
                 .on_scroll_wheel(move |event, _, cx| {
                     cx.stop_propagation();
@@ -350,11 +348,7 @@ fn candidate_row(
         .items_center()
         .gap(px(8.))
         .rounded(px(5.))
-        .bg(rgb(if chosen {
-            theme.selected
-        } else {
-            theme.elevated
-        }))
+        .when(chosen, |row| row.bg(rgb(theme.selected)))
         .text_color(rgb(theme.foreground))
         .cursor_pointer()
         .hover(move |style| style.bg(rgb(if chosen { theme.selected } else { theme.hover })))

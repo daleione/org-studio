@@ -54,6 +54,7 @@ impl CommandKey {
 pub enum BuiltinCommand {
     ExecuteCommand,
     AlignTables,
+    GotoLine,
     FindDocument,
     IsearchForward,
     IsearchBackward,

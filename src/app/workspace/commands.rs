@@ -133,6 +133,7 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::AlignTables) => {
                 self.start_table_alignment(crate::command::TableScope::Current, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::GotoLine) => self.prompt_goto_line(cx),
             CommandImplementation::Builtin(BuiltinCommand::FindDocument) => {
                 self.open_search(false, false, false, cx)
             }

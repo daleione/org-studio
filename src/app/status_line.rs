@@ -719,7 +719,7 @@ pub(crate) fn render_floating_status_line(
         .into_any_element()
 }
 
-/// Both status and search occupy the same floating shell and bottom anchor.
+/// Status, search, and commands share the floating shell's appearance and bottom anchor.
 pub(crate) fn floating_status_container(height: f32) -> gpui::Div {
     div()
         .debug_selector(|| "floating-status-line".to_owned())

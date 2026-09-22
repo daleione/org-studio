@@ -1,5 +1,5 @@
 use super::*;
-use crate::document::TextSnapshot;
+use crate::document::{LineIndex, TextSnapshot};
 use crate::{
     command::{
         BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, InvocationOrigin,
@@ -47,12 +47,67 @@ impl WorkspaceWindow {
             return;
         };
         let implementation = prepared.implementation;
+        let target = if implementation == CommandImplementation::Builtin(BuiltinCommand::GotoLine) {
+            if entry.input == "goto-line" {
+                self.prompt_goto_line(cx);
+                return;
+            }
+            let line = match catalog::line_number(&entry.input) {
+                Ok(line) => line,
+                Err(usage) => {
+                    self.command_failure(usage, cx);
+                    return;
+                }
+            };
+            let Some(doc) = self.document_session() else {
+                return;
+            };
+            let snapshot = doc.read(cx).snapshot();
+            let Ok(range) = snapshot.line_content_range(LineIndex(line - 1)) else {
+                let message = if self.language == crate::i18n::Language::Chinese {
+                    format!("行号超出范围：1–{}", snapshot.len_lines())
+                } else {
+                    format!("Line number out of range: 1–{}", snapshot.len_lines())
+                };
+                self.command_failure(&message, cx);
+                return;
+            };
+            // Wait for the current preview before mapping a source offset to a rendered row.
+            if self.document_workspace.active_surface() == PaneSurface::Reading
+                && !self.latest_preview_is_current(cx)
+            {
+                self.command_line.session.as_mut().unwrap().execute_pending = true;
+                return;
+            }
+            Some(range.start)
+        } else {
+            None
+        };
         self.command_line
             .history
             .retain(|value| value != &entry.input);
         self.command_line.history.insert(0, entry.input);
         self.command_line.history.truncate(30);
-        if let (CommandImplementation::Builtin(BuiltinCommand::AlignTables), Some(scope)) =
+        if let Some(target) = target {
+            let pane = self.document_workspace.active_pane;
+            *self.pending_surface_anchors.get_mut(pane) = None;
+            match self.document_workspace.active_surface() {
+                PaneSurface::Editor => {
+                    if let Some(editor) = self.editor(pane) {
+                        editor.update(cx, |editor, cx| editor.jump_to_source_offset(target, cx));
+                    }
+                }
+                PaneSurface::Reading => {
+                    if let Some(panel) = self.reading_panel_for(pane) {
+                        panel.update(cx, |panel, cx| {
+                            panel.reveal_source_offset(target);
+                            cx.notify();
+                        });
+                    }
+                }
+            }
+            self.close_command_line(cx);
+        } else if let (CommandImplementation::Builtin(BuiltinCommand::AlignTables), Some(scope)) =
             (implementation, entry.scope)
         {
             self.start_table_alignment(scope, cx);

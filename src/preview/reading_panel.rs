@@ -1311,14 +1311,25 @@ impl ReadingPreviewPanel {
             .search_origin
             .get_or_insert_with(|| (self.visible_rows.clone(), self.fold_markers.clone()))
             .clone();
-        let mut rows = origin.0.as_ref().clone();
-        self.fold_markers = origin.1.clone();
-        if let Some(visual) = current.and_then(|r| {
-            self.document
-                .projection
-                .visual_row_for_source_offset(r.start)
-        }) && let Err(index) = rows.binary_search(&visual)
-        {
+        self.fold_markers = origin.1;
+        self.apply_visible_rows(origin.0);
+        self.search_current = current;
+        if let Some(range) = current {
+            self.reveal_source_offset(range.start);
+        }
+    }
+
+    pub(crate) fn reveal_source_offset(&mut self, source: crate::document::ByteOffset) {
+        let Some(visual) = self
+            .document
+            .projection
+            .visual_row_for_source_offset(source)
+        else {
+            return;
+        };
+        self.discard_fold_animation();
+        if let Err(index) = self.visible_rows.binary_search(&visual) {
+            let mut rows = self.visible_rows.as_ref().clone();
             let headings = match self.document.format {
                 DocumentFormat::Org => super::folding::org_heading_rows(
                     &self.document.projection.rows,
@@ -1342,7 +1353,7 @@ impl ReadingPreviewPanel {
                 }
                 path.push(heading);
             }
-            let mut markers = origin.1.as_ref().clone();
+            let mut markers = self.fold_markers.as_ref().clone();
             for heading in &path {
                 markers.remove(&heading.id);
             }
@@ -1372,12 +1383,9 @@ impl ReadingPreviewPanel {
             rows.sort_unstable();
             rows.dedup();
             self.fold_markers = Arc::new(markers);
+            self.apply_visible_rows(Arc::new(rows));
         }
-        self.apply_visible_rows(Arc::new(rows));
-        self.search_current = current;
-        if let Some(r) = current {
-            self.scroll_to_source_offset(r.start);
-        }
+        self.scroll_to_source_offset(source);
     }
     pub(crate) fn search_finish(&mut self, cancel: bool) {
         self.search_ranges = Arc::from([]);

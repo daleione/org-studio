@@ -73,6 +73,13 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             BuiltinCommand::AlignTables,
             UndoPolicy::Transaction,
         ),
+        (
+            "org-studio.document.goto-line",
+            &["goto-line"][..],
+            "Go to source line",
+            BuiltinCommand::GotoLine,
+            UndoPolicy::None,
+        ),
     ] {
         builder
             .register_builtin(BuiltinCommandSpec {

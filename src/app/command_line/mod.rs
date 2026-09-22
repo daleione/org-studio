@@ -72,11 +72,16 @@ impl Session {
         self.selected = 0;
         self.scroll_remainder = 0.;
         self.error = None;
+        self.execute_pending = false;
     }
 
     fn complete(&mut self, index: usize, history: &[String], cx: &mut gpui::App) {
         if let Some(entry) = self.candidates.get(index) {
-            let value = entry.input.clone();
+            let value = if entry.input == "goto-line" {
+                "goto-line ".to_owned()
+            } else {
+                entry.input.clone()
+            };
             self.input.update(cx, |input, cx| input.sync(&value, cx));
             self.set_query(value, history);
         }
@@ -104,6 +109,19 @@ impl Session {
 }
 
 impl WorkspaceWindow {
+    pub(crate) fn prompt_goto_line(&mut self, cx: &mut Context<Self>) {
+        if !self.command_line_is_open() {
+            self.open_command_line(cx);
+        }
+        if let Some(s) = self.command_line.session.as_mut() {
+            let query = "goto-line ";
+            s.input.update(cx, |input, cx| input.sync(query, cx));
+            s.set_query(query.into(), &self.command_line.history);
+            s.focus_pending = true;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn command_line_is_open(&self) -> bool {
         self.command_line
             .session

@@ -1733,6 +1733,22 @@ impl SemanticEditor {
         (source, fraction)
     }
 
+    pub(crate) fn jump_to_source_offset(&mut self, source: ByteOffset, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot(cx);
+        let line = snapshot.line_of_byte(source);
+        let path = self.session.read(cx).syntax_path();
+        let projection = self
+            .folds
+            .projection_revealing(path, &snapshot, Some(line..line + 1));
+        self.finish_fold_animation();
+        self.display_map.set_hidden_ranges(projection.hidden_ranges);
+        self.fold_markers = std::sync::Arc::new(projection.marker_lines);
+        self.scroll_x = 0.;
+        self.set_selection(Selection::caret(source), cx);
+        self.scroll_to_source_offset(source, cx);
+        self.pending_reveal_caret = true;
+    }
+
     pub(crate) fn scroll_to_source_offset(
         &mut self,
         source: ByteOffset,

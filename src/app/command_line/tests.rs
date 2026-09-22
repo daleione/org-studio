@@ -43,6 +43,231 @@ fn source(doc: &DocumentSession) -> String {
     snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
 }
 
+#[test]
+fn command_line_goto_line_arguments_and_read_only_availability() {
+    let (commands, _, _) = crate::preview::document_input();
+    let entries = catalog::entries(
+        &commands,
+        crate::i18n::Language::Chinese,
+        true,
+        false,
+        false,
+    );
+    for query in [":goto-line 123", "org-studio.document.goto-line 123"] {
+        let candidates = catalog::candidates(&entries, query, &[]);
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].input, "goto-line 123");
+        assert_eq!(catalog::line_number(&candidates[0].input), Ok(123));
+    }
+    for query in [
+        "goto-line",
+        "goto-line 0",
+        "goto-line -2",
+        "goto-line +2",
+        "goto-line 1.5",
+        "goto-line abc",
+        "goto-line 2 3",
+        "goto-line 18446744073709551616",
+    ] {
+        assert!(catalog::line_number(query).is_err(), "{query}");
+    }
+    assert_eq!(
+        catalog::candidates(&entries, "行号", &[])[0].input,
+        "goto-line"
+    );
+    assert_eq!(
+        catalog::candidates(&entries, "", &["goto-line 123".into()])[0].input,
+        "goto-line"
+    );
+}
+
+#[gpui::test]
+fn command_line_goto_completion_waits_for_required_argument(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let doc = w.update(cx, |w, cx| install(w, "first\nsecond\nthird\n", cx));
+    cx.run_until_parked();
+    for (query, key) in [
+        ("goto", "enter"),
+        ("goto-line", "enter"),
+        ("行号", "enter"),
+        ("goto", "tab"),
+        ("goto", "ctrl-1"),
+        ("goto", "click"),
+    ] {
+        cx.simulate_keystrokes("alt-x");
+        cx.simulate_input(query);
+        if key == "click" {
+            cx.run_until_parked();
+            let candidate = cx.debug_bounds("command-candidate-0").unwrap();
+            cx.simulate_click(candidate.center(), Modifiers::default());
+        } else {
+            cx.simulate_keystrokes(key);
+        }
+        cx.run_until_parked();
+        w.update(cx, |w, cx| {
+            let s = w.command_line.session.as_ref().unwrap();
+            assert!(w.command_line_is_open());
+            assert_eq!(s.query, "goto-line ");
+            assert_eq!(s.input.read(cx).text, "goto-line ");
+            assert!(s.error.is_none());
+            assert!(!s.execute_pending);
+            assert!(!doc.read(cx).is_dirty());
+        });
+        cx.simulate_input("3");
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        w.update(cx, |w, cx| {
+            assert!(!w.command_line_is_open());
+            assert_eq!(
+                w.editor(PaneSide::Left).unwrap().read(cx).selection(),
+                Selection::caret(ByteOffset(13))
+            );
+            assert_eq!(source(doc.read(cx)), "first\nsecond\nthird\n");
+        });
+    }
+    cx.simulate_keystrokes("alt-x");
+    cx.simulate_input("nonexistent-command");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    w.update(cx, |w, _| {
+        let s = w.command_line.session.as_ref().unwrap();
+        assert!(s.candidates.is_empty());
+        assert!(s.error.is_some());
+        assert!(w.command_line_is_open());
+    });
+}
+
+#[gpui::test]
+fn command_line_goto_line_moves_caret_and_rejects_invalid_input(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let original = format!("* 中文标题\r\n{}", "内容🙂\r\n".repeat(150));
+    let doc = w.update(cx, |w, cx| install(w, &original, cx));
+    cx.run_until_parked();
+    // Fold the heading first: jumping must reveal its body.
+    cx.simulate_keystrokes("tab alt-x");
+    cx.simulate_input("goto-line 100");
+    cx.simulate_keystrokes("tab");
+    w.update(cx, |w, _| {
+        assert_eq!(
+            w.command_line.session.as_ref().unwrap().query,
+            "goto-line 100"
+        )
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    let editor = w.update(cx, |w, cx| {
+        assert!(!w.command_line_is_open());
+        assert!(!doc.read(cx).is_dirty());
+        let editor = w.editor(PaneSide::Left).unwrap();
+        let snapshot = doc.read(cx).snapshot();
+        let target = snapshot
+            .line_content_range(crate::document::LineIndex(99))
+            .unwrap()
+            .start;
+        assert_eq!(editor.read(cx).selection(), Selection::caret(target));
+        assert_eq!(editor.read(cx).top_source_anchor(&snapshot).0, target);
+        editor
+    });
+    cx.simulate_keystrokes("alt-x");
+    for input in ["goto-line 0", "goto-line 153", "goto-line 2 3"] {
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input(input);
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        w.update(cx, |w, cx| {
+            assert!(w.command_line_is_open());
+            assert!(w.command_line.session.as_ref().unwrap().error.is_some());
+            assert_eq!(
+                doc.read(cx)
+                    .snapshot()
+                    .line_of_byte(editor.read(cx).selection().head()),
+                99
+            );
+        });
+    }
+    // The final empty line and first line are valid; numbered execution keeps arguments.
+    for (input, expected_line) in [("goto-line 152", 151), ("goto-line 1", 0)] {
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input(input);
+        cx.simulate_keystrokes("ctrl-1");
+        cx.run_until_parked();
+        w.update(cx, |w, cx| {
+            assert!(!w.command_line_is_open());
+            assert_eq!(
+                doc.read(cx)
+                    .snapshot()
+                    .line_of_byte(editor.read(cx).selection().head()),
+                expected_line
+            );
+            assert_eq!(source(doc.read(cx)), original);
+        });
+        cx.simulate_keystrokes("alt-x");
+    }
+}
+
+#[gpui::test]
+fn command_line_goto_line_reveals_preview_in_active_pane(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(true));
+    let original = (0..160)
+        .map(|i| format!("* Section {i}\nBody {i}\n"))
+        .collect::<String>();
+    let doc = w.update(cx, |w, cx| {
+        let doc = install(w, &original, cx);
+        w.document_workspace
+            .set_surface(PaneSide::Right, PaneSurface::Reading);
+        w.schedule_derived_update(cx);
+        doc
+    });
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(25));
+    cx.run_until_parked();
+    let (editor, reader) = w.update(cx, |w, cx| {
+        w.activate_pane(PaneSide::Right, cx);
+        (
+            w.editor(PaneSide::Left).unwrap(),
+            w.reading_panel_for(PaneSide::Right).unwrap(),
+        )
+    });
+    let before = editor.update(cx, |e, cx| {
+        (e.selection(), e.top_source_anchor(&e.snapshot(cx)))
+    });
+    reader.update(cx, |r, cx| {
+        r.cycle_global_visibility();
+        assert!(!r.visible_rows().contains(&199));
+        cx.notify();
+    });
+    cx.simulate_keystrokes("alt-x");
+    cx.simulate_input("goto-line 200");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert!(!w.command_line_is_open());
+        assert_eq!(w.document_workspace.active_surface(), PaneSurface::Reading);
+        let target = doc
+            .read(cx)
+            .snapshot()
+            .line_content_range(crate::document::LineIndex(199))
+            .unwrap()
+            .start;
+        assert!(reader.read(cx).visible_rows().contains(&199));
+        assert_eq!(reader.read(cx).top_source_offset(), Some(target));
+        assert_eq!(
+            (
+                editor.read(cx).selection(),
+                editor.read(cx).top_source_anchor(&doc.read(cx).snapshot())
+            ),
+            before
+        );
+        assert!(!doc.read(cx).is_dirty());
+    });
+}
+
 #[gpui::test]
 fn command_line_number_shortcuts_follow_visible_rows_and_preserve_digit_input(
     cx: &mut gpui::TestAppContext,

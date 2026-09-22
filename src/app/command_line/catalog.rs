@@ -81,6 +81,13 @@ pub(super) fn entries(
         ),
         (UNDO_DOCUMENT_COMMAND, "undo", "撤销", "Undo", None),
         (REDO_DOCUMENT_COMMAND, "redo", "重做", "Redo", None),
+        (
+            "org-studio.document.goto-line",
+            "goto-line",
+            "跳到指定行号",
+            "Go to source line",
+            None,
+        ),
     ];
     specs
         .into_iter()
@@ -115,6 +122,13 @@ pub(super) fn entries(
                         "Align the table at the caret"
                     }
                 }
+                None if input == "goto-line" => {
+                    if chinese {
+                        "goto-line <行号> · 源文件行号从 1 开始"
+                    } else {
+                        "goto-line <line> · source line numbers start at 1"
+                    }
+                }
                 None => descriptor.description.as_ref(),
             }
             .to_owned();
@@ -143,11 +157,25 @@ pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<
     let query = normalize(query).to_lowercase();
     let query = if let Some(arguments) = query.strip_prefix("org-studio.table.align") {
         format!("table-align{arguments}")
+    } else if let Some(arguments) = query.strip_prefix("org-studio.document.goto-line") {
+        format!("goto-line{arguments}")
     } else if query == "w" {
         "save".to_owned()
     } else {
         query
     };
+    // Preserve arguments when completing or selecting a parameterized command.
+    if query.split_whitespace().next() == Some("goto-line") {
+        return all
+            .iter()
+            .filter(|entry| entry.input == "goto-line")
+            .cloned()
+            .map(|mut entry| {
+                entry.input = query.clone();
+                entry
+            })
+            .collect();
+    }
     // An unavailable current-table command must not fall back to formatting the whole document.
     if query == "table-align" && !all.iter().any(|entry| entry.input == query) {
         return Vec::new();
@@ -167,7 +195,10 @@ pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<
             if query.is_empty() {
                 history
                     .iter()
-                    .position(|h| h == &entry.input)
+                    .position(|h| {
+                        h == &entry.input
+                            || (entry.input == "goto-line" && h.starts_with("goto-line "))
+                    })
                     .unwrap_or(usize::MAX)
             } else {
                 0
@@ -196,4 +227,15 @@ pub(super) fn validate(query: &str) -> Result<(), &'static str> {
         return Err("此命令不接受参数 / This command takes no arguments");
     }
     Ok(())
+}
+
+pub(super) fn line_number(input: &str) -> Result<u64, &'static str> {
+    let mut words = normalize(input).split_whitespace().skip(1);
+    let line = words
+        .next()
+        .filter(|value| value.bytes().all(|b| b.is_ascii_digit()));
+    match line.and_then(|value| value.parse::<u64>().ok()) {
+        Some(line) if line > 0 && words.next().is_none() => Ok(line),
+        _ => Err("goto-line <行号 / line> · 请输入正整数 / Enter a positive integer"),
+    }
 }
