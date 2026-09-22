@@ -11,6 +11,7 @@ pub(crate) const SHELL_MOTION: MotionSpec =
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ShellKind {
+    Command,
     Prefix,
     Buffers,
     Search,
@@ -67,6 +68,7 @@ impl ShellHost {
 impl WorkspaceWindow {
     pub(crate) fn status_shell_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let requests = [
+            self.command_shell_request(window),
             self.prefix_shell_request(window, cx),
             self.buffer_shell_request(window),
             self.search_shell_request(window, cx),
@@ -83,6 +85,7 @@ impl WorkspaceWindow {
         }
         self.finish_prefix_return(self.status.shell.owner == Some(ShellKind::Prefix));
         self.finish_search_return(self.status.shell.owner == Some(ShellKind::Search));
+        self.finish_command_return(self.status.shell.owner == Some(ShellKind::Command));
         if self.status.shell.owner != Some(ShellKind::Buffers) {
             self.buffers.returning = false;
         }

@@ -291,6 +291,7 @@ impl Render for WorkspaceWindow {
             }));
         }
         self.buffer_tick(window, cx);
+        self.command_line_tick(window, cx);
         self.status_shell_tick(window, cx);
         self.search_render_tick(window, cx);
         window.set_window_title(&self.window_title(cx));
@@ -421,6 +422,9 @@ impl Render for WorkspaceWindow {
                 this.open_search(false, false, false, cx)
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.command_line_capture(event, cx) {
+                    return;
+                }
                 let m = event.keystroke.modifiers;
                 if this.keyboard.pending_keys().is_some()
                     && ((event.keystroke.key == "escape" && m == gpui::Modifiers::default())
@@ -459,7 +463,10 @@ impl Render for WorkspaceWindow {
                 }
             }))
             .on_key_down(cx.listener(|this, event, window, cx| {
-                if !this.search_is_open() && this.buffers.panel.is_none() {
+                if !this.search_is_open()
+                    && !this.command_line_is_open()
+                    && this.buffers.panel.is_none()
+                {
                     this.key_down(event, window, cx);
                 }
             }))

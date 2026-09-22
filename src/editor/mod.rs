@@ -11,6 +11,7 @@ mod links;
 mod minimap;
 mod minimap_media;
 mod org_commands;
+pub(crate) use org_commands::{TableAlignmentPlan, plan_table_alignment};
 mod read_only;
 mod search;
 mod source_copy;
@@ -708,6 +709,19 @@ struct ImageResizeSession {
 }
 
 impl SemanticEditor {
+    pub(crate) fn restore_command_selection(
+        &mut self,
+        selection: Selection,
+        revision: crate::document::Revision,
+        cx: &mut Context<Self>,
+    ) {
+        let snapshot = self.snapshot(cx);
+        self.selection = selection.clamp(&snapshot);
+        self.selection_revision = revision;
+        self.sync_selection_utf16(&snapshot);
+        self.pending_reveal_caret = false;
+        cx.notify();
+    }
     pub(crate) fn set_ui_language(
         &mut self,
         language: crate::i18n::Language,
@@ -1179,6 +1193,10 @@ impl SemanticEditor {
     pub(crate) fn request_focus(&mut self, cx: &mut Context<Self>) {
         self.autofocus = true;
         cx.notify();
+    }
+
+    pub(crate) fn cancel_pending_focus(&mut self) {
+        self.autofocus = false;
     }
 
     pub(crate) fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {

@@ -26,6 +26,7 @@ pub(crate) struct ReadingPreviewPanel {
     search_current: Option<crate::document::ByteRange>,
     search_origin: Option<SearchFoldOrigin>,
     document: Arc<PreviewSnapshot>,
+    pending_viewport_deltas: Vec<crate::document::RevisionDelta>,
     list_state: ListState,
     fold_markers: Arc<HashSet<BlockId>>,
     visible_rows: Arc<Vec<usize>>,
@@ -134,6 +135,7 @@ impl ReadingPreviewPanel {
         let table_scroll_handles = table_scroll_handles(&document, None);
         Self {
             document,
+            pending_viewport_deltas: Vec::new(),
             list_state,
             fold_markers: Arc::new(HashSet::new()),
             visible_rows,
@@ -428,7 +430,20 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        // Sample at publication time so scrolling during the background parse is respected.
         let source_anchor = self.top_source_anchor();
+        let mapped = source_anchor.and_then(|(source, offset)| {
+            let mut range = crate::document::RevisionRange::new(
+                self.document.revision,
+                crate::document::ByteRange::new(source.0, source.0),
+            );
+            for delta in &self.pending_viewport_deltas {
+                range = delta.map_range(range).ok()?;
+            }
+            (range.revision == document.revision).then_some((range.range.start, offset))
+        });
+        self.pending_viewport_deltas.clear();
+        let source_anchor = mapped.or(source_anchor);
         let scroll_top = self.list_state.logical_scroll_top();
         self.search_finish(true);
         self.text_selection = ReadingTextSelection::default();
@@ -627,6 +642,9 @@ impl ReadingPreviewPanel {
                 );
             }
         }
+        if let Some((source, offset)) = mapped {
+            self.scroll_to_source_offset_with_offset(source, offset);
+        }
         cx.emit(event);
         cx.notify();
     }
@@ -697,6 +715,21 @@ impl ReadingPreviewPanel {
             .projection
             .source_row(visual)
             .map(|row| (row.content.range.start, scroll_top.offset_in_item))
+    }
+
+    pub(crate) fn map_viewport_through_delta(&mut self, delta: &crate::document::RevisionDelta) {
+        let revision = self
+            .pending_viewport_deltas
+            .last()
+            .map_or(self.document.revision, |delta| delta.after);
+        if delta.before == revision {
+            // Hidden readers can remain stale for a long time; bound retained edit summaries.
+            if self.pending_viewport_deltas.len() >= 256 {
+                self.pending_viewport_deltas.clear();
+            } else {
+                self.pending_viewport_deltas.push(delta.clone());
+            }
+        }
     }
 
     #[cfg(test)]

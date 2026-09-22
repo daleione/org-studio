@@ -52,6 +52,8 @@ impl CommandKey {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinCommand {
+    ExecuteCommand,
+    AlignTables,
     FindDocument,
     IsearchForward,
     IsearchBackward,
@@ -243,6 +245,13 @@ pub enum CommandArguments {
     Dired(Arc<[Arc<str>]>),
     Edit(Arc<[u8]>),
     Extension(Arc<[u8]>),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TableScope {
+    Current,
+    Selection,
+    Document,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

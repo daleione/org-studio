@@ -23,6 +23,7 @@ impl WorkspaceWindow {
             return;
         }
         self.background_pending_open(cx);
+        self.close_command_line(cx);
         self.close_search(false, cx);
         self.search.presentation = None;
         self.dismiss_buffer_panel(cx);
@@ -84,6 +85,7 @@ impl WorkspaceWindow {
         } else {
             DocumentSession::draft(name)
         };
+        self.close_command_line(cx);
         self.close_search(false, cx);
         self.dismiss_buffer_panel(cx);
         self.suspend_derived_preview();
@@ -109,6 +111,7 @@ impl WorkspaceWindow {
             .document_session()
             .is_some_and(|s| s.read(cx).id() == id)
         {
+            self.close_command_line(cx);
             self.close_search(false, cx);
             self.state = WorkspaceLoadState::Empty;
             self.derived.latest = None;

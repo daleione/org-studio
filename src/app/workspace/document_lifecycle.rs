@@ -28,6 +28,7 @@ impl WorkspaceWindow {
 
     pub(crate) fn show_home_now(&mut self, cx: &mut Context<Self>) {
         self.end_prefix(cx);
+        self.close_command_line(cx);
         self.close_search(false, cx);
         if let Some(document) = self.state.take_ready() {
             self.park_document(document);
@@ -144,6 +145,7 @@ impl WorkspaceWindow {
         // Promoting an in-flight background load replaces its callback; only the
         // foreground completion may install the new active document.
         self.buffers.loads.remove(&pending_key);
+        self.close_command_line(cx);
         self.close_search(false, cx);
         self.dismiss_buffer_panel(cx);
         self.content_route = ContentRoute::Document;

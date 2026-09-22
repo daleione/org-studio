@@ -197,6 +197,7 @@ impl WorkspaceWindow {
             key_feedback_request: 0,
             echo: crate::app::echo_area::EchoAreaHost::default(),
             search: crate::app::search::SearchHost::default(),
+            command_line: crate::app::command_line::CommandLineHost::default(),
             buffers: crate::app::buffers::BufferHost::default(),
             content_route: if std::env::var_os("ORG_STUDIO_AGENDA_TEXT").is_some() {
                 ContentRoute::AgendaText
@@ -788,18 +789,23 @@ impl WorkspaceWindow {
             .status
             .shell_owns(crate::app::status_line::shell::ShellKind::Buffers, pane);
         let prefix_panel = self.prefix_hint_on(pane);
+        let command_panel = self
+            .status
+            .shell_owns(crate::app::status_line::shell::ShellKind::Command, pane);
         let returning_status =
-            (self.search_is_closing(pane) || buffer_panel || prefix_panel).then(|| {
-                crate::app::status_line::render_status_line_content(
-                    &snapshot,
-                    layout.clone(),
-                    entity.clone(),
-                    render.window,
-                    echo.take(),
-                    true,
-                    Some(buffer_count),
-                )
-            });
+            (self.search_is_closing(pane) || buffer_panel || prefix_panel || command_panel).then(
+                || {
+                    crate::app::status_line::render_status_line_content(
+                        &snapshot,
+                        layout.clone(),
+                        entity.clone(),
+                        render.window,
+                        echo.take(),
+                        true,
+                        Some(buffer_count),
+                    )
+                },
+            );
         div()
             .w(px(render.width))
             .h_full()
@@ -816,6 +822,7 @@ impl WorkspaceWindow {
                     .min_h_0()
                     .capture_any_mouse_down(move |_, window, cx| {
                         search_entity.update(cx, |w, cx| {
+                            w.close_command_line(cx);
                             if w.keyboard.pending_keys().is_some() {
                                 w.cancel_prefix_input(window, cx);
                             }
@@ -836,7 +843,16 @@ impl WorkspaceWindow {
                     })
                     .child(content),
             )
-            .child(if prefix_panel {
+            .child(if command_panel {
+                self.command_bar(
+                    pane,
+                    render.width,
+                    returning_status,
+                    render.cx,
+                    entity.clone(),
+                )
+                .unwrap()
+            } else if prefix_panel {
                 self.prefix_hint_panel(pane, render.width, returning_status, entity.clone())
                     .unwrap()
             } else if buffer_panel {

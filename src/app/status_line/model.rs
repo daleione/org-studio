@@ -98,6 +98,7 @@ pub(crate) enum Variant {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct StatusLineLayout {
+    pub(crate) command: bool,
     pub(crate) mode: Variant,
     pub(crate) reading_style: Variant,
     pub(crate) outline: Variant,

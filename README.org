@@ -37,6 +37,27 @@ for your tasks*. Native, GPU-rendered, written in Rust.
   macOS shortcuts (=⌘1= / =⌘2= / =⌘3=, =⌘B=, =⌥⌘M=), and several documents in one
   window with save review and external-change handling.
 
+** Command mode
+
+Press =M-x= (Option-x) or =⌘⇧P=, or click =:= in the status line. In the
+reading view, =:= also opens commands; in the editor it remains ordinary text.
+Search by English command or Chinese name, choose with arrow keys, complete
+with =Tab=, and execute with =Enter=. =Esc= or =C-g= returns to the document.
+Visible candidates are numbered from 1; =Ctrl+number= executes that row.
+Plain digits remain available for command arguments.
+Only commands available in the current context are shown.
+
+Use =table-align --all= to align every table in the current Org or Markdown
+document, =table-align= for the table at the caret, or
+=table-align --selection= for tables touched by the source selection. The
+operation keeps the caret and reading position, can be undone in one step,
+and leaves saving to you. Code blocks are excluded; nested Markdown tables
+that cannot be preserved are skipped with a result message.
+
+Other commands include =save= (=w=), =reload=, =preview=, =edit=, =split=,
+=export=, =undo= and =redo=. Recently used commands appear first when the
+input is empty.
+
 ** Install
 
 #+begin_src sh

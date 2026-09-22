@@ -187,20 +187,20 @@ impl NativeInput {
             return;
         }
         let modifiers = event.keystroke.modifiers;
+        if (self.config.command)(key, modifiers, self.append_only) {
+            cx.emit(InputEvent::Command {
+                key: key.to_owned(),
+                modifiers,
+            });
+            cx.stop_propagation();
+            return;
+        }
         if key == "tab" {
             if modifiers.shift {
                 window.focus_prev(cx)
             } else {
                 window.focus_next(cx)
             };
-            cx.stop_propagation();
-            return;
-        }
-        if (self.config.command)(key, modifiers, self.append_only) {
-            cx.emit(InputEvent::Command {
-                key: key.to_owned(),
-                modifiers,
-            });
             cx.stop_propagation();
             return;
         }

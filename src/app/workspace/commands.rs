@@ -4,7 +4,7 @@ use gpui::{ClipboardItem, Context, KeyDownEvent, Window};
 
 use crate::document::TextSnapshot;
 use crate::{
-    app::{ContentRoute, KeyFocusRestore, SurfaceAnchor, WorkspaceWindow},
+    app::{ContentRoute, KeyFocusRestore, PaneSide, SurfaceAnchor, WorkspaceWindow},
     command::{
         BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
         InvocationOrigin, PrefixArgument,
@@ -38,6 +38,7 @@ impl WorkspaceWindow {
         if window.root::<Self>().flatten().is_some_and(|workspace| {
             let workspace = workspace.read(cx);
             workspace.search_is_open()
+                || workspace.command_line_is_open()
                 || workspace.buffers.panel.is_some()
                 || workspace.keyboard.pending_keys().is_some()
         }) {
@@ -126,6 +127,12 @@ impl WorkspaceWindow {
             panel.update(cx, |panel, _| panel.reset_cycle_continuation());
         }
         match implementation {
+            CommandImplementation::Builtin(BuiltinCommand::ExecuteCommand) => {
+                self.open_command_line(cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::AlignTables) => {
+                self.start_table_alignment(crate::command::TableScope::Current, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::FindDocument) => {
                 self.open_search(false, false, false, cx)
             }
@@ -482,6 +489,7 @@ impl WorkspaceWindow {
             }
             return;
         }
+        self.close_command_line(cx);
         self.close_search(false, cx);
         let previous = self.document_workspace.active_pane;
         if matches!(
@@ -509,6 +517,7 @@ impl WorkspaceWindow {
         cx: &mut Context<Self>,
     ) {
         self.end_prefix(cx);
+        self.close_command_line(cx);
         self.close_search(false, cx);
         let pane = self.document_workspace.active_pane;
         let previous_surface = self.document_workspace.surface(pane);
@@ -621,6 +630,17 @@ impl WorkspaceWindow {
             }
             crate::app::PaneSurface::Reading => {
                 self.focus_workspace_on_render = true;
+            }
+        }
+    }
+
+    /// A transient input owns focus even when the previous overlay requested editor focus.
+    pub(crate) fn cancel_pending_document_focus(&mut self, cx: &mut Context<Self>) {
+        self.focus_workspace_on_render = false;
+        self.key_focus_restore = None;
+        for pane in [PaneSide::Left, PaneSide::Right] {
+            if let Some(editor) = self.editor(pane) {
+                editor.update(cx, |editor, _| editor.cancel_pending_focus());
             }
         }
     }

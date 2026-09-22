@@ -28,6 +28,7 @@ impl WorkspaceWindow {
         replace: bool,
         cx: &mut Context<Self>,
     ) {
+        self.close_command_line(cx);
         if self.buffers.panel.is_some() {
             self.cancel_buffer_panel(cx);
         }
@@ -215,7 +216,7 @@ impl WorkspaceWindow {
             },
             std::time::Instant::now(),
         );
-        self.key_focus_restore = None;
+        self.cancel_pending_document_focus(cx);
         self.status.dismiss_popover();
         self.start_search(cx);
     }

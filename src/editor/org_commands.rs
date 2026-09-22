@@ -2,6 +2,9 @@ use std::{ops::Range, path::Path};
 
 use unicode_width::UnicodeWidthStr;
 
+mod batch;
+pub(crate) use batch::{TableAlignmentPlan, plan_table_alignment};
+
 use crate::{
     document::{
         ByteOffset, ByteRange, DocumentFormat, DocumentSnapshot, HeadingIndex, LineIndex,
@@ -364,12 +367,23 @@ fn aligned_row(
 }
 
 fn parse_row(text: &str, format: DocumentFormat) -> ParsedRow {
+    let mut row = parse_source_row(text, format);
+    // Interactive table editing historically expands tabs; batch formatting preserves cell text.
+    for cell in &mut row.cells {
+        if cell.contains('\t') {
+            *cell = cell.replace('\t', "    ");
+        }
+    }
+    row
+}
+
+fn parse_source_row(text: &str, format: DocumentFormat) -> ParsedRow {
     let indent = text[..text.len() - text.trim_start().len()].to_owned();
     let parsed = source_table::parse_line(text, format);
     let cells = parsed
         .cells
         .iter()
-        .map(|cell| text[cell.text_range.clone()].replace('\t', "    "))
+        .map(|cell| text[cell.text_range.clone()].to_owned())
         .collect();
     let separator_alignments = parsed
         .cells

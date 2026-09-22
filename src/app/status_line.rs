@@ -110,6 +110,7 @@ const STATISTICS_FULL_WIDTH: f32 = 308.0;
 const STATISTICS_COMPACT_WIDTH: f32 = 90.0;
 const FORMAT_WIDTH: f32 = 64.0;
 const MORE_WIDTH: f32 = 36.0;
+const COMMAND_WIDTH: f32 = 32.0;
 
 // Status colors deliberately stay independent from document syntax colors. A status should
 // communicate state consistently even when the active theme uses red for its first heading.
@@ -267,6 +268,7 @@ impl StatusLineSnapshot {
         measure: &impl Fn(&str) -> f32,
     ) -> StatusLineLayout {
         let mut layout = StatusLineLayout {
+            command: matches!(self.host, StatusHost::Editor | StatusHost::Reading),
             mode: Variant::Full,
             reading_style: if self.reading_style.is_some() {
                 Variant::Full
@@ -317,6 +319,7 @@ impl StatusLineSnapshot {
                 Degrade::HideOutline,
                 Degrade::HideProgress,
                 Degrade::HideStatistics,
+                Degrade::HideCommand,
                 Degrade::HidePosition,
             ] {
                 layout.apply(step);
@@ -365,11 +368,13 @@ enum Degrade {
     HideProgress,
     HideOutline,
     HidePosition,
+    HideCommand,
 }
 
 impl StatusLineLayout {
     fn apply(&mut self, step: Degrade) {
         match step {
+            Degrade::HideCommand => self.command = false,
             Degrade::CompactStatistics if self.statistics == Variant::Full => {
                 self.statistics = Variant::Compact
             }
@@ -439,6 +444,7 @@ impl StatusLineLayout {
             + statistics
             + format
             + MORE_WIDTH
+            + if self.command { COMMAND_WIDTH } else { 0. }
             + 16.0
     }
 
@@ -1056,6 +1062,38 @@ pub(crate) fn render_status_line_content(
         ));
     }
     let overflow = layout.overflow.clone();
+    if layout.command {
+        let command_entity = entity.clone();
+        right = right.child(
+            div()
+                .id(("status-command", pane_id))
+                .debug_selector(|| "status-command".into())
+                .w(px(COMMAND_WIDTH))
+                .h(px(28.))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(5.))
+                .font_family("Menlo")
+                .text_size(px(17.))
+                .text_color(rgb(status_colors().foreground))
+                .cursor_pointer()
+                .hover(|style| style.bg(rgb(status_colors().hover_background)))
+                .child(":")
+                .tooltip(move |_, cx| {
+                    cx.new(|_| popover::OutlineTooltip(Arc::from("M-x / ⌘⇧P")))
+                        .into()
+                })
+                .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                    cx.stop_propagation();
+                    command_entity.update(cx, |workspace, cx| {
+                        workspace.activate_pane(pane_side_for_status(PaneId(pane_id)), cx);
+                        workspace.open_command_line(cx);
+                    });
+                }),
+        );
+    }
     let more_entity = entity.clone();
     right = right.child(
         status_button(entity.clone(), pane_id, StatusSegment::More)

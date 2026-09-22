@@ -84,6 +84,10 @@ pub(crate) enum Panel {
 }
 
 impl BufferHost {
+    pub(crate) fn input_composing(&self, cx: &App) -> bool {
+        matches!(&self.panel, Some(Panel::Picker(picker)) if picker.input.read(cx).is_composing())
+    }
+
     pub(crate) fn review(&self) -> Option<&SaveReview> {
         match &self.panel {
             Some(Panel::Review(review)) => Some(review),

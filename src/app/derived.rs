@@ -50,6 +50,13 @@ impl WorkspaceWindow {
         delta: Option<crate::document::RevisionDelta>,
         cx: &mut Context<Self>,
     ) {
+        if let Some(delta) = &delta {
+            for pane in [super::PaneSide::Left, super::PaneSide::Right] {
+                if let Some(panel) = self.reading_panel_for(pane) {
+                    panel.update(cx, |panel, _| panel.map_viewport_through_delta(delta));
+                }
+            }
+        }
         self.schedule_derived_update_inner(delta, false, cx);
     }
 

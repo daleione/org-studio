@@ -27,6 +27,7 @@ use workspace::ScrollBenchmark;
 mod agenda;
 pub(crate) mod buffers;
 pub use buffers::{CloseBuffer, NewDocument, SaveBuffers, SwitchBuffer};
+mod command_line;
 mod command_window;
 mod component;
 mod derived;
@@ -279,6 +280,7 @@ impl WorkspaceLoadState {
 pub struct WorkspaceWindow {
     pub(crate) buffers: buffers::BufferHost,
     pub(crate) search: search::SearchHost,
+    pub(crate) command_line: command_line::CommandLineHost,
     pub(crate) language: crate::i18n::Language,
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) focus_workspace_on_render: bool,

@@ -58,6 +58,40 @@ pub(crate) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
 
 pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
+    for (name, aliases, title, command, undo) in [
+        (
+            "org-studio.workspace.execute-command",
+            &["execute-extended-command"][..],
+            "Execute Command",
+            BuiltinCommand::ExecuteCommand,
+            UndoPolicy::None,
+        ),
+        (
+            "org-studio.table.align",
+            &["table-align"][..],
+            "Align Tables",
+            BuiltinCommand::AlignTables,
+            UndoPolicy::Transaction,
+        ),
+    ] {
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: name.into(),
+                aliases,
+                title,
+                description: title,
+                command,
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                undo,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::RedactArguments,
+            })
+            .expect("command input registration");
+    }
     for (name, title, command) in [
         (
             "org-studio.workspace.switch-buffer",
@@ -775,6 +809,10 @@ pub(crate) fn preview_bindings() -> Vec<BindingSpec<'static>> {
 
 pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
     vec![
+        BindingSpec {
+            keys: "M-x",
+            behavior: BindingBehavior::Command("org-studio.workspace.execute-command"),
+        },
         BindingSpec {
             keys: "C-c a",
             behavior: BindingBehavior::Command(OPEN_AGENDA_COMMAND),

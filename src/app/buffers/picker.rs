@@ -41,6 +41,7 @@ pub(crate) fn match_score(name: &str, path: &str, query: &str) -> Option<u16> {
 
 impl WorkspaceWindow {
     pub(crate) fn open_buffer_picker(&mut self, intent: PickerIntent, cx: &mut Context<Self>) {
+        self.close_command_line(cx);
         if self.buffer_busy() {
             return;
         }
@@ -111,6 +112,7 @@ impl WorkspaceWindow {
             markdown: false,
         }));
         self.buffers.focus_pending = true;
+        self.cancel_pending_document_focus(cx);
         self.buffers.scroll.scroll_to_item(selected);
         if intent == PickerIntent::File {
             let directory = self
