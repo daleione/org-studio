@@ -437,6 +437,7 @@ impl EditorFoldAnimation {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ShapeKey {
     pub(super) generated_line: Option<u64>,
+    pub(super) active_inline_code: Option<(usize, usize)>,
     pub(super) text: SharedString,
     pub(super) font_size_bits: u32,
     pub(super) wrap_width_bits: u32,

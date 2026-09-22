@@ -59,6 +59,7 @@ pub(super) fn shape_key(
 ) -> ShapeKey {
     ShapeKey {
         generated_line: None,
+        active_inline_code: None,
         text: text.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
         wrap_width_bits: wrap_width.map_or(0, |width| f32::from(width).to_bits()),

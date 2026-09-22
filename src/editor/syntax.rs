@@ -1011,6 +1011,7 @@ pub(super) enum EditorColorToken {
     Foreground,
     InlineCode,
     Verbatim,
+    InlineDelimiter,
     Link,
     LinkExternal,
     LinkFile,
@@ -1043,6 +1044,9 @@ impl EditorColorToken {
             Self::Foreground => theme.foreground,
             Self::InlineCode => theme.inline_code,
             Self::Verbatim => theme.verbatim,
+            Self::InlineDelimiter => {
+                u32::from(rgb(theme.foreground_dim).blend(rgb(theme.background).opacity(0.30))) >> 8
+            }
             Self::Link => theme.link,
             Self::LinkExternal => theme.link_external,
             Self::LinkFile => theme.link_file,
@@ -1093,6 +1097,37 @@ pub(super) struct EditorSemanticSpan {
     pub(super) swatch: Option<u32>,
     /// Classified link metadata when this span is a link (hover/activation).
     pub(super) link: Option<crate::links::LinkInfo>,
+}
+
+/// Restore the code accent on the delimiters of the span under the caret.
+/// Returning the span (rather than the caret offset) keeps shaping cacheable while typing within it.
+pub(super) fn emphasize_inline_delimiters(
+    spans: &mut [EditorSemanticSpan],
+    caret: Option<usize>,
+) -> Option<Range<usize>> {
+    let caret = caret?;
+    let range = spans
+        .iter()
+        .find(|span| {
+            matches!(
+                span.color,
+                Some(EditorColorToken::InlineCode | EditorColorToken::Verbatim)
+            ) && span.bytes.contains(&caret)
+        })?
+        .bytes
+        .clone();
+    let mut emphasized = false;
+    for span in spans {
+        if span.color == Some(EditorColorToken::InlineDelimiter)
+            && span.bytes.start >= range.start
+            && span.bytes.end <= range.end
+        {
+            // Removing the override reveals the enclosing code span's original color.
+            span.color = None;
+            emphasized = true;
+        }
+    }
+    emphasized.then_some(range)
 }
 
 /// Produces semantic paint runs without hiding or replacing any source byte.
@@ -1619,6 +1654,25 @@ fn collect_inline_spans(
 
         if matches!(inline_span.kind, InlineKind::Code | InlineKind::Verbatim) {
             opaque_ranges.push(source.clone());
+            let delimiter_len = match language {
+                Language::Org => 1,
+                Language::Markdown => text[source.clone()]
+                    .bytes()
+                    .take_while(|byte| *byte == b'`')
+                    .count(),
+            };
+            for marker in [
+                source.start..source.start + delimiter_len,
+                source.end - delimiter_len..source.end,
+            ] {
+                spans.push((
+                    marker,
+                    SpanStyle {
+                        color: Some(EditorColorToken::InlineDelimiter),
+                        ..SpanStyle::default()
+                    },
+                ));
+            }
         }
         if language == Language::Org && inline_span.kind == InlineKind::Link {
             collect_org_link_inner_weights(text, source, spans);
@@ -2045,6 +2099,39 @@ mod tests {
             text.len()
         );
         assert_eq!(style.metrics.font_scale, 1.34);
+    }
+
+    #[test]
+    fn inline_delimiters_follow_only_the_active_code_span() {
+        let theme = &crate::theme::ORG_STUDIO_LIGHT;
+        for (path, literal, width) in [
+            ("notes.org", "=示例=", 1),
+            ("notes.org", "~snippet~", 1),
+            ("notes.md", "`sample`", 1),
+            ("notes.md", "`` a`b ``", 2),
+        ] {
+            let text = format!("{literal} {literal}");
+            let style = line_style(&text, &mut CodeContext::default());
+            let mut spans = semantic_spans(Path::new(path), &text, &style);
+            let plain = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
+            assert_eq!(emphasize_inline_delimiters(&mut spans, None), None);
+            assert_eq!(
+                emphasize_inline_delimiters(&mut spans, Some(text.len())),
+                None
+            );
+            assert_eq!(
+                emphasize_inline_delimiters(&mut spans, Some(width)),
+                Some(0..literal.len())
+            );
+            let active = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
+            assert_eq!(active.iter().map(|run| run.len).sum::<usize>(), text.len());
+            let muted = rgb(EditorColorToken::InlineDelimiter.resolve(theme)).into();
+            for offset in (0..width).chain(literal.len() - width..literal.len()) {
+                assert_eq!(run_at(&plain, offset).color, muted);
+                assert_eq!(run_at(&active, offset).color, run_at(&plain, width).color);
+                assert_eq!(run_at(&active, literal.len() + 1 + offset).color, muted);
+            }
+        }
     }
 
     #[test]

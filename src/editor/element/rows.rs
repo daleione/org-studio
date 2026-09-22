@@ -219,6 +219,7 @@ impl RowShaping<'_> {
         };
         let marked_display = local_marked(self.marked, content_range, &display);
         let mut semantic_row = Vec::new();
+        let mut active_inline_code = None;
         let runs = if let Some(highlights) = self.editor.generated_highlights.as_ref() {
             highlights.get(line_number as usize).map_or_else(
                 || vec![base_run.clone()],
@@ -232,6 +233,16 @@ impl RowShaping<'_> {
                 &text,
                 line_style,
             );
+            let caret = anchor
+                .filter(|offset| {
+                    self.editor_focused
+                        && *offset >= content_range.start
+                        && *offset <= content_range.end
+                })
+                .map(|offset| {
+                    display.source_to_display((offset.0 - content_range.start.0) as usize)
+                });
+            active_inline_code = syntax::emphasize_inline_delimiters(&mut semantic_row, caret);
             let mut runs = syntax::runs_from_spans(
                 &semantic_row,
                 base_run,
@@ -269,6 +280,7 @@ impl RowShaping<'_> {
         );
         // Equal text can carry different faces on different agenda dates.
         shape_key.generated_line = self.generated.then_some(line_number);
+        shape_key.active_inline_code = active_inline_code.map(|range| (range.start, range.end));
         let layout = self
             .editor
             .shape_cache

@@ -1262,3 +1262,41 @@ fn prepared_minimap_layout_honours_an_authored_image_width(cx: &mut gpui::TestAp
     });
     std::fs::remove_dir_all(&dir).expect("cleanup");
 }
+
+#[gpui::test]
+fn inline_delimiters_reuse_layouts_without_moving_source_characters(cx: &mut gpui::TestAppContext) {
+    use crate::document::{ByteOffset, Selection};
+    use std::sync::Arc;
+    cx.update(crate::editor::init);
+    let source = "Before =sample_value= after ".repeat(8);
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("notes.org".into(), source.clone().into_bytes()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(390.), px(600.)));
+    view.run_until_parked();
+    let start = editor.read_with(view, |e, _| {
+        gpui::point(e.hit_rows[0].text_origin_x, e.hit_rows[0].origin_y + px(8.))
+    });
+    view.simulate_click(start, gpui::Modifiers::default());
+    let rows = [0, 9, 10, 0].map(|offset| {
+        editor.update(view, |e, cx| {
+            e.set_selection(Selection::caret(ByteOffset(offset)), cx)
+        });
+        view.run_until_parked();
+        editor.read_with(view, |e, _| e.hit_rows[0].clone())
+    });
+    assert!(!rows[0].layout.wrap_boundaries().is_empty());
+    assert!(!Arc::ptr_eq(&rows[0].layout, &rows[1].layout));
+    assert!(Arc::ptr_eq(&rows[1].layout, &rows[2].layout));
+    assert!(Arc::ptr_eq(&rows[0].layout, &rows[3].layout));
+    for row in &rows {
+        assert_eq!(row.layout.text.as_ref(), source);
+        for index in 0..=source.len() {
+            assert_eq!(
+                row.position_for_display_index(index),
+                rows[0].position_for_display_index(index)
+            );
+        }
+    }
+}
