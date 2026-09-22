@@ -221,13 +221,23 @@ impl SemanticEditor {
                 let goal_x = *self
                     .vertical_goal_x
                     .get_or_insert_with(|| f32::from(position.x));
-                let target = self.hit_test(gpui::point(
+                let mut target = self.hit_test(gpui::point(
                     row.text_origin_x + px(goal_x),
                     row.origin_y
                         + position.y
                         + px(delta as f32 * f32::from(row.line_height)
                             + f32::from(row.line_height) / 2.0),
                 ));
+                // A shorter cell has no caret positions in the blank space below its text.
+                // Continue to the adjacent source row instead of getting stuck in that cell.
+                if target == head && row.table_layout.is_some() && delta != 0 {
+                    let y = if delta > 0 {
+                        row.visible_bottom + row.line_height / 2.
+                    } else {
+                        row.visible_top - row.line_height / 2.
+                    };
+                    target = self.hit_test(gpui::point(row.text_origin_x + px(goal_x), y));
+                }
                 self.selection = if extend {
                     self.selection.with_head(target)
                 } else {
@@ -1713,8 +1723,12 @@ impl SemanticEditor {
             if let Some(position) = row.position_for_display_index(display_local) {
                 let caret_x = row.text_origin_x + position.x;
                 let text_left = row.text_origin_x + px(self.scroll_x);
-                if caret_x > viewport.right() - px(12.0) {
-                    self.scroll_x += f32::from(caret_x - viewport.right() + px(12.0));
+                let text_right = self
+                    .minimap
+                    .bounds
+                    .map_or(viewport.right(), |bounds| bounds.left());
+                if caret_x > text_right - px(12.0) {
+                    self.scroll_x += f32::from(caret_x - text_right + px(12.0));
                 } else if caret_x < text_left {
                     self.scroll_x = (self.scroll_x - f32::from(text_left - caret_x)).max(0.0);
                 }

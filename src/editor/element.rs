@@ -72,7 +72,6 @@ use scroll::{scroll_is_at_end, stabilized_scroll_y};
 use state::{InlineImagePaint, InlineImageResizeHandlePaint, PaintRow, SourceRunButtonPaint};
 use text::{
     folded_display_text, local_marked, lower_fence_backticks, markdown_fence_backticks, shape_key,
-    table_visual_layout,
 };
 
 const GUTTER_PADDING: f32 = 16.0;

@@ -272,8 +272,8 @@ impl EntityInputHandler for SemanticEditor {
             .saturating_sub(row.range.start.0)
             .min(row.range.len()) as usize;
         let end = row.display.source_to_display(end);
-        let start_position = row.layout.position_for_index(start, row.line_height)?;
-        let end_position = row.layout.position_for_index(end, row.line_height)?;
+        let start_position = row.position_for_display_index(start)?;
+        let end_position = row.position_for_display_index(end)?;
         Some(Bounds::new(
             point(
                 row.text_origin_x + start_position.x,

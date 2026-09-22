@@ -1,114 +1,12 @@
-//! Text shaping primitives shared by editor row layout and the minimap
-//! layout pass: run slicing, table fragment shaping, shape-cache keys and
-//! folded/marked display helpers.
+//! Shared text shaping helpers, cache keys, and folded/marked display text.
 
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::{Pixels, TextRun, WrappedLine};
+use gpui::{Pixels, WrappedLine};
 
 use crate::document::ByteRange;
-use crate::editor::{ShapeKey, TableVisualFragment, TableVisualLayout, syntax};
-
-pub(super) fn slice_text_runs(runs: &[TextRun], range: Range<usize>) -> Vec<TextRun> {
-    let mut sliced = Vec::new();
-    let mut offset = 0usize;
-    for run in runs {
-        let run_range = offset..offset + run.len;
-        let start = run_range.start.max(range.start);
-        let end = run_range.end.min(range.end);
-        if start < end {
-            let mut run = run.clone();
-            run.len = end - start;
-            sliced.push(run);
-        }
-        offset = run_range.end;
-        if offset >= range.end {
-            break;
-        }
-    }
-    sliced
-}
-
-pub(super) fn table_visual_layout(
-    text: &gpui::SharedString,
-    runs: &[TextRun],
-    font_size: Pixels,
-    columns: &[usize],
-    format: crate::document::DocumentFormat,
-    text_system: &gpui::WindowTextSystem,
-) -> Option<Arc<TableVisualLayout>> {
-    let delimiters = crate::document::table::delimiter_offsets(text, format)
-        .into_iter()
-        .map(|start| start..start + 1)
-        .collect::<Vec<_>>();
-    if delimiters.len() < 2 || columns.is_empty() {
-        return None;
-    }
-
-    let mut base = runs.first()?.clone();
-    base.len = 1;
-    let space: gpui::SharedString = " ".into();
-    let space_advance = text_system
-        .shape_line(space, font_size, std::slice::from_ref(&base), None)
-        .width();
-    let mut fragments = Vec::with_capacity(delimiters.len() * 2 + 1);
-    let shape_fragment = |range: Range<usize>, x: Pixels| -> Option<TableVisualFragment> {
-        if range.is_empty() {
-            return None;
-        }
-        let fragment_text: gpui::SharedString = text[range.clone()].to_owned().into();
-        let fragment_runs = slice_text_runs(runs, range.clone());
-        (!fragment_runs.is_empty()).then(|| TableVisualFragment {
-            display_range: range,
-            x,
-            layout: Arc::new(text_system.shape_line(
-                fragment_text,
-                font_size,
-                &fragment_runs,
-                None,
-            )),
-        })
-    };
-
-    let first = delimiters.first()?.clone();
-    let indent = shape_fragment(0..first.start, Pixels::ZERO);
-    let mut delimiter_x = indent
-        .as_ref()
-        .map_or(Pixels::ZERO, |fragment| fragment.layout.width());
-    if let Some(indent) = indent {
-        fragments.push(indent);
-    }
-
-    for (column, delimiter_range) in delimiters.iter().enumerate() {
-        let delimiter = shape_fragment(delimiter_range.clone(), delimiter_x)?;
-        let delimiter_width = delimiter.layout.width();
-        fragments.push(delimiter);
-
-        let segment_end = delimiters
-            .get(column + 1)
-            .map_or(text.len(), |next| next.start);
-        if let Some(segment) = shape_fragment(
-            delimiter_range.end..segment_end,
-            delimiter_x + delimiter_width,
-        ) {
-            fragments.push(segment);
-        }
-        if delimiters.get(column + 1).is_some() {
-            let logical_width = columns.get(column).copied().unwrap_or(1).saturating_add(2) as f32;
-            delimiter_x += delimiter_width + space_advance * logical_width;
-        }
-    }
-
-    let width = fragments.iter().fold(Pixels::ZERO, |width, fragment| {
-        width.max(fragment.x + fragment.layout.width())
-    });
-    Some(Arc::new(TableVisualLayout {
-        fragments: fragments.into(),
-        width,
-        len: text.len(),
-    }))
-}
+use crate::editor::{ShapeKey, syntax};
 
 // Keep source bytes and all horizontal/caret geometry intact. Only the glyphs
 // of a Markdown backtick boundary receive an optical vertical adjustment.

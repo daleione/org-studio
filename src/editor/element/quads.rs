@@ -14,44 +14,14 @@ pub(super) fn push_selection_quads(
     include_newline: bool,
     wrap_width: Pixels,
 ) {
-    let line_height = hit.line_height;
-    let start_position = hit.position_for_display_index(start).unwrap_or_default();
-    let end_position = hit
-        .position_for_display_index(end)
-        .unwrap_or(start_position);
-    let line_height_px = f32::from(line_height).max(1.0);
-    let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
-    let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;
-    for row in first_row..=last_row {
-        let left = if row == first_row {
-            start_position.x
-        } else {
-            Pixels::ZERO
-        };
-        let mut right = if row == last_row {
-            end_position.x
-        } else {
-            wrap_width
-        };
-        if include_newline && row == last_row {
-            right += px(8.0);
-        }
-        if right > left {
-            quads.push(fill(
-                Bounds::from_corners(
-                    point(
-                        hit.text_origin_x + left,
-                        hit.origin_y + px(row as f32 * line_height_px),
-                    ),
-                    point(
-                        hit.text_origin_x + right,
-                        hit.origin_y + px((row + 1) as f32 * line_height_px),
-                    ),
-                ),
-                rgba((crate::theme::current_theme().accent << 8) | 0x4a),
-            ));
-        }
-    }
+    push_range_quads(
+        quads,
+        hit,
+        start..end,
+        wrap_width,
+        include_newline,
+        rgba((crate::theme::current_theme().accent << 8) | 0x4a),
+    );
 }
 
 /// Paints the opaque swatch behind every hex literal in the row. Quads stay
@@ -126,6 +96,41 @@ pub(super) fn push_search_quads(
     wrap_width: Pixels,
     current: bool,
 ) {
+    let color = rgba(if current {
+        crate::theme::current_theme().search_current
+    } else {
+        crate::theme::current_theme().search_match
+    });
+    push_range_quads(quads, hit, start..end, wrap_width, false, color);
+}
+
+fn push_range_quads(
+    quads: &mut Vec<PaintQuad>,
+    hit: &HitRow,
+    range: std::ops::Range<usize>,
+    wrap_width: Pixels,
+    include_newline: bool,
+    color: gpui::Rgba,
+) {
+    let start = range.start;
+    let end = range.end;
+    if let Some(table) = &hit.table_layout {
+        for mut bounds in table.range_bounds(start..end, hit.line_height) {
+            bounds.origin += point(hit.text_origin_x, hit.origin_y);
+            quads.push(fill(bounds, color));
+        }
+        if include_newline {
+            let position = table.position_for_index(end, hit.line_height);
+            quads.push(fill(
+                Bounds::new(
+                    point(hit.text_origin_x + position.x, hit.origin_y + position.y),
+                    gpui::size(px(8.), hit.line_height),
+                ),
+                color,
+            ));
+        }
+        return;
+    }
     let line_height = hit.line_height;
     let start_position = hit.position_for_display_index(start).unwrap_or_default();
     let end_position = hit
@@ -140,12 +145,14 @@ pub(super) fn push_search_quads(
         } else {
             Pixels::ZERO
         };
-        let right = if row == last_row {
+        let mut right = if row == last_row {
             end_position.x
         } else {
             wrap_width
         };
-
+        if include_newline && row == last_row {
+            right += px(8.0);
+        }
         if right > left {
             quads.push(fill(
                 Bounds::from_corners(
@@ -158,11 +165,7 @@ pub(super) fn push_search_quads(
                         hit.origin_y + px((row + 1) as f32 * line_height_px),
                     ),
                 ),
-                rgba(if current {
-                    crate::theme::current_theme().search_current
-                } else {
-                    crate::theme::current_theme().search_match
-                }),
+                color,
             ));
         }
     }

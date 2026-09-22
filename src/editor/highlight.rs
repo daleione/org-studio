@@ -54,6 +54,27 @@ impl RangeHighlight {
         range: Range<usize>,
         wrap_width: Pixels,
     ) {
+        if let Some(table) = &hit.table_layout {
+            for bounds in table.range_bounds(range, hit.line_height) {
+                let top = hit.origin_y + bounds.top() + px(self.inset_y);
+                let bottom = hit.origin_y + bounds.bottom() - px(self.inset_y);
+                if bottom <= top {
+                    continue;
+                }
+                quads.push(quad(
+                    Bounds::from_corners(
+                        point(hit.text_origin_x + bounds.left(), top),
+                        point(hit.text_origin_x + bounds.right(), bottom),
+                    ),
+                    Corners::all(px(self.radius)),
+                    self.fill,
+                    Edges::default(),
+                    rgba(0),
+                    BorderStyle::default(),
+                ));
+            }
+            return;
+        }
         let start_position = hit
             .position_for_display_index(range.start)
             .unwrap_or_default();

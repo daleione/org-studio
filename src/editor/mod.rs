@@ -16,6 +16,7 @@ mod read_only;
 mod search;
 mod source_copy;
 mod syntax;
+mod table_layout;
 mod timestamp;
 mod todo;
 
@@ -220,7 +221,7 @@ impl HitRow {
     pub(super) fn position_for_display_index(&self, index: usize) -> Option<Point<Pixels>> {
         self.table_layout.as_ref().map_or_else(
             || self.layout.position_for_index(index, self.line_height),
-            |layout| Some(gpui::point(layout.x_for_index(index), Pixels::ZERO)),
+            |layout| Some(layout.position_for_index(index, self.line_height)),
         )
     }
 
@@ -231,75 +232,18 @@ impl HitRow {
                     .closest_index_for_position(position, self.line_height)
                     .unwrap_or_else(|index| index)
             },
-            |layout| layout.closest_index_for_x(position.x),
+            |layout| layout.closest_index_for_position(position, self.line_height),
         )
     }
 }
 
-#[derive(Clone)]
-pub(super) struct TableVisualFragment {
-    pub(super) display_range: Range<usize>,
-    pub(super) x: Pixels,
-    pub(super) layout: Arc<gpui::ShapedLine>,
-}
-
-#[derive(Clone)]
-pub(super) struct TableVisualLayout {
-    pub(super) fragments: Arc<[TableVisualFragment]>,
-    pub(super) width: Pixels,
-    pub(super) len: usize,
-}
-
-impl TableVisualLayout {
-    pub(super) fn x_for_index(&self, index: usize) -> Pixels {
-        let index = index.min(self.len);
-        if let Some(fragment) = self
-            .fragments
-            .iter()
-            .find(|fragment| fragment.display_range.start == index)
-        {
-            return fragment.x;
-        }
-        if let Some(fragment) = self.fragments.iter().find(|fragment| {
-            fragment.display_range.start < index && index < fragment.display_range.end
-        }) {
-            return fragment.x
-                + fragment
-                    .layout
-                    .x_for_index(index - fragment.display_range.start);
-        }
-        self.fragments.last().map_or(Pixels::ZERO, |fragment| {
-            fragment.x + fragment.layout.width()
-        })
-    }
-
-    pub(super) fn closest_index_for_x(&self, x: Pixels) -> usize {
-        let Some(first) = self.fragments.first() else {
-            return 0;
-        };
-        if x <= first.x {
-            return first.display_range.start;
-        }
-        for (index, fragment) in self.fragments.iter().enumerate() {
-            let right = fragment.x + fragment.layout.width();
-            if x <= right {
-                return fragment.display_range.start
-                    + fragment.layout.closest_index_for_x(x - fragment.x);
-            }
-            if let Some(next) = self.fragments.get(index + 1)
-                && x < next.x
-            {
-                return fragment.display_range.end;
-            }
-        }
-        self.len
-    }
-}
+use table_layout::TableVisualLayout;
 
 #[derive(Default)]
 struct TableGeometryCache {
     revision: Option<Revision>,
-    columns: HashMap<(u64, crate::document::DocumentFormat), Option<Arc<[usize]>>>,
+    columns:
+        HashMap<(u64, crate::document::DocumentFormat), Option<Arc<org_commands::TableColumns>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1221,12 +1165,12 @@ impl SemanticEditor {
         LINE_HEIGHT * self.content_font_size.scale()
     }
 
-    pub(super) fn aligned_table_column_widths(
+    fn table_columns(
         &self,
         snapshot: &DocumentSnapshot,
         line: LineIndex,
         format: crate::document::DocumentFormat,
-    ) -> Option<Arc<[usize]>> {
+    ) -> Option<Arc<org_commands::TableColumns>> {
         let start = org_commands::table_start(snapshot, line.0, format)?;
         let revision = snapshot.revision();
         let mut cache = self.table_geometry_cache.borrow_mut();
@@ -1234,13 +1178,11 @@ impl SemanticEditor {
             cache.revision = Some(revision);
             cache.columns.clear();
         }
-        if let Some(columns) = cache.columns.get(&(start, format)) {
-            return columns.clone();
-        }
-        let columns = org_commands::aligned_table_column_widths(snapshot, start, format)
-            .map(Arc::<[usize]>::from);
-        cache.columns.insert((start, format), columns.clone());
-        columns
+        cache
+            .columns
+            .entry((start, format))
+            .or_insert_with(|| org_commands::table_columns(snapshot, start, format).map(Arc::new))
+            .clone()
     }
 
     pub(crate) fn set_content_font_size(
@@ -2585,9 +2527,14 @@ mod tests {
                 .table_layout
                 .as_ref()
                 .unwrap()
-                .x_for_index(second_pipe);
+                .position_for_index(second_pipe, header.line_height)
+                .x;
             assert_eq!(
-                header.table_layout.as_ref().unwrap().closest_index_for_x(x),
+                header
+                    .table_layout
+                    .as_ref()
+                    .unwrap()
+                    .closest_index_for_position(gpui::point(x, Pixels::ZERO), header.line_height),
                 second_pipe
             );
         });
@@ -2661,7 +2608,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn soft_wrap_wraps_wide_tables_without_scrolling_short_tables(cx: &mut gpui::TestAppContext) {
+    fn soft_wrap_keeps_wide_tables_aligned_with_cell_wrapping(cx: &mut gpui::TestAppContext) {
         cx.update(init);
         let source = format!("| short | value |\n\n| {} | value |\n", "wide".repeat(200));
         let session = cx.new(|_| {
@@ -2683,8 +2630,8 @@ mod tests {
                 .find(|row| row.line == LineIndex(2))
                 .unwrap();
             assert!(short.table_layout.is_some());
-            assert!(wide.table_layout.is_none());
-            assert!(!wide.layout.wrap_boundaries().is_empty());
+            assert!(wide.table_layout.is_some());
+            assert!(wide.table_layout.as_ref().unwrap().visual_rows > 1);
         });
         editor.update(cx, |editor, cx| {
             editor.scroll(-120.0, 0.0, cx);

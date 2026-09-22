@@ -193,14 +193,24 @@ pub(super) fn paint_frame(
                             );
                         } else if let Some(table) = &row.hit.table_layout {
                             for fragment in table.fragments.iter() {
-                                let _ = fragment.layout.paint(
-                                    point(row.hit.text_origin_x + fragment.x, row.hit.origin_y),
-                                    row.hit.line_height,
-                                    TextAlign::Left,
-                                    None,
-                                    window,
-                                    cx,
-                                );
+                                let repeats = if fragment.delimiter {
+                                    table.visual_rows
+                                } else {
+                                    1
+                                };
+                                for visual_row in 0..repeats {
+                                    let _ = fragment.layout.paint(
+                                        point(
+                                            row.hit.text_origin_x + fragment.x,
+                                            row.hit.origin_y + row.hit.line_height * visual_row,
+                                        ),
+                                        row.hit.line_height,
+                                        TextAlign::Left,
+                                        None,
+                                        window,
+                                        cx,
+                                    );
+                                }
                             }
                         } else {
                             let _ = row.hit.layout.paint(

@@ -438,11 +438,16 @@ pub(super) fn table_start(
     Some(start)
 }
 
-pub(super) fn aligned_table_column_widths(
+pub(super) struct TableColumns {
+    pub(super) widths: Vec<usize>,
+    pub(super) aligned: bool,
+}
+
+pub(super) fn table_columns(
     snapshot: &DocumentSnapshot,
     start: u64,
     format: DocumentFormat,
-) -> Option<Vec<usize>> {
+) -> Option<TableColumns> {
     let mut source_rows = Vec::new();
     let mut line = start;
     while line < snapshot.len_lines() {
@@ -461,11 +466,11 @@ pub(super) fn aligned_table_column_widths(
         return None;
     }
     let widths = table_widths(&rows, columns, format);
-    source_rows
+    let aligned = source_rows
         .iter()
         .zip(&rows)
-        .all(|(source, row)| aligned_row(row, &widths, None, format).0 == *source)
-        .then_some(widths)
+        .all(|(source, row)| aligned_row(row, &widths, None, format).0 == *source);
+    Some(TableColumns { widths, aligned })
 }
 
 #[cfg(test)]
@@ -572,10 +577,9 @@ mod tests {
         );
         let aligned_snapshot =
             DocumentSnapshot::from_utf8(aligned.replacement.into_bytes()).unwrap();
-        assert_eq!(
-            aligned_table_column_widths(&aligned_snapshot, 0, DocumentFormat::Markdown),
-            Some(vec![6, 5])
-        );
+        let columns = table_columns(&aligned_snapshot, 0, DocumentFormat::Markdown).unwrap();
+        assert!(columns.aligned);
+        assert_eq!(columns.widths, vec![6, 5]);
     }
 
     #[test]

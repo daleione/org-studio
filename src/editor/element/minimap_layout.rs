@@ -12,8 +12,9 @@ use crate::editor::{SemanticEditor, layout_map::EditorLayoutMap, syntax};
 use super::blocks::editor_block_text_inset;
 use super::rows::visible_source_lines;
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
-use super::text::{folded_display_text, table_visual_layout};
+use super::text::folded_display_text;
 use crate::editor::inline_image::{INLINE_IMAGE_VERTICAL_PADDING, image_sizing};
+use crate::editor::table_layout::TableVisualLayout;
 
 use super::{BLOCK_RIGHT_INSET, BLOCK_TEXT_RIGHT_PADDING};
 
@@ -125,8 +126,8 @@ pub(super) fn schedule_minimap_layout_preparation(
             .iter()
             .copied()
             .collect::<std::collections::HashMap<_, _>>();
-        let mut aligned_tables = std::collections::HashMap::<u64, Option<Arc<[usize]>>>::new();
-        let document_format = crate::document::DocumentFormat::from_path(&request.key.path);
+        let mut tables = std::collections::HashMap::new();
+        let format = crate::document::DocumentFormat::from_path(&request.key.path);
 
         for chunk_start in (0..line_count).step_by(YIELD_LINE_INTERVAL as usize) {
             if cancellation_epoch.load(std::sync::atomic::Ordering::Acquire) != epoch {
@@ -232,51 +233,51 @@ pub(super) fn schedule_minimap_layout_preparation(
                         None,
                         &request.theme,
                     );
-                    let table_columns = (line_style.id == syntax::EditorStyleId::Table)
-                        .then(|| {
-                            crate::editor::org_commands::table_start(
-                                &request.snapshot,
-                                line_number,
-                                document_format,
-                            )
-                        })
-                        .flatten()
+                    let shaped_font_size = px(f32::from(request.font_size) * metrics.font_scale);
+                    let effective_wrap_width = request.key.soft_wrap.then_some(px(row_wrap_width));
+                    let columns = if line_style.id == syntax::EditorStyleId::Table {
+                        crate::editor::org_commands::table_start(
+                            &request.snapshot,
+                            line_number,
+                            format,
+                        )
                         .and_then(|start| {
-                            aligned_tables
+                            tables
                                 .entry(start)
                                 .or_insert_with(|| {
-                                    crate::editor::org_commands::aligned_table_column_widths(
+                                    crate::editor::org_commands::table_columns(
                                         &request.snapshot,
                                         start,
-                                        document_format,
+                                        format,
                                     )
-                                    .map(Arc::<[usize]>::from)
                                 })
-                                .clone()
-                        });
-                    let shaped_font_size = px(f32::from(request.font_size) * metrics.font_scale);
-                    let table_fits = table_columns
-                        .as_ref()
-                        .and_then(|columns| {
-                            table_visual_layout(
-                                &text,
-                                &runs,
-                                shaped_font_size,
-                                columns,
-                                document_format,
-                                &text_system,
-                            )
+                                .as_ref()
                         })
-                        .is_some_and(|layout| f32::from(layout.width) <= row_wrap_width);
-                    let effective_wrap_width =
-                        (request.key.soft_wrap && !table_fits).then_some(px(row_wrap_width));
+                    } else {
+                        None
+                    };
+                    let table = columns.and_then(|columns| {
+                        TableVisualLayout::shape(
+                            &text,
+                            &runs,
+                            shaped_font_size,
+                            columns,
+                            format,
+                            effective_wrap_width,
+                            &text_system,
+                        )
+                    });
                     let wrapped = text_system
                         .shape_text(text, shaped_font_size, &runs, effective_wrap_width, None)
                         .ok()
                         .and_then(|lines| lines.into_iter().next())
                         .unwrap_or_default();
-                    let visual_rows = wrapped.wrap_boundaries().len() + 1;
-                    let wrap_starts = (1..visual_rows)
+                    let visual_rows = table
+                        .as_ref()
+                        .map_or(wrapped.wrap_boundaries().len() + 1, |table| {
+                            table.visual_rows
+                        });
+                    let wrap_starts = (1..if table.is_some() { 1 } else { visual_rows })
                         .map(|visual_row| {
                             let display_index = wrapped
                                 .index_for_position(

@@ -67,7 +67,12 @@ pub(super) fn publish_frame(
         .rows
         .iter()
         .map(|row| {
-            let wrap_starts = (1..row.visual_rows)
+            // Parallel cell wraps are not contiguous slices of a source line.
+            let wrap_starts = (1..if row.hit.table_layout.is_some() {
+                1
+            } else {
+                row.visual_rows
+            })
                 .map(|visual_row| {
                     let display = row
                         .hit

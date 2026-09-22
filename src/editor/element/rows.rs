@@ -7,6 +7,7 @@ use gpui::TextStyle;
 
 use crate::document::{DocumentFormat, DocumentSnapshot, Selection};
 use crate::editor::layout_map::EditorLayoutMap;
+use crate::editor::table_layout::TableVisualLayout;
 use crate::theme::Theme;
 
 use crate::editor::inline_image::INLINE_IMAGE_VERTICAL_PADDING;
@@ -177,19 +178,24 @@ impl RowShaping<'_> {
             fallback_style = syntax::EditorLineStyle::pending_fallback(source_content_range);
             &fallback_style
         };
-        let table_columns = (line_style.id == syntax::EditorStyleId::Table)
-            .then(|| {
-                self.editor
-                    .aligned_table_column_widths(self.snapshot, line, self.document_format)
-            })
-            .flatten();
+        let table_columns = if line_style.id == syntax::EditorStyleId::Table {
+            self.editor
+                .table_columns(self.snapshot, line, self.document_format)
+        } else {
+            None
+        };
         let text_inset = editor_block_text_inset(line_style.block.as_ref());
-        let row_text_origin_x = self.text_origin_x + px(text_inset);
         let row_wrap_width = if text_inset > 0.0 {
             (self.wrap_width - text_inset - BLOCK_RIGHT_INSET - BLOCK_TEXT_RIGHT_PADDING).max(1.0)
         } else {
             self.wrap_width
         };
+        let effective_wrap_width = self
+            .editor
+            .display_map
+            .soft_wrap()
+            .then_some(px(row_wrap_width));
+        let row_text_origin_x = self.text_origin_x + px(text_inset);
         let mut metrics = line_style
             .metrics
             .scaled(self.editor.content_font_size().scale());
@@ -237,23 +243,17 @@ impl RowShaping<'_> {
             runs
         };
         let shaped_font_size = px(f32::from(self.font_size) * metrics.font_scale);
-        let table_layout = table_columns
-            .as_ref()
-            .and_then(|columns| {
-                table_visual_layout(
-                    &text,
-                    &runs,
-                    shaped_font_size,
-                    columns,
-                    self.document_format,
-                    self.window.text_system(),
-                )
-            })
-            .filter(|layout| {
-                !self.editor.display_map.soft_wrap() || f32::from(layout.width) <= row_wrap_width
-            });
-        let effective_wrap_width = (table_layout.is_none() && self.editor.display_map.soft_wrap())
-            .then_some(px(row_wrap_width));
+        let table_layout = table_columns.as_ref().and_then(|columns| {
+            TableVisualLayout::shape(
+                &text,
+                &runs,
+                shaped_font_size,
+                columns,
+                self.document_format,
+                effective_wrap_width,
+                self.window.text_system(),
+            )
+        });
         let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
         let mut shape_key = shape_key(
             &text,
@@ -290,6 +290,8 @@ impl RowShaping<'_> {
             });
         let visual_rows = if inline_image_source.is_some() {
             1
+        } else if let Some(table) = &table_layout {
+            table.visual_rows
         } else {
             layout.wrap_boundaries().len() + 1
         };
