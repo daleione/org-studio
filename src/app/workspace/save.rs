@@ -3,7 +3,7 @@ use crate::{
     document::{DocumentSession, SaveError, SaveStartError, write_atomic},
 };
 use gpui::{Context, Entity, PromptButton, PromptLevel, Window};
-use std::{path::PathBuf, sync::Arc};
+use std::path::PathBuf;
 
 impl WorkspaceWindow {
     pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -279,17 +279,6 @@ impl WorkspaceWindow {
             self.fail_buffer_review(message, cx);
         }
         cx.notify();
-    }
-    pub(crate) fn request_open_at(
-        &mut self,
-        path: PathBuf,
-        anchor: Arc<str>,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.open(path, cx);
-        self.pending_navigation = Some((self.generation, anchor));
-        self.apply_pending_navigation(self.generation, cx);
     }
     pub(crate) fn request_home(&mut self, _: &mut Window, cx: &mut Context<Self>) {
         if !self.buffer_busy() {

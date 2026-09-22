@@ -37,7 +37,7 @@ impl WorkspaceWindow {
         self.generation = self.generation.wrapping_add(1);
         self.load_task = None;
         self.stop_document_watch();
-        self.editor_minimap_width_subscriptions.clear();
+        self.editor_subscriptions.clear();
         self.save.error = None;
         self.state = WorkspaceLoadState::Empty;
         self.opened_at = None;
@@ -556,7 +556,7 @@ impl WorkspaceWindow {
                 self.home_error = None;
                 let session = cx.new(|_| session);
                 let editor_syntax = Arc::new(crate::editor::EditorSyntaxService::default());
-                self.editor_minimap_width_subscriptions.clear();
+                self.editor_subscriptions.clear();
                 let minimap_visible = if cfg!(feature = "benchmarks") {
                     std::env::var("ORG_STUDIO_EDITOR_MINIMAP_BENCH")
                         .ok()
@@ -670,6 +670,11 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn apply_pending_navigation(&mut self, generation: u64, cx: &mut impl AppContext) {
+        // Loading can retain the previous document for display; it must not consume
+        // a destination belonging to the incoming document.
+        if !matches!(self.state, WorkspaceLoadState::Ready { .. }) {
+            return;
+        }
         let Some((pending_generation, anchor)) = self.pending_navigation.clone() else {
             return;
         };

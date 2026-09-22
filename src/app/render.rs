@@ -687,7 +687,7 @@ impl WorkspaceWindow {
     fn ensure_document_subscription(&mut self, cx: &mut Context<Self>) {
         let Some(document) = self.state.ready() else {
             self.document_subscription = None;
-            self.editor_minimap_width_subscriptions.clear();
+            self.editor_subscriptions.clear();
             self.subscribed_document = None;
             return;
         };
@@ -726,10 +726,10 @@ impl WorkspaceWindow {
             .flatten()
             .cloned()
             .collect::<Vec<_>>();
-        if self.editor_minimap_width_subscriptions.len() != editors.len() {
-            self.editor_minimap_width_subscriptions.clear();
+        if self.editor_subscriptions.len() != editors.len() {
+            self.editor_subscriptions.clear();
             for editor in editors {
-                self.editor_minimap_width_subscriptions.push(cx.subscribe(
+                let width = cx.subscribe(
                     &editor,
                     |this, _, event: &crate::editor::EditorMinimapWidthEvent, cx| {
                         this.change_minimap_width(
@@ -737,7 +737,14 @@ impl WorkspaceWindow {
                             cx,
                         );
                     },
-                ));
+                );
+                let link = cx.subscribe(
+                    &editor,
+                    |this, _, event: &crate::editor::EditorOpenDocumentEvent, cx| {
+                        this.open_document_link(event.path.clone(), event.anchor.clone(), cx);
+                    },
+                );
+                self.editor_subscriptions.push((width, link));
             }
         }
     }

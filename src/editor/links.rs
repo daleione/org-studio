@@ -99,8 +99,14 @@ impl SemanticEditor {
                 Self::open_with_system_handler(&target);
             }
             LinkKind::File => {
-                if let Some(path) = self.resolve_file_link(&link.meta.raw, cx) {
-                    Self::open_with_system_handler(&path.to_string_lossy());
+                if let Some((path, anchor)) =
+                    crate::links::resolve_file_link(self.session.read(cx).path(), &link.meta.raw)
+                {
+                    if crate::preview::is_supported_document(&path) {
+                        cx.emit(EditorOpenDocumentEvent { path, anchor });
+                    } else {
+                        Self::open_with_system_handler(&path.to_string_lossy());
+                    }
                 }
             }
             LinkKind::Internal => {
@@ -118,25 +124,6 @@ impl SemanticEditor {
         if let Err(error) = std::process::Command::new("open").arg(target).spawn() {
             tracing::warn!(?error, target, "failed to open link");
         }
-    }
-
-    fn resolve_file_link(&self, raw: &str, cx: &Context<Self>) -> Option<std::path::PathBuf> {
-        let target = raw
-            .strip_prefix("file:")
-            .or_else(|| raw.strip_prefix("attachment:"))
-            .or_else(|| (!raw.is_empty() && !raw.contains(':')).then_some(raw))?;
-        let target = target.split("::").next().unwrap_or(target);
-        let path = std::path::Path::new(target);
-        if path.is_absolute() {
-            return Some(path.to_path_buf());
-        }
-        if let Some(home_rest) = target.strip_prefix("~/")
-            && let Ok(home) = std::env::var("HOME")
-        {
-            return Some(std::path::Path::new(&home).join(home_rest));
-        }
-        let base = self.session.read(cx).path().parent()?;
-        Some(base.join(path))
     }
 
     fn internal_link_offset(&self, target: &str, cx: &Context<Self>) -> Option<ByteOffset> {
@@ -321,28 +308,55 @@ mod link_tests {
     }
 
     #[gpui::test]
-    fn file_links_resolve_relative_to_the_document_directory(cx: &mut gpui::TestAppContext) {
+    fn document_links_request_in_app_preview_with_their_anchor(cx: &mut gpui::TestAppContext) {
+        let directory =
+            std::env::temp_dir().join(format!("org-studio-link-events-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
         let session = cx.new(|_| {
             crate::document::DocumentSession::from_utf8(
-                std::path::Path::new("/tmp/org-studio-demo/main.org").to_path_buf(),
-                b"[[file:notes.org]]".to_vec(),
+                directory.join("main.org"),
+                b"links\n".to_vec(),
             )
             .unwrap()
         });
         let editor = cx.new(|cx| SemanticEditor::new(session, cx));
-        editor.update(cx, |editor, cx| {
-            let resolved = editor
-                .resolve_file_link("file:notes.org::12", cx)
-                .expect("resolves");
-            assert_eq!(
-                resolved,
-                std::path::PathBuf::from("/tmp/org-studio-demo/notes.org")
-            );
-            let absolute = editor
-                .resolve_file_link("file:/etc/hosts", cx)
-                .expect("absolute path");
-            assert_eq!(absolute, std::path::PathBuf::from("/etc/hosts"));
-            assert!(editor.resolve_file_link("irc:chan", cx).is_none());
+        let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+        editor.update(cx, |_, cx| {
+            let events = events.clone();
+            cx.subscribe_self(move |_, event: &EditorOpenDocumentEvent, _| {
+                events.lock().unwrap().push(event.clone());
+            })
+            .detach();
         });
+        for (filename, destination, anchor) in [
+            ("notes.org", "file:notes.org::*Heading", "*Heading"),
+            ("notes.md", "notes.md#section", "section"),
+            (
+                "中文 notes.markdown",
+                "%E4%B8%AD%E6%96%87%20notes.markdown#section",
+                "section",
+            ),
+        ] {
+            std::fs::write(directory.join(filename), "contents").unwrap();
+            editor.update(cx, |editor, cx| {
+                editor.open_link(
+                    &LinkHit {
+                        line: LineIndex(0),
+                        display_range: 0..1,
+                        meta: crate::links::classify(
+                            destination,
+                            crate::links::LinkFormat::Markdown,
+                        ),
+                    },
+                    cx,
+                )
+            });
+            let events = events.lock().unwrap();
+            let event = events.last().unwrap();
+            assert_eq!(event.path, directory.join(filename));
+            assert_eq!(event.anchor.as_deref(), Some(anchor));
+            std::fs::remove_file(directory.join(filename)).unwrap();
+        }
+        std::fs::remove_dir(directory).unwrap();
     }
 }

@@ -3704,6 +3704,75 @@ fn reload_keeps_session_identity_and_publishes_a_coherent_preview(cx: &mut gpui:
     let _ = std::fs::remove_file(path);
 }
 
+#[gpui::test]
+fn reloading_org_and_markdown_keeps_the_preview_viewport(cx: &mut gpui::TestAppContext) {
+    for (extension, heading) in [("org", "*"), ("md", "#")] {
+        let path = std::env::temp_dir().join(format!(
+            "org-studio-reload-scroll-{}.{extension}",
+            std::process::id()
+        ));
+        let source = (0..200)
+            .map(|i| format!("{heading} Heading {i}\nbody {i}\n\n"))
+            .collect::<String>();
+        std::fs::write(&path, &source).unwrap();
+        let loaded = super::load_document(path.clone()).unwrap();
+        let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
+        let panel = app.update(cx, |app, cx| {
+            app.generation = 1;
+            assert!(app.apply_load_result(1, Ok(loaded), cx));
+            let panel = app.reading_panel().unwrap();
+            panel.update(cx, |panel, _| {
+                panel.scroll_to(gpui::ListOffset {
+                    item_ix: 160,
+                    offset_in_item: gpui::px(7.0),
+                })
+            });
+            panel
+        });
+        std::fs::write(&path, format!("{source}{heading} Appended\nnew content\n")).unwrap();
+        app.update(cx, |app, cx| app.reload_current(cx));
+        cx.run_until_parked();
+        cx.read(|cx| {
+            let panel = panel.read(cx);
+            assert_eq!(panel.document().revision, crate::document::Revision(1));
+            let top = panel.list_state().logical_scroll_top();
+            assert_eq!(top.item_ix, 160, "{extension}");
+            assert_eq!(top.offset_in_item, gpui::px(7.0), "{extension}");
+        });
+        std::fs::remove_file(path).unwrap();
+    }
+}
+
+#[gpui::test]
+fn linked_document_opens_in_current_workspace_reading_pane(cx: &mut gpui::TestAppContext) {
+    let path =
+        std::env::temp_dir().join(format!("org-studio-open-preview-{}.md", std::process::id()));
+    std::fs::write(&path, "# Start\ntext\n\n# Destination\nbody\n").unwrap();
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    app.update(cx, |app, cx| {
+        app.create_buffer("Source.org".into(), None, cx);
+        app.open_document_link(path.clone(), Some("destination".into()), cx)
+    });
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(25));
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert_eq!(app.document_session().unwrap().read(cx).path(), path);
+        assert_eq!(
+            app.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading
+        );
+        let panel = app.reading_panel().unwrap();
+        let panel = panel.read(cx);
+        assert!(panel.top_source_offset().unwrap().0 > 0);
+        assert!(app.pending_navigation.is_none());
+        assert_eq!(app.buffer_sessions().count(), 2);
+    });
+    std::fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn dired_help_lists_every_command_and_groups_alias_keys() {
     let (commands, _, _) = preview_input();

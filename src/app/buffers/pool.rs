@@ -59,7 +59,7 @@ impl WorkspaceWindow {
         self.document_workspace = parked.workspace;
         self.soft_wrap = parked.soft_wrap;
         self.derived.latest = parked.preview;
-        self.editor_minimap_width_subscriptions.clear();
+        self.editor_subscriptions.clear();
         self.reconcile_visible_editor_panes(cx);
         self.reconcile_derived_preview(cx);
         self.sync_document_watch(cx);

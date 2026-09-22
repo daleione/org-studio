@@ -428,9 +428,10 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        let source_anchor = self.top_source_anchor();
+        let scroll_top = self.list_state.logical_scroll_top();
         self.search_finish(true);
         self.text_selection = ReadingTextSelection::default();
-        let source_anchor = self.top_source_anchor();
         let previous_visible_rows = self.visible_rows.clone();
         let previous_minimap = self.minimap_state.clone();
         let global_visibility = self.global_visibility;
@@ -572,6 +573,11 @@ impl ReadingPreviewPanel {
             self.apply_visible_rows(Arc::new(next_visible_rows));
             if let Some((anchor, offset_in_item)) = source_anchor {
                 self.scroll_to_source_offset_with_offset(anchor, offset_in_item);
+            } else if !self.visible_rows.is_empty() {
+                self.list_state.scroll_to(ListOffset {
+                    item_ix: scroll_top.item_ix.min(self.visible_rows.len() - 1),
+                    offset_in_item: scroll_top.offset_in_item,
+                });
             }
         }
         if let Some((patch, reused_chunks, total_chunks)) = incremental_update {

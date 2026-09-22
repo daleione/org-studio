@@ -119,7 +119,7 @@ impl WorkspaceWindow {
             key_context,
             state: WorkspaceLoadState::Empty,
             document_subscription: None,
-            editor_minimap_width_subscriptions: Vec::new(),
+            editor_subscriptions: Vec::new(),
             subscribed_document: None,
             recent_documents: crate::recent_documents::load(),
             home_error: None,

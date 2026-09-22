@@ -1,3 +1,4 @@
+use crate::links::{resolve_file_link, split_link_target};
 use gpui::{ClipboardItem, Context, Window};
 
 use crate::app::WorkspaceWindow;
@@ -114,7 +115,7 @@ impl WorkspaceWindow {
         target: &PreviewActionTarget,
         destination: &str,
         panel: gpui::Entity<ReadingPreviewPanel>,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), &'static str> {
         let Some(session) = self.document_session().cloned() else {
@@ -133,8 +134,8 @@ impl WorkspaceWindow {
             return Ok(());
         }
 
-        let destination = destination.strip_prefix("file:").unwrap_or(destination);
-        let (path_or_anchor, search) = split_link_target(destination);
+        let local_target = destination.strip_prefix("file:").unwrap_or(destination);
+        let (path_or_anchor, search) = split_link_target(local_target);
         if path_or_anchor.is_empty()
             || path_or_anchor.starts_with('#')
             || path_or_anchor.starts_with('*')
@@ -151,36 +152,42 @@ impl WorkspaceWindow {
             return Ok(());
         }
 
-        let path = std::path::Path::new(path_or_anchor);
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            document_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join(path)
-        };
+        let (path, anchor) =
+            resolve_file_link(&document_path, destination).ok_or("Invalid file link")?;
         if !path.exists() {
             return Err("Linked file does not exist");
         }
-        let opens_as_document = path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("org")
-                    || extension.eq_ignore_ascii_case("md")
-                    || extension.eq_ignore_ascii_case("markdown")
-            });
-        if opens_as_document {
-            if let Some(anchor) = search {
-                self.request_open_at(path, anchor.into(), window, cx);
-            } else {
-                self.open(path, cx);
-            }
+        if crate::preview::is_supported_document(&path) {
+            self.open_document_link(path, anchor, cx);
         } else {
             cx.open_with_system(&path);
         }
         Ok(())
+    }
+
+    pub(crate) fn open_document_link(
+        &mut self,
+        path: std::path::PathBuf,
+        anchor: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.buffer_busy() {
+            return;
+        }
+        self.open(path, cx);
+        self.set_active_surface(crate::app::PaneSurface::Reading, cx);
+        // A newly loading document starts at its own destination, not the source pane's anchor.
+        if matches!(self.state, crate::app::WorkspaceLoadState::Loading { .. }) {
+            *self
+                .pending_surface_anchors
+                .get_mut(self.document_workspace.active_pane) = None;
+        }
+        if let Some(anchor) = anchor {
+            self.pending_navigation = Some((self.generation, anchor.into()));
+            if matches!(self.state, crate::app::WorkspaceLoadState::Ready { .. }) {
+                self.apply_pending_navigation(self.generation, cx);
+            }
+        }
     }
 
     fn copy_reading_code(
@@ -230,18 +237,6 @@ impl WorkspaceWindow {
         cx.open_with_system(&path);
         Ok(())
     }
-}
-
-fn split_link_target(destination: &str) -> (&str, Option<&str>) {
-    if let Some((path, search)) = destination.split_once("::") {
-        return (path, Some(search));
-    }
-    if destination.starts_with('#') {
-        return (destination, None);
-    }
-    destination
-        .split_once('#')
-        .map_or((destination, None), |(path, anchor)| (path, Some(anchor)))
 }
 
 fn target_belongs_to_panel(

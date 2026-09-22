@@ -665,6 +665,14 @@ pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
 
 impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
 
+#[derive(Clone, Debug)]
+pub(crate) struct EditorOpenDocumentEvent {
+    pub(crate) path: PathBuf,
+    pub(crate) anchor: Option<String>,
+}
+
+impl EventEmitter<EditorOpenDocumentEvent> for SemanticEditor {}
+
 /// Everything needed to recompute an inline image's painted size without
 /// reading the document again.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -824,6 +832,12 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) -> Self {
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
+            let reload_anchor = matches!(event, DocumentEvent::Reloaded { .. }).then(|| {
+                let line = this.animated_line_at_y(this.scroll_y);
+                let fraction = (this.scroll_y - this.animated_line_start_y(line))
+                    / this.animated_line_height_px(line).max(1.0);
+                (line, fraction.clamp(0.0, 1.0))
+            });
             let mut retain_inline_geometry = false;
             if matches!(
                 event,
@@ -1016,8 +1030,6 @@ impl SemanticEditor {
                 this.vertical_goal_x = None;
             } else if let DocumentEvent::ResourceChanged { path, .. } = event {
                 this.refresh_inline_image(path, cx);
-            } else if matches!(event, DocumentEvent::Reloaded { .. }) {
-                this.display_map.invalidate_layout();
             } else if matches!(event, DocumentEvent::PathChanged { .. }) {
                 this.syntax_service.reset();
                 this.folds = folding::EditorFoldState::default();
@@ -1053,15 +1065,26 @@ impl SemanticEditor {
                 this.inline_image_cache.borrow_mut().clear();
                 this.clear_source_run_feedback();
                 this.pending_reveal_caret = false;
-                this.scroll_y = 0.0;
                 this.minimap.note_viewport_changed();
-                this.scroll_x = 0.0;
                 this.layout_anchor = None;
                 this.folds = folding::EditorFoldState::default();
                 this.fold_markers = Arc::new(HashSet::new());
                 this.fold_animation = None;
                 this.fold_animation_revision = this.fold_animation_revision.wrapping_add(1);
                 this.display_map.set_hidden_ranges(Vec::new());
+                this.display_map.invalidate_layout();
+                this.display_map
+                    .configure(snapshot.len_lines(), this.display_map.wrap_width());
+                let (line, fraction) = reload_anchor.expect("reload has a viewport anchor");
+                let line = line.min(snapshot.len_lines().saturating_sub(1));
+                let viewport_height = this
+                    .viewport
+                    .map_or(0.0, |bounds| f32::from(bounds.size.height));
+                let max_scroll = (this.display_map.total_height() - viewport_height).max(0.0);
+                this.scroll_y = (this.display_map.line_start_y(line)
+                    + fraction * this.display_map.line_height_px(line))
+                .clamp(0.0, max_scroll);
+                this.scroll_at_end = false;
             }
             cx.notify();
         });
@@ -1944,6 +1967,53 @@ mod tests {
         let status = cx.read(|cx| editor.read(cx).status(cx));
         assert_eq!(status.visible_bottom_line, 3);
         assert!(status.reached_end);
+    }
+
+    #[gpui::test]
+    fn reload_preserves_viewport_and_clamps_when_the_file_shrinks(cx: &mut gpui::TestAppContext) {
+        let source = (0..200).map(|i| format!("line {i}\n")).collect::<String>();
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8(PathBuf::from("reload.org"), source.clone().into_bytes())
+                .unwrap()
+        });
+        let editor = cx.new(|cx| SemanticEditor::new(session.clone(), cx));
+        editor.update(cx, |editor, _| {
+            editor.scroll_y = editor.display_map.line_start_y(80) + LINE_HEIGHT * 0.25;
+            editor.scroll_x = 42.0;
+            editor.pending_reveal_caret = true;
+        });
+        session.update(cx, |session, cx| {
+            let reload = session
+                .reload_request()
+                .unwrap()
+                .prepare(format!("{source}new line\n").into_bytes())
+                .unwrap();
+            session.apply_reload(reload, cx).unwrap();
+        });
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            let (offset, fraction) = editor.top_source_anchor(&session.read(cx).snapshot());
+            assert_eq!(
+                session.read(cx).snapshot().line_index_at(offset).unwrap(),
+                LineIndex(80)
+            );
+            assert!((fraction - 0.25).abs() < 0.001);
+            assert_eq!(editor.scroll_x, 42.0);
+            assert!(!editor.pending_reveal_caret);
+        });
+        session.update(cx, |session, cx| {
+            let reload = session
+                .reload_request()
+                .unwrap()
+                .prepare(b"short\n".to_vec())
+                .unwrap();
+            session.apply_reload(reload, cx).unwrap();
+        });
+        cx.read(|cx| {
+            let editor = editor.read(cx);
+            assert!(editor.scroll_y <= editor.display_map.total_height());
+            assert!(editor.scroll_y.is_finite());
+        });
     }
 
     #[gpui::test]

@@ -9,6 +9,8 @@ use std::{ops::Range, sync::Arc};
 
 mod destination;
 pub(crate) use destination::LiteralDestination;
+mod file;
+pub(crate) use file::{resolve_file_link, split_link_target};
 
 /// Document format context for [`classify`]: a bare word is a fuzzy internal
 /// link in Org but a relative file path in Markdown.

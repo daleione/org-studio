@@ -295,7 +295,7 @@ pub struct WorkspaceWindow {
     pub(crate) state: WorkspaceLoadState,
     pub(crate) echo: EchoAreaHost,
     pub(crate) document_subscription: Option<Subscription>,
-    pub(crate) editor_minimap_width_subscriptions: Vec<Subscription>,
+    pub(crate) editor_subscriptions: Vec<(Subscription, Subscription)>,
     pub(crate) subscribed_document: Option<crate::document::DocumentId>,
     pub(crate) recent_documents: Vec<crate::recent_documents::RecentDocument>,
     pub(crate) home_error: Option<Arc<str>>,
