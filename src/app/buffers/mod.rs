@@ -12,8 +12,10 @@ use std::{
     sync::Arc,
 };
 
+mod navigation;
 mod picker;
 mod pool;
+mod quick_view;
 mod review;
 #[cfg(test)]
 mod tests;
@@ -28,7 +30,9 @@ gpui::actions!(
         CloseBuffer,
         SaveBuffers,
         NextBuffer,
-        PreviousBuffer
+        PreviousBuffer,
+        NavigateBack,
+        NavigateForward
     ]
 );
 
@@ -41,6 +45,7 @@ pub(crate) struct ParkedDocument {
 
 #[derive(Default)]
 pub(crate) struct BufferHost {
+    navigation: navigation::NavigationHistory,
     parked: Vec<ParkedDocument>,
     pub(crate) panel: Option<Panel>,
     pub(crate) returning: bool,
@@ -72,7 +77,6 @@ pub(crate) struct Picker {
     input: Entity<crate::app::native_input::NativeInput>,
     _subscription: Subscription,
     selected: usize,
-    recent: bool,
     pending_confirm: bool,
     message: Option<String>,
     return_search: bool,

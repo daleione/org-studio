@@ -225,6 +225,12 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::SwitchBuffer) => {
                 self.open_buffer_picker(crate::app::buffers::PickerIntent::Switch, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::NavigateBack) => {
+                self.navigate_history(false, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::NavigateForward) => {
+                self.navigate_history(true, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::CloseBuffer) => {
                 self.open_buffer_picker(crate::app::buffers::PickerIntent::Close, cx)
             }

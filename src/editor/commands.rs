@@ -1861,6 +1861,27 @@ impl SemanticEditor {
         }
     }
 
+    pub(crate) fn scroll_x(&self) -> f32 {
+        self.scroll_x
+    }
+
+    pub(crate) fn restore_scroll(
+        &mut self,
+        source: ByteOffset,
+        fraction: f32,
+        x: f32,
+        cx: &mut Context<Self>,
+    ) {
+        self.scroll_to_source_offset(source, cx);
+        let snapshot = self.snapshot(cx);
+        if let Ok(line) = snapshot.line_index_at(source) {
+            self.scroll_y += fraction * self.display_map.line_height_px(line.0);
+        }
+        self.scroll_x = x;
+        self.pending_reveal_caret = false;
+        cx.notify();
+    }
+
     pub(crate) fn top_source_anchor(&self, snapshot: &DocumentSnapshot) -> (ByteOffset, f32) {
         let line = self.animated_line_at_y(self.scroll_y);
         let line_start = self.animated_line_start_y(line);

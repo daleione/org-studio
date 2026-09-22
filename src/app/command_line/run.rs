@@ -112,23 +112,7 @@ impl WorkspaceWindow {
         };
         self.command_line.remember(entry.input);
         if let Some(target) = target {
-            let pane = self.document_workspace.active_pane;
-            *self.pending_surface_anchors.get_mut(pane) = None;
-            match self.document_workspace.active_surface() {
-                PaneSurface::Editor => {
-                    if let Some(editor) = self.editor(pane) {
-                        editor.update(cx, |editor, cx| editor.jump_to_source_offset(target, cx));
-                    }
-                }
-                PaneSurface::Reading => {
-                    if let Some(panel) = self.reading_panel_for(pane) {
-                        panel.update(cx, |panel, cx| {
-                            panel.reveal_source_offset(target);
-                            cx.notify();
-                        });
-                    }
-                }
-            }
+            self.navigate_to_source(target, cx);
             self.close_command_line(cx);
         } else if let (CommandImplementation::Builtin(BuiltinCommand::AlignTables), Some(scope)) =
             (implementation, entry.scope)

@@ -253,33 +253,12 @@ pub(crate) fn render_status_popover(
                                 });
                                 if let Some(mapped) = mapped {
                                     let side = super::pane_side_for_status(pane);
-                                    match this.document_workspace.surface(side) {
-                                        crate::app::PaneSurface::Editor => {
-                                            if let Some(editor) = this.editor(side) {
-                                                editor.update(cx, |editor, cx| {
-                                                    editor.set_selection(
-                                                        crate::document::Selection::caret(
-                                                            mapped.range.start,
-                                                        ),
-                                                        cx,
-                                                    );
-                                                    editor.scroll_to_source_offset(
-                                                        mapped.range.start,
-                                                        cx,
-                                                    );
-                                                });
-                                            }
-                                        }
-                                        crate::app::PaneSurface::Reading => {
-                                            if this.latest_preview_is_current(cx)
-                                                && let Some(panel) = this.reading_panel_for(side)
-                                            {
-                                                panel.update(cx, |panel, _| {
-                                                    panel
-                                                        .scroll_to_source_offset(mapped.range.start)
-                                                });
-                                            }
-                                        }
+                                    this.activate_pane(side, cx);
+                                    if this.document_workspace.active_surface()
+                                        != crate::app::PaneSurface::Reading
+                                        || this.latest_preview_is_current(cx)
+                                    {
+                                        this.navigate_to_source(mapped.range.start, cx);
                                     }
                                 }
                                 this.status.popover = None;

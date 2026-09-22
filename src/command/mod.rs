@@ -71,6 +71,8 @@ pub enum BuiltinCommand {
     SaveDocument,
     SaveDocumentAs,
     SwitchBuffer,
+    NavigateBack,
+    NavigateForward,
     CloseBuffer,
     SaveBuffers,
     NextBuffer,

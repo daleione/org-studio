@@ -452,6 +452,7 @@ fn open_picker_includes_documents_loaded_in_the_background(cx: &mut gpui::TestAp
     let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     w.update(cx, |w, cx| {
         w.create_buffer("当前.org".into(), None, cx);
+        w.recent_documents.clear();
         w.open_buffer_picker(PickerIntent::Switch, cx);
         w.open_background_buffer(path.clone(), cx);
     });
@@ -544,9 +545,6 @@ fn recent_panel_scroll_stays_inside_the_panel(cx: &mut gpui::TestAppContext) {
             })
             .collect();
         w.open_buffer_picker(PickerIntent::Switch, cx);
-        if let Some(Panel::Picker(p)) = &mut w.buffers.panel {
-            p.recent = true;
-        }
     });
     cx.run_until_parked();
     let bounds = cx.debug_bounds("floating-status-line").unwrap();

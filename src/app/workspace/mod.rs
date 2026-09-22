@@ -768,11 +768,15 @@ impl WorkspaceWindow {
         let buffer_count = self.buffer_sessions().count();
         let layout = self.status_layout(
             &snapshot,
-            (status_width - crate::app::status_line::buffer_status_width(buffer_count)).max(1.),
+            (status_width
+                - crate::app::status_line::buffer_status_width(buffer_count)
+                - self.navigation_status_width(pane, status_width, render.cx))
+            .max(1.),
             render.window,
         );
         let style_popover_left =
-            crate::app::status_line::reading_style_popover_left(&snapshot, &layout, render.window);
+            crate::app::status_line::reading_style_popover_left(&snapshot, &layout, render.window)
+                + self.navigation_status_width(pane, status_width, render.cx);
         let status_popover = self.status.popover_for(snapshot.pane);
         let mut echo = (pane == self.document_workspace.active_pane)
             .then(|| self.displayed_echo_message())
@@ -792,20 +796,22 @@ impl WorkspaceWindow {
         let command_panel = self
             .status
             .shell_owns(crate::app::status_line::shell::ShellKind::Command, pane);
-        let returning_status =
-            (self.search_is_closing(pane) || buffer_panel || prefix_panel || command_panel).then(
-                || {
-                    crate::app::status_line::render_status_line_content(
-                        &snapshot,
-                        layout.clone(),
-                        entity.clone(),
-                        render.window,
-                        echo.take(),
-                        true,
-                        Some(buffer_count),
-                    )
-                },
-            );
+        let returning_status = (self.search_is_closing(pane)
+            || buffer_panel
+            || prefix_panel
+            || command_panel)
+            .then(|| {
+                let content = crate::app::status_line::render_status_line_content(
+                    &snapshot,
+                    layout.clone(),
+                    entity.clone(),
+                    render.window,
+                    echo.take(),
+                    true,
+                    Some(buffer_count),
+                );
+                self.with_navigation_status(content, pane, status_width, entity.clone(), render.cx)
+            });
         div()
             .w(px(render.width))
             .h_full()
@@ -886,7 +892,13 @@ impl WorkspaceWindow {
                     crate::app::status_line::floating_status_container(
                         crate::app::status_line::FLOATING_STATUS_HEIGHT,
                     )
-                    .child(content)
+                    .child(self.with_navigation_status(
+                        content,
+                        pane,
+                        status_width,
+                        entity.clone(),
+                        render.cx,
+                    ))
                     .into_any_element()
                 })
             })

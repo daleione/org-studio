@@ -167,6 +167,11 @@ impl WorkspaceWindow {
             editing,
             selected,
         );
+        all.retain(|entry| match entry.input.as_str() {
+            "navigate-back" => self.navigation_can_go(false, cx),
+            "navigate-forward" => self.navigation_can_go(true, cx),
+            _ => true,
+        });
         if editing
             && let Some(editor) = self.editor(pane)
             && let Some(available) = editor.read(cx).available_table_edits(cx)

@@ -208,6 +208,9 @@ fn main() {
             .map(|path| preload_initial_document(path, cx));
         org_studio::editor::init(cx);
         cx.bind_keys([
+            KeyBinding::new("cmd-p", org_studio::app::SwitchBuffer, None),
+            KeyBinding::new("cmd-[", org_studio::app::NavigateBack, None),
+            KeyBinding::new("cmd-]", org_studio::app::NavigateForward, None),
             KeyBinding::new("cmd-o", OpenDocument, None),
             KeyBinding::new("cmd-s", SaveDocument, None),
             KeyBinding::new("cmd-shift-s", SaveDocumentAs, None),
@@ -249,6 +252,8 @@ fn main() {
             org_studio::settings::WorkspaceSettings::load().language,
         ));
         cx.intercept_keystrokes(WorkspaceWindow::intercept_fullscreen_escape)
+            .detach();
+        cx.intercept_keystrokes(WorkspaceWindow::intercept_quick_open_shortcuts)
             .detach();
         let displays = cx.displays();
         for (index, display) in displays.iter().enumerate() {

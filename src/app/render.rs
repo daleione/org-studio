@@ -501,6 +501,16 @@ impl Render for WorkspaceWindow {
                 }),
             )
             .on_action(
+                cx.listener(|this, _: &crate::app::buffers::NavigateBack, _, cx| {
+                    this.navigate_history(false, cx)
+                }),
+            )
+            .on_action(
+                cx.listener(|this, _: &crate::app::buffers::NavigateForward, _, cx| {
+                    this.navigate_history(true, cx)
+                }),
+            )
+            .on_action(
                 cx.listener(|this, _: &crate::app::buffers::CloseBuffer, _, cx| {
                     this.open_buffer_picker(crate::app::buffers::PickerIntent::Close, cx)
                 }),

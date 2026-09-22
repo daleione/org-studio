@@ -168,9 +168,7 @@ impl WorkspaceWindow {
                 self.editor(pane)
                     .map_or(0., |e| e.read(cx).top_source_anchor(&snapshot).1)
             },
-            scroll_x: self
-                .editor(pane)
-                .map_or(0., |e| e.read(cx).search_scroll_x()),
+            scroll_x: self.editor(pane).map_or(0., |e| e.read(cx).scroll_x()),
             selection,
             selection_revision: snapshot.revision(),
             after_replace: false,
@@ -247,7 +245,7 @@ impl WorkspaceWindow {
             session.scroll =
                 snapshot.revision_range(crate::document::ByteRange::new(offset.0, offset.0));
             session.scroll_fraction = fraction;
-            session.scroll_x = editor.search_scroll_x();
+            session.scroll_x = editor.scroll_x();
         }
         session.focus_pending = !session.mode.replacing();
         session.replacement_focus_pending = session.mode.replacing();
@@ -295,12 +293,7 @@ impl WorkspaceWindow {
                         );
                     }
                     if let Ok(scroll) = e.session().read(cx).map_range_to_current(s.scroll) {
-                        e.search_restore_scroll(
-                            scroll.range.start,
-                            s.scroll_fraction,
-                            s.scroll_x,
-                            cx,
-                        );
+                        e.restore_scroll(scroll.range.start, s.scroll_fraction, s.scroll_x, cx);
                     }
                 } else if e.session().read(cx).id() == s.document
                     && e.session().read(cx).revision() == s.revision

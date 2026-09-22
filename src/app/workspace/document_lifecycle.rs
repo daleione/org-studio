@@ -162,6 +162,7 @@ impl WorkspaceWindow {
         preserve_previous: bool,
         cx: &mut Context<Self>,
     ) {
+        let navigation_origin = self.capture_navigation_location(cx);
         if !preserve_previous {
             self.stop_document_watch();
         }
@@ -196,6 +197,9 @@ impl WorkspaceWindow {
         self.load_task = Some(cx.spawn(async move |this, cx| {
             let result = background.await;
             let _ = this.update(cx, |this, cx| {
+                if generation == this.generation && result.is_ok() {
+                    this.remember_navigation_location(navigation_origin);
+                }
                 if this.apply_load_result(generation, result, cx) {
                     this.reconcile_derived_preview(cx);
                     this.sync_document_watch(cx);
@@ -333,11 +337,11 @@ impl WorkspaceWindow {
         // `notify` can spend hundreds of milliseconds initializing FSEvents on macOS. Keep that
         // blocking setup off GPUI's executor; otherwise completion of an already-loaded document
         // can sit behind the watcher even though parsing took less than a millisecond.
-        let (setup_sender, setup_receiver) = async_channel::bounded(1);
+        let (setup_sender, setup_receiver) = std::sync::mpsc::sync_channel(1);
         let setup_started = std::thread::Builder::new()
             .name("org-studio-file-watch-setup".into())
             .spawn(move || {
-                let _ = setup_sender.send_blocking(crate::file_watcher::FileWatch::new(target));
+                let _ = setup_sender.send(crate::file_watcher::FileWatch::new(target));
             });
         if setup_started.is_err() {
             self.file_watch_directory = None;
@@ -348,7 +352,17 @@ impl WorkspaceWindow {
             return;
         }
         self.file_watch_task = Some(cx.spawn(async move |this, cx| {
-            let watch = match setup_receiver.recv().await {
+            // Match the buffer watcher: external threads do not wake GPUI tasks directly.
+            let setup = loop {
+                match setup_receiver.try_recv() {
+                    Ok(result) => break Ok(result),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => break Err(()),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        cx.background_executor().timer(Duration::from_millis(50)).await;
+                    }
+                }
+            };
+            let watch = match setup {
                 Ok(Ok(watch)) => watch,
                 Ok(Err(error)) => {
                     let message: Arc<str> = format!("Could not watch the document: {error}").into();

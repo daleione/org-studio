@@ -88,6 +88,27 @@ pub(super) fn entries(
             "Go to source line",
             None,
         ),
+        (
+            "org-studio.workspace.switch-buffer",
+            "quick-open",
+            "快速打开与跳转",
+            "Quick open and navigate",
+            None,
+        ),
+        (
+            "org-studio.workspace.navigate-back",
+            "navigate-back",
+            "返回上个位置",
+            "Go back",
+            None,
+        ),
+        (
+            "org-studio.workspace.navigate-forward",
+            "navigate-forward",
+            "前往下个位置",
+            "Go forward",
+            None,
+        ),
     ];
     specs
         .into_iter()

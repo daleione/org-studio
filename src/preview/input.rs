@@ -124,6 +124,16 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
     }
     for (name, title, command) in [
         (
+            "org-studio.workspace.navigate-back",
+            "Navigate back",
+            BuiltinCommand::NavigateBack,
+        ),
+        (
+            "org-studio.workspace.navigate-forward",
+            "Navigate forward",
+            BuiltinCommand::NavigateForward,
+        ),
+        (
             "org-studio.workspace.switch-buffer",
             "Switch document",
             BuiltinCommand::SwitchBuffer,
@@ -173,7 +183,11 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             .register_builtin(BuiltinCommandSpec {
                 name: name.into(),
                 aliases: match command {
-                    BuiltinCommand::SwitchBuffer => &["switch-to-buffer", "list-buffers"],
+                    BuiltinCommand::SwitchBuffer => {
+                        &["switch-to-buffer", "list-buffers", "quick-open"]
+                    }
+                    BuiltinCommand::NavigateBack => &["navigate-back"],
+                    BuiltinCommand::NavigateForward => &["navigate-forward"],
                     BuiltinCommand::CloseBuffer => &["kill-buffer"],
                     BuiltinCommand::SaveBuffers => &["save-some-buffers"],
                     BuiltinCommand::NextBuffer => &["next-buffer"],
@@ -870,6 +884,18 @@ pub(crate) fn preview_bindings() -> Vec<BindingSpec<'static>> {
 
 pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
     vec![
+        BindingSpec {
+            keys: "s-p",
+            behavior: BindingBehavior::Command("quick-open"),
+        },
+        BindingSpec {
+            keys: "s-[",
+            behavior: BindingBehavior::Command("navigate-back"),
+        },
+        BindingSpec {
+            keys: "s-]",
+            behavior: BindingBehavior::Command("navigate-forward"),
+        },
         BindingSpec {
             keys: "M-x",
             behavior: BindingBehavior::Command("org-studio.workspace.execute-command"),

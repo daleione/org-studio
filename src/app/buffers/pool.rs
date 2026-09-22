@@ -22,16 +22,19 @@ impl WorkspaceWindow {
         if self.buffer_session(id, cx).is_none() {
             return;
         }
+        let is_current = self
+            .document_session()
+            .is_some_and(|s| s.read(cx).id() == id);
+        if !is_current {
+            self.remember_navigation_location(self.capture_navigation_location(cx));
+        }
         self.background_pending_open(cx);
         self.close_command_line(cx);
         self.close_search(false, cx);
         self.search.presentation = None;
         self.dismiss_buffer_panel(cx);
         self.content_route = ContentRoute::Document;
-        if self
-            .document_session()
-            .is_some_and(|s| s.read(cx).id() == id)
-        {
+        if is_current {
             self.request_document_focus(cx);
             cx.notify();
             return;

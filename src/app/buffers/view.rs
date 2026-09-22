@@ -210,14 +210,15 @@ impl WorkspaceWindow {
                 .child(close)
                 .into_any_element();
         }
+        if p.intent == PickerIntent::Switch {
+            return self.quick_picker_view(p, entity, close.into_any_element(), cx);
+        }
         let items = self.buffer_candidates(cx);
         let total = items.len();
         let heading = if p.intent == PickerIntent::Close {
             self.buffer_text("关闭文档", "Close document")
         } else if p.intent == PickerIntent::File {
             self.buffer_text("打开 / 新建文件", "Open / create file")
-        } else if p.recent {
-            self.buffer_text("最近", "Recent")
         } else {
             self.buffer_text("已打开", "Open documents")
         };
@@ -328,10 +329,6 @@ impl WorkspaceWindow {
                 .to_owned()
             }
         });
-        let tabs = [
-            (false, self.buffer_text("已打开", "Open")),
-            (true, self.buffer_text("最近", "Recent")),
-        ];
         div()
             .size_full()
             .flex()
@@ -399,46 +396,6 @@ impl WorkspaceWindow {
                     .flex()
                     .items_center()
                     .gap(px(12.))
-                    .when(p.intent != PickerIntent::File, |footer| {
-                        footer.child(
-                            div()
-                                .flex()
-                                .flex_none()
-                                .p(px(2.))
-                                .rounded(px(6.))
-                                .bg(rgb(theme.hover))
-                                .children(tabs.into_iter().map(|(recent, label)| {
-                                    let entity = entity.clone();
-                                    button(
-                                        if recent {
-                                            "buffer-recent"
-                                        } else {
-                                            "buffer-open"
-                                        },
-                                        label,
-                                    )
-                                    .when(recent == p.recent, |b| {
-                                        b.bg(rgb(theme.background)).text_color(rgb(theme.accent))
-                                    })
-                                    .on_mouse_down(
-                                        MouseButton::Left,
-                                        move |_, _, cx| {
-                                            cx.stop_propagation();
-                                            entity.update(cx, |w, cx| {
-                                                if let Some(Panel::Picker(p)) = &mut w.buffers.panel
-                                                    && p.intent != PickerIntent::Close
-                                                {
-                                                    p.recent = recent;
-                                                    p.selected = 0;
-                                                }
-                                                w.buffers.focus_pending = true;
-                                                cx.notify();
-                                            });
-                                        },
-                                    )
-                                })),
-                        )
-                    })
                     .child(div().flex_1().min_w_0().h(px(34.)).child(p.input.clone())),
             )
             .into_any_element()

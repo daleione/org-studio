@@ -26,7 +26,9 @@ use workspace::ScrollBenchmark;
 
 mod agenda;
 pub(crate) mod buffers;
-pub use buffers::{CloseBuffer, NewDocument, SaveBuffers, SwitchBuffer};
+pub use buffers::{
+    CloseBuffer, NavigateBack, NavigateForward, NewDocument, SaveBuffers, SwitchBuffer,
+};
 mod command_line;
 mod command_window;
 mod component;
