@@ -682,7 +682,6 @@ impl WorkspaceWindow {
             ContentRoute::Agenda => div().size_full().child(self.agenda.render(
                 entity.clone(),
                 viewport_width,
-                self.window_title(cx),
                 window,
                 !cx.reduce_motion(),
                 titlebar_inset,

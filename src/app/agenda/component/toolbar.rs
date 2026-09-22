@@ -16,7 +16,6 @@ pub(crate) struct AgendaToolbarProps<'a> {
     pub(crate) language: Language,
     pub(crate) window_width: f32,
     pub(crate) main_content_offset: f32,
-    pub(crate) window_title: String,
     pub(crate) search: Option<Entity<crate::app::native_input::NativeInput>>,
     pub(crate) motion_enabled: bool,
     /// Left inset of the titlebar row; shrinks while fullscreen hides the
@@ -138,7 +137,6 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
         language,
         window_width,
         main_content_offset,
-        window_title,
         search,
         motion_enabled,
         titlebar_inset,
@@ -233,7 +231,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
         .border_color(rgb(super::super::style::BORDER()))
         .child(
             div()
-                .debug_selector(|| "agenda-titlebar-file-row".to_owned())
+                .debug_selector(|| "agenda-titlebar-controls".to_owned())
                 .absolute()
                 .top_0()
                 .left(px(titlebar_inset + 6. - main_content_offset))
@@ -245,22 +243,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                 .child(crate::app::render::theme_toggle_button(
                     workspace.clone(),
                     theme_mode,
-                ))
-                .child(
-                    div()
-                        .debug_selector(|| "agenda-titlebar-file-name".to_owned())
-                        .w(px(240.))
-                        .h(px(crate::app::TITLEBAR_HEIGHT))
-                        .flex()
-                        .items_center()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .text_size(px(12.))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(super::super::style::MUTED()))
-                        .child(window_title),
-                ),
+                )),
         )
         .child(titlebar_actions.absolute().top(px(4.)).right(px(24.)))
         .child(first)
@@ -545,7 +528,6 @@ mod tests {
                     language: Language::Chinese,
                     window_width: 250.,
                     main_content_offset: 0.,
-                    window_title: "tasks.org".to_owned(),
                     search: None,
                     motion_enabled: true,
                     titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
@@ -619,7 +601,6 @@ mod tests {
                     language: Language::Chinese,
                     window_width: 1000.,
                     main_content_offset: 0.,
-                    window_title: "tasks.org".to_owned(),
                     search: None,
                     motion_enabled: true,
                     titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,
@@ -628,19 +609,14 @@ mod tests {
         }
         let (_, cx) = cx.add_window_view(|_, _| Harness(workspace));
         let actions = cx.debug_bounds("agenda-toolbar-actions").unwrap();
-        let file_row = cx.debug_bounds("agenda-titlebar-file-row").unwrap();
+        let controls = cx.debug_bounds("agenda-titlebar-controls").unwrap();
         let edit_button = cx.debug_bounds("agenda-titlebar-edit-toggle").unwrap();
-        let filename = cx.debug_bounds("agenda-titlebar-file-name").unwrap();
+        assert!(cx.debug_bounds("agenda-titlebar-file-name").is_none());
         let title = cx.debug_bounds("agenda-toolbar-title-row").unwrap();
         assert_eq!(actions.top(), px(4.));
         assert_eq!(actions.bottom(), px(crate::app::TITLEBAR_HEIGHT - 4.));
-        assert_eq!(file_row.left(), px(84.));
+        assert_eq!(controls.left(), px(84.));
         assert_eq!(edit_button.left(), px(84.));
-        assert!(
-            filename.left() >= edit_button.right(),
-            "the file name must sit to the right of the edit button"
-        );
-        assert_eq!(filename.bottom(), px(crate::app::TITLEBAR_HEIGHT));
         assert!(title.top() > actions.bottom());
     }
 
@@ -657,7 +633,6 @@ mod tests {
                     language: Language::Chinese,
                     window_width: 900.,
                     main_content_offset: 0.,
-                    window_title: "tasks.org".to_owned(),
                     search: None,
                     motion_enabled: true,
                     titlebar_inset: crate::app::TITLEBAR_LEADING_INSET,

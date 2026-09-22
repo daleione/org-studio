@@ -107,6 +107,7 @@ fn document_titlebar(
     export_open: bool,
     titlebar_inset: f32,
     theme_mode: ThemeMode,
+    title: String,
 ) -> gpui::Div {
     let theme = current_theme();
     let sidebar_workspace = workspace.clone();
@@ -128,6 +129,9 @@ fn document_titlebar(
     };
     let agenda_workspace = workspace.clone();
     let agenda_icon_color = theme.foreground;
+    // Equal margins keep the title centered in the window, clear of both button groups.
+    let title_inset =
+        (titlebar_inset + 64.0).max(crate::app::TITLEBAR_TRAILING_INSET + 96.0) + 12.0;
     div()
         .debug_selector(|| "document-titlebar".to_owned())
         .absolute()
@@ -228,6 +232,28 @@ fn document_titlebar(
                 }),
         )
         .child(theme_toggle_button(workspace, theme_mode))
+        .child(
+            div()
+                .absolute()
+                .top_0()
+                .left(px(title_inset))
+                .right(px(title_inset))
+                .h_full()
+                .min_w_0()
+                .overflow_hidden()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(
+                    div()
+                        .debug_selector(|| "document-titlebar-filename".to_owned())
+                        .min_w_0()
+                        .truncate()
+                        .text_size(px(13.0))
+                        .text_color(rgb(theme.foreground))
+                        .child(title),
+                ),
+        )
 }
 
 impl Render for WorkspaceWindow {
@@ -576,6 +602,7 @@ impl Render for WorkspaceWindow {
                     self.export.is_open(),
                     titlebar_inset,
                     self.theme_mode(),
+                    self.window_title(cx),
                 ))
             })
             .child(
@@ -789,6 +816,7 @@ mod tests {
                 export_open,
                 crate::app::TITLEBAR_LEADING_INSET,
                 theme_mode,
+                self.0.read(cx).window_title(cx),
             )
         }
     }
@@ -809,6 +837,13 @@ mod tests {
         cx: &mut gpui::TestAppContext,
     ) {
         let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        workspace.update(cx, |workspace, cx| {
+            workspace.create_buffer(
+                "Project notes and reference material for the next release.org".into(),
+                None,
+                cx,
+            );
+        });
         let workspace_for_view = workspace.clone();
         let (_, cx) = cx.add_window_view(move |_, _| TitlebarHarness(workspace_for_view));
 
@@ -871,6 +906,17 @@ mod tests {
             workspace.read_with(cx, |workspace, _| workspace.minimap_visible()),
             minimap_was_visible
         );
+
+        for width in [900., 390.] {
+            cx.simulate_resize(gpui::size(px(width), px(600.)));
+            cx.run_until_parked();
+            let bar = cx.debug_bounds("document-titlebar").unwrap();
+            let title = cx.debug_bounds("document-titlebar-filename").unwrap();
+            let left = cx.debug_bounds("document-titlebar-agenda-toggle").unwrap();
+            let right = cx.debug_bounds("document-titlebar-export-toggle").unwrap();
+            assert!((f32::from(title.center().x - bar.center().x)).abs() < 1.);
+            assert!(title.left() >= left.right() && title.right() <= right.left());
+        }
     }
 
     #[gpui::test]
