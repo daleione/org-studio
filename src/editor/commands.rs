@@ -679,13 +679,16 @@ impl SemanticEditor {
     }
 
     pub(crate) fn align_table_at_selection(&mut self, cx: &mut Context<Self>) -> bool {
+        self.align_table_at(self.selection.head(), cx)
+    }
+
+    pub(super) fn align_table_at(&mut self, offset: ByteOffset, cx: &mut Context<Self>) -> bool {
         if self.is_read_only(cx) {
             return false;
         }
         let snapshot = self.snapshot(cx);
         let path = self.session.read(cx).syntax_path().to_path_buf();
-        let Some(context) =
-            super::org_commands::EditorCommandContext::at(&path, &snapshot, self.selection.head())
+        let Some(context) = super::org_commands::EditorCommandContext::at(&path, &snapshot, offset)
         else {
             return false;
         };
@@ -786,6 +789,15 @@ impl SemanticEditor {
         edit: crate::command::TableEdit,
         cx: &mut Context<Self>,
     ) -> Result<(), &'static str> {
+        self.edit_table_at(edit, self.selection, cx)
+    }
+
+    pub(super) fn edit_table_at(
+        &mut self,
+        edit: crate::command::TableEdit,
+        target: Selection,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
         if self.is_read_only(cx) {
             return Err("只读文档 / Read-only document");
         }
@@ -794,13 +806,13 @@ impl SemanticEditor {
         let context = super::org_commands::EditorCommandContext::at(
             self.session.read(cx).syntax_path(),
             &snapshot,
-            self.selection.head(),
+            target.head(),
         )
         .ok_or("当前光标不在表格中 / No table at point")?;
         let table = super::org_commands::EditableTable::at(&snapshot, &context)
             .ok_or("当前光标不在表格中 / No table at point")?;
         let newline = self.session.read(cx).newline_sequence();
-        let change = table.edit(edit, &snapshot, self.selection, newline)?;
+        let change = table.edit(edit, &snapshot, target, newline)?;
         let killed = if edit == crate::command::TableEdit::KillRow {
             let mut text = snapshot.copy_range(context.line_range);
             text.push_str(newline);
@@ -1233,6 +1245,7 @@ impl SemanticEditor {
     }
 
     fn keyboard_quit(&mut self, _: &KeyboardQuit, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_table_actions(cx);
         self.dismiss_inline(cx);
         self.dismiss_todo(cx);
         self.todo.hover_range = None;
@@ -1415,6 +1428,10 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        self.table_hover(event.position, cx);
+        if self.table_menu_is_open() {
+            return;
+        }
         self.source_copy_hover(event.position, cx);
         self.inline_hover(event.position, cx);
         self.todo_hover(event.position, cx);
@@ -1719,6 +1736,7 @@ impl SemanticEditor {
     }
 
     pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
+        self.dismiss_table_actions(cx);
         self.dismiss_inline(cx);
         self.dismiss_todo(cx);
         self.todo.hover_range = None;
@@ -1955,10 +1973,13 @@ impl Render for SemanticEditor {
         let timestamp_overlay = self.timestamp_overlay(cx);
         let todo_overlay = self.todo_overlay(window, cx);
         let inline_overlay = self.inline_overlay(window, cx);
+        let table_overlays = self.table_overlays(window, cx);
         let source_copy_tooltip = self.source_copy_tooltip(window);
         div()
             .id("semantic-editor")
-            .key_context(if self.inline_actions.popup.is_some() {
+            .key_context(if self.table_menu_is_open() {
+                "TableMenu"
+            } else if self.inline_actions.popup.is_some() {
                 "InlinePicker"
             } else if self.todo.popup.is_some() {
                 "TodoPicker"
@@ -2029,6 +2050,7 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(Self::scroll_page_down))
             .on_action(cx.listener(Self::scroll_page_up))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::on_mouse_down))
+            .on_mouse_down(MouseButton::Right, cx.listener(Self::table_right_click))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _, cx| {
                 if this.inline_key(event, cx) {
                     cx.stop_propagation();
@@ -2045,6 +2067,7 @@ impl Render for SemanticEditor {
             }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !hovered {
+                    this.table_hover(window.mouse_position(), cx);
                     this.source_copy_hover(window.mouse_position(), cx);
                     this.inline_hover(window.mouse_position(), cx);
                     this.todo_hover(window.mouse_position(), cx);
@@ -2075,6 +2098,7 @@ impl Render for SemanticEditor {
             .children(timestamp_overlay)
             .children(todo_overlay)
             .children(inline_overlay)
+            .children(table_overlays)
             .children(source_copy_tooltip)
             .when_some(self.command_feedback.clone(), |editor, message| {
                 editor.child(

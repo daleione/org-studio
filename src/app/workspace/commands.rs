@@ -39,6 +39,9 @@ impl WorkspaceWindow {
             let workspace = workspace.read(cx);
             workspace.search_is_open()
                 || workspace.command_line_is_open()
+                || workspace
+                    .editor(workspace.document_workspace.active_pane)
+                    .is_some_and(|editor| editor.read(cx).table_menu_is_open())
                 || workspace.buffers.panel.is_some()
                 || workspace.keyboard.pending_keys().is_some()
         }) {

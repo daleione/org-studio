@@ -16,6 +16,7 @@ mod read_only;
 mod search;
 mod source_copy;
 mod syntax;
+mod table_actions;
 mod table_layout;
 mod timestamp;
 mod todo;
@@ -595,6 +596,7 @@ pub struct SemanticEditor {
     todo: todo::TodoInteraction,
     timestamp: timestamp::TimestampInteraction,
     inline_actions: inline_actions::InlineActions,
+    table_actions: table_actions::TableActions,
     hover_position: Option<Point<Pixels>>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_copy: source_copy::SourceCopy,
@@ -824,6 +826,7 @@ impl SemanticEditor {
                     | DocumentEvent::PathChanged { .. }
             ) {
                 retain_inline_geometry = this.inline_document_changed(event, cx);
+                this.dismiss_table_actions(cx);
                 this.dismiss_todo(cx);
                 this.todo.hover_range = None;
                 this.todo.config = None;
@@ -1109,6 +1112,7 @@ impl SemanticEditor {
             todo: todo::TodoInteraction::default(),
             timestamp: timestamp::TimestampInteraction::default(),
             inline_actions: inline_actions::InlineActions::default(),
+            table_actions: table_actions::TableActions::default(),
             hover_position: None,
             source_run_buttons: Arc::from([]),
             source_copy: source_copy::SourceCopy::default(),
@@ -1165,6 +1169,7 @@ impl SemanticEditor {
 
     pub(crate) fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         if self.display_map.set_soft_wrap(soft_wrap) {
+            self.dismiss_table_actions(cx);
             if soft_wrap {
                 self.scroll_x = 0.0;
             }
@@ -1213,6 +1218,7 @@ impl SemanticEditor {
         if self.content_font_size == font_size {
             return false;
         }
+        self.dismiss_table_actions(cx);
         self.finish_fold_animation();
         let viewport_height = self
             .viewport

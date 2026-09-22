@@ -91,6 +91,9 @@ pub(super) fn publish_frame(
 
     host.update(cx, |editor, cx| {
         let viewport_changed = editor.viewport != Some(bounds);
+        if viewport_changed {
+            editor.dismiss_table_actions(cx);
+        }
         editor.viewport = Some(bounds);
         editor.minimap.bounds =
             (editor.minimap.visible && editor.minimap.reveal >= 1.0).then_some(Bounds::new(

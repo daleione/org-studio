@@ -140,7 +140,6 @@ struct StatusColors {
     active_foreground: u32,
     badge_background: u32,
     badge_foreground: u32,
-    floating_background: u32,
 }
 
 static STATUS_LIGHT: StatusColors = StatusColors {
@@ -163,7 +162,6 @@ static STATUS_LIGHT: StatusColors = StatusColors {
     active_foreground: 0x4977cf,
     badge_background: 0xe4eaff,
     badge_foreground: 0x4565cd,
-    floating_background: 0xf7f9fbf5,
 };
 
 static STATUS_DARK: StatusColors = StatusColors {
@@ -188,7 +186,6 @@ static STATUS_DARK: StatusColors = StatusColors {
     active_foreground: 0x66b3ff,
     badge_background: 0x1b3a5c,
     badge_foreground: 0x66b3ff,
-    floating_background: 0x1e2b39f5,
 };
 
 fn status_colors() -> &'static StatusColors {
@@ -731,8 +728,8 @@ pub(crate) fn floating_status_container(height: f32) -> gpui::Div {
         .h(px(height))
         .rounded(px(10.0))
         .border_1()
-        .border_color(rgb(status_colors().border))
-        .bg(gpui::rgba(status_colors().floating_background))
+        .border_color(rgb(current_theme().floating_border))
+        .bg(gpui::rgba(current_theme().floating_background))
         .overflow_hidden()
         .shadow_lg()
 }
