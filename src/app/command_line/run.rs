@@ -47,6 +47,33 @@ impl WorkspaceWindow {
             return;
         };
         let implementation = prepared.implementation;
+        if let CommandImplementation::Builtin(BuiltinCommand::EditTable(edit)) = implementation {
+            let edit = if matches!(edit, crate::command::TableEdit::Sort { .. }) {
+                match catalog::sort_edit(&entry.input) {
+                    Ok(edit) => edit,
+                    Err(error) => {
+                        self.command_failure(error, cx);
+                        return;
+                    }
+                }
+            } else {
+                edit
+            };
+            let pane = self.document_workspace.active_pane;
+            let result = self
+                .editor(pane)
+                .ok_or("No active editor")
+                .and_then(|editor| {
+                    editor.update(cx, |editor, cx| editor.edit_table_at_selection(edit, cx))
+                });
+            if let Err(error) = result {
+                self.command_failure(error, cx);
+                return;
+            }
+            self.command_line.remember(entry.input);
+            self.close_command_line(cx);
+            return;
+        }
         let target = if implementation == CommandImplementation::Builtin(BuiltinCommand::GotoLine) {
             if entry.input == "goto-line" {
                 self.prompt_goto_line(cx);
@@ -83,11 +110,7 @@ impl WorkspaceWindow {
         } else {
             None
         };
-        self.command_line
-            .history
-            .retain(|value| value != &entry.input);
-        self.command_line.history.insert(0, entry.input);
-        self.command_line.history.truncate(30);
+        self.command_line.remember(entry.input);
         if let Some(target) = target {
             let pane = self.document_workspace.active_pane;
             *self.pending_surface_anchors.get_mut(pane) = None;

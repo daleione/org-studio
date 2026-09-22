@@ -3,7 +3,9 @@ use std::{ops::Range, path::Path};
 use unicode_width::UnicodeWidthStr;
 
 mod batch;
+mod edit;
 pub(crate) use batch::{TableAlignmentPlan, plan_table_alignment};
+pub(super) use edit::EditableTable;
 
 use crate::{
     document::{

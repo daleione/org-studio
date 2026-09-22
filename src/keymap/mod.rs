@@ -83,15 +83,13 @@ impl KeyStroke {
         if rest.is_empty() {
             return Err(KeyParseError::MissingKey(source.into()));
         }
-        if rest == "<" || rest == ">" {
-            modifiers |= SHIFT;
-        }
-        let key = match rest {
-            "<" => Arc::from(","),
-            ">" => Arc::from("."),
-            _ => normalize_key(rest),
-        };
-        Ok(Self { key, modifiers })
+        Ok(Self::new(
+            rest,
+            modifiers & CONTROL != 0,
+            modifiers & META != 0,
+            modifiers & SHIFT != 0,
+            modifiers & COMMAND != 0,
+        ))
     }
 
     pub fn key(&self) -> &str {
@@ -662,6 +660,12 @@ mod tests {
             KeyStroke::new("^", false, false, false, false),
             KeyStroke::parse("S-6").unwrap()
         );
+        for key in ["?", "^", "<", ">"] {
+            assert_eq!(
+                KeyStroke::parse(key).unwrap(),
+                KeyStroke::new(key, false, false, false, false)
+            );
+        }
     }
 
     #[test]

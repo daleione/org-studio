@@ -58,6 +58,29 @@ pub(crate) fn preview_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextS
 
 pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, ContextSet) {
     let mut builder = CommandRegistryBuilder::default();
+    for spec in crate::command::TABLE_COMMANDS {
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: format!(
+                    "org-studio.table.{}",
+                    spec.alias.trim_start_matches("table-")
+                )
+                .into(),
+                aliases: &[spec.name, spec.alias],
+                title: spec.en,
+                description: spec.en,
+                command: BuiltinCommand::EditTable(spec.edit),
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::RawPrefix,
+                repeat: RepeatPolicy::Never,
+                undo: UndoPolicy::Transaction,
+                availability: Availability::FocusedView,
+                side_effect: SideEffectClass::None,
+                required_capabilities: CapabilitySet::empty(),
+                redaction: RedactionPolicy::RedactArguments,
+            })
+            .expect("table command registration");
+    }
     for (name, aliases, title, command, undo) in [
         (
             "org-studio.workspace.execute-command",
@@ -751,6 +774,37 @@ pub(crate) fn source_bindings() -> Vec<BindingSpec<'static>> {
         keys: "C-c C-o",
         behavior: BindingBehavior::Command(OPEN_LINK_AT_COMMAND),
     });
+    bindings.extend([
+        BindingSpec {
+            keys: "C-c -",
+            behavior: BindingBehavior::Command("org-table-insert-hline"),
+        },
+        BindingSpec {
+            keys: "C-c RET",
+            behavior: BindingBehavior::Command("org-table-hline-and-move"),
+        },
+        BindingSpec {
+            keys: "C-c ^",
+            behavior: BindingBehavior::Command("org-table-sort-lines"),
+        },
+    ]);
+    bindings.extend(
+        [
+            ("M-up", "org-table-move-row-up"),
+            ("M-down", "org-table-move-row-down"),
+            ("M-left", "org-table-move-column-left"),
+            ("M-right", "org-table-move-column-right"),
+            ("M-S-up", "org-table-kill-row"),
+            ("M-S-down", "org-table-insert-row"),
+            ("M-S-left", "org-table-delete-column"),
+            ("M-S-right", "org-table-insert-column"),
+        ]
+        .into_iter()
+        .map(|(keys, name)| BindingSpec {
+            keys,
+            behavior: BindingBehavior::Command(name),
+        }),
+    );
     bindings
 }
 

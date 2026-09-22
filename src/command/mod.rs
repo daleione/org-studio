@@ -1,5 +1,8 @@
 use std::{borrow::Borrow, collections::HashMap, fmt, sync::Arc};
 
+mod table;
+pub use table::{TABLE_COMMANDS, TableEdit};
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct CommandName(Arc<str>);
 
@@ -54,6 +57,7 @@ impl CommandKey {
 pub enum BuiltinCommand {
     ExecuteCommand,
     AlignTables,
+    EditTable(TableEdit),
     GotoLine,
     FindDocument,
     IsearchForward,

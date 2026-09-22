@@ -716,6 +716,113 @@ impl SemanticEditor {
         else {
             return false;
         };
+        self.apply_table_change(snapshot, alignment, cx)
+    }
+
+    pub(crate) fn available_table_edits(
+        &self,
+        cx: &gpui::App,
+    ) -> Option<Vec<crate::command::TableEdit>> {
+        if self.is_read_only(cx) {
+            return None;
+        }
+        let snapshot = self.snapshot(cx);
+        let line = snapshot.line_index_at(self.selection.head()).ok()?;
+        let text = snapshot.copy_range(snapshot.line_content_range(line).ok()?);
+        if !text.trim_start().starts_with('|') {
+            return None;
+        }
+        let context = super::org_commands::EditorCommandContext::at(
+            self.session.read(cx).syntax_path(),
+            &snapshot,
+            self.selection.head(),
+        )?;
+        let table = super::org_commands::EditableTable::at(&snapshot, &context)?;
+        Some(
+            crate::command::TABLE_COMMANDS
+                .iter()
+                .filter_map(|command| table.available(command.edit).then_some(command.edit))
+                .collect(),
+        )
+    }
+
+    pub(crate) fn show_command_feedback(&mut self, message: &str, cx: &mut Context<Self>) {
+        self.command_feedback = Some(message.into());
+        cx.notify();
+    }
+
+    fn table_column_action(
+        &mut self,
+        action: &TableColumnAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.available_table_edits(cx).is_some() {
+            if let Err(error) = self.edit_table_at_selection(action.0, cx) {
+                self.show_command_feedback(error, cx);
+            }
+            return;
+        }
+        // These four keys are native word actions when the caret is outside a table.
+        match action.0 {
+            crate::command::TableEdit::MoveColumnLeft => {
+                self.move_word_left(&MoveWordLeft, window, cx)
+            }
+            crate::command::TableEdit::MoveColumnRight => {
+                self.move_word_right(&MoveWordRight, window, cx)
+            }
+            crate::command::TableEdit::DeleteColumn => {
+                self.select_word_left(&SelectWordLeft, window, cx)
+            }
+            crate::command::TableEdit::InsertColumn => {
+                self.select_word_right(&SelectWordRight, window, cx)
+            }
+            _ => unreachable!("only horizontal Option-arrows use this action"),
+        }
+    }
+
+    pub(crate) fn edit_table_at_selection(
+        &mut self,
+        edit: crate::command::TableEdit,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        if self.is_read_only(cx) {
+            return Err("只读文档 / Read-only document");
+        }
+        self.finish_composition(cx);
+        let snapshot = self.snapshot(cx);
+        let context = super::org_commands::EditorCommandContext::at(
+            self.session.read(cx).syntax_path(),
+            &snapshot,
+            self.selection.head(),
+        )
+        .ok_or("当前光标不在表格中 / No table at point")?;
+        let table = super::org_commands::EditableTable::at(&snapshot, &context)
+            .ok_or("当前光标不在表格中 / No table at point")?;
+        let newline = self.session.read(cx).newline_sequence();
+        let change = table.edit(edit, &snapshot, self.selection, newline)?;
+        let killed = if edit == crate::command::TableEdit::KillRow {
+            let mut text = snapshot.copy_range(context.line_range);
+            text.push_str(newline);
+            Some(text)
+        } else {
+            None
+        };
+        if !self.apply_table_change(&snapshot, change, cx) {
+            return Err("表格编辑失败 / Table edit failed");
+        }
+        if let Some(text) = killed {
+            cx.write_to_clipboard(ClipboardItem::new_string(text));
+        }
+        Ok(())
+    }
+
+    fn apply_table_change(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        alignment: super::org_commands::TableAlignment,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let before = self.selection;
         let after = Selection::caret(alignment.caret);
         let revision = snapshot.revision();
@@ -1903,6 +2010,7 @@ impl Render for SemanticEditor {
             .on_action(cx.listener(Self::insert_tab))
             .on_action(cx.listener(Self::shift_tab))
             .on_action(cx.listener(Self::align_table))
+            .on_action(cx.listener(Self::table_column_action))
             .on_action(cx.listener(Self::toggle_todo))
             .on_action(cx.listener(Self::toggle_checkbox))
             .on_action(cx.listener(Self::toggle_inline_image_previews))

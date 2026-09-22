@@ -25,6 +25,14 @@ pub(crate) struct CommandLineHost {
     next_id: u64,
 }
 
+impl CommandLineHost {
+    fn remember(&mut self, command: String) {
+        self.history.retain(|value| value != &command);
+        self.history.insert(0, command);
+        self.history.truncate(30);
+    }
+}
+
 enum Phase {
     Input,
     Running(Instant),
@@ -110,11 +118,14 @@ impl Session {
 
 impl WorkspaceWindow {
     pub(crate) fn prompt_goto_line(&mut self, cx: &mut Context<Self>) {
+        self.prompt_command("goto-line ", cx);
+    }
+
+    pub(crate) fn prompt_command(&mut self, query: &str, cx: &mut Context<Self>) {
         if !self.command_line_is_open() {
             self.open_command_line(cx);
         }
         if let Some(s) = self.command_line.session.as_mut() {
-            let query = "goto-line ";
             s.input.update(cx, |input, cx| input.sync(query, cx));
             s.set_query(query.into(), &self.command_line.history);
             s.focus_pending = true;
@@ -149,13 +160,23 @@ impl WorkspaceWindow {
         let selected = self
             .editor(pane)
             .is_some_and(|e| !e.read(cx).selection().is_empty());
-        let all = catalog::entries(
+        let mut all = catalog::entries(
             &self.commands,
             self.language,
             doc.read(cx).is_read_only(),
             editing,
             selected,
         );
+        if editing
+            && let Some(editor) = self.editor(pane)
+            && let Some(available) = editor.read(cx).available_table_edits(cx)
+        {
+            all.extend(catalog::table_entries(
+                &self.commands,
+                self.language,
+                &available,
+            ));
+        }
         let candidates = catalog::candidates(&all, "", &self.command_line.history);
         let input = cx.new(|cx| {
             NativeInput::new(

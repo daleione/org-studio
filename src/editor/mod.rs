@@ -112,6 +112,10 @@ pub struct RunSourceBlockAt {
 
 #[derive(Clone, Debug, PartialEq, gpui::Action)]
 #[action(namespace = semantic_editor, no_json)]
+struct TableColumnAction(crate::command::TableEdit);
+
+#[derive(Clone, Debug, PartialEq, gpui::Action)]
+#[action(namespace = semantic_editor, no_json)]
 pub(crate) struct ActivateReadOnlyLine {
     pub(crate) line: u64,
 }
@@ -127,14 +131,30 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("delete", DeleteForward, Some("SemanticEditor")),
         KeyBinding::new("left", MoveLeft, Some("SemanticEditor")),
         KeyBinding::new("right", MoveRight, Some("SemanticEditor")),
-        KeyBinding::new("alt-left", MoveWordLeft, Some("SemanticEditor")),
-        KeyBinding::new("alt-right", MoveWordRight, Some("SemanticEditor")),
+        KeyBinding::new(
+            "alt-left",
+            TableColumnAction(crate::command::TableEdit::MoveColumnLeft),
+            Some("SemanticEditor"),
+        ),
+        KeyBinding::new(
+            "alt-right",
+            TableColumnAction(crate::command::TableEdit::MoveColumnRight),
+            Some("SemanticEditor"),
+        ),
         KeyBinding::new("up", MoveUp, Some("SemanticEditor")),
         KeyBinding::new("down", MoveDown, Some("SemanticEditor")),
         KeyBinding::new("shift-left", SelectLeft, Some("SemanticEditor")),
         KeyBinding::new("shift-right", SelectRight, Some("SemanticEditor")),
-        KeyBinding::new("alt-shift-left", SelectWordLeft, Some("SemanticEditor")),
-        KeyBinding::new("alt-shift-right", SelectWordRight, Some("SemanticEditor")),
+        KeyBinding::new(
+            "alt-shift-left",
+            TableColumnAction(crate::command::TableEdit::DeleteColumn),
+            Some("SemanticEditor"),
+        ),
+        KeyBinding::new(
+            "alt-shift-right",
+            TableColumnAction(crate::command::TableEdit::InsertColumn),
+            Some("SemanticEditor"),
+        ),
         KeyBinding::new("shift-up", SelectUp, Some("SemanticEditor")),
         KeyBinding::new("shift-down", SelectDown, Some("SemanticEditor")),
         KeyBinding::new("cmd-left", MoveLineStart, Some("SemanticEditor")),

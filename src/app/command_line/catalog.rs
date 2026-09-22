@@ -1,5 +1,5 @@
 use crate::{
-    command::{CommandKey, CommandRegistry, TableScope},
+    command::{CommandKey, CommandRegistry, TABLE_COMMANDS, TableEdit, TableScope},
     i18n::Language,
     preview::*,
 };
@@ -153,8 +153,42 @@ pub(super) fn normalize(query: &str) -> &str {
     query.trim().trim_start_matches(':').trim_start()
 }
 
+pub(super) fn table_entries(
+    commands: &CommandRegistry,
+    language: Language,
+    available: &[TableEdit],
+) -> Vec<Entry> {
+    TABLE_COMMANDS
+        .iter()
+        .filter(|spec| available.contains(&spec.edit))
+        .filter_map(|spec| {
+            Some(Entry {
+                key: commands.key(spec.name)?,
+                input: spec.alias.into(),
+                description: if language == Language::Chinese {
+                    spec.zh
+                } else {
+                    spec.en
+                }
+                .into(),
+                scope: None,
+                words: format!("{} {} {} {}", spec.name, spec.alias, spec.zh, spec.en)
+                    .to_lowercase(),
+            })
+        })
+        .collect()
+}
+
 pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<Entry> {
     let query = normalize(query).to_lowercase();
+    let query = if let Some(spec) = TABLE_COMMANDS
+        .iter()
+        .find(|spec| query.split_whitespace().next() == Some(spec.name))
+    {
+        format!("{}{}", spec.alias, &query[spec.name.len()..])
+    } else {
+        query
+    };
     let query = if let Some(arguments) = query.strip_prefix("org-studio.table.align") {
         format!("table-align{arguments}")
     } else if let Some(arguments) = query.strip_prefix("org-studio.document.goto-line") {
@@ -165,10 +199,11 @@ pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<
         query
     };
     // Preserve arguments when completing or selecting a parameterized command.
-    if query.split_whitespace().next() == Some("goto-line") {
+    let command = query.split_whitespace().next().unwrap_or("");
+    if matches!(command, "goto-line" | "table-sort") {
         return all
             .iter()
-            .filter(|entry| entry.input == "goto-line")
+            .filter(|entry| entry.input == command)
             .cloned()
             .map(|mut entry| {
                 entry.input = query.clone();
@@ -177,7 +212,9 @@ pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<
             .collect();
     }
     // An unavailable current-table command must not fall back to formatting the whole document.
-    if query == "table-align" && !all.iter().any(|entry| entry.input == query) {
+    if (query == "table-align" || TABLE_COMMANDS.iter().any(|spec| spec.alias == query))
+        && !all.iter().any(|entry| entry.input == query)
+    {
         return Vec::new();
     }
     let mut found = all
@@ -219,14 +256,33 @@ pub(super) fn validate(query: &str) -> Result<(), &'static str> {
         if !matches!(args.as_slice(), [] | ["--all"] | ["--selection"]) {
             return Err("table-align [--all | --selection]");
         }
-    } else if matches!(
-        command,
-        "save" | "w" | "reload" | "preview" | "edit" | "split" | "export" | "undo" | "redo"
-    ) && words.next().is_some()
+    } else if matches!(command, "table-sort" | "org-table-sort-lines") {
+        sort_edit(query)?;
+    } else if (TABLE_COMMANDS
+        .iter()
+        .any(|spec| command == spec.name || command == spec.alias)
+        || matches!(
+            command,
+            "save" | "w" | "reload" | "preview" | "edit" | "split" | "export" | "undo" | "redo"
+        ))
+        && words.next().is_some()
     {
         return Err("此命令不接受参数 / This command takes no arguments");
     }
     Ok(())
+}
+
+pub(super) fn sort_edit(input: &str) -> Result<TableEdit, &'static str> {
+    let mut numeric = false;
+    let mut reverse = false;
+    for flag in normalize(input).split_whitespace().skip(1) {
+        match flag {
+            "--numeric" if !numeric => numeric = true,
+            "--reverse" if !reverse => reverse = true,
+            _ => return Err("table-sort [--numeric] [--reverse]"),
+        }
+    }
+    Ok(TableEdit::Sort { numeric, reverse })
 }
 
 pub(super) fn line_number(input: &str) -> Result<u64, &'static str> {

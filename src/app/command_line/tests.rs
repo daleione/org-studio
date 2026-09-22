@@ -44,6 +44,222 @@ fn source(doc: &DocumentSession) -> String {
 }
 
 #[test]
+fn table_command_aliases_flags_and_unavailable_exact_matches() {
+    use crate::command::{TABLE_COMMANDS, TableEdit};
+    let (commands, _, _) = crate::preview::document_input();
+    let available = TABLE_COMMANDS
+        .iter()
+        .map(|spec| spec.edit)
+        .collect::<Vec<_>>();
+    let entries = catalog::table_entries(&commands, crate::i18n::Language::Chinese, &available);
+    for query in [
+        "table-sort --numeric --reverse",
+        "org-table-sort-lines --numeric --reverse",
+    ] {
+        assert_eq!(catalog::validate(query), Ok(()));
+        let found = catalog::candidates(&entries, query, &[]);
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].input, "table-sort --numeric --reverse");
+        assert_eq!(
+            catalog::sort_edit(&found[0].input),
+            Ok(TableEdit::Sort {
+                numeric: true,
+                reverse: true
+            })
+        );
+    }
+    for query in [
+        "table-sort --random",
+        "table-sort --numeric --numeric",
+        "table-insert-row --below",
+        "org-table-kill-row 2",
+    ] {
+        assert!(catalog::validate(query).is_err(), "{query}");
+    }
+    let entries = catalog::table_entries(
+        &commands,
+        crate::i18n::Language::English,
+        &[TableEdit::InsertRowBelow],
+    );
+    assert!(catalog::candidates(&entries, "table-insert-row", &[]).is_empty());
+    assert!(catalog::candidates(&entries, "org-table-insert-row", &[]).is_empty());
+}
+
+#[gpui::test]
+fn table_keyboard_edits_follow_cells_and_undo_as_one_transaction(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let original =
+        "before words\n\n| Shelf | Count |\n|-------+-------|\n| Cedar | 12 |\n| Birch | 3 |\n";
+    let doc = w.update(cx, |w, cx| install(w, original, cx));
+    cx.run_until_parked();
+    let editor = w.update(cx, |w, _| w.editor(PaneSide::Left).unwrap().clone());
+    let caret = ByteOffset(original.find("Cedar").unwrap() as u64);
+    editor.update(cx, |e, cx| e.set_selection(Selection::caret(caret), cx));
+    cx.simulate_keystrokes("alt-down");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        let text = source(doc.read(cx));
+        assert!(text.find("Birch").unwrap() < text.find("Cedar").unwrap());
+        assert!(text[e.selection().head().0 as usize..].starts_with("Cedar"));
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        assert_eq!(source(doc.read(cx)), original);
+        assert_eq!(e.selection(), Selection::caret(caret));
+    });
+    cx.simulate_keystrokes("alt-shift-right");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        let text = source(doc.read(cx));
+        assert!(
+            text.lines()
+                .find(|line| line.contains("Cedar"))
+                .unwrap()
+                .starts_with("|   | Cedar")
+        );
+        assert!(text[e.selection().head().0 as usize..].starts_with("  | Cedar"));
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-u alt-shift-down");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        let snapshot = doc.read(cx).snapshot();
+        let line = snapshot.line_index_at(e.selection().head()).unwrap();
+        assert_eq!(line.0, 5);
+        assert!(
+            snapshot
+                .copy_range(snapshot.line_content_range(line).unwrap())
+                .chars()
+                .all(|c| c == '|' || c == ' ')
+        );
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("alt-shift-up");
+    cx.run_until_parked();
+    w.update(cx, |_, cx| {
+        assert!(!source(doc.read(cx)).contains("Cedar"));
+        assert_eq!(
+            cx.read_from_clipboard().unwrap().text().as_deref(),
+            Some("| Cedar | 12 |\n")
+        );
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-c enter");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        let text = source(doc.read(cx));
+        assert!(text.lines().nth(5).unwrap().starts_with("|---"));
+        assert_eq!(
+            doc.read(cx)
+                .snapshot()
+                .line_index_at(e.selection().head())
+                .unwrap()
+                .0,
+            6
+        );
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-u ctrl-c -");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        let text = source(doc.read(cx));
+        assert!(text.lines().nth(4).unwrap().starts_with("|---"));
+        assert!(text[e.selection().head().0 as usize..].starts_with("Cedar"));
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("ctrl-c ^");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert_eq!(
+            w.command_line.session.as_ref().unwrap().query,
+            "table-sort "
+        );
+        assert_eq!(source(doc.read(cx)), original);
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        e.set_selection(Selection::caret(ByteOffset(12)), cx)
+    });
+    cx.simulate_keystrokes("alt-left");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        assert_eq!(source(doc.read(cx)), original);
+        assert_eq!(e.selection().head(), ByteOffset(7));
+    });
+}
+
+#[gpui::test]
+fn table_command_sort_preserves_arguments_and_unavailable_commands_are_hidden(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let original =
+        "paragraph\n\n| Shelf | Count |\n|-------+-------|\n| Cedar | 12 |\n| Birch | 3 |\n";
+    let doc = w.update(cx, |w, cx| install(w, original, cx));
+    cx.run_until_parked();
+    let editor = w.update(cx, |w, _| w.editor(PaneSide::Left).unwrap().clone());
+    cx.simulate_keystrokes("alt-x");
+    cx.run_until_parked();
+    w.update(cx, |w, _| {
+        assert!(
+            !w.command_line
+                .session
+                .as_ref()
+                .unwrap()
+                .all
+                .iter()
+                .any(|e| e.input == "table-sort")
+        )
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    editor.update(cx, |e, cx| {
+        e.set_selection(
+            Selection::caret(ByteOffset(original.find("12").unwrap() as u64)),
+            cx,
+        )
+    });
+    cx.simulate_keystrokes("alt-x");
+    cx.simulate_input("org-table-sort-lines --numeric");
+    cx.simulate_keystrokes("tab enter");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert!(!w.command_line_is_open());
+        let text = source(doc.read(cx));
+        assert!(text.find("Birch").unwrap() < text.find("Cedar").unwrap());
+        assert!(text[editor.read(cx).selection().head().0 as usize..].starts_with("12"));
+    });
+    cx.simulate_keystrokes("cmd-z");
+    cx.run_until_parked();
+    w.update(cx, |_, cx| assert_eq!(source(doc.read(cx)), original));
+    editor.update(cx, |e, cx| {
+        e.set_selection(
+            Selection::caret(ByteOffset(original.find("Cedar").unwrap() as u64)),
+            cx,
+        )
+    });
+    cx.simulate_keystrokes("alt-x");
+    cx.simulate_input("table-sort --numeric");
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        assert!(w.command_line.session.as_ref().unwrap().error.is_some());
+        assert_eq!(source(doc.read(cx)), original);
+    });
+}
+
+#[test]
 fn command_line_goto_line_arguments_and_read_only_availability() {
     let (commands, _, _) = crate::preview::document_input();
     let entries = catalog::entries(

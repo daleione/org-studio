@@ -133,6 +133,30 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::AlignTables) => {
                 self.start_table_alignment(crate::command::TableScope::Current, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::EditTable(edit)) => {
+                if matches!(edit, crate::command::TableEdit::Sort { .. }) {
+                    self.prompt_command("table-sort ", cx);
+                    return;
+                }
+                let edit = match (edit, prefix != PrefixArgument::None) {
+                    (crate::command::TableEdit::InsertRow, true) => {
+                        crate::command::TableEdit::InsertRowBelow
+                    }
+                    (crate::command::TableEdit::InsertHline, true) => {
+                        crate::command::TableEdit::InsertHlineAbove
+                    }
+                    _ => edit,
+                };
+                if self.document_workspace.active_surface() == crate::app::PaneSurface::Editor
+                    && let Some(editor) = self.editor(self.document_workspace.active_pane)
+                {
+                    editor.update(cx, |editor, cx| {
+                        if let Err(error) = editor.edit_table_at_selection(edit, cx) {
+                            editor.show_command_feedback(error, cx);
+                        }
+                    });
+                }
+            }
             CommandImplementation::Builtin(BuiltinCommand::GotoLine) => self.prompt_goto_line(cx),
             CommandImplementation::Builtin(BuiltinCommand::FindDocument) => {
                 self.open_search(false, false, false, cx)
@@ -886,6 +910,19 @@ impl WorkspaceWindow {
             self.document_workspace.active_surface(),
             crate::app::PaneSurface::Editor
         );
+        if editor_surface
+            && self.keyboard.pending_keys().is_none()
+            && stroke.meta()
+            && !stroke.control()
+            && !stroke.command()
+            && matches!(stroke.key(), "up" | "down" | "left" | "right")
+            && !self
+                .editor(self.document_workspace.active_pane)
+                .is_some_and(|editor| editor.read(cx).available_table_edits(cx).is_some())
+        {
+            // Outside tables, Option-arrows retain the editor's native word navigation.
+            return;
+        }
         let editor_escape_prefix = editor_surface
             && stroke.key() == "escape"
             && !stroke.control()
