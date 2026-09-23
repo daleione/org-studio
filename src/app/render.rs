@@ -10,12 +10,12 @@ use crate::{
     editor::Copy,
     preview::{
         CycleThemeMode, DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize,
-        EXPORT_DOCUMENT_COMMAND, ExportDocument, IncreaseContentFontSize, OpenDocument,
-        OpenFileManager, QUIT_APPLICATION_COMMAND, QuitApplication, RELOAD_DOCUMENT_COMMAND,
-        ReloadDocument, ResetContentFontSize, ReturnToDocument, SAVE_DOCUMENT_AS_COMMAND,
-        SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument, SaveDocumentAs, ShowEditor,
-        ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese,
-        UseEnglish,
+        EXPORT_DOCUMENT_COMMAND, EditConfiguration, ExportDocument, IncreaseContentFontSize,
+        OpenDocument, OpenFileManager, QUIT_APPLICATION_COMMAND, QuitApplication,
+        RELOAD_DOCUMENT_COMMAND, ReloadDocument, ResetContentFontSize, ReturnToDocument,
+        SAVE_DOCUMENT_AS_COMMAND, SAVE_DOCUMENT_COMMAND, SHOW_HOME_COMMAND, SaveDocument,
+        SaveDocumentAs, ShowEditor, ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar,
+        ToggleSoftWrap, UseChinese, UseEnglish,
     },
     theme::{ThemeMode, current_theme},
 };
@@ -543,6 +543,9 @@ impl Render for WorkspaceWindow {
             ))
             .on_action(
                 cx.listener(|this, _: &OpenDocument, window, cx| this.choose_file(window, cx)),
+            )
+            .on_action(
+                cx.listener(|this, _: &EditConfiguration, _, cx| this.edit_configuration(cx)),
             )
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
                 this.dispatch_command(SHOW_HOME_COMMAND, window, cx)

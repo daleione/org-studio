@@ -1,10 +1,10 @@
 use crate::{
     editor::{Copy, Cut, Paste, Redo, SelectAll, Undo},
     preview::{
-        CycleThemeMode, DecreaseContentFontSize, ExportDocument, IncreaseContentFontSize,
-        OpenDocument, QuitApplication, ReloadDocument, ResetContentFontSize, SaveDocument,
-        SaveDocumentAs, ShowEditor, ShowHome, ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar,
-        ToggleSoftWrap, UseChinese, UseEnglish,
+        CycleThemeMode, DecreaseContentFontSize, EditConfiguration, ExportDocument,
+        IncreaseContentFontSize, OpenDocument, QuitApplication, ReloadDocument,
+        ResetContentFontSize, SaveDocument, SaveDocumentAs, ShowEditor, ShowHome, ShowReading,
+        ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap, UseChinese, UseEnglish,
     },
 };
 use gpui::{Menu, MenuItem, SystemMenuType};
@@ -16,6 +16,8 @@ pub fn application_menus(language: crate::i18n::Language) -> Vec<Menu> {
     };
     vec![
         Menu::new("Org Studio").items([
+            MenuItem::action(t("编辑配置…", "Edit Configuration…"), EditConfiguration),
+            MenuItem::separator(),
             MenuItem::os_submenu(t("服务", "Services"), SystemMenuType::Services),
             MenuItem::separator(),
             MenuItem::action(t("退出 Org Studio", "Quit Org Studio"), QuitApplication),

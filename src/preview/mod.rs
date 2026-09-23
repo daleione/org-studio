@@ -151,6 +151,7 @@ actions!(
     org_preview,
     [
         OpenDocument,
+        EditConfiguration,
         ShowHome,
         ReloadDocument,
         SaveDocument,

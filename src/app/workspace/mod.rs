@@ -424,7 +424,13 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn save_preview_settings(&self) {
-        let _settings = crate::settings::WorkspaceSettings {
+        let _settings = self.workspace_settings();
+        #[cfg(not(test))]
+        _settings.save_async();
+    }
+
+    pub(crate) fn workspace_settings(&self) -> crate::settings::WorkspaceSettings {
+        crate::settings::WorkspaceSettings {
             split_ratio: self.document_view_preferences.split_ratio,
             language: self.language,
             minimap_enabled: self.minimap_visible,
@@ -434,9 +440,7 @@ impl WorkspaceWindow {
             reading_style: self.reading_style,
             theme_mode: self.theme_mode,
             status_line: self.status.settings(),
-        };
-        #[cfg(not(test))]
-        _settings.save_async();
+        }
     }
 
     pub fn language(&self) -> crate::i18n::Language {

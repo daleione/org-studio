@@ -2,38 +2,95 @@ use crate::i18n::Language;
 use crate::theme::ThemeMode;
 use std::{
     fs, io,
+    io::Write,
     path::PathBuf,
     sync::{OnceLock, mpsc},
 };
 
 const SETTINGS_VERSION: u32 = 7;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WorkspaceSettings {
-    /// Preferred left-pane share in basis points when the workspace is split.
-    pub split_ratio: u16,
-    pub language: Language,
-    pub minimap_enabled: bool,
-    pub minimap_thumb_visibility: MinimapThumbVisibility,
-    /// `None` follows the adaptive width; `Some` is the user's preferred
-    /// logical-pixel width before the current window's safety clamp.
-    pub minimap_width: Option<u16>,
-    /// Preferred Sidebar width. Rendering applies the current window clamp
-    /// without overwriting this value.
-    pub sidebar_width: u16,
-    pub reading_style: crate::preview::PreviewStyleId,
-    pub status_line: StatusLineSettings,
-    /// Titlebar theme switch: Auto follows the system appearance.
-    pub theme_mode: ThemeMode,
+// Keep the help shown in settings.conf beside the corresponding Rust fields.
+// Doc comments are not available at runtime, so this small macro reuses them.
+macro_rules! documented_settings {
+    (
+        $(#[$attribute:meta])*
+        $visibility:vis struct $name:ident {
+            $(#[doc = $help:literal] $field_visibility:vis $field:ident: $type:ty,)*
+        }
+    ) => {
+        $(#[$attribute])*
+        $visibility struct $name {
+            $(#[doc = $help] $field_visibility $field: $type,)*
+        }
+
+        impl $name {
+            fn description(field: &str) -> Option<&'static str> {
+                $(if field == stringify!($field) { return Some($help.trim()); })*
+                None
+            }
+        }
+    };
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct StatusLineSettings {
-    pub outline: bool,
-    pub position: bool,
-    pub progress: bool,
-    pub statistics: bool,
-    pub format: bool,
+documented_settings! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct WorkspaceSettings {
+        /// Left pane share, 1000..9000; 5000 means 50%.
+        pub split_ratio: u16,
+        /// en | zh-CN.
+        pub language: Language,
+        /// Show the minimap, true | false.
+        pub minimap_enabled: bool,
+        /// Minimap thumb, always | hover.
+        pub minimap_thumb_visibility: MinimapThumbVisibility,
+        /// auto or 48..480 logical pixels; preferred width before window clamping.
+        pub minimap_width: Option<u16>,
+        /// 180..420 logical pixels; preferred width before window clamping.
+        pub sidebar_width: u16,
+        /// Reading style, base | warm-clay.
+        pub reading_style: crate::preview::PreviewStyleId,
+        /// Status-line sections configured by the status_* keys.
+        pub status_line: StatusLineSettings,
+        /// auto (follow system) | light | dark.
+        pub theme_mode: ThemeMode,
+    }
+}
+
+documented_settings! {
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct StatusLineSettings {
+        /// Show the heading path, true | false.
+        pub outline: bool,
+        /// Show the cursor position, true | false.
+        pub position: bool,
+        /// Show reading progress, true | false.
+        pub progress: bool,
+        /// Show document statistics, true | false.
+        pub statistics: bool,
+        /// Show file format, true | false.
+        pub format: bool,
+    }
+}
+
+fn setting_description(key: &str) -> Option<&'static str> {
+    if key == "version" {
+        Some("Configuration format version; leave unchanged.")
+    } else if let Some(field) = key.strip_prefix("status_") {
+        StatusLineSettings::description(field)
+    } else {
+        WorkspaceSettings::description(key)
+    }
+}
+
+fn append_setting(source: &mut String, key: &str, value: impl std::fmt::Display) {
+    let description = setting_description(key).expect("every setting has a field description");
+    source.push_str("# ");
+    source.push_str(description);
+    source.push('\n');
+    source.push_str(key);
+    source.push('=');
+    source.push_str(&value.to_string());
+    source.push('\n');
 }
 
 impl Default for StatusLineSettings {
@@ -71,6 +128,31 @@ impl Default for WorkspaceSettings {
 }
 
 impl WorkspaceSettings {
+    pub(crate) fn ensure_editable_file(self) -> io::Result<PathBuf> {
+        let path = settings_path().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                "configuration directory is unavailable",
+            )
+        })?;
+        self.ensure_editable_file_at(path)
+    }
+
+    fn ensure_editable_file_at(self, path: PathBuf) -> io::Result<PathBuf> {
+        let parent = path.parent().expect("settings path has a parent");
+        fs::create_dir_all(parent)?;
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => file.write_all(self.serialize().as_bytes())?,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error),
+        }
+        Ok(path)
+    }
+
     pub fn load() -> Self {
         let Some(path) = settings_path() else {
             return Self::default();
@@ -217,30 +299,48 @@ impl WorkspaceSettings {
     }
 
     fn serialize(self) -> String {
-        format!(
-            "version={SETTINGS_VERSION}\nsplit_ratio={}\nlanguage={}\nminimap_enabled={}\nminimap_thumb_visibility={}\nminimap_width={}\nsidebar_width={}\nreading_style={}\nstatus_outline={}\nstatus_position={}\nstatus_progress={}\nstatus_statistics={}\nstatus_format={}\ntheme_mode={}\n",
-            self.split_ratio,
+        let mut source = String::from(
+            "# Org Studio settings\n# Save and restart to apply changes. Invalid values use defaults.\n\n",
+        );
+        append_setting(&mut source, "version", SETTINGS_VERSION);
+        append_setting(&mut source, "split_ratio", self.split_ratio);
+        append_setting(
+            &mut source,
+            "language",
             match self.language {
                 Language::English => "en",
                 Language::Chinese => "zh-CN",
             },
-            self.minimap_enabled,
+        );
+        append_setting(&mut source, "minimap_enabled", self.minimap_enabled);
+        append_setting(
+            &mut source,
+            "minimap_thumb_visibility",
             match self.minimap_thumb_visibility {
                 MinimapThumbVisibility::Always => "always",
                 MinimapThumbVisibility::Hover => "hover",
             },
+        );
+        append_setting(
+            &mut source,
+            "minimap_width",
             self.minimap_width
                 .map(|width| width.to_string())
                 .unwrap_or_else(|| "auto".to_owned()),
-            self.sidebar_width,
-            self.reading_style.as_str(),
-            self.status_line.outline,
-            self.status_line.position,
-            self.status_line.progress,
+        );
+        append_setting(&mut source, "sidebar_width", self.sidebar_width);
+        append_setting(&mut source, "reading_style", self.reading_style.as_str());
+        append_setting(&mut source, "status_outline", self.status_line.outline);
+        append_setting(&mut source, "status_position", self.status_line.position);
+        append_setting(&mut source, "status_progress", self.status_line.progress);
+        append_setting(
+            &mut source,
+            "status_statistics",
             self.status_line.statistics,
-            self.status_line.format,
-            self.theme_mode.as_str(),
-        )
+        );
+        append_setting(&mut source, "status_format", self.status_line.format);
+        append_setting(&mut source, "theme_mode", self.theme_mode.as_str());
+        source
     }
 }
 
@@ -291,7 +391,16 @@ pub fn initial_sidebar_width(fallback: u16) -> u16 {
 }
 
 fn settings_path() -> Option<PathBuf> {
-    application_support_dir().map(|path| path.join("settings.conf"))
+    #[cfg(target_os = "macos")]
+    {
+        std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .map(|home| home.join(".config/org-studio/settings.conf"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        application_support_dir().map(|path| path.join("settings.conf"))
+    }
 }
 
 pub(crate) fn application_support_dir() -> Option<PathBuf> {
@@ -322,6 +431,17 @@ pub(crate) fn application_support_dir() -> Option<PathBuf> {
 mod tests {
     use super::*;
 
+    fn test_directory() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "org-studio-settings-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("current time")
+                .as_nanos()
+        ))
+    }
+
     #[test]
     fn settings_round_trip_and_reject_unknown_versions() {
         let settings = WorkspaceSettings {
@@ -349,6 +469,27 @@ mod tests {
             WorkspaceSettings::parse("version=99\nminimap_enabled=false\n"),
             None
         );
+    }
+
+    #[test]
+    fn every_setting_has_its_description_directly_above_it() {
+        let source = WorkspaceSettings::default().serialize();
+        let mut previous = "";
+        for line in source.lines() {
+            if let Some((key, _)) = line.split_once('=')
+                && !key.starts_with('#')
+            {
+                assert_eq!(
+                    previous,
+                    format!(
+                        "# {}",
+                        setting_description(key).expect("serialized setting has a description")
+                    ),
+                    "description must be directly above {key}"
+                );
+            }
+            previous = line;
+        }
     }
 
     #[test]
@@ -421,5 +562,26 @@ mod tests {
             !settings.serialize().contains("soft_wrap="),
             "an unrelated settings save must remove the legacy global soft-wrap value"
         );
+    }
+
+    #[test]
+    fn editable_file_is_created_once_without_replacing_user_changes() {
+        let directory = test_directory();
+        let path = directory.join("settings.conf");
+        let settings = WorkspaceSettings::default();
+        assert_eq!(
+            settings.ensure_editable_file_at(path.clone()).unwrap(),
+            path
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), settings.serialize());
+
+        fs::write(&path, "version=7\ntheme_mode=dark\n# my own note").unwrap();
+        settings.ensure_editable_file_at(path.clone()).unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "version=7\ntheme_mode=dark\n# my own note"
+        );
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(directory).unwrap();
     }
 }

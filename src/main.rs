@@ -8,7 +8,7 @@ use org_studio::{
     app::WorkspaceWindow,
     perf_tracing,
     preview::{
-        DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, ExportDocument,
+        DOCUMENT_WORKSPACE_KEY_CONTEXT, DecreaseContentFontSize, EditConfiguration, ExportDocument,
         IncreaseContentFontSize, InitialDocumentLoad, OpenDocument, QuitApplication,
         ReloadDocument, ResetContentFontSize, SaveDocument, SaveDocumentAs, ShowEditor,
         ShowReading, ShowSplit, ToggleMinimap, ToggleSidebar, ToggleSoftWrap,
@@ -213,6 +213,7 @@ fn main() {
             KeyBinding::new("cmd-[", org_studio::app::NavigateBack, None),
             KeyBinding::new("cmd-]", org_studio::app::NavigateForward, None),
             KeyBinding::new("cmd-o", OpenDocument, None),
+            KeyBinding::new("cmd-,", EditConfiguration, None),
             KeyBinding::new("cmd-s", SaveDocument, None),
             KeyBinding::new("cmd-shift-s", SaveDocumentAs, None),
             KeyBinding::new("cmd-r", ReloadDocument, None),

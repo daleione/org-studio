@@ -163,6 +163,25 @@ impl WorkspaceWindow {
         self.open_with_previous(path, true, cx);
     }
 
+    pub(crate) fn edit_configuration(&mut self, cx: &mut Context<Self>) {
+        if self.buffer_busy() {
+            return;
+        }
+        match self.workspace_settings().ensure_editable_file() {
+            Ok(path) => self.open(path, cx),
+            Err(error) => {
+                self.set_document_notice(Some(
+                    format!(
+                        "{}: {error}",
+                        self.buffer_text("无法打开配置", "Could not open configuration")
+                    )
+                    .into(),
+                ));
+                cx.notify();
+            }
+        }
+    }
+
     pub(crate) fn open_discarding_current(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.open_with_previous(path, false, cx);
     }
