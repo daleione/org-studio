@@ -3,7 +3,7 @@
 
 use gpui::{Bounds, PaintQuad, Pixels, fill, point, px, rgba};
 
-use crate::document::ByteRange;
+use crate::document::{ByteRange, TextSnapshot};
 use crate::editor::{HitRow, highlight::RangeHighlight, syntax};
 
 pub(super) fn push_selection_quads(
@@ -86,6 +86,100 @@ pub(super) fn push_link_hover_quad(
 ) {
     RangeHighlight::rounded(rgba((syntax::link_accent(&link.meta.kind, theme) << 8) | 0x26).into())
         .paint(quads, hit, link.display_range.clone(), wrap_width);
+}
+
+/// Highlights a data row, or the column selected from its table header.
+pub(super) fn table_hover_quads(
+    rows: &[crate::editor::HitRow],
+    snapshot: &crate::document::DocumentSnapshot,
+    format: crate::document::DocumentFormat,
+    hovered_line: crate::document::LineIndex,
+    column: usize,
+    header: bool,
+    accent: u32,
+) -> Vec<PaintQuad> {
+    let Some(index) = rows.iter().position(|row| row.line == hovered_line) else {
+        return Vec::new();
+    };
+    let color = rgba((accent << 8) | 0x1c);
+    if !header {
+        return table_hover_bounds(&rows[index], snapshot, format, None)
+            .map(|bounds| fill(bounds, color))
+            .into_iter()
+            .collect();
+    }
+    let mut quads = Vec::new();
+    for (offset, row) in rows[index..].iter().enumerate() {
+        if row.line.0 != hovered_line.0 + offset as u64 {
+            break;
+        }
+        let Some(bounds) = table_hover_bounds(row, snapshot, format, Some(column)) else {
+            break;
+        };
+        quads.push(fill(bounds, color));
+    }
+    quads
+}
+
+fn table_hover_bounds(
+    row: &crate::editor::HitRow,
+    snapshot: &crate::document::DocumentSnapshot,
+    format: crate::document::DocumentFormat,
+    column: Option<usize>,
+) -> Option<Bounds<Pixels>> {
+    let range = snapshot.line_content_range(row.line).ok()?;
+    let text = snapshot.copy_range(range);
+    if !crate::document::table::is_table_row(&text, format) {
+        return None;
+    }
+    let (left, right, top, bottom) = if let Some(table) = &row.table_layout {
+        let mut delimiters = table.fragments.iter().filter(|fragment| fragment.delimiter);
+        let (left, right) = if let Some(column) = column {
+            let left = delimiters.clone().nth(column)?;
+            let right = delimiters.nth(column + 1)?;
+            (left.x + left.width, right.x)
+        } else {
+            let first = delimiters.clone().next()?;
+            let last = delimiters.next_back()?;
+            (first.x, last.x + last.width)
+        };
+        (
+            row.text_origin_x + left,
+            row.text_origin_x + right,
+            row.origin_y,
+            row.origin_y + row.line_height * table.visual_rows,
+        )
+    } else {
+        let range = if let Some(column) = column {
+            crate::document::table::parse_line(&text, format)
+                .cells
+                .get(column)?
+                .raw_range
+                .clone()
+        } else {
+            let end = if text.trim_end().ends_with('|') {
+                text.rfind('|')? + 1
+            } else {
+                text.len()
+            };
+            text.find('|')?..end
+        };
+        let start = row.position_for_display_index(row.display.source_to_display(range.start))?;
+        let end = row.position_for_display_index(row.display.source_to_display(range.end))?;
+        if start.y != end.y {
+            return None;
+        }
+        (
+            row.text_origin_x + start.x,
+            row.text_origin_x + end.x,
+            row.origin_y + start.y,
+            row.origin_y + start.y + row.line_height,
+        )
+    };
+    let top = top.max(row.visible_top);
+    let bottom = bottom.min(row.visible_bottom);
+    (left < right && top < bottom)
+        .then(|| Bounds::from_corners(point(left, top), point(right, bottom)))
 }
 
 pub(super) fn push_search_quads(

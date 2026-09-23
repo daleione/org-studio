@@ -7,6 +7,7 @@ use std::sync::{Arc, OnceLock};
 use gpui::RenderImage;
 
 use super::minimap::paint_minimap_layer;
+use super::quads::table_hover_quads;
 use super::scroll::publish_frame;
 use super::*;
 
@@ -21,6 +22,14 @@ pub(super) fn paint_frame(
     let editor_focused = focus_handle.is_focused(window);
     let caret_visible = editor_focused && state.caret.is_some();
     let caret_opacity = host.update(cx, |editor, cx| editor.caret_opacity(caret_visible, cx));
+    let table_hover = host.read(cx).hovered_table_cell();
+    let table_source = table_hover.map(|_| {
+        let editor = host.read(cx);
+        (
+            editor.snapshot(cx),
+            crate::document::DocumentFormat::from_path(editor.session.read(cx).syntax_path()),
+        )
+    });
     window.handle_input(
         &focus_handle,
         ElementInputHandler::new(bounds, host.clone()),
@@ -116,6 +125,21 @@ pub(super) fn paint_frame(
                 }
                 for background in state.rows.iter().filter_map(|row| row.background.clone()) {
                     window.paint_quad(background);
+                }
+                if let (Some((line, column, header)), Some((snapshot, format))) =
+                    (table_hover, table_source.as_ref())
+                {
+                    for quad in table_hover_quads(
+                        &_hits,
+                        snapshot,
+                        *format,
+                        line,
+                        column,
+                        header,
+                        crate::theme::current_theme().accent,
+                    ) {
+                        window.paint_quad(quad);
+                    }
                 }
                 for pill in state.tag_pills.drain(..) {
                     window.paint_quad(pill);

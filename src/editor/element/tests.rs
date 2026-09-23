@@ -10,7 +10,7 @@ use super::minimap_layout::{prepare_minimap_layout_request, schedule_minimap_lay
 use super::minimap_raster::{
     apply_editor_minimap_media_dimensions, minimap_text_color, minimap_text_row,
 };
-use super::quads::push_swatch_quads;
+use super::quads::{push_swatch_quads, table_hover_quads};
 use super::rows::{MAX_ANIMATED_PAINT_LINES, animated_paint_lines};
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
 use super::text::folded_display_text;
@@ -24,8 +24,126 @@ use crate::editor::{
         EditorSyntaxService, SparseEditorStyleSnapshot, semantic_spans,
     },
 };
-use gpui::{AppContext, px};
+use gpui::{AppContext, Modifiers, px};
 use std::path::Path;
+
+fn table_cell_center(
+    editor: &gpui::Entity<SemanticEditor>,
+    line: u64,
+    column: usize,
+    view: &gpui::VisualTestContext,
+) -> gpui::Point<gpui::Pixels> {
+    view.read(|cx| {
+        let editor = editor.read(cx);
+        let row = editor
+            .hit_rows
+            .iter()
+            .find(|row| row.line.0 == line)
+            .unwrap();
+        let snapshot = editor.snapshot(cx);
+        let range = snapshot.line_content_range(row.line).unwrap();
+        let text = snapshot.copy_range(range);
+        let format =
+            crate::document::DocumentFormat::from_path(editor.session.read(cx).syntax_path());
+        let cell = &crate::document::table::parse_line(&text, format).cells[column];
+        let start = row
+            .position_for_display_index(row.display.source_to_display(cell.raw_range.start))
+            .unwrap();
+        let end = row
+            .position_for_display_index(row.display.source_to_display(cell.raw_range.end))
+            .unwrap();
+        gpui::point(
+            row.text_origin_x + (start.x + end.x) / 2.,
+            row.origin_y + start.y + px(5.),
+        )
+    })
+}
+
+#[gpui::test]
+fn editor_table_hover_uses_rows_for_data_and_columns_for_headers(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    for (path, separator) in [
+        ("tables.org", "|---+---+---|"),
+        ("tables.md", "|---|---|---|"),
+    ] {
+        let source = format!(
+            "| A | B | C |\n{separator}\n| 1 | 2 | 3 |\n\n| D | E | F |\n{separator}\n| 4 | 5 | 6 |\n"
+        );
+        let session = cx
+            .new(|_| DocumentSession::from_utf8(path.into(), source.as_bytes().to_vec()).unwrap());
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        view.run_until_parked();
+        let body_cell = table_cell_center(&editor, 2, 1, view);
+        view.simulate_mouse_move(body_cell, None, Modifiers::default());
+        view.run_until_parked();
+        view.read(|cx| {
+            let editor = editor.read(cx);
+            let (line, column, header) = editor.hovered_table_cell().unwrap();
+            assert_eq!((line.0, column, header), (2, 1, false));
+            let snapshot = editor.snapshot(cx);
+            let format =
+                crate::document::DocumentFormat::from_path(editor.session.read(cx).syntax_path());
+            let quads = table_hover_quads(
+                &editor.hit_rows,
+                &snapshot,
+                format,
+                line,
+                column,
+                header,
+                0x4689d8,
+            );
+            assert_eq!(quads.len(), 1);
+            assert!(quads[0].bounds.contains(&body_cell));
+        });
+        let header_cell = table_cell_center(&editor, 0, 1, view);
+        view.simulate_mouse_move(header_cell, None, Modifiers::default());
+        view.run_until_parked();
+        view.read(|cx| {
+            let editor = editor.read(cx);
+            let (line, column, header) = editor.hovered_table_cell().unwrap();
+            assert_eq!((line.0, column, header), (0, 1, true));
+            let snapshot = editor.snapshot(cx);
+            let format =
+                crate::document::DocumentFormat::from_path(editor.session.read(cx).syntax_path());
+            let quads = table_hover_quads(
+                &editor.hit_rows,
+                &snapshot,
+                format,
+                line,
+                column,
+                header,
+                0x4689d8,
+            );
+            assert_eq!(quads.len(), 3);
+            let second_table_top = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 4)
+                .unwrap()
+                .origin_y;
+            assert!(
+                quads
+                    .iter()
+                    .all(|quad| quad.bounds.bottom() < second_table_top)
+            );
+            assert_eq!(
+                quads
+                    .iter()
+                    .filter(|quad| quad.bounds.contains(&header_cell))
+                    .count(),
+                1,
+            );
+        });
+        let blank = view.read(|cx| {
+            let editor = editor.read(cx);
+            let row = editor.hit_rows.iter().find(|row| row.line.0 == 3).unwrap();
+            gpui::point(row.text_origin_x + px(10.), row.origin_y + px(5.))
+        });
+        view.simulate_mouse_move(blank, None, Modifiers::default());
+        view.run_until_parked();
+        view.read(|cx| assert!(editor.read(cx).hovered_table_cell().is_none()));
+    }
+}
 
 #[gpui::test]
 fn narrow_tables_wrap_cells_with_shared_columns_and_source_mapping(cx: &mut gpui::TestAppContext) {

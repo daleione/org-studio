@@ -18,6 +18,7 @@ struct CellHit {
     offset: ByteOffset,
     line: LineIndex,
     column: usize,
+    header: bool,
     bounds: Bounds<Pixels>,
     button: Bounds<Pixels>,
 }
@@ -55,6 +56,14 @@ struct MenuItem {
 }
 
 impl SemanticEditor {
+    pub(super) fn hovered_table_cell(&self) -> Option<(LineIndex, usize, bool)> {
+        self.table_actions
+            .hover
+            .as_ref()
+            .filter(|_| self.table_actions.popup.is_none())
+            .map(|hit| (hit.line, hit.column, hit.header))
+    }
+
     pub(crate) fn table_menu_is_open(&self) -> bool {
         self.table_actions.popup.is_some()
     }
@@ -88,6 +97,14 @@ impl SemanticEditor {
             return None;
         }
         let parsed = source_table::parse_line(&text, format);
+        let header = org_commands::table_start(&snapshot, row.line.0, format) == Some(row.line.0)
+            && snapshot
+                .line_content_range(LineIndex(row.line.0 + 1))
+                .ok()
+                .is_some_and(|range| {
+                    let next = snapshot.copy_range(range);
+                    source_table::is_table_row(&next, format) && source_table::is_separator(&next)
+                });
         let delimiters = row.table_layout.as_ref().map(|table| {
             table
                 .fragments
@@ -181,6 +198,7 @@ impl SemanticEditor {
                 offset,
                 line: row.line,
                 column,
+                header,
                 bounds,
                 button,
             });
