@@ -175,15 +175,12 @@ actions!(
 );
 
 pub(crate) fn is_supported_document(path: &std::path::Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                extension.eq_ignore_ascii_case("org")
-                    || extension.eq_ignore_ascii_case("md")
-                    || extension.eq_ignore_ascii_case("markdown")
-            })
+    path.is_file() && (DocumentFormat::detect(path).is_some() || is_editor_only_document(path))
+}
+
+pub(crate) fn is_editor_only_document(path: &std::path::Path) -> bool {
+    crate::syntax_highlighting::language_for_path(path).is_some()
+        || crate::document::is_plain_text_path(path)
 }
 
 pub(crate) fn accept_generation(current: u64, completed: u64) -> bool {

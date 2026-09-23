@@ -3773,6 +3773,88 @@ fn linked_document_opens_in_current_workspace_reading_pane(cx: &mut gpui::TestAp
     std::fs::remove_file(path).unwrap();
 }
 
+#[gpui::test]
+fn linked_plain_text_opens_in_current_workspace_editor(cx: &mut gpui::TestAppContext) {
+    let path =
+        std::env::temp_dir().join(format!("org-studio-linked-text-{}.txt", std::process::id()));
+    std::fs::write(&path, "plain text\n").unwrap();
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    let source_id = app.update(cx, |app, cx| {
+        app.create_buffer("Source.org".into(), None, cx);
+        app.set_active_surface(crate::app::PaneSurface::Reading, cx);
+        let source_id = app.document_session().unwrap().read(cx).id();
+        app.open_document_link(path.clone(), None, cx);
+        assert_eq!(
+            app.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading,
+            "keep the source document's mode while the link loads"
+        );
+        source_id
+    });
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert_eq!(app.document_session().unwrap().read(cx).path(), path);
+        assert_eq!(
+            app.document_workspace.active_surface(),
+            crate::app::PaneSurface::Editor
+        );
+        assert!(app.editor(crate::app::PaneSide::Left).is_some());
+        assert_eq!(app.buffer_sessions().count(), 2);
+    });
+    app.update(cx, |app, cx| {
+        app.activate_buffer(source_id, cx);
+        assert_eq!(
+            app.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading,
+            "returning to the source restores its reading mode"
+        );
+        app.show_home_now(cx);
+        app.open_recent(path.clone(), cx);
+    });
+    cx.read(|cx| {
+        assert_eq!(
+            app.read(cx).document_session().unwrap().read(cx).path(),
+            path
+        );
+    });
+    std::fs::remove_file(path).unwrap();
+}
+
+#[gpui::test]
+fn linked_plain_text_uses_editors_in_both_split_panes(cx: &mut gpui::TestAppContext) {
+    let path = std::env::temp_dir().join(format!(
+        "org-studio-linked-split-text-{}.txt",
+        std::process::id()
+    ));
+    std::fs::write(&path, "* literal text\n").unwrap();
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(true));
+    app.update(cx, |app, cx| {
+        app.create_buffer("Source.org".into(), None, cx);
+        app.document_workspace
+            .set_surface(crate::app::PaneSide::Left, crate::app::PaneSurface::Reading);
+        app.document_workspace.set_surface(
+            crate::app::PaneSide::Right,
+            crate::app::PaneSurface::Reading,
+        );
+        app.open_document_link(path.clone(), None, cx);
+    });
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let app = app.read(cx);
+        assert_eq!(app.document_session().unwrap().read(cx).path(), path);
+        for pane in [crate::app::PaneSide::Left, crate::app::PaneSide::Right] {
+            assert_eq!(
+                app.document_workspace.surface(pane),
+                crate::app::PaneSurface::Editor
+            );
+            assert!(app.editor(pane).is_some());
+        }
+        assert!(app.derived.latest.is_none());
+    });
+    std::fs::remove_file(path).unwrap();
+}
+
 #[test]
 fn dired_help_lists_every_command_and_groups_alias_keys() {
     let (commands, _, _) = preview_input();

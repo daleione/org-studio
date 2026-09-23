@@ -50,6 +50,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn editable_file_links_open_in_app_but_binary_links_do_not() {
+        let directory =
+            std::env::temp_dir().join(format!("org-studio-file-link-kind-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        for name in [
+            "notes.org",
+            "sample.rs",
+            "notes.TXT",
+            "config.toml",
+            "photo.png",
+        ] {
+            std::fs::write(directory.join(name), "contents").unwrap();
+        }
+        for name in ["notes.org", "sample.rs", "notes.TXT", "config.toml"] {
+            assert!(
+                crate::preview::is_supported_document(&directory.join(name)),
+                "{name}"
+            );
+        }
+        assert!(!crate::preview::is_supported_document(
+            &directory.join("photo.png")
+        ));
+        assert!(!crate::preview::is_supported_document(
+            &directory.join("missing.txt")
+        ));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn local_documents_keep_paths_and_navigation_targets() {
         let base = Path::new("/tmp/notes/main.org");
         for (raw, expected, anchor) in [

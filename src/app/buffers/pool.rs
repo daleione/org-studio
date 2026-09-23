@@ -48,6 +48,8 @@ impl WorkspaceWindow {
             return;
         };
         let parked = self.buffers.parked.remove(index);
+        let source_file =
+            crate::preview::is_editor_only_document(parked.document.session.read(cx).syntax_path());
         self.suspend_derived_preview();
         if let Some(current) = self.state.take_ready() {
             self.park_document(current);
@@ -61,6 +63,12 @@ impl WorkspaceWindow {
             document: parked.document,
         };
         self.document_workspace = parked.workspace;
+        if source_file {
+            for pane in [crate::app::PaneSide::Left, crate::app::PaneSide::Right] {
+                self.document_workspace
+                    .set_surface(pane, crate::app::PaneSurface::Editor);
+            }
+        }
         self.soft_wrap = parked.soft_wrap;
         self.derived.latest = parked.preview;
         self.editor_subscriptions.clear();
@@ -183,6 +191,7 @@ impl WorkspaceWindow {
         let path = path.clone();
         self.load_task = None;
         self.generation = self.generation.wrapping_add(1);
+        self.pending_link_surface = None;
         if let Some(document) = self.state.take_ready() {
             self.state = WorkspaceLoadState::Ready { document };
         }

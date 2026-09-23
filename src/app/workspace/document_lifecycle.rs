@@ -45,6 +45,7 @@ impl WorkspaceWindow {
         self.first_frame_scheduled = None;
         self.home_error = None;
         self.pending_navigation = None;
+        self.pending_link_surface = None;
         self.pending_surface_anchors = PanePair {
             left: None,
             right: None,
@@ -70,6 +71,7 @@ impl WorkspaceWindow {
         self.home_error = None;
         self.save.error = None;
         self.pending_navigation = None;
+        self.pending_link_surface = None;
         self.pending_surface_anchors = PanePair {
             left: None,
             right: None,
@@ -168,7 +170,8 @@ impl WorkspaceWindow {
         }
         let generation =
             self.begin_open_with_previous(path.clone(), Instant::now(), preserve_previous);
-        let build_preview = self.document_workspace.needs_reading();
+        let build_preview = self.document_workspace.needs_reading()
+            && !crate::preview::is_editor_only_document(&path);
 
         // Opening the requested document is user-visible latency. Submit it before synchronous
         // file-watcher setup and before one-time font startup work so a small local file is not
@@ -237,7 +240,8 @@ impl WorkspaceWindow {
         self.opened_at = Some(Instant::now());
         self.first_frame_scheduled = None;
         self.set_document_notice(None);
-        let build_preview = self.document_workspace.needs_reading();
+        let build_preview = self.document_workspace.needs_reading()
+            && !crate::preview::is_editor_only_document(request.path());
         let background = cx
             .background_executor()
             .spawn_with_priority(gpui::Priority::High, async move {
@@ -525,6 +529,12 @@ impl WorkspaceWindow {
         if !accept_generation(self.generation, generation) {
             return false;
         }
+        let linked_surface =
+            self.pending_link_surface
+                .take()
+                .and_then(|(pending_generation, surface)| {
+                    (pending_generation == generation).then_some(surface)
+                });
         let previous = self.state.take_ready();
         self.state = match result {
             Ok(loaded) => {
@@ -541,6 +551,15 @@ impl WorkspaceWindow {
                         (session, Some(preview))
                     }
                 };
+                if crate::preview::is_editor_only_document(session.syntax_path()) {
+                    for pane in [crate::app::PaneSide::Left, crate::app::PaneSide::Right] {
+                        self.document_workspace
+                            .set_surface(pane, crate::app::PaneSurface::Editor);
+                    }
+                } else if let Some(surface) = linked_surface {
+                    self.document_workspace
+                        .set_surface(self.document_workspace.active_pane, surface);
+                }
                 let preview = self
                     .document_workspace
                     .needs_reading()
@@ -771,7 +790,7 @@ impl WorkspaceWindow {
             self.open_buffers(paths, cx);
             return;
         }
-        self.home_error = Some("Drop an Org or Markdown document to open it.".into());
+        self.home_error = Some("Drop a supported text document to open it.".into());
         cx.notify();
     }
 
@@ -912,6 +931,35 @@ mod tests {
             );
         });
 
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[gpui::test]
+    fn opening_source_file_selects_editor_even_from_reading_mode(cx: &mut gpui::TestAppContext) {
+        let path =
+            std::env::temp_dir().join(format!("org-studio-source-file-{}.rs", std::process::id()));
+        std::fs::write(&path, b"fn main() {}\n").unwrap();
+        assert!(is_supported_document(&path));
+        let loaded = load_workspace_document(path.clone(), false).unwrap();
+        let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+        workspace.update(cx, |workspace, cx| {
+            workspace
+                .document_workspace
+                .set_surface(crate::app::PaneSide::Left, crate::app::PaneSurface::Reading);
+            workspace.generation = 1;
+            assert!(workspace.apply_load_result(1, Ok(loaded), cx));
+            assert_eq!(
+                workspace.document_workspace.active_surface(),
+                crate::app::PaneSurface::Editor
+            );
+            assert!(workspace.editor(crate::app::PaneSide::Left).is_some());
+            assert!(workspace.derived.latest.is_none());
+            workspace.show_reading(cx);
+            assert_eq!(
+                workspace.document_workspace.active_surface(),
+                crate::app::PaneSurface::Editor
+            );
+        });
         std::fs::remove_file(path).unwrap();
     }
 

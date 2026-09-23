@@ -324,7 +324,9 @@ fn todo_quick_bar_narrow_bottom_and_keyboard_overflow(cx: &mut TestAppContext) {
         e.hit_rows
             .iter()
             .rev()
-            .find(|r| r.origin_y + px(6.) < e.viewport.unwrap().bottom())
+            .find(|r| {
+                (1..=20).contains(&r.line.0) && r.origin_y + px(6.) < e.viewport.unwrap().bottom()
+            })
             .unwrap()
             .line
             .0

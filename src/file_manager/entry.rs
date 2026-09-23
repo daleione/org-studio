@@ -17,6 +17,7 @@ pub enum EntryKind {
     Directory,
     OrgFile,
     Markdown,
+    CodeFile,
     Image,
     RegularFile,
     Symlink,

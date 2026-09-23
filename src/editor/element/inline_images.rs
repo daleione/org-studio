@@ -31,6 +31,7 @@ pub(super) fn resolve_inline_images(
         let document_path = editor.session.read(cx).syntax_path().to_path_buf();
         if crate::document::DocumentFormat::from_path(&document_path)
             == crate::document::DocumentFormat::Org
+            && crate::syntax_highlighting::language_for_path(&document_path).is_none()
         {
             let visible_lines = editor.animated_visible_line_range(
                 snapshot,

@@ -305,6 +305,7 @@ pub struct WorkspaceWindow {
     pub(crate) home_error: Option<Arc<str>>,
     pub(crate) generation: u64,
     pub(crate) pending_navigation: Option<(u64, Arc<str>)>,
+    pub(crate) pending_link_surface: Option<(u64, PaneSurface)>,
     pub(crate) pending_surface_anchors: PanePair<Option<SurfaceAnchor>>,
     pub(crate) load_task: Option<Task<()>>,
     pub(crate) babel_task: Option<Task<()>>,

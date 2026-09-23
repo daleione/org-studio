@@ -174,15 +174,24 @@ impl WorkspaceWindow {
         if self.buffer_busy() {
             return;
         }
+        let surface = if crate::document::DocumentFormat::detect(&path).is_some() {
+            crate::app::PaneSurface::Reading
+        } else {
+            crate::app::PaneSurface::Editor
+        };
         self.open(path, cx);
-        self.set_active_surface(crate::app::PaneSurface::Reading, cx);
+        if matches!(self.state, crate::app::WorkspaceLoadState::Loading { .. }) {
+            self.pending_link_surface = Some((self.generation, surface));
+        } else {
+            self.set_active_surface(surface, cx);
+        }
         // A newly loading document starts at its own destination, not the source pane's anchor.
         if matches!(self.state, crate::app::WorkspaceLoadState::Loading { .. }) {
             *self
                 .pending_surface_anchors
                 .get_mut(self.document_workspace.active_pane) = None;
         }
-        if let Some(anchor) = anchor {
+        if let Some(anchor) = anchor.filter(|_| surface == crate::app::PaneSurface::Reading) {
             self.pending_navigation = Some((self.generation, anchor.into()));
             if matches!(self.state, crate::app::WorkspaceLoadState::Ready { .. }) {
                 self.apply_pending_navigation(self.generation, cx);

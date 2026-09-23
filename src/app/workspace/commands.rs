@@ -422,6 +422,19 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn show_reading(&mut self, cx: &mut Context<Self>) {
+        if self
+            .current_document_path(cx)
+            .is_some_and(crate::preview::is_editor_only_document)
+        {
+            self.show_echo_message(
+                crate::app::echo_area::EchoMessage::warning(self.buffer_text(
+                    "文本和代码文件仅在编辑区显示",
+                    "Text and source files are shown in the editor",
+                )),
+                cx,
+            );
+            return;
+        }
         self.document_workspace.layout = crate::app::WorkspaceLayout::Single;
         self.set_active_surface(crate::app::PaneSurface::Reading, cx);
     }
@@ -550,6 +563,20 @@ impl WorkspaceWindow {
         surface: crate::app::PaneSurface,
         cx: &mut Context<Self>,
     ) {
+        if matches!(surface, crate::app::PaneSurface::Reading)
+            && self
+                .current_document_path(cx)
+                .is_some_and(crate::preview::is_editor_only_document)
+        {
+            self.show_echo_message(
+                crate::app::echo_area::EchoMessage::warning(self.buffer_text(
+                    "文本和代码文件仅在编辑区显示",
+                    "Text and source files are shown in the editor",
+                )),
+                cx,
+            );
+            return;
+        }
         self.end_prefix(cx);
         self.close_command_line(cx);
         self.close_search(false, cx);

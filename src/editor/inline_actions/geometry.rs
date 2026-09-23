@@ -38,8 +38,10 @@ impl SemanticEditor {
         ) {
             return None;
         }
-        let org =
-            DocumentFormat::from_path(self.session.read(cx).syntax_path()) == DocumentFormat::Org;
+        let org = DocumentFormat::from_path(self.session.read(cx).syntax_path())
+            == DocumentFormat::Org
+            && crate::syntax_highlighting::language_for_path(self.session.read(cx).syntax_path())
+                .is_none();
         let mut token = None;
         if org && !self.is_read_only(cx) {
             if style == syntax::EditorStyleId::List {

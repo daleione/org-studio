@@ -275,6 +275,32 @@ fn batch_open_keeps_every_success_and_focuses_the_first_file(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn background_source_file_activates_in_editor(cx: &mut gpui::TestAppContext) {
+    let root = std::env::temp_dir().join(format!("buffer-source-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("main.py");
+    std::fs::write(&path, "def main():\n    return 42\n").unwrap();
+    let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| {
+        w.create_buffer("notes.org".into(), None, cx);
+        w.document_workspace
+            .set_surface(crate::app::PaneSide::Left, crate::app::PaneSurface::Reading);
+        w.open_background_buffer(path.clone(), cx);
+    });
+    cx.run_until_parked();
+    w.update(cx, |w, cx| {
+        let session = w.buffer_for_path(&path, cx).unwrap();
+        w.activate_buffer(session.read(cx).id(), cx);
+        assert_eq!(
+            w.document_workspace.active_surface(),
+            crate::app::PaneSurface::Editor
+        );
+        assert!(w.editor(crate::app::PaneSide::Left).is_some());
+    });
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
 fn save_callback_stays_with_its_document_after_switching(cx: &mut gpui::TestAppContext) {
     let root = std::env::temp_dir().join(format!("buffer-save-switch-{}", std::process::id()));
     std::fs::create_dir_all(&root).unwrap();

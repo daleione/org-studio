@@ -535,7 +535,7 @@ impl WorkspaceWindow {
                     self.open_sidebar_directory(path, cx);
                 }
             }
-            Some((path, EntryKind::OrgFile | EntryKind::Markdown)) => {
+            Some((path, EntryKind::OrgFile | EntryKind::Markdown | EntryKind::CodeFile)) => {
                 let already_open = matches!(
                     &self.state,
                     WorkspaceLoadState::Loading { path: current, .. }
@@ -1381,6 +1381,7 @@ fn sidebar_icon(kind: EntryKind) -> (&'static str, u32) {
         EntryKind::Directory => ("D", current_theme().heading[3]),
         EntryKind::OrgFile => ("O", current_theme().heading[1]),
         EntryKind::Markdown => ("M", current_theme().heading[0]),
+        EntryKind::CodeFile => ("C", current_theme().keyword),
         EntryKind::Image => ("I", current_theme().heading[2]),
         EntryKind::Symlink => ("@", current_theme().meta),
         EntryKind::RegularFile => ("F", current_theme().foreground_dim),

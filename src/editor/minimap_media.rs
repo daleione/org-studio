@@ -9,6 +9,7 @@ pub(super) struct MinimapImagePaint {
 pub(super) fn image_path(document_path: &Path, text: &str) -> Option<PathBuf> {
     if crate::document::DocumentFormat::from_path(document_path)
         != crate::document::DocumentFormat::Org
+        || crate::syntax_highlighting::language_for_path(document_path).is_some()
     {
         return None;
     }

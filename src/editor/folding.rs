@@ -327,6 +327,9 @@ impl EditorFoldState {
         path: &Path,
         snapshot: &DocumentSnapshot,
     ) -> Arc<HeadingIndex> {
+        if crate::syntax_highlighting::language_for_path(path).is_some() {
+            return Arc::new(HeadingIndex::default());
+        }
         let format = DocumentFormat::from_path(path);
         if let Some(cached) = self.heading_cache.borrow().as_ref()
             && cached.document_id == snapshot.document_id()
@@ -843,6 +846,19 @@ mod tests {
         assert_eq!(folds.global, GlobalVisibility::All);
         assert_eq!(
             folds.projection(org(), &snapshot),
+            EditorFoldProjection::default()
+        );
+    }
+
+    #[test]
+    fn source_file_does_not_treat_org_like_text_as_headings() {
+        let snapshot = DocumentSnapshot::from_utf8(b"* pointer\nbody\n".to_vec()).unwrap();
+        let path = std::path::Path::new("main.rs");
+        let mut folds = EditorFoldState::default();
+        assert!(folds.heading_index(path, &snapshot).is_empty());
+        assert!(!folds.cycle_global(path, &snapshot));
+        assert_eq!(
+            folds.projection(path, &snapshot),
             EditorFoldProjection::default()
         );
     }

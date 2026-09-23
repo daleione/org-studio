@@ -117,7 +117,22 @@ fn classify(path: &Path, file_type: Option<fs::FileType>) -> EntryKind {
         Some("org") => EntryKind::OrgFile,
         Some("md" | "markdown") => EntryKind::Markdown,
         Some("png" | "jpg" | "jpeg" | "gif" | "webp") => EntryKind::Image,
+        _ if crate::syntax_highlighting::language_for_path(path).is_some() => EntryKind::CodeFile,
         _ => EntryKind::RegularFile,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn scan_classifies_supported_source_files() {
+        for path in ["main.rs", "main.go", "main.py"] {
+            assert_eq!(classify(Path::new(path), None), EntryKind::CodeFile);
+        }
+        assert_eq!(classify(Path::new("notes.org"), None), EntryKind::OrgFile);
+        assert_eq!(classify(Path::new("image.png"), None), EntryKind::Image);
     }
 }
 

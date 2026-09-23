@@ -2,6 +2,7 @@
 
 use std::{
     collections::HashMap,
+    path::Path,
     sync::{Arc, Mutex, OnceLock},
 };
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
@@ -58,6 +59,27 @@ pub(crate) enum CodeHighlightKind {
     String,
     Type,
     Variable,
+}
+
+/// Source files use the same grammars as fenced code blocks.
+pub(crate) fn language_for_path(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?;
+    Some(match extension.to_ascii_lowercase().as_str() {
+        "rs" => "rust",
+        "go" => "go",
+        "py" => "python",
+        "js" => "javascript",
+        "jsx" => "jsx",
+        "ts" => "typescript",
+        "tsx" => "tsx",
+        "json" => "json",
+        "sh" | "bash" | "zsh" => "bash",
+        "c" | "h" => "c",
+        "cc" | "cpp" | "cxx" | "hpp" => "cpp",
+        "sql" => "sql",
+        "typ" => "typst",
+        _ => return None,
+    })
 }
 
 pub(crate) fn highlight_code(
@@ -338,6 +360,19 @@ fn code_highlight_kind(name: &str) -> Option<CodeHighlightKind> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_file_extensions_match_existing_grammars() {
+        for (path, expected) in [
+            ("main.RS", Some("rust")),
+            ("main.go", Some("go")),
+            ("main.py", Some("python")),
+            ("main.tsx", Some("tsx")),
+            ("notes.org", None),
+        ] {
+            assert_eq!(language_for_path(Path::new(path)), expected);
+        }
+    }
 
     #[test]
     fn typst_highlights_code_math_and_nested_unicode_markup() {

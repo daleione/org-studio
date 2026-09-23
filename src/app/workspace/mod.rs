@@ -125,6 +125,7 @@ impl WorkspaceWindow {
             home_error: None,
             generation: 0,
             pending_navigation: None,
+            pending_link_surface: None,
             pending_surface_anchors: PanePair {
                 left: None,
                 right: None,

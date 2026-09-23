@@ -110,9 +110,11 @@ impl WorkspaceWindow {
                 format_character_count(document_statistics.characters, self.language).into(),
             ),
             document_statistics: Some(document_statistics),
-            format: Some(DocumentFormat::from_path(
+            format: crate::syntax_highlighting::language_for_path(
                 ready.session.read(cx).syntax_path(),
-            )),
+            )
+            .is_none()
+            .then(|| DocumentFormat::from_path(ready.session.read(cx).syntax_path())),
             transient: self.document_transient_status(None, cx),
         })
     }

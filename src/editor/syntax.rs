@@ -434,6 +434,15 @@ impl EditorStyleSnapshot {
         lines: Range<u64>,
         cache: &EditorSyntaxService,
     ) -> Self {
+        if let Some(language) = crate::syntax_highlighting::language_for_path(path) {
+            let lines = lines.collect::<Vec<_>>();
+            return Self {
+                revision: snapshot.revision(),
+                lines: code_file_styles(snapshot, &lines, language)
+                    .into_values()
+                    .collect(),
+            };
+        }
         let language = language(path);
         let mut code = cache.context_at(snapshot, language, lines.start);
         let styles = lines
@@ -476,6 +485,16 @@ impl SparseEditorStyleSnapshot {
         lines: &[u64],
         service: &EditorSyntaxService,
     ) -> EditorStyleQuery {
+        if let Some(language) = crate::syntax_highlighting::language_for_path(path) {
+            return EditorStyleQuery {
+                snapshot: Self {
+                    revision: snapshot.revision(),
+                    lines: code_file_styles(snapshot, lines, language),
+                },
+                pending: false,
+                start_builder: false,
+            };
+        }
         let language = language(path);
         let mut requested = lines.to_vec();
         requested.sort_unstable();
@@ -552,6 +571,12 @@ impl SparseEditorStyleSnapshot {
         lines: &[u64],
         cache: &EditorSyntaxService,
     ) -> Self {
+        if let Some(language) = crate::syntax_highlighting::language_for_path(path) {
+            return Self {
+                revision: snapshot.revision(),
+                lines: code_file_styles(snapshot, lines, language),
+            };
+        }
         let language = language(path);
         let mut requested = lines.to_vec();
         requested.sort_unstable();
@@ -584,6 +609,31 @@ impl SparseEditorStyleSnapshot {
     pub(super) fn line(&self, line: u64) -> Option<&EditorLineStyle> {
         self.lines.get(&line)
     }
+}
+
+fn code_file_styles(
+    snapshot: &DocumentSnapshot,
+    lines: &[u64],
+    language: &'static str,
+) -> BTreeMap<u64, EditorLineStyle> {
+    let language: Arc<str> = Arc::from(language);
+    lines
+        .iter()
+        .filter_map(|&line| {
+            let source_range = snapshot.line_content_range(LineIndex(line)).ok()?;
+            Some((
+                line,
+                EditorLineStyle {
+                    source_range,
+                    id: EditorStyleId::Plain,
+                    code_language: Some(language.clone()),
+                    block: None,
+                    todo: None,
+                    metrics: BlockMetrics::default(),
+                },
+            ))
+        })
+        .collect()
 }
 
 fn append_styles(
@@ -1278,7 +1328,7 @@ pub(super) fn semantic_spans(
     let verbatim = matches!(
         line_style.id,
         EditorStyleId::Code | EditorStyleId::CodeBoundary
-    );
+    ) || line_style.code_language.is_some();
     let document_language = language(path);
     let mut opaque_inline_ranges = Vec::new();
     if !verbatim {
@@ -1322,8 +1372,7 @@ pub(super) fn semantic_spans(
             _ => {}
         }
     }
-    if line_style.id == EditorStyleId::Code
-        && let Some(language) = line_style.code_language.as_deref()
+    if let Some(language) = line_style.code_language.as_deref()
         && let Ok(code_spans) = crate::syntax_highlighting::highlight_code(language, text)
     {
         spans.extend(
@@ -1960,6 +2009,32 @@ mod tests {
             ),
             todo,
             metrics: metrics_for(id),
+        }
+    }
+
+    #[test]
+    fn source_files_use_code_highlighting_without_org_markup() {
+        for (path, source, language) in [
+            ("main.rs", "fn main() { let value = 42; }\n", "rust"),
+            ("main.go", "package main\nfunc main() {}\n", "go"),
+            ("main.py", "def main():\n    return 42\n", "python"),
+        ] {
+            let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let query = SparseEditorStyleSnapshot::query_lines(
+                Path::new(path),
+                &snapshot,
+                &[0],
+                &EditorSyntaxService::default(),
+            );
+            let style = query.snapshot.line(0).unwrap();
+            assert!(!query.pending);
+            assert_eq!(style.id, EditorStyleId::Plain);
+            assert_eq!(style.code_language.as_deref(), Some(language));
+            assert!(style.block.is_none());
+            let text = snapshot.copy_range(style.source_range);
+            let spans = semantic_spans(Path::new(path), &text, style);
+            assert!(spans.iter().any(|span| span.color.is_some()), "{path}");
+            assert!(spans.iter().all(|span| !span.pill), "{path}");
         }
     }
 

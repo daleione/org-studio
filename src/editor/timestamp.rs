@@ -54,6 +54,8 @@ impl SemanticEditor {
     ) -> Option<(ByteRange, String, TimestampKind, Point<Pixels>)> {
         if self.is_read_only(cx)
             || DocumentFormat::from_path(self.session.read(cx).syntax_path()) != DocumentFormat::Org
+            || crate::syntax_highlighting::language_for_path(self.session.read(cx).syntax_path())
+                .is_some()
         {
             return None;
         }

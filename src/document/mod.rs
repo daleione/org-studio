@@ -27,7 +27,7 @@ pub use file::{
     SaveState, SyncState, write_atomic,
 };
 pub(crate) use file::{TargetExpectation, resolve_symlink_target};
-pub(crate) use format::DocumentFormat;
+pub(crate) use format::{DocumentFormat, is_plain_text_path};
 pub(crate) use headings::{DocumentHeading, HeadingIndex, OutlineEntry};
 pub(crate) use outline::{
     GlobalVisibility, LocalVisibility, OutlineCycleProjection, OutlineHeading,

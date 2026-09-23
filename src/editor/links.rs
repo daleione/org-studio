@@ -328,13 +328,36 @@ mod link_tests {
             })
             .detach();
         });
-        for (filename, destination, anchor) in [
-            ("notes.org", "file:notes.org::*Heading", "*Heading"),
-            ("notes.md", "notes.md#section", "section"),
+        for (filename, destination, anchor, format) in [
+            (
+                "notes.org",
+                "file:notes.org::*Heading",
+                "*Heading",
+                crate::links::LinkFormat::Org,
+            ),
+            (
+                "sample.rs",
+                "file:sample.rs#main",
+                "main",
+                crate::links::LinkFormat::Org,
+            ),
+            (
+                "notes.txt",
+                "file:notes.txt#section",
+                "section",
+                crate::links::LinkFormat::Org,
+            ),
+            (
+                "notes.md",
+                "notes.md#section",
+                "section",
+                crate::links::LinkFormat::Markdown,
+            ),
             (
                 "中文 notes.markdown",
                 "%E4%B8%AD%E6%96%87%20notes.markdown#section",
                 "section",
+                crate::links::LinkFormat::Markdown,
             ),
         ] {
             std::fs::write(directory.join(filename), "contents").unwrap();
@@ -343,10 +366,7 @@ mod link_tests {
                     &LinkHit {
                         line: LineIndex(0),
                         display_range: 0..1,
-                        meta: crate::links::classify(
-                            destination,
-                            crate::links::LinkFormat::Markdown,
-                        ),
+                        meta: crate::links::classify(destination, format),
                     },
                     cx,
                 )

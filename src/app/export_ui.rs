@@ -80,16 +80,29 @@ impl WorkspaceWindow {
         &self,
         cx: &gpui::App,
     ) -> Option<(crate::document::DocumentSnapshot, PathBuf, DocumentFormat)> {
-        self.state.ready().map(|document| {
+        self.state.ready().and_then(|document| {
             let session = document.session.read(cx);
             let path = session.path().to_path_buf();
+            if crate::syntax_highlighting::language_for_path(&path).is_some() {
+                return None;
+            }
             let format = DocumentFormat::from_path(&path);
-            (session.snapshot(), path, format)
+            Some((session.snapshot(), path, format))
         })
     }
 
     pub(crate) fn show_export_panel(&mut self, cx: &mut Context<Self>) {
         if !matches!(self.state, WorkspaceLoadState::Ready { .. }) {
+            return;
+        }
+        if self.current_export_source(cx).is_none() {
+            self.show_echo_message(
+                crate::app::echo_area::EchoMessage::warning(self.buffer_text(
+                    "代码文件暂不支持导出",
+                    "Source file export is not available",
+                )),
+                cx,
+            );
             return;
         }
         self.export.panel = Some(ExportPanelState::default());
