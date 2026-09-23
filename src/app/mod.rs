@@ -314,6 +314,7 @@ pub struct WorkspaceWindow {
     pub(crate) babel_task: Option<Task<()>>,
     pub(crate) babel_editor: Option<gpui::Entity<crate::editor::SemanticEditor>>,
     pub(crate) babel_request: u64,
+    pub(crate) babel_trusted_documents: std::collections::HashSet<PathBuf>,
     pub(crate) derived: DerivedHost,
     pub(crate) file_watch_task: Option<Task<()>>,
     pub(crate) file_watch_request: u64,

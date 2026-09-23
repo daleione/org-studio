@@ -135,6 +135,7 @@ impl WorkspaceWindow {
             babel_task: None,
             babel_editor: None,
             babel_request: 0,
+            babel_trusted_documents: std::collections::HashSet::new(),
             derived: crate::app::DerivedHost::default(),
             file_watch_task: None,
             file_watch_request: 0,

@@ -25,7 +25,7 @@ use super::{
     QUIT_APPLICATION_COMMAND, REDO_DOCUMENT_COMMAND, RELOAD_DOCUMENT_COMMAND,
     RESET_CONTENT_FONT_SIZE_COMMAND, RETURN_DOCUMENT_COMMAND, SAVE_DOCUMENT_AS_COMMAND,
     SAVE_DOCUMENT_COMMAND, SCROLL_BACKWARD_COMMAND, SCROLL_FORWARD_COMMAND, SHOW_EDITOR_COMMAND,
-    SHOW_HOME_COMMAND, SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND,
+    SHOW_HOME_COMMAND, SHOW_READING_COMMAND, SHOW_SPLIT_COMMAND, TANGLE_DOCUMENT_COMMAND,
     TOGGLE_INLINE_IMAGE_PREVIEWS_COMMAND, TOGGLE_MINIMAP_COMMAND, TOGGLE_SIDEBAR_COMMAND,
     TOGGLE_SOFT_WRAP_COMMAND, UNDO_DOCUMENT_COMMAND,
 };
@@ -277,6 +277,23 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             redaction: RedactionPolicy::RedactArguments,
         })
         .expect("valid built-in Babel command");
+    builder
+        .register_builtin(BuiltinCommandSpec {
+            name: TANGLE_DOCUMENT_COMMAND.into(),
+            aliases: &["org-babel-tangle"],
+            title: "Tangle Org Document",
+            description: "Write source blocks with :tangle targets to code files",
+            command: BuiltinCommand::TangleDocument,
+            role: CommandRole::Action,
+            argument_spec: ArgumentSpec::None,
+            repeat: RepeatPolicy::Never,
+            undo: UndoPolicy::None,
+            availability: Availability::FocusedView,
+            side_effect: SideEffectClass::WriteFileSystem,
+            required_capabilities: CapabilitySet::WRITE_FILE_SYSTEM,
+            redaction: RedactionPolicy::RedactArguments,
+        })
+        .expect("valid built-in tangle command");
     builder
         .register_builtin(BuiltinCommandSpec {
             name: ORG_CONTEXT_COMMAND.into(),
@@ -915,6 +932,10 @@ pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec {
             keys: "C-c C-c",
             behavior: BindingBehavior::Command(ORG_CONTEXT_COMMAND),
+        },
+        BindingSpec {
+            keys: "C-c C-v t",
+            behavior: BindingBehavior::Command(TANGLE_DOCUMENT_COMMAND),
         },
         BindingSpec {
             keys: "C-c C-x C-v",

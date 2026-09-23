@@ -257,6 +257,9 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::ExecuteSourceBlock) => {
                 self.execute_source_block(window, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::TangleDocument) => {
+                self.tangle_document(window, cx)
+            }
             CommandImplementation::Builtin(BuiltinCommand::OpenLinkAt) => {
                 // Resolve via the active pane: a pending `C-c` prefix moves focus
                 // to the workspace root, so a focus-based lookup would drop the
