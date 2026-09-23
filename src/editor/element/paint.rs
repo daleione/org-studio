@@ -59,6 +59,17 @@ pub(super) fn paint_frame(
                     window,
                     cx,
                 );
+                if row.visual_rows > 1 {
+                    paint_continuation_markers(
+                        window,
+                        number_x,
+                        row.gutter_layout.width(),
+                        row.hit.origin_y,
+                        row.hit.line_height,
+                        row.visual_rows,
+                        text_left - px(GUTTER_PADDING / 2.0),
+                    );
+                }
             };
             if let Some((top, bottom)) = row.animation_clip_y {
                 if bottom > top {
@@ -304,6 +315,38 @@ pub(super) fn paint_frame(
                 cx.quit();
             }
         }
+    }
+}
+
+/// Connect all wrapped rows to the center of their source line number.
+fn paint_continuation_markers(
+    window: &mut Window,
+    number_x: Pixels,
+    number_width: Pixels,
+    origin_y: Pixels,
+    line_height: Pixels,
+    visual_rows: usize,
+    tip_x: Pixels,
+) {
+    let height = (f32::from(line_height) * 0.64).clamp(8.0, 15.0);
+    let stroke = (height * 0.11).clamp(1.2, 1.8);
+    let stem_x = number_x + number_width / 2.0;
+    let bend_offset = (line_height - px(height)) / 2.0 + px(height * 0.72);
+    let last_bend_y = origin_y + line_height * (visual_rows - 1) + bend_offset;
+    let head = px(height * 0.24);
+    let mut arrow = gpui::PathBuilder::stroke(px(stroke));
+    arrow.move_to(point(stem_x, origin_y + line_height - px(1.0)));
+    arrow.line_to(point(stem_x, last_bend_y));
+    for visual_row in 1..visual_rows {
+        let bend_y = origin_y + line_height * visual_row + bend_offset;
+        arrow.move_to(point(stem_x, bend_y));
+        arrow.line_to(point(tip_x, bend_y));
+        arrow.move_to(point(tip_x - head, bend_y - head));
+        arrow.line_to(point(tip_x, bend_y));
+        arrow.line_to(point(tip_x - head, bend_y + head));
+    }
+    if let Ok(path) = arrow.build() {
+        window.paint_path(path, rgba((current_theme().line_number << 8) | 0x99));
     }
 }
 
