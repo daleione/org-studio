@@ -102,7 +102,6 @@ pub(super) fn build_frame(
         target_wrap_width,
         style.font(),
         font_size,
-        theme,
         cx.text_system().clone(),
     );
     let minimap_bounds = Bounds::new(

@@ -634,12 +634,12 @@ pub(crate) struct EditorMinimapWidthEvent(pub(crate) f32);
 impl EventEmitter<EditorMinimapWidthEvent> for SemanticEditor {}
 
 #[derive(Clone, Debug)]
-pub(crate) struct EditorOpenDocumentEvent {
+pub(crate) struct EditorOpenFileEvent {
     pub(crate) path: PathBuf,
     pub(crate) anchor: Option<String>,
 }
 
-impl EventEmitter<EditorOpenDocumentEvent> for SemanticEditor {}
+impl EventEmitter<EditorOpenFileEvent> for SemanticEditor {}
 
 /// Everything needed to recompute an inline image's painted size without
 /// reading the document again.

@@ -39,7 +39,6 @@ pub(super) fn prepare_minimap_layout_request(
     wrap_width: f32,
     font: gpui::Font,
     font_size: Pixels,
-    theme: &crate::theme::Theme,
     text_system: Arc<gpui::TextSystem>,
 ) -> Option<MinimapLayoutPreparationRequest> {
     if !editor.minimap.visible && !editor.layout_reflow_pending || editor.fold_animation.is_some() {
@@ -79,7 +78,7 @@ pub(super) fn prepare_minimap_layout_request(
         text_system,
         font,
         font_size,
-        theme: *theme,
+        theme: *crate::theme::current_theme(),
         fold_markers: editor.fold_markers.clone(),
     })
 }

@@ -44,7 +44,7 @@ impl ApplicationController {
         if let Some(handle) = self.main_window {
             let update = handle.update(cx, |preview, window, cx| {
                 if let Some(path) = path.clone()
-                    && preview.current_document_path(cx) != Some(path.as_path())
+                    && preview.current_open_path(cx) != Some(path.as_path())
                 {
                     preview.open(path, cx);
                 }
@@ -205,6 +205,7 @@ fn main() {
         let initial_path = initial_path.clone().or(launch_path);
         let initial_load = initial_path
             .clone()
+            .filter(|path| !org_studio::preview::is_supported_image(path))
             .map(|path| preload_initial_document(path, cx));
         org_studio::editor::init(cx);
         cx.bind_keys([

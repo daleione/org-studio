@@ -126,6 +126,7 @@ impl WorkspaceWindow {
             generation: 0,
             pending_navigation: None,
             pending_link_surface: None,
+            image_viewer: super::image_viewer::ImageViewerState::default(),
             pending_surface_anchors: PanePair {
                 left: None,
                 right: None,
@@ -542,6 +543,14 @@ impl WorkspaceWindow {
             }
             WorkspaceLoadState::Ready { document } => document.session.read(cx).file_path(),
             WorkspaceLoadState::Empty => None,
+        }
+    }
+
+    pub fn current_open_path<'a>(&'a self, cx: &'a gpui::App) -> Option<&'a std::path::Path> {
+        match self.content_route {
+            ContentRoute::Document => self.current_document_path(cx),
+            ContentRoute::Image => self.image_viewer.path.as_deref(),
+            ContentRoute::FileManager | ContentRoute::Agenda | ContentRoute::AgendaText => None,
         }
     }
 
@@ -1043,6 +1052,14 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn window_title(&self, cx: &gpui::App) -> String {
+        if self.content_route == ContentRoute::Image
+            && let Some(path) = &self.image_viewer.path
+        {
+            return format!(
+                "{} - Org Studio",
+                path.file_name().unwrap_or_default().to_string_lossy()
+            );
+        }
         if self.content_route == ContentRoute::FileManager
             && let Some(session) = self.file_manager.session()
         {

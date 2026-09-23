@@ -178,7 +178,9 @@ impl WorkspaceWindow {
             self.open(first, cx);
         }
         for path in paths {
-            self.open_background_buffer(path, cx);
+            if !crate::preview::is_supported_image(&path) {
+                self.open_background_buffer(path, cx);
+            }
         }
     }
 

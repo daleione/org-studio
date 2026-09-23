@@ -382,6 +382,7 @@ impl Render for WorkspaceWindow {
         let export_status = self.export.status().cloned();
         let show_echo_area = !self.prefix_hint_visible()
             && !matches!(self.content_route, crate::app::ContentRoute::Agenda)
+            && !matches!(self.content_route, crate::app::ContentRoute::Image)
             && !(self.content_route == crate::app::ContentRoute::Document
                 && self.state.ready().is_some());
         // The agenda route draws its own toolbar into the titlebar row, so it
@@ -448,6 +449,45 @@ impl Render for WorkspaceWindow {
                 this.open_search(false, false, false, cx)
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.content_route == crate::app::ContentRoute::Image {
+                    let key = event.keystroke.key.as_str();
+                    let modifiers = event.keystroke.modifiers;
+                    let platform_key = modifiers.platform && !modifiers.alt && !modifiers.control;
+                    let handled = if platform_key {
+                        match key {
+                            "+" | "=" => {
+                                this.zoom_image(1.25, None, window, cx);
+                                true
+                            }
+                            "-" => {
+                                this.zoom_image(0.8, None, window, cx);
+                                true
+                            }
+                            "0" => {
+                                this.reset_image_zoom(cx);
+                                true
+                            }
+                            "o" => {
+                                this.choose_file(window, cx);
+                                true
+                            }
+                            "q" => {
+                                this.request_quit(window, cx);
+                                true
+                            }
+                            _ => false,
+                        }
+                    } else if key == "escape" && modifiers == gpui::Modifiers::default() {
+                        this.close_image_viewer(cx);
+                        true
+                    } else {
+                        false
+                    };
+                    if handled {
+                        cx.stop_propagation();
+                    }
+                    return;
+                }
                 if this.command_line_capture(event, cx) {
                     return;
                 }
@@ -614,9 +654,11 @@ impl Render for WorkspaceWindow {
                         div()
                             .flex_1()
                             .min_h_0()
-                            .when(!show_agenda, |body| {
-                                body.pt(px(crate::app::TITLEBAR_HEIGHT))
-                            })
+                            .when(
+                                !show_agenda
+                                    && self.content_route != crate::app::ContentRoute::Image,
+                                |body| body.pt(px(crate::app::TITLEBAR_HEIGHT)),
+                            )
                             .child(self.workspace_body(
                                 entity.clone(),
                                 command_window_width,
@@ -784,8 +826,12 @@ impl WorkspaceWindow {
                 );
                 let link = cx.subscribe(
                     &editor,
-                    |this, _, event: &crate::editor::EditorOpenDocumentEvent, cx| {
-                        this.open_document_link(event.path.clone(), event.anchor.clone(), cx);
+                    |this, _, event: &crate::editor::EditorOpenFileEvent, cx| {
+                        if crate::preview::is_supported_image(&event.path) {
+                            this.open(event.path.clone(), cx);
+                        } else {
+                            this.open_document_link(event.path.clone(), event.anchor.clone(), cx);
+                        }
                     },
                 );
                 self.editor_subscriptions.push((width, link));

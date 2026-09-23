@@ -302,7 +302,6 @@ fn tab_alignment_holds_minimap_pixels_until_complete_layout(cx: &mut gpui::TestA
                 editor.display_map.wrap_width(),
                 gpui::font(".SystemUIFont"),
                 px(15.),
-                crate::theme::current_theme(),
                 cx.text_system().clone(),
             )
             .unwrap();
@@ -1239,7 +1238,6 @@ fn prepared_minimap_layout_honours_an_authored_image_width(cx: &mut gpui::TestAp
             editor.display_map.wrap_width(),
             gpui::font(".SystemUIFont"),
             px(15.),
-            crate::theme::current_theme(),
             cx.text_system().clone(),
         )
         .expect("layout request");

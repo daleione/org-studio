@@ -535,6 +535,7 @@ impl WorkspaceWindow {
                     self.open_sidebar_directory(path, cx);
                 }
             }
+            Some((path, EntryKind::Image)) => self.open(path, cx),
             Some((path, EntryKind::OrgFile | EntryKind::Markdown | EntryKind::CodeFile)) => {
                 let already_open = matches!(
                     &self.state,
@@ -679,6 +680,19 @@ impl WorkspaceWindow {
             window.request_animation_frame();
         }
         let body = match self.content_route {
+            ContentRoute::Image => div().size_full().when_some(
+                self.image_viewer.path.as_ref().zip(self.image_viewer.size),
+                |body, (path, size)| {
+                    body.child(super::image_viewer::render_image_viewer(
+                        entity.clone(),
+                        path,
+                        size,
+                        &self.image_viewer,
+                        titlebar_inset,
+                        window,
+                    ))
+                },
+            ),
             ContentRoute::Agenda => div().size_full().child(self.agenda.render(
                 entity.clone(),
                 viewport_width,

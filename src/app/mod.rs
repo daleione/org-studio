@@ -37,6 +37,7 @@ mod echo_area;
 pub(crate) mod export_ui;
 mod file_manager;
 mod home;
+mod image_viewer;
 mod menus;
 pub(crate) use crate::components::native_input;
 pub use menus::application_menus;
@@ -179,6 +180,7 @@ pub struct DocumentViewPreferences {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ContentRoute {
     Document,
+    Image,
     FileManager,
     Agenda,
     AgendaText,
@@ -306,6 +308,7 @@ pub struct WorkspaceWindow {
     pub(crate) generation: u64,
     pub(crate) pending_navigation: Option<(u64, Arc<str>)>,
     pub(crate) pending_link_surface: Option<(u64, PaneSurface)>,
+    pub(crate) image_viewer: image_viewer::ImageViewerState,
     pub(crate) pending_surface_anchors: PanePair<Option<SurfaceAnchor>>,
     pub(crate) load_task: Option<Task<()>>,
     pub(crate) babel_task: Option<Task<()>>,

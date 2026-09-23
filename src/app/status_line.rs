@@ -1321,6 +1321,7 @@ impl WorkspaceWindow {
                 self.document_status_snapshot(self.document_workspace.active_pane, cx)
             }
             ContentRoute::FileManager => self.dired_status_snapshot(DIRED_PANE_ID),
+            ContentRoute::Image => None,
             ContentRoute::Agenda | ContentRoute::AgendaText => self.agenda_status_snapshot(),
         }
     }

@@ -46,6 +46,7 @@ impl WorkspaceWindow {
         self.home_error = None;
         self.pending_navigation = None;
         self.pending_link_surface = None;
+        self.image_viewer.clear(cx);
         self.pending_surface_anchors = PanePair {
             left: None,
             right: None,
@@ -133,6 +134,14 @@ impl WorkspaceWindow {
         if self.buffer_busy() {
             return;
         }
+        if crate::preview::is_supported_image(&path) {
+            if let Err(message) = self.open_image_viewer(path, cx) {
+                self.set_document_notice(Some(message.into()));
+                cx.notify();
+            }
+            return;
+        }
+        self.image_viewer.clear(cx);
         if let Some(session) = self.buffer_for_path(&path, cx) {
             let id = session.read(cx).id();
             self.activate_buffer(id, cx);
@@ -753,7 +762,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn open_recent(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if is_supported_document(&path) {
+        if is_supported_document(&path) || crate::preview::is_supported_image(&path) {
             self.open(path, cx);
         } else {
             crate::recent_documents::remove(&mut self.recent_documents, &path);
@@ -783,7 +792,7 @@ impl WorkspaceWindow {
         let paths = paths
             .paths()
             .iter()
-            .filter(|path| is_supported_document(path))
+            .filter(|path| is_supported_document(path) || crate::preview::is_supported_image(path))
             .cloned()
             .collect::<Vec<_>>();
         if !paths.is_empty() {

@@ -157,7 +157,9 @@ impl WorkspaceWindow {
         if !path.exists() {
             return Err("Linked file does not exist");
         }
-        if crate::preview::is_supported_document(&path) {
+        if crate::preview::is_supported_image(&path) {
+            self.open_image_viewer(path, cx)?;
+        } else if crate::preview::is_supported_document(&path) {
             self.open_document_link(path, anchor, cx);
         } else {
             cx.open_with_system(&path);
@@ -213,7 +215,7 @@ impl WorkspaceWindow {
     }
 
     fn open_reading_image(
-        &self,
+        &mut self,
         target: &PreviewActionTarget,
         image_path: &str,
         cx: &mut Context<Self>,
@@ -230,21 +232,152 @@ impl WorkspaceWindow {
             cx.open_url(image_path);
             return Ok(());
         }
-        let image_path = image_path.strip_prefix("file:").unwrap_or(image_path);
-        let path = std::path::Path::new(image_path);
-        let path = if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            document_path
-                .parent()
-                .unwrap_or_else(|| std::path::Path::new("."))
-                .join(path)
-        };
+        let (path, _) =
+            resolve_file_link(&document_path, image_path).ok_or("Invalid image link")?;
         if !path.exists() {
             return Err("Image file does not exist");
         }
-        cx.open_with_system(&path);
+        self.open_image_viewer(path, cx)
+    }
+
+    pub(crate) fn open_image_viewer(
+        &mut self,
+        path: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) -> Result<(), &'static str> {
+        if !crate::preview::is_supported_image(&path) {
+            return Err("Image format is not supported");
+        }
+        let path = std::fs::canonicalize(&path).unwrap_or(path);
+        let size =
+            crate::preview::image_dimensions(&path).map_err(|_| "Image could not be loaded")?;
+        gpui::ImageSource::from(path.clone()).remove_asset(cx);
+        self.close_command_line(cx);
+        self.close_search(false, cx);
+        self.dismiss_buffer_panel(cx);
+        if self.content_route != crate::app::ContentRoute::Image {
+            self.image_viewer.return_route = self.content_route;
+        }
+        crate::recent_documents::record_success(&mut self.recent_documents, path.clone());
+        self.image_viewer.clear(cx);
+        self.image_viewer.path = Some(path);
+        self.image_viewer.size = Some(size);
+        self.image_viewer.zoom = 1.0;
+        self.image_viewer.raster_zoom = 1.0;
+        self.image_viewer
+            .scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+        self.content_route = crate::app::ContentRoute::Image;
+        cx.notify();
         Ok(())
+    }
+
+    pub(crate) fn close_image_viewer(&mut self, cx: &mut Context<Self>) {
+        self.image_viewer.clear(cx);
+        self.content_route = self.image_viewer.return_route;
+        cx.notify();
+    }
+
+    pub(crate) fn zoom_image(
+        &mut self,
+        factor: f32,
+        focal_point: Option<gpui::Point<gpui::Pixels>>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.zoom_image_with_refinement(factor, focal_point, true, window, cx);
+    }
+
+    fn zoom_image_with_refinement(
+        &mut self,
+        factor: f32,
+        focal_point: Option<gpui::Point<gpui::Pixels>>,
+        refine: bool,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.content_route != crate::app::ContentRoute::Image || !factor.is_finite() {
+            return;
+        }
+        let Some(image_size) = self.image_viewer.size else {
+            return;
+        };
+        let old_zoom = self.image_viewer.zoom;
+        self.image_viewer.zoom = (old_zoom * factor).clamp(0.1, 16.0);
+        if self.image_viewer.zoom == old_zoom {
+            return;
+        }
+        let viewport = window.viewport_size();
+        let viewport_width = f32::from(viewport.width);
+        let viewport_height = (f32::from(viewport.height) - crate::app::TITLEBAR_HEIGHT).max(1.0);
+        let focal_x = focal_point
+            .map(|point| f32::from(point.x))
+            .unwrap_or(viewport_width / 2.0)
+            .clamp(0.0, viewport_width);
+        let focal_y = focal_point
+            .map(|point| f32::from(point.y) - crate::app::TITLEBAR_HEIGHT)
+            .unwrap_or(viewport_height / 2.0)
+            .clamp(0.0, viewport_height);
+        let old_offset = self.image_viewer.scroll.offset();
+        let ratio = self.image_viewer.zoom / old_zoom;
+        let old_origin = crate::app::image_viewer::image_origin(
+            image_size,
+            viewport_width,
+            viewport_height,
+            old_zoom,
+        );
+        let new_origin = crate::app::image_viewer::image_origin(
+            image_size,
+            viewport_width,
+            viewport_height,
+            self.image_viewer.zoom,
+        );
+        self.image_viewer.scroll.set_offset(gpui::point(
+            gpui::px(crate::app::image_viewer::zoomed_scroll_offset(
+                f32::from(old_offset.x),
+                focal_x,
+                ratio,
+                old_origin.0,
+                new_origin.0,
+            )),
+            gpui::px(crate::app::image_viewer::zoomed_scroll_offset(
+                f32::from(old_offset.y),
+                focal_y,
+                ratio,
+                old_origin.1,
+                new_origin.1,
+            )),
+        ));
+        if refine {
+            self.image_viewer.raster_zoom = self.image_viewer.zoom;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn zoom_image_gesture(
+        &mut self,
+        factor: f32,
+        focal_point: gpui::Point<gpui::Pixels>,
+        phase: gpui::TouchPhase,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Reuse the current texture while the fingers are moving. Only request
+        // a sharper raster after the gesture settles.
+        self.zoom_image_with_refinement(factor, Some(focal_point), false, window, cx);
+        if matches!(phase, gpui::TouchPhase::Ended | gpui::TouchPhase::Cancelled) {
+            self.image_viewer.raster_zoom = self.image_viewer.zoom;
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn reset_image_zoom(&mut self, cx: &mut Context<Self>) {
+        self.image_viewer.zoom = 1.0;
+        self.image_viewer.raster_zoom = 1.0;
+        self.image_viewer
+            .scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+        cx.notify();
     }
 }
 

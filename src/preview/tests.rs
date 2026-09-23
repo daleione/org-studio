@@ -3855,6 +3855,44 @@ fn linked_plain_text_uses_editors_in_both_split_panes(cx: &mut gpui::TestAppCont
     std::fs::remove_file(path).unwrap();
 }
 
+#[gpui::test]
+fn opening_image_file_shows_standalone_page_and_returns_to_document(cx: &mut gpui::TestAppContext) {
+    let path =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/images/flow.svg");
+    assert!(crate::preview::is_supported_image(&path));
+    let app = cx.new(|_| WorkspaceWindow::with_split_layout(false));
+    let source_id = app.update(cx, |app, cx| {
+        app.create_buffer("Source.org".into(), None, cx);
+        let source_id = app.document_session().unwrap().read(cx).id();
+        app.set_active_surface(crate::app::PaneSurface::Reading, cx);
+        app.open(path.clone(), cx);
+        assert_eq!(app.content_route, crate::app::ContentRoute::Image);
+        assert_eq!(app.image_viewer.path.as_ref(), Some(&path));
+        assert_eq!(app.current_open_path(cx), Some(path.as_path()));
+        assert!(app.window_title(cx).contains("flow.svg"));
+        assert_eq!(app.document_session().unwrap().read(cx).id(), source_id);
+        assert_eq!(
+            app.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading
+        );
+        source_id
+    });
+    app.update(cx, |app, cx| {
+        app.close_image_viewer(cx);
+        assert_eq!(app.content_route, crate::app::ContentRoute::Document);
+        assert_ne!(app.current_open_path(cx), Some(path.as_path()));
+        assert_eq!(app.document_session().unwrap().read(cx).id(), source_id);
+        assert_eq!(
+            app.document_workspace.active_surface(),
+            crate::app::PaneSurface::Reading
+        );
+        app.show_home_now(cx);
+        app.open_recent(path.clone(), cx);
+        assert_eq!(app.content_route, crate::app::ContentRoute::Image);
+        assert_eq!(app.image_viewer.path.as_ref(), Some(&path));
+    });
+}
+
 #[test]
 fn dired_help_lists_every_command_and_groups_alias_keys() {
     let (commands, _, _) = preview_input();

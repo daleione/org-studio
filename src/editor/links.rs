@@ -102,8 +102,10 @@ impl SemanticEditor {
                 if let Some((path, anchor)) =
                     crate::links::resolve_file_link(self.session.read(cx).path(), &link.meta.raw)
                 {
-                    if crate::preview::is_supported_document(&path) {
-                        cx.emit(EditorOpenDocumentEvent { path, anchor });
+                    if crate::preview::is_supported_document(&path)
+                        || crate::preview::is_supported_image(&path)
+                    {
+                        cx.emit(EditorOpenFileEvent { path, anchor });
                     } else {
                         Self::open_with_system_handler(&path.to_string_lossy());
                     }
@@ -323,7 +325,7 @@ mod link_tests {
         let events = Arc::new(std::sync::Mutex::new(Vec::new()));
         editor.update(cx, |_, cx| {
             let events = events.clone();
-            cx.subscribe_self(move |_, event: &EditorOpenDocumentEvent, _| {
+            cx.subscribe_self(move |_, event: &EditorOpenFileEvent, _| {
                 events.lock().unwrap().push(event.clone());
             })
             .detach();
@@ -332,32 +334,38 @@ mod link_tests {
             (
                 "notes.org",
                 "file:notes.org::*Heading",
-                "*Heading",
+                Some("*Heading"),
                 crate::links::LinkFormat::Org,
             ),
             (
                 "sample.rs",
                 "file:sample.rs#main",
-                "main",
+                Some("main"),
                 crate::links::LinkFormat::Org,
             ),
             (
                 "notes.txt",
                 "file:notes.txt#section",
-                "section",
+                Some("section"),
                 crate::links::LinkFormat::Org,
             ),
             (
                 "notes.md",
                 "notes.md#section",
-                "section",
+                Some("section"),
                 crate::links::LinkFormat::Markdown,
             ),
             (
                 "中文 notes.markdown",
                 "%E4%B8%AD%E6%96%87%20notes.markdown#section",
-                "section",
+                Some("section"),
                 crate::links::LinkFormat::Markdown,
+            ),
+            (
+                "figure.svg",
+                "file:figure.svg",
+                None,
+                crate::links::LinkFormat::Org,
             ),
         ] {
             std::fs::write(directory.join(filename), "contents").unwrap();
@@ -374,7 +382,7 @@ mod link_tests {
             let events = events.lock().unwrap();
             let event = events.last().unwrap();
             assert_eq!(event.path, directory.join(filename));
-            assert_eq!(event.anchor.as_deref(), Some(anchor));
+            assert_eq!(event.anchor.as_deref(), anchor);
             std::fs::remove_file(directory.join(filename)).unwrap();
         }
         std::fs::remove_dir(directory).unwrap();

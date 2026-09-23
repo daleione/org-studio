@@ -178,6 +178,19 @@ pub(crate) fn is_supported_document(path: &std::path::Path) -> bool {
     path.is_file() && (DocumentFormat::detect(path).is_some() || is_editor_only_document(path))
 }
 
+pub fn is_supported_image(path: &std::path::Path) -> bool {
+    path.is_file()
+        && path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| {
+                matches!(
+                    extension.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+                )
+            })
+}
+
 pub(crate) fn is_editor_only_document(path: &std::path::Path) -> bool {
     crate::syntax_highlighting::language_for_path(path).is_some()
         || crate::document::is_plain_text_path(path)
