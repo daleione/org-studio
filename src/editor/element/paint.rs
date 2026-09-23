@@ -18,7 +18,8 @@ pub(super) fn paint_frame(
     cx: &mut App,
 ) {
     let focus_handle = host.read(cx).focus_handle.clone();
-    let caret_visible = focus_handle.is_focused(window) && state.caret.is_some();
+    let editor_focused = focus_handle.is_focused(window);
+    let caret_visible = editor_focused && state.caret.is_some();
     let caret_opacity = host.update(cx, |editor, cx| editor.caret_opacity(caret_visible, cx));
     window.handle_input(
         &focus_handle,
@@ -48,8 +49,9 @@ pub(super) fn paint_frame(
         window.paint_quad(gutter);
         paint_minimap_layer(host, state, window, cx);
         let text_left = state.gutter.bounds.right() + px(1.0);
-        for row in &state.rows {
+        for (index, row) in state.rows.iter().enumerate() {
             let number_x = text_left - px(GUTTER_PADDING) - row.gutter_layout.width();
+            let active_gutter = row.active && editor_focused;
             let mut paint = |window: &mut Window| {
                 let _ = row.gutter_layout.paint(
                     point(number_x, row.hit.origin_y),
@@ -62,12 +64,20 @@ pub(super) fn paint_frame(
                 if row.visual_rows > 1 {
                     paint_continuation_markers(
                         window,
+                        row,
                         number_x,
-                        row.gutter_layout.width(),
-                        row.hit.origin_y,
-                        row.hit.line_height,
-                        row.visual_rows,
                         text_left - px(GUTTER_PADDING / 2.0),
+                        active_gutter,
+                    );
+                }
+                if row.inline_image.is_some() && row.hit.line_height > px(88.0) {
+                    paint_tall_image_marker(
+                        window,
+                        row,
+                        number_x,
+                        index.checked_sub(1).and_then(|index| state.rows.get(index)),
+                        state.rows.get(index + 1),
+                        active_gutter,
                     );
                 }
             };
@@ -321,23 +331,23 @@ pub(super) fn paint_frame(
 /// Connect all wrapped rows to the center of their source line number.
 fn paint_continuation_markers(
     window: &mut Window,
+    row: &PaintRow,
     number_x: Pixels,
-    number_width: Pixels,
-    origin_y: Pixels,
-    line_height: Pixels,
-    visual_rows: usize,
     tip_x: Pixels,
+    active: bool,
 ) {
+    let line_height = row.hit.line_height;
+    let origin_y = row.hit.origin_y;
     let height = (f32::from(line_height) * 0.64).clamp(8.0, 15.0);
-    let stroke = (height * 0.11).clamp(1.2, 1.8);
-    let stem_x = number_x + number_width / 2.0;
+    let stroke = (height * 0.11).clamp(1.2, 1.8) + if active { 0.2 } else { 0.0 };
+    let stem_x = number_x + row.gutter_layout.width() / 2.0;
     let bend_offset = (line_height - px(height)) / 2.0 + px(height * 0.72);
-    let last_bend_y = origin_y + line_height * (visual_rows - 1) + bend_offset;
+    let last_bend_y = origin_y + line_height * (row.visual_rows - 1) + bend_offset;
     let head = px(height * 0.24);
     let mut arrow = gpui::PathBuilder::stroke(px(stroke));
     arrow.move_to(point(stem_x, origin_y + line_height - px(1.0)));
     arrow.line_to(point(stem_x, last_bend_y));
-    for visual_row in 1..visual_rows {
+    for visual_row in 1..row.visual_rows {
         let bend_y = origin_y + line_height * visual_row + bend_offset;
         arrow.move_to(point(stem_x, bend_y));
         arrow.line_to(point(tip_x, bend_y));
@@ -346,8 +356,65 @@ fn paint_continuation_markers(
         arrow.line_to(point(tip_x - head, bend_y + head));
     }
     if let Ok(path) = arrow.build() {
-        window.paint_path(path, rgba((current_theme().line_number << 8) | 0x99));
+        let theme = current_theme();
+        let (color, alpha) = if active {
+            (theme.link, 0xcc)
+        } else {
+            (theme.line_number, 0x99)
+        };
+        window.paint_path(path, rgba((color << 8) | alpha));
     }
+}
+
+/// Bracket a tall image row around its centered line number.
+fn paint_tall_image_marker(
+    window: &mut Window,
+    row: &PaintRow,
+    number_x: Pixels,
+    previous: Option<&PaintRow>,
+    next: Option<&PaintRow>,
+    active: bool,
+) {
+    let (number_top, number_bottom) = gutter_number_span(row);
+    let gap = px(3.0);
+    let top = previous
+        .filter(|previous| {
+            previous.hit.line.0 + 1 == row.hit.line.0 && previous.inline_image.is_none()
+        })
+        .map_or(row.hit.visible_top, |previous| {
+            gutter_number_span(previous).1 + gap
+        });
+    let bottom = next
+        .filter(|next| next.hit.line.0 == row.hit.line.0 + 1 && next.inline_image.is_none())
+        .map_or(row.hit.visible_bottom, |next| {
+            gutter_number_span(next).0 - gap
+        });
+    let x = number_x + row.gutter_layout.width() / 2.0;
+    let stroke = px(if active { 1.3 } else { 1.1 });
+    let theme = current_theme();
+    let (color, alpha) = if active {
+        (theme.link, 0xcc)
+    } else {
+        (theme.line_number, 0x88)
+    };
+    let color = rgba((color << 8) | alpha);
+    for (start, end) in [(top, number_top - gap), (number_bottom + gap, bottom)] {
+        if end > start {
+            window.paint_quad(
+                fill(
+                    Bounds::new(point(x - stroke / 2.0, start), size(stroke, end - start)),
+                    color,
+                )
+                .corner_radii(stroke / 2.0),
+            );
+        }
+    }
+}
+
+fn gutter_number_span(row: &PaintRow) -> (Pixels, Pixels) {
+    let center = row.hit.origin_y + row.hit.line_height / 2.0;
+    let half_height = (row.gutter_layout.ascent + row.gutter_layout.descent) / 2.0;
+    (center - half_height, center + half_height)
 }
 
 /// Rounded resize grip drawn at the bottom-right corner of a resizable image.
