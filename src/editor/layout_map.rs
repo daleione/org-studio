@@ -217,6 +217,23 @@ impl EditorLayoutMap {
         true
     }
 
+    /// Keep the last measured heights as estimates during a live width change.
+    /// The visible rows are measured again in the same frame; retaining their
+    /// previous heights prevents the camera from jumping to baseline estimates
+    /// between successive resize events.
+    pub(super) fn configure_for_resize(&mut self, line_count: u64, wrap_width: f32) -> bool {
+        if self.line_count != line_count {
+            return self.configure(line_count, wrap_width);
+        }
+        let wrap_width_bits = wrap_width.max(1.0).to_bits();
+        if self.wrap_width_bits == wrap_width_bits {
+            return false;
+        }
+        self.wrap_width_bits = wrap_width_bits;
+        self.measured_wrap_starts.clear();
+        true
+    }
+
     fn clear_layout(&mut self) {
         self.measured_heights.clear();
         self.measured_wrap_starts.clear();
@@ -632,6 +649,25 @@ mod tests {
         assert_eq!(map.line_at_y(10.0 * 22.0 + 40.0), 10);
         assert_eq!(map.line_start_y(512), 512.0 * 22.0 + 110.0 + 54.0);
         assert_eq!(map.measured_heights.len(), 2);
+    }
+
+    #[test]
+    fn live_resize_keeps_measured_heights_until_rows_are_remeasured() {
+        let mut map = EditorLayoutMap::default();
+        map.configure(1_000, 400.0);
+        map.update_line_layout(500, 5, 22.0, 0.0, 0.0);
+        map.update_line_wrap_starts(500, &[10, 20, 30, 40]);
+        let before = map.total_height();
+
+        assert!(map.configure_for_resize(1_000, 399.0));
+        assert_eq!(map.total_height(), before);
+        assert_eq!(map.line_height_px(500), 110.0);
+        assert!(map.line_wrap_starts(500).is_empty());
+
+        map.update_line_layout(500, 6, 22.0, 0.0, 0.0);
+        assert_eq!(map.total_height(), before + 22.0);
+        assert!(map.configure_for_resize(1_000, 398.0));
+        assert_eq!(map.total_height(), before + 22.0);
     }
 
     #[test]

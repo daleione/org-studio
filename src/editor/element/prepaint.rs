@@ -311,10 +311,9 @@ fn plan_frame(
     let defer_minimap_reflow = {
         let editor = host.read(cx);
         let viewport_height = f32::from(bounds.size.height);
-        // A width change invalidates all measured wrap heights. At the document
-        // end, clearing them would paint one sparse/estimated frame before the
-        // complete target-width layout is ready. Keep the current layout
-        // authoritative until that replacement can happen atomically.
+        // At the document end, even a temporary height estimate can move the
+        // bottom camera. Keep the current layout authoritative until the
+        // complete target-width layout can replace it atomically.
         editor.layout_reflow_pending
             && editor.display_map.wrap_width().to_bits() != target_wrap_width.to_bits()
             && (editor.scroll_at_end
@@ -351,11 +350,9 @@ fn reconfigure_layout(
                 viewport_height,
                 editor.animated_document_height(),
             );
-        // Toggling the minimap changes the wrapping width. At the document end,
-        // clearing all measured rows immediately makes the bottom camera use a
-        // baseline-height estimate until the complete minimap layout arrives.
-        // Keep the old, coherent layout for that short preparation window and
-        // publish the new-width layout atomically below.
+        // Toggling the minimap changes the wrapping width. Keep the old,
+        // coherent layout at the document end until the complete replacement
+        // arrives, then publish the new width atomically below.
         let anchor_line = editor.animated_line_at_y(editor.scroll_y);
         let anchor_start = editor.animated_line_start_y(anchor_line);
         let anchor_height = editor.animated_line_height_px(anchor_line).max(1.0);
@@ -363,7 +360,7 @@ fn reconfigure_layout(
         let layout_reconfigured = !defer_minimap_reflow
             && editor
                 .display_map
-                .configure(snapshot.len_lines(), target_wrap_width);
+                .configure_for_resize(snapshot.len_lines(), target_wrap_width);
         if layout_reconfigured {
             editor.layout_reflow_pending = false;
         }
