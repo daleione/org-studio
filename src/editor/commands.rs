@@ -682,6 +682,36 @@ impl SemanticEditor {
         self.align_table_at(self.selection.head(), cx)
     }
 
+    pub(crate) fn recalculate_table_at_selection(
+        &mut self,
+        all_rows: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
+        if self.is_read_only(cx) {
+            return Err("Read-only document".into());
+        }
+        self.finish_composition(cx);
+        let snapshot = self.snapshot(cx);
+        if crate::document::DocumentFormat::detect(self.session.read(cx).syntax_path())
+            != Some(crate::document::DocumentFormat::Org)
+        {
+            return Ok(false);
+        }
+        let Some(change) = super::org_commands::recalculate_table(
+            &snapshot,
+            self.selection.head(),
+            self.session.read(cx).newline_sequence(),
+            all_rows,
+        )?
+        else {
+            return Ok(false);
+        };
+        if !self.apply_table_change(&snapshot, change, cx) {
+            return Err("Table recalculation failed".into());
+        }
+        Ok(true)
+    }
+
     pub(super) fn align_table_at(&mut self, offset: ByteOffset, cx: &mut Context<Self>) -> bool {
         if self.is_read_only(cx) {
             return false;

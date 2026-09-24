@@ -97,6 +97,13 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             UndoPolicy::Transaction,
         ),
         (
+            "org-studio.table.recalculate",
+            &["table-recalculate", "org-table-recalculate"][..],
+            "Recalculate TBLFM formulas",
+            BuiltinCommand::RecalculateTable,
+            UndoPolicy::Transaction,
+        ),
+        (
             "org-studio.document.goto-line",
             &["goto-line"][..],
             "Go to source line",
@@ -817,6 +824,10 @@ pub(crate) fn source_bindings() -> Vec<BindingSpec<'static>> {
         BindingSpec {
             keys: "C-c ^",
             behavior: BindingBehavior::Command("org-table-sort-lines"),
+        },
+        BindingSpec {
+            keys: "C-c *",
+            behavior: BindingBehavior::Command("table-recalculate"),
         },
     ]);
     bindings.extend(

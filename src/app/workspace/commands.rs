@@ -136,6 +136,24 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::AlignTables) => {
                 self.start_table_alignment(crate::command::TableScope::Current, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::RecalculateTable) => {
+                if self.content_route == ContentRoute::Document
+                    && self.document_workspace.active_surface() == crate::app::PaneSurface::Editor
+                    && let Some(editor) = self.editor(self.document_workspace.active_pane)
+                {
+                    editor.update(cx, |editor, cx| {
+                        match editor
+                            .recalculate_table_at_selection(prefix != PrefixArgument::None, cx)
+                        {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                editor.show_command_feedback("No TBLFM table at point", cx)
+                            }
+                            Err(error) => editor.show_command_feedback(&error, cx),
+                        }
+                    });
+                }
+            }
             CommandImplementation::Builtin(BuiltinCommand::EditTable(edit)) => {
                 if matches!(edit, crate::command::TableEdit::Sort { .. }) {
                     self.prompt_command("table-sort ", cx);

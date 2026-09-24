@@ -1,7 +1,7 @@
 use gpui::{Context, Focusable, Window};
 
 use crate::{
-    app::{PaneSurface, WorkspaceWindow, echo_area::EchoMessage},
+    app::{ContentRoute, PaneSurface, WorkspaceWindow, echo_area::EchoMessage},
     document::{DocumentCommand, EditOrigin, EditTransaction},
     editor::SourceRunPhase,
 };
@@ -85,13 +85,27 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.content_route != ContentRoute::Document {
+            return;
+        }
         if matches!(
             self.document_workspace.active_surface(),
             PaneSurface::Editor
         ) && let Some(editor) = self.editor(self.document_workspace.active_pane)
-            && editor.update(cx, |editor, cx| editor.align_table_at_selection(cx))
         {
-            return;
+            let handled = editor.update(cx, |editor, cx| {
+                match editor.recalculate_table_at_selection(false, cx) {
+                    Ok(true) => true,
+                    Err(error) => {
+                        editor.show_command_feedback(&error, cx);
+                        true
+                    }
+                    Ok(false) => editor.align_table_at_selection(cx),
+                }
+            });
+            if handled {
+                return;
+            }
         }
         self.execute_source_block(window, cx);
     }

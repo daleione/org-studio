@@ -57,6 +57,7 @@ impl CommandKey {
 pub enum BuiltinCommand {
     ExecuteCommand,
     AlignTables,
+    RecalculateTable,
     EditTable(TableEdit),
     GotoLine,
     FindDocument,
