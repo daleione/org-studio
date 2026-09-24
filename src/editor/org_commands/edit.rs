@@ -11,7 +11,7 @@ pub(in crate::editor) struct EditableTable {
     start_line: u64,
     range: ByteRange,
     format: DocumentFormat,
-    has_formulas: bool,
+    formula_lines: Vec<String>,
 }
 
 impl EditableTable {
@@ -41,17 +41,22 @@ impl EditableTable {
             row.cells.resize(columns, String::new());
             row.separator_alignments.resize(columns, (false, false));
         }
-        let has_formulas = format == DocumentFormat::Org
-            && snapshot
-                .line_content_range(LineIndex(end))
-                .ok()
-                .is_some_and(|range| {
-                    snapshot
-                        .copy_range(range)
-                        .trim_start()
-                        .to_ascii_uppercase()
-                        .starts_with("#+TBLFM:")
-                });
+        let mut formula_lines = Vec::new();
+        let mut formula_end = end;
+        if format == DocumentFormat::Org {
+            while let Ok(range) = snapshot.line_content_range(LineIndex(formula_end)) {
+                let line = snapshot.copy_range(range);
+                if !line
+                    .trim_start()
+                    .get(..8)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+TBLFM:"))
+                {
+                    break;
+                }
+                formula_lines.push(line);
+                formula_end += 1;
+            }
+        }
         Some(Self {
             rows,
             columns,
@@ -61,19 +66,20 @@ impl EditableTable {
             start_line: start,
             range: ByteRange::new(
                 snapshot.line_content_range(LineIndex(start)).ok()?.start.0,
-                snapshot.line_content_range(LineIndex(end - 1)).ok()?.end.0,
+                snapshot
+                    .line_content_range(LineIndex(formula_end.saturating_sub(1)))
+                    .ok()?
+                    .end
+                    .0,
             ),
             format,
-            has_formulas,
+            formula_lines,
         })
     }
 
     pub(in crate::editor) fn available(&self, edit: TableEdit) -> bool {
-        if self.has_formulas {
-            return false;
-        }
         let markdown = self.format == DocumentFormat::Markdown;
-        match edit {
+        let position_valid = match edit {
             TableEdit::InsertRow => !markdown || self.row > 1,
             TableEdit::InsertRowBelow => !markdown || self.row > 0,
             TableEdit::KillRow => !markdown || self.row > 1,
@@ -87,7 +93,115 @@ impl EditableTable {
             }
             TableEdit::Sort { .. } => !self.rows[self.row].separator && (!markdown || self.row > 1),
             TableEdit::InsertColumn => true,
+        };
+        position_valid && (self.formula_lines.is_empty() || self.rewritten_formulas(edit).is_some())
+    }
+
+    fn data_row_at(&self, index: usize) -> usize {
+        self.rows[..index]
+            .iter()
+            .filter(|row| !row.separator)
+            .count()
+            + 1
+    }
+
+    fn row_marker(&self, index: usize) -> Option<&str> {
+        self.rows.get(index)?.cells.first().map(|cell| cell.trim())
+    }
+
+    fn rewritten_formulas(&self, edit: TableEdit) -> Option<Vec<String>> {
+        use super::formula::{AxisEdit, adapt_formula_lines};
+
+        let insert_at = match edit {
+            TableEdit::InsertRow => Some(self.row),
+            TableEdit::InsertRowBelow => Some(self.row + 1),
+            _ => None,
+        };
+        if insert_at.is_some_and(|index| {
+            self.row_marker(index) == Some("^")
+                || index > 0 && self.row_marker(index - 1) == Some("_")
+        }) {
+            return None;
         }
+        if edit == TableEdit::KillRow
+            && (matches!(self.row_marker(self.row), Some("!" | "^" | "_" | "$"))
+                || self.row_marker(self.row + 1) == Some("^")
+                || self.row > 0 && self.row_marker(self.row - 1) == Some("_"))
+        {
+            return None;
+        }
+        let data_row = self.data_row_at(self.row);
+        let (row, column) = match edit {
+            TableEdit::InsertRow => (Some(AxisEdit::Insert(data_row)), None),
+            TableEdit::InsertRowBelow => {
+                (Some(AxisEdit::Insert(self.data_row_at(self.row + 1))), None)
+            }
+            TableEdit::KillRow
+                if self.rows.iter().filter(|row| !row.separator).count() > 1
+                    && !self.rows[self.row].separator =>
+            {
+                (Some(AxisEdit::Delete(data_row)), None)
+            }
+            TableEdit::MoveRowUp | TableEdit::MoveRowDown => {
+                let next = if edit == TableEdit::MoveRowUp {
+                    self.row - 1
+                } else {
+                    self.row + 1
+                };
+                if self.rows[self.row].separator || self.rows[next].separator {
+                    return None;
+                }
+                if matches!(self.row_marker(self.row), Some("!" | "^" | "_" | "$"))
+                    || matches!(self.row_marker(next), Some("!" | "^" | "_" | "$"))
+                    || self.row_marker(self.row.max(next) + 1) == Some("^")
+                    || self.row.min(next) > 0
+                        && self.row_marker(self.row.min(next) - 1) == Some("_")
+                {
+                    return None;
+                }
+                (Some(AxisEdit::Swap(data_row, self.data_row_at(next))), None)
+            }
+            TableEdit::InsertColumn => (None, Some(AxisEdit::Insert(self.column + 1))),
+            TableEdit::DeleteColumn => (None, Some(AxisEdit::Delete(self.column + 1))),
+            TableEdit::MoveColumnLeft | TableEdit::MoveColumnRight => {
+                let next = if edit == TableEdit::MoveColumnLeft {
+                    self.column - 1
+                } else {
+                    self.column + 1
+                };
+                (None, Some(AxisEdit::Swap(self.column + 1, next + 1)))
+            }
+            TableEdit::InsertHline
+            | TableEdit::InsertHlineAbove
+            | TableEdit::HlineAndMove
+            | TableEdit::Sort { .. }
+            | TableEdit::KillRow => return None,
+        };
+        // The first column holds Org's #, *, !, ^, _, and $ row markers.
+        let changes_first_column =
+            matches!(edit, TableEdit::InsertColumn | TableEdit::DeleteColumn) && self.column == 0
+                || edit == TableEdit::MoveColumnRight && self.column == 0
+                || edit == TableEdit::MoveColumnLeft && self.column == 1;
+        if changes_first_column
+            && self.rows.iter().any(|row| {
+                row.cells.first().is_some_and(|cell| {
+                    matches!(cell.trim(), "#" | "*" | "!" | "^" | "_" | "$" | "/")
+                })
+            })
+        {
+            return None;
+        }
+        if edit == TableEdit::DeleteColumn
+            && self.rows.iter().any(|row| {
+                matches!(
+                    row.cells.first().map(|cell| cell.trim()),
+                    Some("!" | "^" | "_" | "$")
+                ) && !row.cells[self.column].trim().is_empty()
+            })
+        {
+            return None;
+        }
+        adapt_formula_lines(&self.formula_lines, row, column)
     }
 
     fn blank_row(&self, separator: bool) -> ParsedRow {
@@ -109,6 +223,12 @@ impl EditableTable {
         if !self.available(edit) {
             return Err("当前表格位置不支持此操作 / Operation unavailable at this table position");
         }
+        let formulas = if self.formula_lines.is_empty() {
+            Vec::new()
+        } else {
+            self.rewritten_formulas(edit)
+                .ok_or("Cannot safely update table formula references")?
+        };
         match edit {
             TableEdit::InsertRow | TableEdit::InsertRowBelow => {
                 let target = self.row + usize::from(edit == TableEdit::InsertRowBelow);
@@ -201,6 +321,10 @@ impl EditableTable {
                 caret = ByteOffset(self.range.start.0 + (replacement.len() + local) as u64);
             }
             replacement.push_str(&text);
+        }
+        for formula in formulas {
+            replacement.push_str(newline);
+            replacement.push_str(&formula);
         }
         Ok(TableAlignment {
             range: self.range,
@@ -546,11 +670,10 @@ mod tests {
         let (_, first, _) = table(text, "Cedar", "a.md");
         assert!(!first.available(TableEdit::MoveRowUp));
         let (_, formula, _) = table("| 1 | 2 |\n#+TBLFM: $2=$1*2", "1", "a.org");
-        assert!(
-            crate::command::TABLE_COMMANDS
-                .iter()
-                .all(|command| !formula.available(command.edit))
-        );
+        assert!(formula.available(TableEdit::InsertColumn));
+        assert!(formula.available(TableEdit::InsertRowBelow));
+        assert!(!formula.available(TableEdit::DeleteColumn));
+        assert!(!formula.available(TableEdit::InsertHline));
         for (extension, text) in [
             ("a.org", "#+begin_example\n| literal |\n#+end_example"),
             ("a.md", "```\n| literal |\n```"),
@@ -565,5 +688,85 @@ mod tests {
             .unwrap();
             assert!(EditableTable::at(&snapshot, &context).is_none());
         }
+    }
+
+    #[test]
+    fn formula_table_column_edits_keep_absolute_references_on_their_cells() {
+        let source = "| 2 | 3 | 0 |\n#+TBLFM: $3=$1+$2::@1$3=A1+B1+log10(100)\n";
+        let (inserted, _) = apply(source, "3 |", "a.org", TableEdit::InsertColumn);
+        assert!(inserted.contains("#+TBLFM: $4=$1+$3::@1$4=A1+C1+log10(100)"));
+        assert_eq!(
+            cells(&inserted, DocumentFormat::Org)[0],
+            ["2", "", "3", "0"]
+        );
+        let snapshot = DocumentSnapshot::from_utf8(inserted.as_bytes().to_vec()).unwrap();
+        let caret = ByteOffset(inserted.find("#+TBLFM:").unwrap() as u64);
+        let calculated = super::recalculate_table(&snapshot, caret, "\n", true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            cells(&calculated.replacement, DocumentFormat::Org)[0][3],
+            "7"
+        );
+
+        let (moved, _) = apply(source, "3 |", "a.org", TableEdit::MoveColumnRight);
+        assert!(moved.contains("#+TBLFM: $2=$1+$3::@1$2=A1+C1+log10(100)"));
+
+        let (deleted, _) = apply(
+            "| 2 | unused | 0 |\n#+TBLFM: $3=$1*2\n",
+            "unused",
+            "a.org",
+            TableEdit::DeleteColumn,
+        );
+        assert!(deleted.contains("#+TBLFM: $2=$1*2"));
+        let (snapshot, table, selection) = table(source, "3 |", "a.org");
+        assert!(!table.available(TableEdit::DeleteColumn));
+        assert!(
+            table
+                .edit(TableEdit::DeleteColumn, &snapshot, selection, "\n")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn formula_table_row_edits_count_data_rows_and_preserve_multiple_formula_lines() {
+        let source = "| heading | 0 |\n|---------+---|\n| A | 1 |\n| B | 2 |\n#+TBLFM: @3$2=@2$2+1\n#+TBLFM: @3$2=A3+1\n";
+        let (inserted, _) = apply(source, "B |", "a.org", TableEdit::InsertRow);
+        assert!(inserted.contains("#+TBLFM: @4$2=@2$2+1\n#+TBLFM: @4$2=A4+1"));
+        let (moved, _) = apply(source, "B |", "a.org", TableEdit::MoveRowUp);
+        assert!(moved.contains("#+TBLFM: @2$2=@3$2+1\n#+TBLFM: @2$2=A2+1"));
+        assert_eq!(cells(&moved, DocumentFormat::Org)[2][0], "B");
+
+        let (_, formula_table, _) = table(source, "A |", "a.org");
+        assert!(!formula_table.available(TableEdit::KillRow));
+        let (snapshot, table, selection) = table(source, "B |", "a.org");
+        assert!(table.available(TableEdit::KillRow));
+        let change = table
+            .edit(TableEdit::KillRow, &snapshot, selection, "\n")
+            .unwrap();
+        assert!(!change.replacement.contains("#+TBLFM:"));
+    }
+
+    #[test]
+    fn formula_table_keeps_crlf_and_special_first_column_markers() {
+        let source = "| # | 2 | 0 |\r\n#+TBLFM: $3=$2*2\r\n";
+        let (_, table, _) = table(source, "#", "a.org");
+        assert!(!table.available(TableEdit::InsertColumn));
+        assert!(!table.available(TableEdit::MoveColumnRight));
+        assert!(table.available(TableEdit::InsertRowBelow));
+        let (output, _) = apply(source, "2 |", "a.org", TableEdit::InsertColumn);
+        assert!(output.contains("\r\n#+TBLFM: $4=$3*2\r\n"));
+        assert_eq!(output.matches("\r\n#+TBLFM:").count(), 1);
+    }
+
+    #[test]
+    fn formula_table_does_not_break_named_fields_with_structural_edits() {
+        let named_column = "| ! | value | result |\n| # | 2 | 0 |\n#+TBLFM: $3=$value*2\n";
+        let (_, named_table, _) = table(named_column, "value", "a.org");
+        assert!(!named_table.available(TableEdit::DeleteColumn));
+        let named_field = "| 2 | 0 |\n| ^ | input | |\n| 4 | 0 |\n#+TBLFM: @3$2=$input*2\n";
+        let (_, table, _) = table(named_field, "2 |", "a.org");
+        assert!(!table.available(TableEdit::KillRow));
+        assert!(!table.available(TableEdit::InsertRowBelow));
     }
 }

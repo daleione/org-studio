@@ -142,12 +142,41 @@ impl WorkspaceWindow {
                     && let Some(editor) = self.editor(self.document_workspace.active_pane)
                 {
                     editor.update(cx, |editor, cx| {
-                        match editor
-                            .recalculate_table_at_selection(prefix != PrefixArgument::None, cx)
+                        let result = if prefix
+                            .effective_count()
+                            .is_some_and(|count| count.unsigned_abs() >= 16)
                         {
+                            editor.iterate_table_at_selection(cx)
+                        } else {
+                            editor
+                                .recalculate_table_at_selection(prefix != PrefixArgument::None, cx)
+                        };
+                        match result {
                             Ok(true) => {}
                             Ok(false) => {
                                 editor.show_command_feedback("No TBLFM table at point", cx)
+                            }
+                            Err(error) => editor.show_command_feedback(&error, cx),
+                        }
+                    });
+                }
+            }
+            CommandImplementation::Builtin(
+                command @ (BuiltinCommand::RecalculateBufferTables
+                | BuiltinCommand::IterateBufferTables),
+            ) => {
+                if self.content_route == ContentRoute::Document
+                    && self.document_workspace.active_surface() == crate::app::PaneSurface::Editor
+                    && let Some(editor) = self.editor(self.document_workspace.active_pane)
+                {
+                    editor.update(cx, |editor, cx| {
+                        match editor.recalculate_buffer_tables(
+                            command == BuiltinCommand::IterateBufferTables,
+                            cx,
+                        ) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                editor.show_command_feedback("No TBLFM tables in document", cx)
                             }
                             Err(error) => editor.show_command_feedback(&error, cx),
                         }

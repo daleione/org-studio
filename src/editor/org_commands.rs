@@ -8,6 +8,9 @@ mod formula;
 pub(crate) use batch::{TableAlignmentPlan, plan_table_alignment};
 pub(super) use edit::EditableTable;
 pub(super) use formula::recalculate as recalculate_table;
+pub(super) use formula::recalculate_buffer_tables;
+pub(super) use formula::recalculate_iteratively as iterate_table;
+pub(super) use formula::recalculate_marked_row_on_navigation;
 
 use crate::{
     document::{

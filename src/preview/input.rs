@@ -104,6 +104,20 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             UndoPolicy::Transaction,
         ),
         (
+            "org-studio.table.recalculate-buffer",
+            &["table-recalculate-buffer"][..],
+            "Recalculate all TBLFM tables",
+            BuiltinCommand::RecalculateBufferTables,
+            UndoPolicy::Transaction,
+        ),
+        (
+            "org-studio.table.iterate-buffer",
+            &["table-iterate-buffer"][..],
+            "Iterate all TBLFM tables",
+            BuiltinCommand::IterateBufferTables,
+            UndoPolicy::Transaction,
+        ),
+        (
             "org-studio.document.goto-line",
             &["goto-line"][..],
             "Go to source line",

@@ -687,6 +687,21 @@ impl SemanticEditor {
         all_rows: bool,
         cx: &mut Context<Self>,
     ) -> Result<bool, String> {
+        self.recalculate_table_with_mode(all_rows, false, cx)
+    }
+
+    pub(crate) fn iterate_table_at_selection(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
+        self.recalculate_table_with_mode(true, true, cx)
+    }
+
+    pub(crate) fn recalculate_buffer_tables(
+        &mut self,
+        iterate: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
         if self.is_read_only(cx) {
             return Err("Read-only document".into());
         }
@@ -697,13 +712,52 @@ impl SemanticEditor {
         {
             return Ok(false);
         }
-        let Some(change) = super::org_commands::recalculate_table(
+        let Some(change) = super::org_commands::recalculate_buffer_tables(
             &snapshot,
             self.selection.head(),
             self.session.read(cx).newline_sequence(),
-            all_rows,
+            iterate,
         )?
         else {
+            return Ok(false);
+        };
+        if !self.apply_table_change(&snapshot, change, cx) {
+            return Err("Buffer table recalculation failed".into());
+        }
+        Ok(true)
+    }
+
+    fn recalculate_table_with_mode(
+        &mut self,
+        all_rows: bool,
+        iterate: bool,
+        cx: &mut Context<Self>,
+    ) -> Result<bool, String> {
+        if self.is_read_only(cx) {
+            return Err("Read-only document".into());
+        }
+        self.finish_composition(cx);
+        let snapshot = self.snapshot(cx);
+        if crate::document::DocumentFormat::detect(self.session.read(cx).syntax_path())
+            != Some(crate::document::DocumentFormat::Org)
+        {
+            return Ok(false);
+        }
+        let change = if iterate {
+            super::org_commands::iterate_table(
+                &snapshot,
+                self.selection.head(),
+                self.session.read(cx).newline_sequence(),
+            )
+        } else {
+            super::org_commands::recalculate_table(
+                &snapshot,
+                self.selection.head(),
+                self.session.read(cx).newline_sequence(),
+                all_rows,
+            )
+        }?;
+        let Some(change) = change else {
             return Ok(false);
         };
         if !self.apply_table_change(&snapshot, change, cx) {
@@ -744,6 +798,20 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) -> bool {
         let newline = self.session.read(cx).newline_sequence().to_owned();
+        match super::org_commands::recalculate_marked_row_on_navigation(
+            snapshot,
+            context,
+            self.selection.head(),
+            &newline,
+            navigation,
+        ) {
+            Ok(Some(change)) => return self.apply_table_change(snapshot, change, cx),
+            Ok(None) => {}
+            Err(error) => {
+                self.show_command_feedback(&error, cx);
+                return false;
+            }
+        }
         let Some(alignment) =
             super::org_commands::align_table(snapshot, context, &newline, navigation)
         else {

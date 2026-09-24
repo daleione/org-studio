@@ -58,6 +58,8 @@ pub enum BuiltinCommand {
     ExecuteCommand,
     AlignTables,
     RecalculateTable,
+    RecalculateBufferTables,
+    IterateBufferTables,
     EditTable(TableEdit),
     GotoLine,
     FindDocument,
