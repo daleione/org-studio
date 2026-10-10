@@ -1213,7 +1213,7 @@ pub(crate) fn reading_inline(
         })
         .collect::<Vec<_>>();
     selectable
-        .on_click(ranges, move |index, window, cx| {
+        .on_double_click(ranges, move |index, window, cx| {
             let Some(action) = actions.get(index).cloned() else {
                 return;
             };

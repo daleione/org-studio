@@ -201,7 +201,6 @@ impl SemanticEditor {
             position,
         });
         self.hovered_link = None;
-        self.hover_position = None;
         cx.notify();
     }
 

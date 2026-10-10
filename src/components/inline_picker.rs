@@ -21,25 +21,13 @@ pub(crate) struct TagsValue {
     pub available: Vec<String>,
 }
 #[derive(Clone)]
-pub(crate) struct LinkValue {
-    pub target: String,
-    pub title: Option<String>,
-    pub preview: Vec<String>,
-    pub can_open: bool,
-    pub can_edit: bool,
-}
-#[derive(Clone)]
 pub(crate) enum InlineValue {
     Priority(PriorityValue),
     Tags(TagsValue),
-    Link(LinkValue),
 }
 pub(crate) enum InlineEvent {
     Priority(Option<String>),
     Tags(Vec<String>),
-    Link(String),
-    Open,
-    Copy,
     Cancel,
 }
 pub(crate) struct InlinePicker {
@@ -47,9 +35,7 @@ pub(crate) struct InlinePicker {
     pub language: Language,
     pub width: f32,
     pub height: f32,
-    editing: bool,
     focus_on_render: bool,
-    error: bool,
     input: Entity<NativeInput>,
     focus: FocusHandle,
     selected: usize,
@@ -60,7 +46,7 @@ pub(crate) struct InlinePicker {
 impl EventEmitter<InlineEvent> for InlinePicker {}
 impl InlinePicker {
     pub(crate) fn is_pinned(&self) -> bool {
-        matches!(self.value, InlineValue::Tags(_)) || self.editing
+        matches!(self.value, InlineValue::Tags(_))
     }
 
     pub fn new(value: InlineValue, language: Language, cx: &mut Context<Self>) -> Self {
@@ -77,21 +63,7 @@ impl InlinePicker {
         });
         let subscription = cx.subscribe(&input, |this, _, event, cx| match event {
             InputEvent::Command { key, .. } if key == "escape" => cx.emit(InlineEvent::Cancel),
-            InputEvent::Command { key, .. } if key == "enter" => {
-                if matches!(this.value, InlineValue::Tags(_)) {
-                    this.add_tag(cx);
-                } else {
-                    this.apply(cx);
-                }
-            }
-            InputEvent::Changed(_) => {
-                this.error = false;
-                this.input.update(cx, |i, cx| {
-                    i.invalid = false;
-                    cx.notify();
-                });
-                cx.notify();
-            }
+            InputEvent::Command { key, .. } if key == "enter" => this.add_tag(cx),
             _ => cx.notify(),
         });
         let pinned = matches!(value, InlineValue::Tags(_));
@@ -108,9 +80,7 @@ impl InlinePicker {
             language,
             width: 320.,
             height: 300.,
-            editing: false,
             focus_on_render: pinned,
-            error: false,
             input,
             focus: cx.focus_handle(),
             selected,
@@ -170,25 +140,6 @@ impl InlinePicker {
                         + inherited_height,
                 )
             }
-            InlineValue::Link(LinkValue {
-                target,
-                title,
-                preview,
-                ..
-            }) => {
-                if self.editing {
-                    return (300., if self.error { 139. } else { 112. });
-                }
-                let label = title.as_deref().unwrap_or(target);
-                let width = (text_width(label, 12., window) + 62.).clamp(240., 320.);
-                let header = if title.is_some() { 50. } else { 42. };
-                let body = if preview.is_empty() {
-                    0.
-                } else {
-                    10. + preview.len() as f32 * 18.
-                };
-                (width, 2. + header + body + 35.)
-            }
         }
     }
     pub fn focus_input(&self, window: &mut Window, cx: &mut App) {
@@ -215,26 +166,9 @@ impl InlinePicker {
         self.input.update(cx, |i, cx| i.sync("", cx));
         cx.notify();
     }
-    pub fn reject_input(&mut self, cx: &mut Context<Self>) {
-        self.error = true;
-        self.input.update(cx, |i, cx| {
-            i.invalid = true;
-            cx.notify();
-        });
-        cx.notify();
-    }
     fn apply(&mut self, cx: &mut Context<Self>) {
-        match &self.value {
-            InlineValue::Tags(TagsValue { local, .. }) => cx.emit(InlineEvent::Tags(local.clone())),
-            InlineValue::Link(_) if self.editing => {
-                let target = self.input.read(cx).text.trim();
-                if !target.is_empty() && !target.contains(['\n', '\r']) {
-                    cx.emit(InlineEvent::Link(target.to_owned()));
-                } else {
-                    self.reject_input(cx);
-                }
-            }
-            _ => {}
+        if let InlineValue::Tags(TagsValue { local, .. }) = &self.value {
+            cx.emit(InlineEvent::Tags(local.clone()));
         }
     }
     pub fn handle_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {

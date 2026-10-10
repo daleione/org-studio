@@ -86,7 +86,6 @@ impl Render for InlinePicker {
         match self.value.clone() {
             InlineValue::Priority(value) => self.render_priority(content, value, window, cx),
             InlineValue::Tags(value) => self.render_tags(content, value, cx),
-            InlineValue::Link(value) => self.render_link(content, value, cx),
         }
     }
 }
@@ -108,13 +107,6 @@ impl InlinePicker {
                     .on_click(cx.listener(|this, _, _, cx| this.apply(cx))),
             )
     }
-}
-
-fn icon(name: &str) -> Svg {
-    svg()
-        .path(format!("assets/icons/agenda/{name}.svg"))
-        .size(px(14.))
-        .flex_none()
 }
 
 impl InlinePicker {
@@ -322,164 +314,6 @@ impl InlinePicker {
             .child(list)
             .children(inherited_section)
             .child(self.footer(cx));
-        content
-    }
-    fn render_link(
-        &mut self,
-        mut content: Stateful<Div>,
-        value: LinkValue,
-        cx: &mut Context<Self>,
-    ) -> Stateful<Div> {
-        let theme = current_theme();
-        let LinkValue {
-            target,
-            title,
-            preview,
-            can_open,
-            can_edit,
-        } = value;
-        if self.editing {
-            content = content
-                .p(px(10.))
-                .gap(px(7.))
-                .child(
-                    div()
-                        .text_size(ui_px(11.))
-                        .text_color(rgb(theme.foreground_dim))
-                        .child(self.language.text("inline.edit_link")),
-                )
-                .child(self.input.clone())
-                .when(self.error, |s| {
-                    s.child(
-                        div()
-                            .text_color(rgb(theme.heading[0]))
-                            .child(self.language.text("inline.invalid_link")),
-                    )
-                })
-                .child(self.footer(cx));
-        } else {
-            let has_title = title.is_some();
-            let label = title.unwrap_or_else(|| target.clone());
-            let header = div()
-                .id("link-summary")
-                .debug_selector(|| "link-summary".into())
-                .h(px(if has_title { 50. } else { 42. }))
-                .flex_none()
-                .px(px(10.))
-                .flex()
-                .items_center()
-                .gap(px(8.))
-                .child(
-                    div()
-                        .size(px(24.))
-                        .rounded(px(6.))
-                        .bg(rgb(HOVER_BACKGROUND()))
-                        .flex_none()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            icon(if has_title {
-                                "file-text"
-                            } else {
-                                "arrow-square-out"
-                            })
-                            .text_color(rgb(theme.link)),
-                        ),
-                )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .flex()
-                        .flex_col()
-                        .child(
-                            div()
-                                .line_height(ui_px(18.))
-                                .font_weight(FontWeight::MEDIUM)
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(label),
-                        )
-                        .when(has_title, |s| {
-                            s.child(
-                                div()
-                                    .text_size(ui_px(10.))
-                                    .line_height(ui_px(14.))
-                                    .text_color(rgb(theme.foreground_dim))
-                                    .overflow_hidden()
-                                    .text_ellipsis()
-                                    .child(target),
-                            )
-                        }),
-                );
-            content = content.p_0().gap_0().child(header);
-            if !preview.is_empty() {
-                let mut excerpt = div().px(px(12.)).pb(px(10.)).flex_none().flex().flex_col();
-                for line in preview {
-                    excerpt = excerpt.child(
-                        div()
-                            .h(px(18.))
-                            .line_height(ui_px(18.))
-                            .text_size(ui_px(11.))
-                            .text_color(rgb(theme.foreground_dim))
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(line),
-                    );
-                }
-                content = content.child(excerpt);
-            }
-            let row = div()
-                .id("link-actions")
-                .debug_selector(|| "link-actions".into())
-                .h(ui_px(35.))
-                .flex_none()
-                .border_t_1()
-                .border_color(rgb(theme.border))
-                .bg(rgb(theme.background_alt))
-                .px(px(5.))
-                .flex()
-                .items_center()
-                .gap(px(2.))
-                .child(
-                    button("link-open", "", false)
-                        .gap(px(5.))
-                        .text_color(rgb(theme.link))
-                        .child(icon("arrow-square-out").text_color(rgb(theme.link)))
-                        .child(self.language.text("inline.open"))
-                        .debug_selector(|| "link-open".into())
-                        .when(!can_open, |s| s.opacity(0.4).cursor_default())
-                        .on_click(cx.listener(move |_, _, _, cx| {
-                            if can_open {
-                                cx.emit(InlineEvent::Open);
-                            }
-                        })),
-                )
-                .child(div().flex_1())
-                .child(
-                    button("link-copy", self.language.text("inline.copy"), false)
-                        .text_color(rgb(theme.foreground_dim))
-                        .debug_selector(|| "link-copy".into())
-                        .on_click(cx.listener(|_, _, _, cx| cx.emit(InlineEvent::Copy))),
-                )
-                .when(can_edit, |s| {
-                    s.child(
-                        button("link-edit", self.language.text("inline.edit"), false)
-                            .text_color(rgb(theme.foreground_dim))
-                            .debug_selector(|| "link-edit".into())
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if let InlineValue::Link(LinkValue { target, .. }) = &this.value {
-                                    this.input.update(cx, |i, cx| i.sync(target, cx));
-                                }
-                                this.editing = true;
-                                this.focus_input(window, cx);
-                                cx.notify();
-                            })),
-                    )
-                });
-            content = content.child(row);
-        }
         content
     }
 }

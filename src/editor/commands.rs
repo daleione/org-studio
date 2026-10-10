@@ -1449,12 +1449,13 @@ impl SemanticEditor {
             window.dispatch_action(Box::new(super::RunSourceBlockAt { source_offset }), cx);
             return;
         }
-        if (event.modifiers.platform || event.modifiers.control)
+        if event.click_count == 2
             && let Some(link) = self
                 .link_at_position(event.position)
                 .and_then(|index| self.link_hits.get(index))
                 .cloned()
         {
+            self.dismiss_inline(cx);
             self.open_link(&link, cx);
             return;
         }
@@ -1547,8 +1548,7 @@ impl SemanticEditor {
             .and_then(|index| self.link_hits.get(index))
             .map(|hit| (hit.line, hit.display_range.clone()));
         if hovered_link.as_ref() != self.hovered_link.as_ref() {
-            self.hovered_link = hovered_link.clone();
-            self.hover_position = hovered_link.map(|_| event.position);
+            self.hovered_link = hovered_link;
             cx.notify();
         }
         if self.image_resize_move(event.position, cx) {

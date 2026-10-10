@@ -187,7 +187,6 @@ impl SemanticEditor {
         self.timestamp.hover_task = None;
         self.timestamp.hover_range = None;
         self.hovered_link = None;
-        self.hover_position = None;
         let observation = cx.observe(&picker, |_, _, cx| cx.notify());
         self.todo.popup = Some(TodoPopup {
             picker,

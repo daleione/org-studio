@@ -1,9 +1,7 @@
 //! Revision-guarded inline interactions, shared hover grace and source geometry.
 use super::*;
 use crate::{
-    components::inline_picker::{
-        InlineEvent, InlinePicker, InlineValue, LinkValue, PriorityValue, TagsValue,
-    },
+    components::inline_picker::{InlineEvent, InlinePicker, InlineValue, PriorityValue, TagsValue},
     document::DocumentFormat,
 };
 
@@ -20,13 +18,11 @@ enum Kind {
     Checkbox,
     Priority,
     Tags,
-    Link(LinkHit),
 }
 #[derive(Clone)]
 struct Hit {
     range: ByteRange,
     bounds: Bounds<Pixels>,
-    pointer: Point<Pixels>,
     source: String,
     kind: Kind,
 }
@@ -53,7 +49,6 @@ struct InlineCommit {
 enum HighlightKind {
     Tags,
     Token,
-    Link,
 }
 #[derive(Clone, Copy)]
 struct Hovered {
@@ -67,7 +62,6 @@ impl Hit {
             kind: match self.kind {
                 Kind::Tags => HighlightKind::Tags,
                 Kind::Checkbox | Kind::Priority => HighlightKind::Token,
-                Kind::Link(_) => HighlightKind::Link,
             },
         }
     }
@@ -202,9 +196,7 @@ impl SemanticEditor {
             {
                 return;
             }
-            if matches!(hit.kind, Kind::Priority | Kind::Link(_))
-                && self.inline_actions.pending.is_none()
-            {
+            if matches!(hit.kind, Kind::Priority) && self.inline_actions.pending.is_none() {
                 self.schedule_inline(hit, false, cx);
             }
         } else if self.inline_actions.popup.is_some() && self.inline_actions.closing.is_none() {
@@ -218,7 +210,6 @@ impl SemanticEditor {
     fn schedule_inline(&mut self, hit: Hit, clicked: bool, cx: &mut Context<Self>) {
         let snapshot = self.snapshot(cx);
         let revision = snapshot.revision();
-        let read_only = self.is_read_only(cx);
         let delay = if clicked || self.inline_actions.popup.is_some() {
             0
         } else {
@@ -229,7 +220,7 @@ impl SemanticEditor {
             executor.timer(Duration::from_millis(delay)).await;
             let background_hit = hit.clone();
             let value = executor
-                .spawn(async move { prepare(&background_hit, &snapshot, read_only) })
+                .spawn(async move { prepare(&background_hit, &snapshot) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 if this.snapshot(cx).revision() != revision

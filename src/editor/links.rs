@@ -96,7 +96,7 @@ impl SemanticEditor {
                 if target.starts_with("www.") {
                     target = format!("https://{target}");
                 }
-                Self::open_with_system_handler(&target);
+                cx.open_url(&target);
             }
             LinkKind::File => {
                 if let Some((path, anchor)) =
@@ -107,7 +107,7 @@ impl SemanticEditor {
                     {
                         cx.emit(EditorOpenFileEvent { path, anchor });
                     } else {
-                        Self::open_with_system_handler(&path.to_string_lossy());
+                        cx.open_with_system(&path);
                     }
                 }
             }
@@ -117,14 +117,6 @@ impl SemanticEditor {
                 }
             }
             LinkKind::Dangerous | LinkKind::Other => {}
-        }
-    }
-
-    /// Opens `target` with the platform handler. This crate targets macOS, so
-    /// `open` is the system mechanism for URLs, mail, and files alike.
-    fn open_with_system_handler(target: &str) {
-        if let Err(error) = std::process::Command::new("open").arg(target).spawn() {
-            tracing::warn!(?error, target, "failed to open link");
         }
     }
 
@@ -203,86 +195,174 @@ pub(crate) fn vertical_distance(y: Pixels, row: &super::HitRow) -> f32 {
     }
 }
 
-/// A reading excerpt for an internal destination, without Org's property drawers.
-pub(super) fn internal_preview(
-    snapshot: &DocumentSnapshot,
-    offset: ByteOffset,
-) -> (Option<String>, Vec<String>) {
-    let analysis =
-        crate::org_semantic::analyze(snapshot, Arc::new(crate::org_syntax::parse(snapshot)));
-    let heading = analysis
-        .headings
-        .iter()
-        .filter(|h| h.content.start <= offset)
-        .max_by_key(|h| h.content.start);
-    let title = heading.map(|h| h.title.to_string());
-    let start = heading.map_or(offset, |h| h.content.start);
-    let limit = analysis
-        .headings
-        .iter()
-        .filter(|h| h.content.start > start)
-        .map(|h| h.content.start.0)
-        .min()
-        .unwrap_or(snapshot.len_bytes());
-    let mut preview = Vec::new();
-    let mut drawer = false;
-    let Some(mut lines) =
-        crate::document::LineCursor::within(snapshot, ByteRange::new(start.0, limit))
-    else {
-        return (title, preview);
-    };
-    let mut examined = 0;
-    while let Some(line) = lines.next_line() {
-        examined += 1;
-        if examined > 128 {
-            break;
-        }
-        let text = line.text.trim();
-        if heading.is_some() && examined == 1 {
-            continue;
-        }
-        if text.eq_ignore_ascii_case(":END:") {
-            drawer = false;
-            continue;
-        }
-        if text.len() > 2
-            && text.starts_with(':')
-            && text.ends_with(':')
-            && text[1..text.len().saturating_sub(1)]
-                .chars()
-                .all(|c| c.is_alphanumeric() || c == '_')
-        {
-            drawer = true;
-            continue;
-        }
-        if drawer
-            || text.is_empty()
-            || text.starts_with("#+")
-            || text.starts_with("# ")
-            || ["SCHEDULED:", "DEADLINE:", "CLOSED:"]
-                .iter()
-                .any(|key| text.starts_with(key))
-        {
-            continue;
-        }
-        // Keep the excerpt near an explicit body target; property links start at their heading.
-        if line.range.end < offset
-            && !line.text.contains(":CUSTOM_ID:")
-            && !line.text.contains(":ID:")
-        {
-            continue;
-        }
-        preview.push(text.chars().take(140).collect());
-        if preview.len() == 2 {
-            break;
-        }
-    }
-    (title, preview)
-}
-
 #[cfg(test)]
 mod link_tests {
     use super::*;
+    use gpui::{Modifiers, TestAppContext, VisualTestContext};
+
+    fn link_position(
+        editor: &Entity<SemanticEditor>,
+        line: u64,
+        display_index: usize,
+        cx: &mut VisualTestContext,
+    ) -> Point<Pixels> {
+        cx.read(|cx| {
+            let row = editor
+                .read(cx)
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == line)
+                .unwrap();
+            let position = row.position_for_display_index(display_index).unwrap();
+            gpui::point(
+                row.text_origin_x + position.x + px(2.),
+                row.origin_y + position.y + px(6.),
+            )
+        })
+    }
+
+    fn double_click(position: Point<Pixels>, cx: &mut VisualTestContext) {
+        cx.simulate_event(MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            click_count: 2,
+            ..Default::default()
+        });
+        cx.simulate_event(MouseUpEvent {
+            position,
+            button: MouseButton::Left,
+            click_count: 2,
+            ..Default::default()
+        });
+        cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn file_links_place_the_caret_on_single_click_and_open_on_double_click(
+        cx: &mut TestAppContext,
+    ) {
+        cx.update(init);
+        let directory = tempfile::tempdir().unwrap();
+        let destination = directory.path().join("notes.org");
+        std::fs::write(&destination, "* Destination\n").unwrap();
+        for (name, source, anchor) in [
+            (
+                "main.org",
+                "[[file:notes.org::*Destination][打开文件]]\n",
+                "*Destination",
+            ),
+            (
+                "main.md",
+                "[打开文件](notes.org#destination)\n",
+                "destination",
+            ),
+        ] {
+            let session = cx.new(|_| {
+                DocumentSession::from_utf8(directory.path().join(name), source.as_bytes().to_vec())
+                    .unwrap()
+            });
+            let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+            let events = Arc::new(std::sync::Mutex::new(Vec::new()));
+            editor.update(view, |_, cx| {
+                let events = events.clone();
+                cx.subscribe_self(move |_, event: &EditorOpenFileEvent, _| {
+                    events.lock().unwrap().push(event.clone())
+                })
+                .detach();
+            });
+            view.run_until_parked();
+            let position = link_position(&editor, 0, "打".len(), view);
+            view.simulate_mouse_move(position, None, Modifiers::default());
+            view.executor().advance_clock(Duration::from_millis(400));
+            view.run_until_parked();
+            view.read(|cx| {
+                assert!(editor.read(cx).hovered_link.is_some());
+                assert!(editor.read(cx).inline_actions.popup.is_none());
+            });
+            let caret = view.read(|cx| editor.read(cx).hit_test(position));
+            for modifiers in [
+                Modifiers::default(),
+                Modifiers {
+                    platform: true,
+                    ..Default::default()
+                },
+                Modifiers {
+                    control: true,
+                    ..Default::default()
+                },
+            ] {
+                view.simulate_click(position, modifiers);
+                view.read(|cx| assert_eq!(editor.read(cx).selection(), Selection::caret(caret)));
+                assert!(
+                    events.lock().unwrap().is_empty(),
+                    "single clicks must not open links"
+                );
+            }
+            double_click(position, view);
+            let events = events.lock().unwrap();
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].path, destination);
+            assert_eq!(events[0].anchor.as_deref(), Some(anchor));
+            view.read(|cx| {
+                let snapshot = editor.read(cx).snapshot(cx);
+                assert_eq!(
+                    snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                    source
+                );
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn double_click_opens_urls_and_jumps_to_internal_targets(cx: &mut TestAppContext) {
+        cx.update(init);
+        let source = "[[#target][跳转]]\n[[https://example.com][网站]]\n* Target\n:PROPERTIES:\n:CUSTOM_ID: target\n:END:\n";
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8("main.org".into(), source.as_bytes().to_vec()).unwrap()
+        });
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        view.run_until_parked();
+        let position = link_position(&editor, 1, 0, view);
+        view.simulate_click(position, Modifiers::default());
+        assert!(view.opened_url().is_none());
+        double_click(position, view);
+        assert_eq!(view.opened_url().as_deref(), Some("https://example.com"));
+        let position = link_position(&editor, 0, 0, view);
+        double_click(position, view);
+        view.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(
+                editor.selection().head(),
+                internal_offset(&editor.snapshot(cx), "#target").unwrap()
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn wrapped_link_hover_hits_are_continuous_without_a_popup(cx: &mut TestAppContext) {
+        cx.update(init);
+        let caption = "中文链接 This long caption wraps across several visual rows";
+        let source = format!("[[https://example.com][{caption}]]\n");
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8("main.org".into(), source.as_bytes().to_vec()).unwrap()
+        });
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        view.simulate_resize(gpui::size(px(340.), px(500.)));
+        view.run_until_parked();
+        for (index, _) in caption.char_indices() {
+            let position = link_position(&editor, 0, index, view);
+            view.simulate_mouse_move(position, None, Modifiers::default());
+            view.read(|cx| {
+                assert!(
+                    editor.read(cx).link_at_position(position).is_some(),
+                    "hole at {position:?}"
+                )
+            });
+        }
+        view.executor().advance_clock(Duration::from_millis(400));
+        view.run_until_parked();
+        view.read(|cx| assert!(editor.read(cx).inline_actions.popup.is_none()));
+    }
 
     #[gpui::test]
     fn internal_links_resolve_to_their_document_positions(cx: &mut gpui::TestAppContext) {

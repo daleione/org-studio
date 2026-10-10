@@ -325,7 +325,8 @@ pub(super) fn paint_frame(
         );
     });
 
-    if host.read(cx).inline_highlight().is_some() {
+    let editor = host.read(cx);
+    if editor.inline_highlight().is_some() || editor.hovered_link.is_some() {
         window.set_window_cursor_style(CursorStyle::PointingHand);
     }
     let _benchmark = publish_frame(host, bounds, state, cx);

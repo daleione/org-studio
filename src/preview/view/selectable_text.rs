@@ -187,7 +187,7 @@ impl SelectableReadingText {
         self
     }
 
-    pub(super) fn on_click(
+    pub(super) fn on_double_click(
         mut self,
         ranges: Vec<Range<usize>>,
         listener: impl Fn(usize, &mut Window, &mut App) + 'static,
@@ -362,7 +362,7 @@ impl Element for SelectableReadingText {
                 cx.notify();
                 suppress
             });
-            if suppress_click || !up_hitbox.is_hovered(window) {
+            if event.click_count != 2 || suppress_click || !up_hitbox.is_hovered(window) {
                 return;
             }
             let local_offset = offset.saturating_sub(text_offset);
@@ -948,7 +948,9 @@ mod tests {
     }
 
     #[gpui::test]
-    fn a_later_text_row_receives_its_own_mouse_up(cx: &mut gpui::TestAppContext) {
+    fn a_later_text_row_opens_links_only_on_double_click_without_dragging(
+        cx: &mut gpui::TestAppContext,
+    ) {
         let preview = crate::preview::loading::derive_preview(
             PathBuf::from("selection.md"),
             DocumentSnapshot::from_utf8(b"first\nsecond\n".to_vec()).unwrap(),
@@ -982,25 +984,49 @@ mod tests {
                             1,
                             None,
                         )
-                        .on_click(std::iter::once(0..6).collect(), {
-                            let clicked = render_clicked.clone();
-                            move |_, _, _| clicked.set(true)
-                        }),
+                        .on_double_click(
+                            std::iter::once(0..6).collect(),
+                            {
+                                let clicked = render_clicked.clone();
+                                move |_, _, _| clicked.set(true)
+                            },
+                        ),
                     )
                     .into_any_element()
             },
         );
-        cx.simulate_mouse_down(
-            point(px(8.0), px(30.0)),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-        cx.simulate_mouse_up(
-            point(px(8.0), px(30.0)),
-            MouseButton::Left,
-            Modifiers::default(),
-        );
-
+        let position = point(px(8.0), px(30.0));
+        cx.simulate_click(position, Modifiers::default());
+        assert!(!clicked.get(), "a single click only places the text anchor");
+        cx.read(|cx| assert!(!panel.read(cx).text_selection_pending()));
+        cx.simulate_event(gpui::MouseDownEvent {
+            position,
+            button: MouseButton::Left,
+            click_count: 2,
+            ..Default::default()
+        });
+        cx.simulate_event(gpui::MouseUpEvent {
+            position,
+            button: MouseButton::Left,
+            click_count: 2,
+            ..Default::default()
+        });
         assert!(clicked.get());
+
+        clicked.set(false);
+        cx.simulate_mouse_down(position, MouseButton::Left, Modifiers::default());
+        cx.simulate_mouse_move(
+            point(px(55.0), px(30.0)),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        cx.simulate_event(gpui::MouseUpEvent {
+            position: point(px(55.0), px(30.0)),
+            button: MouseButton::Left,
+            click_count: 2,
+            ..Default::default()
+        });
+        assert!(!clicked.get(), "dragging a link must only select text");
+        cx.read(|cx| assert!(panel.read(cx).selected_text().is_some()));
     }
 }

@@ -7,8 +7,6 @@
 
 use std::{ops::Range, sync::Arc};
 
-mod destination;
-pub(crate) use destination::LiteralDestination;
 mod file;
 pub(crate) use file::{resolve_file_link, split_link_target};
 

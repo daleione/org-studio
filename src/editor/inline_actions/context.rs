@@ -1,6 +1,5 @@
 //! Build picker values from a revision-consistent document snapshot.
 use super::*;
-use crate::{editor::links::internal_preview, links::LiteralDestination};
 
 pub(super) fn priority_token(text: &str) -> Option<Range<usize>> {
     let start = text.find("[#")?;
@@ -13,11 +12,7 @@ pub(super) fn priority_token(text: &str) -> Option<Range<usize>> {
         .then_some(start..end)
 }
 
-pub(super) fn prepare(
-    hit: &Hit,
-    snapshot: &DocumentSnapshot,
-    read_only: bool,
-) -> Option<InlineValue> {
+pub(super) fn prepare(hit: &Hit, snapshot: &DocumentSnapshot) -> Option<InlineValue> {
     match &hit.kind {
         Kind::Checkbox => None,
         Kind::Priority => {
@@ -105,29 +100,6 @@ pub(super) fn prepare(
                 local: heading.tags.iter().map(|s| s.to_string()).collect(),
                 inherited: inherited.iter().map(|s| s.to_string()).collect(),
                 available,
-            }))
-        }
-        Kind::Link(link) => {
-            let mut preview = Vec::new();
-            let mut title = None;
-            let mut can_open = !matches!(
-                link.meta.kind,
-                crate::links::LinkKind::Dangerous | crate::links::LinkKind::Other
-            );
-            if link.meta.kind == crate::links::LinkKind::Internal {
-                let destination = crate::editor::links::internal_offset(snapshot, &link.meta.raw);
-                can_open = destination.is_some();
-                if let Some(offset) = destination {
-                    (title, preview) = internal_preview(snapshot, offset);
-                }
-            }
-            Some(InlineValue::Link(LinkValue {
-                target: link.meta.raw.to_string(),
-                title,
-                preview,
-                can_open,
-                can_edit: !read_only
-                    && LiteralDestination::parse(&hit.source, &link.meta.raw).is_some(),
             }))
         }
     }

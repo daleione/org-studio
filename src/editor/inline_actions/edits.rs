@@ -1,6 +1,5 @@
 //! Revision-guarded edits and picker commands; keep selection and layout stable.
 use super::*;
-use crate::links::LiteralDestination;
 
 impl SemanticEditor {
     pub(super) fn apply_inline_edits(
@@ -82,39 +81,6 @@ impl SemanticEditor {
             } else {
                 format!(":{}:", tags.join(":"))
             }),
-            InlineEvent::Link(target) => {
-                let Kind::Link(link) = &hit.kind else {
-                    return;
-                };
-                let Some(destination) = LiteralDestination::parse(&hit.source, &link.meta.raw)
-                else {
-                    return;
-                };
-                if !destination.accepts(target) {
-                    if let Some(popup) = &self.inline_actions.popup {
-                        popup.picker.update(cx, |p, cx| p.reject_input(cx));
-                    }
-                    return;
-                }
-                let local = destination.range;
-                range = ByteRange::new(
-                    hit.range.start.0 + local.start as u64,
-                    hit.range.start.0 + local.end as u64,
-                );
-                Some(target.clone())
-            }
-            InlineEvent::Open => {
-                if let Kind::Link(link) = &hit.kind {
-                    self.open_link(link, cx);
-                }
-                None
-            }
-            InlineEvent::Copy => {
-                if let Kind::Link(link) = &hit.kind {
-                    cx.write_to_clipboard(ClipboardItem::new_string(link.meta.raw.to_string()));
-                }
-                None
-            }
             _ => None,
         };
         self.dismiss_inline(cx);
