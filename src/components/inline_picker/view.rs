@@ -1,5 +1,6 @@
 //! Floating shell and theme-consistent controls for each picker.
 use super::*;
+use crate::typography::{ui_family, ui_px};
 
 fn button(
     id: impl Into<ElementId>,
@@ -9,7 +10,7 @@ fn button(
     let label: SharedString = label.into();
     div()
         .id(id)
-        .h(px(26.))
+        .h(ui_px(26.))
         .px(px(8.))
         .flex_none()
         .flex()
@@ -57,10 +58,10 @@ impl Render for InlinePicker {
             .border_color(rgb(theme.border))
             .bg(rgb(theme.background))
             .shadow_md()
-            .font_family(".SystemUIFont")
+            .font_family(ui_family(".SystemUIFont"))
             .font_weight(FontWeight::NORMAL)
-            .text_size(px(12.))
-            .line_height(px(19.))
+            .text_size(ui_px(12.))
+            .line_height(ui_px(19.))
             .text_color(rgb(theme.foreground))
             .cursor_default()
             .flex()
@@ -93,7 +94,7 @@ impl InlinePicker {
     fn footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex_none()
-            .h(px(26.))
+            .h(ui_px(26.))
             .flex()
             .justify_end()
             .gap(px(6.))
@@ -181,7 +182,7 @@ impl InlinePicker {
                 )
                 .w(px(self.remove_width(window)))
                 .justify_center()
-                .text_size(px(11.))
+                .text_size(ui_px(11.))
                 .text_color(rgb(theme.foreground_dim))
                 .when(self.keyboard_navigation && self.selected == count, |s| {
                     s.bg(rgb(HOVER_BACKGROUND()))
@@ -275,7 +276,7 @@ impl InlinePicker {
                             let tag = tag.clone();
                             move || format!("inherited-tag-{tag}")
                         })
-                        .h(px(22.))
+                        .h(ui_px(22.))
                         .px(px(7.))
                         .max_w_full()
                         .flex()
@@ -284,7 +285,7 @@ impl InlinePicker {
                         .rounded(px(5.))
                         .bg(rgb(theme.background_alt))
                         .text_color(rgb(theme.foreground_dim))
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .child(div().overflow_hidden().text_ellipsis().child(tag.clone())),
                 );
             }
@@ -301,8 +302,8 @@ impl InlinePicker {
                 .child(
                     div()
                         .h(px(14.))
-                        .line_height(px(14.))
-                        .text_size(px(10.))
+                        .line_height(ui_px(14.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(self.language.text("inline.inherited_short")),
                 )
@@ -317,7 +318,7 @@ impl InlinePicker {
                     .font_weight(FontWeight::MEDIUM)
                     .child(self.language.text("inline.tags")),
             )
-            .child(div().h(px(30.)).flex_none().child(self.input.clone()))
+            .child(div().h(ui_px(30.)).flex_none().child(self.input.clone()))
             .child(list)
             .children(inherited_section)
             .child(self.footer(cx));
@@ -343,7 +344,7 @@ impl InlinePicker {
                 .gap(px(7.))
                 .child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(self.language.text("inline.edit_link")),
                 )
@@ -394,7 +395,7 @@ impl InlinePicker {
                         .flex_col()
                         .child(
                             div()
-                                .line_height(px(18.))
+                                .line_height(ui_px(18.))
                                 .font_weight(FontWeight::MEDIUM)
                                 .overflow_hidden()
                                 .text_ellipsis()
@@ -403,8 +404,8 @@ impl InlinePicker {
                         .when(has_title, |s| {
                             s.child(
                                 div()
-                                    .text_size(px(10.))
-                                    .line_height(px(14.))
+                                    .text_size(ui_px(10.))
+                                    .line_height(ui_px(14.))
                                     .text_color(rgb(theme.foreground_dim))
                                     .overflow_hidden()
                                     .text_ellipsis()
@@ -419,8 +420,8 @@ impl InlinePicker {
                     excerpt = excerpt.child(
                         div()
                             .h(px(18.))
-                            .line_height(px(18.))
-                            .text_size(px(11.))
+                            .line_height(ui_px(18.))
+                            .text_size(ui_px(11.))
                             .text_color(rgb(theme.foreground_dim))
                             .overflow_hidden()
                             .text_ellipsis()
@@ -432,7 +433,7 @@ impl InlinePicker {
             let row = div()
                 .id("link-actions")
                 .debug_selector(|| "link-actions".into())
-                .h(px(35.))
+                .h(ui_px(35.))
                 .flex_none()
                 .border_t_1()
                 .border_color(rgb(theme.border))

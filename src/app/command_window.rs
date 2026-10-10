@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::sync::Arc;
 
 use gpui::{FontWeight, ParentElement, Pixels, Styled, div, prelude::*, px, relative, rgb};
@@ -55,7 +56,7 @@ impl CommandWindow {
             .absolute()
             .left(px(0.0))
             .right(px(0.0))
-            .bottom(px(ECHO_AREA_HEIGHT))
+            .bottom(ui_px(ECHO_AREA_HEIGHT))
             .h(height)
             .bg(rgb(current_theme().background_alt))
             .border_t_1()
@@ -81,7 +82,7 @@ impl CommandWindow {
 fn command_window_header(title: Arc<str>, close: Option<CommandItem>) -> gpui::Div {
     div()
         .w_full()
-        .h(px(38.0))
+        .h(ui_px(38.0))
         .px_5()
         .flex()
         .items_center()
@@ -101,7 +102,7 @@ fn command_window_header(title: Arc<str>, close: Option<CommandItem>) -> gpui::D
                 .child(
                     div()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_size(px(13.0))
+                        .text_size(ui_px(13.0))
                         .child(title.to_string()),
                 ),
         )
@@ -111,7 +112,7 @@ fn command_window_header(title: Arc<str>, close: Option<CommandItem>) -> gpui::D
                     .flex()
                     .items_center()
                     .gap_2()
-                    .text_size(px(12.0))
+                    .text_size(ui_px(12.0))
                     .text_color(rgb(current_theme().foreground_dim))
                     .child(key_cap(key, px(44.0)))
                     .child(label.to_string()),
@@ -133,8 +134,8 @@ fn render_group(group: CommandGroup) -> gpui::Div {
         .border_color(rgb(current_theme().border))
         .child(
             div()
-                .h(px(20.0))
-                .text_size(px(10.5))
+                .h(ui_px(20.0))
+                .text_size(ui_px(10.5))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(current_theme().foreground_dim))
                 .child(group.title.to_string()),
@@ -157,7 +158,7 @@ fn render_group(group: CommandGroup) -> gpui::Div {
 
 fn command_row((key, title): CommandItem) -> gpui::Div {
     div()
-        .h(px(27.0))
+        .h(ui_px(27.0))
         .flex()
         .items_center()
         .gap_2()
@@ -169,7 +170,7 @@ fn command_row((key, title): CommandItem) -> gpui::Div {
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(12.5))
+                .text_size(ui_px(12.5))
                 .text_color(rgb(current_theme().foreground))
                 .child(title.to_string()),
         )
@@ -178,7 +179,7 @@ fn command_row((key, title): CommandItem) -> gpui::Div {
 fn key_cap(key: Arc<str>, width: Pixels) -> gpui::Div {
     div()
         .w(width)
-        .h(px(22.0))
+        .h(ui_px(22.0))
         .flex()
         .items_center()
         .justify_center()
@@ -186,6 +187,6 @@ fn key_cap(key: Arc<str>, width: Pixels) -> gpui::Div {
         .bg(rgb(current_theme().code_boundary_background))
         .text_color(rgb(current_theme().heading[0]))
         .font_weight(FontWeight::SEMIBOLD)
-        .text_size(px(12.0))
+        .text_size(ui_px(12.0))
         .child(key.to_string())
 }

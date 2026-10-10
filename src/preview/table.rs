@@ -1,9 +1,6 @@
 use std::{collections::HashMap, ops::Range, sync::Arc};
 
-use gpui::{
-    AnyElement, Div, FontWeight, ScrollHandle, SharedString, TextRun, div, font, prelude::*, px,
-    rgb,
-};
+use gpui::{AnyElement, Div, FontWeight, ScrollHandle, div, prelude::*, px, rgb};
 use smallvec::SmallVec;
 #[cfg(test)]
 use unicode_width::UnicodeWidthChar;
@@ -95,7 +92,7 @@ impl TableRenderProjection {
     ) -> Arc<ReadingTableLayout> {
         let available_width = available_width.max(1.0);
         let zoom = zoom.max(0.01);
-        let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
+        let character_width = style.typography.relative_size(1.0, 12.0) * 0.65 * zoom;
         let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
         let preferred = self
             .columns
@@ -146,6 +143,13 @@ impl TableRenderProjection {
             overflow: false,
         })
     }
+}
+
+/// Cell wrap boundaries and the tallest rendered cell, before row padding.
+#[derive(Default)]
+pub(crate) struct ShapedTableCells {
+    pub(crate) wrapped_cells: Vec<Vec<String>>,
+    pub(crate) height: f32,
 }
 
 impl TableRowProjection {
@@ -236,15 +240,23 @@ impl TableRowProjection {
             .collect()
     }
 
-    pub(crate) fn display_cell_texts(&self, source: &str) -> Vec<String> {
+    pub(crate) fn display_cell_runs(&self, source: &str) -> Vec<super::display_map::DisplayRuns> {
         self.columns()
             .iter()
             .enumerate()
             .map(|(index, _)| {
-                self.cells
+                let parsed = self
+                    .cells
                     .get(index)
-                    .map(|cell| parse_document_inline(self.format, cell.text(source)).text)
-                    .unwrap_or_default()
+                    .map(|cell| parse_document_inline(self.format, cell.text(source)))
+                    .unwrap_or_default();
+                super::display_map::DisplayRuns {
+                    text: parsed.text.into(),
+                    inline_spans: parsed.spans.into(),
+                    code_spans: Arc::from([]),
+                    links: Arc::from([]),
+                    source_segments: Arc::from([]),
+                }
             })
             .collect()
     }
@@ -256,64 +268,81 @@ impl TableRowProjection {
         zoom: f32,
         style: super::PreviewStyle,
         text_system: &gpui::WindowTextSystem,
-    ) -> Vec<Vec<String>> {
+    ) -> ShapedTableCells {
         if self.separator {
-            return Vec::new();
+            return ShapedTableCells::default();
         }
         let widths = self.resolved_content_widths(layout, zoom, style);
-        let font_size = (style.typography.body_size - 1.0).max(12.0) * zoom;
-        let mut table_font = font(style.typography.body_family);
-        table_font.weight = if self.header {
-            FontWeight::SEMIBOLD
-        } else {
-            FontWeight::NORMAL
+        let font_size = style.typography.relative_size(1.0, 12.0) * zoom;
+        let line_height = style.typography.relative_line_height(3.0, 18.0) * zoom;
+        let table_font = crate::typography::font_with_fallbacks(
+            style.typography.body_family,
+            style.typography.body_fallbacks,
+        );
+        let inherited = gpui::TextStyle {
+            font_family: table_font.family,
+            font_fallbacks: table_font.fallbacks,
+            font_weight: if self.header {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::NORMAL
+            },
+            ..Default::default()
         };
-        self.display_cell_texts(source)
-            .into_iter()
-            .zip(widths)
-            .map(|(text, width)| {
-                if text.is_empty() {
-                    return vec![String::new()];
-                }
-                let shared: SharedString = text.clone().into();
-                let runs = [TextRun {
-                    len: shared.len(),
-                    font: table_font.clone(),
-                    color: gpui::rgb(style.palette.foreground).into(),
-                    background_color: None,
-                    underline: None,
-                    strikethrough: None,
-                }];
-                let mut starts = vec![0];
-                if let Ok(shaped) = text_system.shape_text(
-                    shared,
-                    px(font_size),
+        let mut measured = ShapedTableCells {
+            height: line_height,
+            ..Default::default()
+        };
+        for (display, width) in self.display_cell_runs(source).into_iter().zip(widths) {
+            let text = &display.text;
+            let runs = super::view::styled_text::inline_text_runs(
+                text,
+                &display.inline_spans,
+                style,
+                &inherited,
+            );
+            let mut starts = vec![0];
+            let height = if super::inline_layout::needs_sized_inline(&display.inline_spans, style) {
+                let shaped = super::inline_layout::shape_inline(
+                    text,
                     &runs,
-                    Some(px(width.max(1.0))),
-                    None,
-                ) && let Some(line) = shaped.first()
-                {
-                    starts.extend(line.wrap_boundaries().iter().filter_map(|boundary| {
-                        line.runs()
-                            .get(boundary.run_ix)
-                            .and_then(|run| run.glyphs.get(boundary.glyph_ix))
-                            .map(|glyph| glyph.index)
-                    }));
-                }
-                starts.push(text.len());
-                starts.sort_unstable();
-                starts.dedup();
-                let lines = starts
-                    .windows(2)
-                    .filter_map(|pair| {
-                        let (start, end) = (pair[0], pair[1]);
-                        (start < end && text.is_char_boundary(start) && text.is_char_boundary(end))
-                            .then(|| text[start..end].to_owned())
-                    })
-                    .collect::<Vec<_>>();
-                if lines.is_empty() { vec![text] } else { lines }
-            })
-            .collect()
+                    &display.inline_spans,
+                    super::inline_layout::InlineTextMetrics {
+                        font_size,
+                        code_font_size: style.typography.inline_code_font_size(font_size, zoom),
+                        line_height,
+                        wrap_width: width,
+                    },
+                    text_system,
+                );
+                starts = shaped.line_starts;
+                f32::from(shaped.size.height)
+            } else if let Ok(shaped) = text_system.shape_text(
+                text.clone(),
+                px(font_size),
+                &runs,
+                Some(px(width.max(1.0))),
+                None,
+            ) && let Some(line) = shaped.first()
+            {
+                starts.extend(line.wrap_boundaries().iter().filter_map(|boundary| {
+                    line.runs()
+                        .get(boundary.run_ix)
+                        .and_then(|run| run.glyphs.get(boundary.glyph_ix))
+                        .map(|glyph| glyph.index)
+                }));
+                (line.wrap_boundaries().len() + 1) as f32 * line_height
+            } else {
+                line_height
+            };
+            measured.height = measured.height.max(height);
+            let lines = super::inline_layout::wrapped_ranges(text, starts)
+                .into_iter()
+                .map(|range| text[range].to_owned())
+                .collect();
+            measured.wrapped_cells.push(lines);
+        }
+        measured
     }
 
     /// Retained for estimator contract tests; live Reading and Minimap geometry uses
@@ -355,7 +384,7 @@ impl TableRowProjection {
             zoom,
             style,
         );
-        let character_width = (style.typography.body_size - 1.0).max(12.0) * 0.65 * zoom;
+        let character_width = style.typography.relative_size(1.0, 12.0) * 0.65 * zoom;
         let cell_padding = style.spacing.table_cell_x * 2.0 * zoom;
         layout
             .column_widths
@@ -740,6 +769,13 @@ pub(crate) fn render_table_row(
                 }
             }
         }
+        let cell_runs = super::display_map::DisplayRuns {
+            text: display.text.clone().into(),
+            inline_spans: display.spans.clone().into(),
+            code_spans: Arc::from([]),
+            links: Arc::from([]),
+            source_segments: Arc::from([]),
+        };
         let text: gpui::SharedString = display.text.into();
         let text_len = text.len();
         let styled = styled_inline_runs(text, display.spans.into(), style);
@@ -760,12 +796,14 @@ pub(crate) fn render_table_row(
                 row_id,
                 selection,
             )
+            .with_inline_fonts(&cell_runs, style, zoom)
             .with_search_ranges(search_ranges)
             .with_text_offset(text_offset)
             .restrict_drag_to_bounds()
             .into_any_element()
         } else {
-            styled.into_any_element()
+            super::view::inline_text::ReadingText::inline(styled, &cell_runs, style, zoom)
+                .into_any_element()
         };
         let content = div()
             .w_full()
@@ -822,10 +860,8 @@ pub(crate) fn render_table_row(
             element.hover(|hover| hover.bg(rgb(palette.hover)))
         })
         .font_family(style.typography.body_family)
-        .text_size(px((style.typography.body_size - 1.0).max(12.0) * zoom))
-        .line_height(px(
-            (style.typography.body_line_height - 3.0).max(18.0) * zoom
-        ))
+        .text_size(px(style.typography.relative_size(1.0, 12.0) * zoom))
+        .line_height(px(style.typography.relative_line_height(3.0, 18.0) * zoom))
         .text_color(rgb(palette.foreground))
         .children(elements);
     let scroller = div()

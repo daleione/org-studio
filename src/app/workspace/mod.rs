@@ -1,3 +1,4 @@
+use crate::typography::ui_size;
 use std::{sync::Arc, time::Instant};
 
 use gpui::{Context, Window, div, prelude::*, px, rgb};
@@ -108,7 +109,7 @@ impl WorkspaceWindow {
             .then(|| std::env::var("ORG_STUDIO_SCROLL_BENCH_STYLE").ok())
             .flatten()
             .and_then(|style| crate::preview::PreviewStyleId::parse(&style));
-        Self {
+        let mut workspace = Self {
             language: preview_settings.language,
             focus_handle: None,
             focus_workspace_on_render: false,
@@ -219,6 +220,7 @@ impl WorkspaceWindow {
                 left: crate::typography::ContentFontSize::default(),
                 right: crate::typography::ContentFontSize::default(),
             },
+            font_settings: preview_settings.fonts,
             split_resize: None,
             soft_wrap: true,
             minimap_visible,
@@ -231,7 +233,14 @@ impl WorkspaceWindow {
             reading_style: benchmark_reading_style.unwrap_or(preview_settings.reading_style),
             theme_mode: preview_settings.theme_mode,
             status: crate::app::status_line::StatusLineHost::new(preview_settings.status_line),
+        };
+        let warnings = &crate::typography::fonts().warnings;
+        if !warnings.is_empty() {
+            workspace.set_echo_message(Some(crate::app::echo_area::EchoMessage::warning(
+                warnings.join("; "),
+            )));
         }
+        workspace
     }
 
     pub fn document_session(&self) -> Option<&gpui::Entity<crate::document::DocumentSession>> {
@@ -282,7 +291,9 @@ impl WorkspaceWindow {
             );
             editor.set_ui_language(language, cx);
             editor.set_content_font_size(content_font_size, cx);
-            editor.set_bottom_overlay_clearance(crate::app::status_line::FLOATING_STATUS_CLEARANCE);
+            editor.set_bottom_overlay_clearance(ui_size(
+                crate::app::status_line::FLOATING_STATUS_CLEARANCE,
+            ));
             editor.set_soft_wrap(soft_wrap, cx);
             editor.set_minimap(minimap_visible, minimap_width, cx);
             editor
@@ -441,6 +452,7 @@ impl WorkspaceWindow {
             reading_style: self.reading_style,
             theme_mode: self.theme_mode,
             status_line: self.status.settings(),
+            fonts: self.font_settings.clone(),
         }
     }
 
@@ -904,9 +916,9 @@ impl WorkspaceWindow {
                         true,
                         Some(buffer_count),
                     );
-                    crate::app::status_line::floating_status_container(
+                    crate::app::status_line::floating_status_container(ui_size(
                         crate::app::status_line::FLOATING_STATUS_HEIGHT,
-                    )
+                    ))
                     .child(self.with_navigation_status(
                         content,
                         pane,

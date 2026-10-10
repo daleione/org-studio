@@ -51,6 +51,7 @@ pub(super) fn lower_fence_backticks(line: &mut WrappedLine, range: Range<usize>,
 
 pub(super) fn shape_key(
     text: &gpui::SharedString,
+    font: gpui::Font,
     font_size: Pixels,
     marked: Option<std::ops::Range<usize>>,
     wrap_width: Option<Pixels>,
@@ -62,6 +63,7 @@ pub(super) fn shape_key(
         active_inline_code: None,
         text: text.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
+        font,
         wrap_width_bits: wrap_width.map_or(0, |width| f32::from(width).to_bits()),
         syntax_key,
         code_language,

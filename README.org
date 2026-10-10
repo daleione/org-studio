@@ -58,6 +58,33 @@ Other commands include =save= (=w=), =reload=, =preview=, =edit=, =split=,
 =export=, =undo= and =redo=. Recently used commands appear first when the
 input is empty.
 
+** Fonts
+
+Open *Edit Configuration…* (=⌘,=) to configure fonts. On macOS the file is
+=~/.config/org-studio/settings.conf=. Save it and restart to apply changes.
+
+#+begin_src conf
+editor_font_family=JetBrains Mono
+editor_font_size=15
+reading_font_family=auto
+reading_font_size=16
+code_font_family=Menlo
+code_font_size=14
+ui_font_family=auto
+ui_font_size=14
+font_fallbacks=PingFang SC,Apple Color Emoji
+#+end_src
+
+Use installed font family names. =auto= selects the editor/interface default
+or the current reading style's font. Reading and code sizes also support =auto=
+for the style defaults. Numeric sizes are 5–96 logical pixels; reading headings
+and smaller labels preserve their proportions. The code preference applies to
+reading code blocks and inline code. Missing fonts fall back to defaults while
+the requested names remain in the configuration.
+
+=⌘+= / =⌘−= temporarily zoom the active content pane. =⌘0= returns to the
+configured font sizes; these temporary zoom changes do not overwrite preferences.
+
 ** Install
 
 #+begin_src sh

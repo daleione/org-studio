@@ -2,6 +2,7 @@ use super::{geometry::BarLayout, presentation::PresentationPhase};
 use crate::app::status_line::{
     FLOATING_STATUS_HEIGHT, FLOATING_STATUS_INSET, floating_status_container,
 };
+use crate::typography::{ui_family, ui_px, ui_size};
 use crate::{
     app::{PaneSide, PaneSurface, WorkspaceWindow, component::ModeSwitch},
     document::{ByteOffset, ByteRange, TextSnapshot},
@@ -92,7 +93,7 @@ impl gpui::Render for SearchTooltip {
             .border_color(rgb(theme.border))
             .bg(rgb(theme.background))
             .shadow_md()
-            .text_size(px(12.))
+            .text_size(ui_px(12.))
             .text_color(rgb(theme.foreground_muted))
             .child(self.0)
     }
@@ -168,7 +169,7 @@ impl WorkspaceWindow {
                     s.query_empty
                 };
                 crate::app::native_input::input_frame(true, !replacement && s.failed)
-                    .text_size(px(13.))
+                    .text_size(ui_px(13.))
                     .text_color(rgb(if empty {
                         theme.foreground_muted
                     } else {
@@ -238,7 +239,7 @@ impl WorkspaceWindow {
                 .id(name)
                 .debug_selector(move || format!("search-{name}"))
                 .flex_none()
-                .h(px(28.))
+                .h(ui_px(28.))
                 .px(px(if narrow { 5. } else { 7. }))
                 .when(icon.is_some(), |button| {
                     button.w(px(if narrow { 24. } else { 28. })).px_0()
@@ -247,7 +248,7 @@ impl WorkspaceWindow {
                 .items_center()
                 .justify_center()
                 .rounded(px(5.))
-                .text_size(px(12.))
+                .text_size(ui_px(12.))
                 .text_color(rgb(theme.foreground_muted))
                 .when(matches!(action, Action::ReplaceAll), |b| {
                     b.bg(rgb(theme.accent)).text_color(rgb(theme.background))
@@ -298,7 +299,7 @@ impl WorkspaceWindow {
             mode_switch
                 .item(index, name, |_| label)
                 .debug_selector(move || name.to_owned())
-                .text_size(px(12.))
+                .text_size(ui_px(12.))
                 .when(!enabled, |item| item.opacity(0.35))
                 .when(interactive, |item| {
                     item.on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -313,13 +314,13 @@ impl WorkspaceWindow {
             .debug_selector(|| "search-query-row".to_owned())
             .flex_none()
             .w_full()
-            .h(px(40.))
+            .h(ui_px(40.))
             .px(px(7.))
             .flex()
             .gap(px(layout.column_gap))
             .items_center()
             .child(mode_switch.render(modes))
-            .child(div().flex_1().min_w_0().h(px(30.)).child(field(false)))
+            .child(div().flex_1().min_w_0().h(ui_px(30.)).child(field(false)))
             .child(
                 div()
                     .flex_none()
@@ -338,7 +339,7 @@ impl WorkspaceWindow {
                             .whitespace_nowrap()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .text_size(px(12.))
+                            .text_size(ui_px(12.))
                             .text_color(rgb(if s.failed {
                                 theme.error
                             } else {
@@ -368,7 +369,7 @@ impl WorkspaceWindow {
             };
             let replacement = div()
                 .w_full()
-                .h(px(41.))
+                .h(ui_px(41.))
                 .px(px(7.))
                 .pb(px(7.))
                 .flex()
@@ -379,13 +380,13 @@ impl WorkspaceWindow {
                         div()
                             .flex_none()
                             .w(px(mode_width))
-                            .text_size(px(12.))
+                            .text_size(ui_px(12.))
                             .text_color(rgb(theme.foreground_muted))
                             .text_center()
                             .child(self.language.text("search.replace_with")),
                     )
                 })
-                .child(div().flex_1().min_w_0().h(px(30.)).child(field(true)))
+                .child(div().flex_1().min_w_0().h(ui_px(30.)).child(field(true)))
                 .when(!narrow, |row| row.child(actions()));
             let height = layout.replacement_height;
             content = content.child(
@@ -406,7 +407,7 @@ impl WorkspaceWindow {
                             .when(narrow, |body| {
                                 body.child(
                                     div()
-                                        .h(px(35.))
+                                        .h(ui_px(35.))
                                         .px(px(7.))
                                         .flex()
                                         .justify_end()
@@ -420,10 +421,10 @@ impl WorkspaceWindow {
             content = content.child(
                 div()
                     .flex_none()
-                    .h(px(26.))
+                    .h(ui_px(26.))
                     .px(px(12.))
                     .overflow_hidden()
-                    .text_size(px(11.))
+                    .text_size(ui_px(11.))
                     .text_color(rgb(if s.range_blocked {
                         theme.error
                     } else {
@@ -437,8 +438,8 @@ impl WorkspaceWindow {
                 .left(px(inset))
                 .right(px(inset))
                 .rounded(px(10. + 2. * reveal))
-                .text_size(px(12.))
-                .font_family(".SystemUIFont")
+                .text_size(ui_px(12.))
+                .font_family(ui_family(".SystemUIFont"))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(content.opacity(shape.content_opacity))
                 .when_some(status_content, |shell, status| {
@@ -449,7 +450,7 @@ impl WorkspaceWindow {
                             .bottom_0()
                             .left(px((rendered_width - width) / 2.))
                             .w(px((width - 2.).max(0.)))
-                            .h(px(FLOATING_STATUS_HEIGHT - 2.))
+                            .h(px(ui_size(FLOATING_STATUS_HEIGHT) - 2.))
                             .opacity(1. - shape.content_opacity)
                             .child(status),
                     )
@@ -501,13 +502,13 @@ impl WorkspaceWindow {
             div()
                 .id(name)
                 .debug_selector(move || format!("search-option-{name}"))
-                .h(px(30.))
+                .h(ui_px(30.))
                 .px(px(8.))
                 .flex()
                 .items_center()
                 .gap(px(8.))
                 .rounded(px(5.))
-                .text_size(px(12.))
+                .text_size(ui_px(12.))
                 .text_color(rgb(theme.foreground))
                 .when(!enabled, |row| row.opacity(0.35))
                 .when(enabled, |row| {
@@ -527,11 +528,11 @@ impl WorkspaceWindow {
         };
         let heading = |label: &'static str| {
             div()
-                .h(px(24.))
+                .h(ui_px(24.))
                 .px(px(8.))
                 .flex()
                 .items_center()
-                .text_size(px(11.))
+                .text_size(ui_px(11.))
                 .text_color(rgb(theme.foreground_muted))
                 .child(label)
         };
@@ -556,7 +557,7 @@ impl WorkspaceWindow {
             .border_color(rgb(theme.border))
             .bg(rgb(theme.background))
             .shadow_lg()
-            .font_family(".SystemUIFont")
+            .font_family(ui_family(".SystemUIFont"))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(heading(self.language.text("search.case")))
             .child(row(
@@ -627,7 +628,7 @@ impl WorkspaceWindow {
                     div()
                         .px(px(8.))
                         .py(px(5.))
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .text_color(rgb(theme.foreground_muted))
                         .overflow_hidden()
                         .child(

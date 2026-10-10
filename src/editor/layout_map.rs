@@ -410,7 +410,7 @@ impl EditorLayoutMap {
             let mut index = chunk as usize + 1;
             while index < self.height_fenwick.len() {
                 self.height_fenwick[index] += delta;
-                index += index & index.wrapping_neg();
+                index += index.isolate_lowest_one();
             }
         }
     }
@@ -462,7 +462,7 @@ impl EditorLayoutMap {
             let mut index = chunk as usize + 1;
             while index < self.height_fenwick.len() {
                 self.height_fenwick[index] += delta;
-                index += index & index.wrapping_neg();
+                index += index.isolate_lowest_one();
             }
         }
 

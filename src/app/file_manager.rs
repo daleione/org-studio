@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
@@ -843,7 +844,7 @@ impl WorkspaceWindow {
             })
             .child(
                 div()
-                    .h(px(50.0))
+                    .h(ui_px(50.0))
                     .px_4()
                     .flex()
                     .items_center()
@@ -852,8 +853,8 @@ impl WorkspaceWindow {
                     .border_color(rgb(current_theme().border))
                     .child(
                         div()
-                            .w(px(24.0))
-                            .h(px(24.0))
+                            .w(ui_px(24.0))
+                            .h(ui_px(24.0))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -861,7 +862,7 @@ impl WorkspaceWindow {
                             .bg(rgb(current_theme().heading[0]))
                             .text_color(rgb(0xffffff))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .child("F"),
                     )
                     .child(breadcrumb::file_manager_breadcrumb(
@@ -871,19 +872,19 @@ impl WorkspaceWindow {
                     .child(
                         div()
                             .px_2()
-                            .h(px(22.0))
+                            .h(ui_px(22.0))
                             .flex()
                             .items_center()
                             .rounded_sm()
                             .bg(rgb(current_theme().background_alt))
                             .text_color(rgb(current_theme().foreground_dim))
-                            .text_size(px(10.5))
+                            .text_size(ui_px(10.5))
                             .child(format!("{} items", entries.len())),
                     ),
             )
             .child(
                 div()
-                    .h(px(30.0))
+                    .h(ui_px(30.0))
                     .px_3()
                     .flex()
                     .items_center()
@@ -892,9 +893,9 @@ impl WorkspaceWindow {
                     .bg(rgb(current_theme().background_alt))
                     .text_color(rgb(current_theme().foreground_dim))
                     .font_weight(gpui::FontWeight::SEMIBOLD)
-                    .text_size(px(10.0))
-                    .child(div().w(px(38.0)).child("MARK"))
-                    .child(div().w(px(36.0)).child("TYPE"))
+                    .text_size(ui_px(10.0))
+                    .child(div().w(ui_px(38.0)).child("MARK"))
+                    .child(div().w(ui_px(36.0)).child("TYPE"))
                     .child(div().flex_1().child("NAME"))
                     .child(div().w(px(104.0)).child("MODIFIED"))
                     .child(div().w(px(84.0)).flex().justify_end().child("SIZE")),
@@ -994,7 +995,7 @@ impl WorkspaceWindow {
             })
             .child(
                 div()
-                    .h(px(38.0))
+                    .h(ui_px(38.0))
                     .px_3()
                     .flex()
                     .items_center()
@@ -1008,7 +1009,7 @@ impl WorkspaceWindow {
                             .whitespace_nowrap()
                             .text_ellipsis()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .text_size(px(12.5))
+                            .text_size(ui_px(12.5))
                             .child(directory),
                     ),
             )
@@ -1040,14 +1041,14 @@ impl WorkspaceWindow {
             .when_some(status, |sidebar, status| {
                 sidebar.child(
                     div()
-                        .h(px(24.0))
+                        .h(ui_px(24.0))
                         .px_3()
                         .flex()
                         .items_center()
                         .border_t_1()
                         .border_color(rgb(current_theme().border))
                         .text_color(rgb(current_theme().foreground_dim))
-                        .text_size(px(10.5))
+                        .text_size(ui_px(10.5))
                         .child(status.to_string()),
                 )
             })
@@ -1079,17 +1080,17 @@ fn dired_context_menu(entity: Entity<WorkspaceWindow>, menu: DiredContextMenu) -
             let entity = entity.clone();
             div()
                 .id(("dired-context-action", action as usize))
-                .h(px(28.0))
+                .h(ui_px(28.0))
                 .px_2()
                 .flex()
                 .items_center()
                 .cursor_pointer()
-                .text_size(px(11.5))
+                .text_size(ui_px(11.5))
                 .hover(|style| style.bg(rgb(current_theme().code_boundary_background)))
                 .child(div().flex_1().child(label))
                 .child(
                     div()
-                        .text_size(px(10.0))
+                        .text_size(ui_px(10.0))
                         .text_color(rgb(current_theme().foreground_dim))
                         .child(key),
                 )
@@ -1138,14 +1139,14 @@ fn dired_row(
     let row = div()
         .id(("dired-row", id.0 as usize))
         .w_full()
-        .h(px(34.0))
+        .h(ui_px(34.0))
         .px_3()
         .flex()
         .items_center()
         .cursor_pointer()
         .border_b_1()
         .border_color(rgb(current_theme().background_alt))
-        .text_size(px(12.0))
+        .text_size(ui_px(12.0))
         .when(selected, |row| {
             row.bg(rgb(current_theme().code_boundary_background))
         })
@@ -1161,7 +1162,7 @@ fn dired_row(
     )
     .child(
         div()
-            .w(px(38.0))
+            .w(ui_px(38.0))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(rgb(if mark == Some(Mark::Delete) {
                 current_theme().type_name
@@ -1171,10 +1172,10 @@ fn dired_row(
             .child(mark_text),
     )
     .child(
-        div().w(px(36.0)).child(
+        div().w(ui_px(36.0)).child(
             div()
-                .w(px(20.0))
-                .h(px(20.0))
+                .w(ui_px(20.0))
+                .h(ui_px(20.0))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1182,14 +1183,14 @@ fn dired_row(
                 .bg(rgb(icon_color))
                 .text_color(rgb(0xffffff))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_size(px(9.5))
+                .text_size(ui_px(9.5))
                 .child(icon),
         ),
     )
     .child(
         div()
             .flex_1()
-            .text_size(px(12.5))
+            .text_size(ui_px(12.5))
             .child(entry.display_name.to_string()),
     )
     .child(
@@ -1245,12 +1246,12 @@ fn sidebar_row(
         .relative()
         .w_full()
         .my(px(1.0))
-        .h(px(30.0))
+        .h(ui_px(30.0))
         .pr_2()
         .flex()
         .items_center()
         .cursor_pointer()
-        .text_size(px(11.5))
+        .text_size(ui_px(11.5))
         .when(selected, |row| {
             row.bg(rgb(current_theme().code_boundary_background))
         })
@@ -1290,7 +1291,7 @@ fn sidebar_row(
                 current_theme().heading[3]
             }))
             .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_size(px(10.0))
+            .text_size(ui_px(10.0))
             .child(mark_text),
     )
     .child(
@@ -1302,7 +1303,7 @@ fn sidebar_row(
             .justify_center()
             .text_color(rgb(icon_color))
             .font_weight(gpui::FontWeight::SEMIBOLD)
-            .text_size(px(10.0))
+            .text_size(ui_px(10.0))
             .child(icon),
     )
     .child(

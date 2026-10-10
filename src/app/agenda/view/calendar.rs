@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
@@ -33,7 +34,7 @@ impl Render for CalendarDrag {
                 .rounded(px(6.))
                 .bg(rgb(theme.hover))
                 .text_color(rgb(theme.success))
-                .text_size(px(10.))
+                .text_size(ui_px(10.))
                 .shadow_md()
                 .child(self.title.to_string()),
         )
@@ -115,12 +116,12 @@ fn task_chip(workspace: Entity<WorkspaceWindow>, row: &AgendaRow, index: usize) 
     let (background, foreground) = tone(row);
     div()
         .id(("calendar-task", index))
-        .min_h(px(36.))
+        .min_h(ui_px(36.))
         .p_2()
         .rounded(px(5.))
         .bg(rgb(background))
         .text_color(rgb(foreground))
-        .text_size(px(10.))
+        .text_size(ui_px(10.))
         .cursor_pointer()
         .hover(|style| style.opacity(0.84).shadow_sm())
         .active(|style| style.opacity(0.68))
@@ -130,7 +131,12 @@ fn task_chip(workspace: Entity<WorkspaceWindow>, row: &AgendaRow, index: usize) 
                 .font_weight(gpui::FontWeight::SEMIBOLD)
                 .child(row.title.to_string()),
         )
-        .child(div().mt_1().text_size(px(9.)).child(row.todo.to_string()))
+        .child(
+            div()
+                .mt_1()
+                .text_size(ui_px(9.))
+                .child(row.todo.to_string()),
+        )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
                 this.dispatch_agenda_intent(UiIntent::SelectRow(index), cx)
@@ -195,7 +201,7 @@ fn month_view(
             .gap_1()
             .child(
                 div()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_dim))
                     .child(format!("{} · {}", weekday(language, *date), date.day())),
             );
@@ -246,7 +252,7 @@ fn time_view(
                 .gap_1()
                 .child(
                     div()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(weekday(language, *date)),
                 )
@@ -257,7 +263,7 @@ fn time_view(
                         .flex()
                         .items_center()
                         .justify_center()
-                        .text_size(px(15.))
+                        .text_size(ui_px(15.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(date.day().to_string()),
                 ),
@@ -278,7 +284,7 @@ fn time_view(
                     .pt_3()
                     .pr_2()
                     .text_right()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_muted))
                     .border_r_1()
                     .border_color(rgb(theme.divider))
@@ -351,7 +357,7 @@ fn time_view(
                         .h(px(54.))
                         .pr_2()
                         .text_right()
-                        .text_size(px(9.))
+                        .text_size(ui_px(9.))
                         .text_color(rgb(theme.foreground_muted))
                         .child(format!("{hour:02}:00"))
                 })),
@@ -497,7 +503,7 @@ pub(crate) fn agenda_calendar(
         .child(
             div()
                 .flex_none()
-                .h(px(38.))
+                .h(ui_px(38.))
                 .px_5()
                 .flex()
                 .items_center()
@@ -510,12 +516,12 @@ pub(crate) fn agenda_calendar(
                         .flex()
                         .items_center()
                         .gap_4()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_muted))
                         .child(
                             div()
                                 .id("calendar-toggle-all-day")
-                                .h(px(30.))
+                                .h(ui_px(30.))
                                 .px_2()
                                 .flex()
                                 .items_center()

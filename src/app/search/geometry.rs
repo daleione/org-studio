@@ -1,5 +1,6 @@
 #[cfg(test)]
 use crate::app::status_line::shell::SHELL_MOTION;
+use crate::typography::ui_size;
 #[cfg(test)]
 use std::time::{Duration, Instant};
 
@@ -13,28 +14,28 @@ pub(super) struct BarLayout {
 }
 impl BarLayout {
     pub fn new(available: f32, language: crate::i18n::Language) -> Self {
-        let narrow = available < 420.;
+        let narrow = available < ui_size(420.);
         Self {
             narrow,
             // Reserve the result slot independently of its current label. Switching
             // from scope to progress or a match count must not resize the input.
-            controls_width: match (language, narrow) {
+            controls_width: ui_size(match (language, narrow) {
                 (_, true) => 160.,
                 (crate::i18n::Language::English, false) => 212.,
                 (_, false) => 196.,
-            },
+            }),
             column_gap: if !narrow && language == crate::i18n::Language::English {
                 8.
             } else {
                 4.
             },
-            mode_item_width: match (language, narrow) {
+            mode_item_width: ui_size(match (language, narrow) {
                 (crate::i18n::Language::English, true) => 46.,
                 (crate::i18n::Language::English, false) => 52.,
                 (_, true) => 36.,
                 (_, false) => 44.,
-            },
-            replacement_height: if narrow { 76. } else { 41. },
+            }),
+            replacement_height: ui_size(if narrow { 76. } else { 41. }),
         }
     }
     pub fn mode_width(&self) -> f32 {

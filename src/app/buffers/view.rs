@@ -2,6 +2,7 @@ use super::*;
 use crate::components::selection_style::{
     HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
 };
+use crate::typography::{ui_family, ui_px};
 use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
 
 fn button_base(
@@ -13,12 +14,12 @@ fn button_base(
         .id(id)
         .flex_none()
         .px(px(9.))
-        .h(px(28.))
+        .h(ui_px(28.))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(5.))
-        .text_size(px(12.))
+        .text_size(ui_px(12.))
         .text_color(rgb(theme.foreground_dim))
         .cursor_pointer()
         .child(label.into())
@@ -98,7 +99,7 @@ impl WorkspaceWindow {
                 .left(px((width - shape.width) / 2.))
                 .right(gpui::auto())
                 .w(px(shape.width))
-                .font_family(".SystemUIFont")
+                .font_family(ui_family(".SystemUIFont"))
                 .children(
                     body.map(|body| div().size_full().opacity(shape.content_opacity).child(body)),
                 )
@@ -108,7 +109,7 @@ impl WorkspaceWindow {
                             .absolute()
                             .bottom_0()
                             .w_full()
-                            .h(px(crate::app::status_line::FLOATING_STATUS_HEIGHT))
+                            .h(ui_px(crate::app::status_line::FLOATING_STATUS_HEIGHT))
                             .opacity(1. - shape.content_opacity)
                             .children(status),
                     )
@@ -121,8 +122,8 @@ impl WorkspaceWindow {
         let theme = crate::theme::current_theme();
         let close_entity = entity.clone();
         let close = button("buffer-panel-close", "×")
-            .text_size(px(19.))
-            .w(px(28.))
+            .text_size(ui_px(19.))
+            .w(ui_px(28.))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 cx.stop_propagation();
                 close_entity.update(cx, |w, cx| w.cancel_buffer_panel(cx));
@@ -139,18 +140,18 @@ impl WorkspaceWindow {
                     .gap(px(8.))
                     .child(
                         div()
-                            .h(px(24.))
+                            .h(ui_px(24.))
                             .flex()
                             .items_center()
                             .justify_between()
-                            .text_size(px(12.))
+                            .text_size(ui_px(12.))
                             .text_color(rgb(theme.foreground_dim))
                             .child(self.buffer_text("新建", "New"))
                             .child(close),
                     )
                     .child(
                         div()
-                            .h(px(34.))
+                            .h(ui_px(34.))
                             .flex()
                             .items_center()
                             .gap(px(8.))
@@ -186,11 +187,17 @@ impl WorkspaceWindow {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(12.))
+                        .text_size(ui_px(12.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(self.buffer_text("新建", "New")),
                 )
-                .child(div().flex_1().min_w_0().h(px(34.)).child(p.input.clone()))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h(ui_px(34.))
+                        .child(p.input.clone()),
+                )
                 .child(
                     button(
                         "buffer-draft-format",
@@ -246,7 +253,7 @@ impl WorkspaceWindow {
             rows.push(
                 div()
                     .id(("buffer-row", index))
-                    .h(px(46.))
+                    .h(ui_px(46.))
                     .flex_none()
                     .px(px(10.))
                     .rounded(px(7.))
@@ -265,14 +272,14 @@ impl WorkspaceWindow {
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(13.))
+                                    .text_size(ui_px(13.))
                                     .text_color(rgb(theme.foreground))
                                     .child(c.name),
                             )
                             .child(
                                 div()
                                     .truncate()
-                                    .text_size(px(10.))
+                                    .text_size(ui_px(10.))
                                     .text_color(rgb(theme.foreground_muted))
                                     .child(path),
                             ),
@@ -281,7 +288,7 @@ impl WorkspaceWindow {
                         div()
                             .w(px(66.))
                             .flex_none()
-                            .text_size(px(11.))
+                            .text_size(ui_px(11.))
                             .text_color(rgb(if c.dirty {
                                 theme.warning
                             } else {
@@ -292,7 +299,7 @@ impl WorkspaceWindow {
                     .when_some(id, |row, id| {
                         row.child(
                             button(("buffer-row-close", index), "×")
-                                .w(px(28.))
+                                .w(ui_px(28.))
                                 .opacity(if selected { 1. } else { 0.35 })
                                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                     cx.stop_propagation();
@@ -335,13 +342,13 @@ impl WorkspaceWindow {
             .flex_col()
             .child(
                 div()
-                    .h(px(50.))
+                    .h(ui_px(50.))
                     .flex_none()
                     .px(px(18.))
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .text_size(px(12.))
+                    .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground_dim))
                     .child(heading)
                     .child(
@@ -367,7 +374,7 @@ impl WorkspaceWindow {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(12.))
+                                .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(self.buffer_text("没有匹配的文档", "No matching documents")),
                         )
@@ -376,12 +383,12 @@ impl WorkspaceWindow {
             )
             .child(
                 div()
-                    .h(px(30.))
+                    .h(ui_px(30.))
                     .flex_none()
                     .px(px(18.))
                     .flex()
                     .items_center()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_muted))
                     .child(hint),
             )
@@ -396,7 +403,13 @@ impl WorkspaceWindow {
                     .flex()
                     .items_center()
                     .gap(px(12.))
-                    .child(div().flex_1().min_w_0().h(px(34.)).child(p.input.clone())),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h(ui_px(34.))
+                            .child(p.input.clone()),
+                    ),
             )
             .into_any_element()
     }
@@ -424,7 +437,7 @@ impl WorkspaceWindow {
                 let s = session.read(cx);
                 let choices = if e.done {
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_px(12.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(self.buffer_text("已保存", "Saved"))
                 } else {
@@ -496,14 +509,14 @@ impl WorkspaceWindow {
                                 .child(
                                     div()
                                         .truncate()
-                                        .text_size(px(13.))
+                                        .text_size(ui_px(13.))
                                         .text_color(rgb(theme.foreground_dim))
                                         .child(s.display_name()),
                                 )
                                 .child(
                                     div()
                                         .truncate()
-                                        .text_size(px(10.))
+                                        .text_size(ui_px(10.))
                                         .text_color(rgb(theme.foreground_muted))
                                         .child(
                                             s.file_path()
@@ -548,11 +561,11 @@ impl WorkspaceWindow {
                     .px(px(18.))
                     .flex()
                     .items_center()
-                    .text_size(px(13.))
+                    .text_size(ui_px(13.))
                     .text_color(rgb(theme.foreground_dim))
                     .child(title),
             )
-            .child(div().px(px(18.)).pb(px(12.)).flex_none().text_size(px(12.)).text_color(rgb(theme.foreground_dim))
+            .child(div().px(px(18.)).pb(px(12.)).flex_none().text_size(ui_px(12.)).text_color(rgb(theme.foreground_dim))
                 .child(if r.kind == ReviewKind::Save {
                     self.buffer_text("选择要保存的文档；跳过的修改会保留。", "Choose documents to save. Skipped edits will be kept.")
                 } else {
@@ -570,12 +583,12 @@ impl WorkspaceWindow {
             )
             .child(
                 div()
-                    .h(px(34.))
+                    .h(ui_px(34.))
                     .px(px(18.))
                     .flex_none()
                     .flex()
                     .items_center()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(if r.error.is_some() {
                         theme.error
                     } else {

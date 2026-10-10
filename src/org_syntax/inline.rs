@@ -28,6 +28,12 @@ pub struct InlineSpan {
     pub target: Option<Arc<str>>,
 }
 
+impl InlineSpan {
+    pub fn is_code(&self) -> bool {
+        matches!(self.kind, InlineKind::Code | InlineKind::Verbatim)
+    }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct InlineText {
     pub text: String,

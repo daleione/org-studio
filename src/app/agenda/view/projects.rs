@@ -1,4 +1,5 @@
 use super::super::UiIntent;
+use crate::typography::ui_px;
 use crate::{agenda::ProjectSummary, app::WorkspaceWindow};
 use gpui::{Entity, MouseButton, div, prelude::*, px, rgb};
 
@@ -55,14 +56,14 @@ pub(crate) fn projects_view(
                     })
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_px(12.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .child(project.project.title.to_string()),
                     )
                     .child(
                         div()
                             .mt_2()
-                            .text_size(px(9.))
+                            .text_size(ui_px(9.))
                             .text_color(rgb(if project.stuck {
                                 theme.warning
                             } else {
@@ -99,7 +100,7 @@ pub(crate) fn projects_view(
                 rows.child(
                     div()
                         .id(("agenda-project-task", index))
-                        .min_h(px(43.))
+                        .min_h(ui_px(43.))
                         .px_2()
                         .flex()
                         .items_center()
@@ -111,7 +112,7 @@ pub(crate) fn projects_view(
                         .child(
                             div()
                                 .w(px(70.))
-                                .h(px(22.))
+                                .h(ui_px(22.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -128,14 +129,14 @@ pub(crate) fn projects_view(
                                         theme.hover
                                     },
                                 ))
-                                .text_size(px(9.))
+                                .text_size(ui_px(9.))
                                 .child(task.todo.to_string()),
                         )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
-                                .text_size(px(11.))
+                                .text_size(ui_px(11.))
                                 .child(task.title.to_string()),
                         )
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -158,14 +159,14 @@ pub(crate) fn projects_view(
                         div()
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(ui_px(10.))
                                     .text_color(rgb(theme.todo_active))
                                     .child(language.text("agenda.project_details")),
                             )
                             .child(
                                 div()
                                     .mt_2()
-                                    .text_size(px(19.))
+                                    .text_size(ui_px(19.))
                                     .font_weight(gpui::FontWeight::BOLD)
                                     .child(project.project.title.to_string()),
                             ),
@@ -185,7 +186,7 @@ pub(crate) fn projects_view(
                         .rounded(px(8.))
                         .bg(rgb(theme.hover))
                         .text_color(rgb(theme.warning))
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .child(
                             project
                                 .blocked_reason
@@ -198,7 +199,7 @@ pub(crate) fn projects_view(
             .child(
                 div()
                     .mt_4()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_dim))
                     .child(
                         language
@@ -252,14 +253,14 @@ fn metric(value: usize, label: &'static str) -> gpui::Div {
         .bg(rgb(theme.surface))
         .child(
             div()
-                .text_size(px(18.))
+                .text_size(ui_px(18.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(value.to_string()),
         )
         .child(
             div()
                 .mt_1()
-                .text_size(px(10.))
+                .text_size(ui_px(10.))
                 .text_color(rgb(theme.foreground_dim))
                 .child(label),
         )

@@ -1,3 +1,4 @@
+use crate::typography::{ui_family, ui_px};
 use gpui::{
     Div, Entity, MouseButton, ParentElement, Stateful, StatefulInteractiveElement, Styled, div,
     prelude::*, px, rgb,
@@ -46,7 +47,7 @@ pub(crate) fn task_row(
     };
     TaskColumns::row()
         .id(("agenda-task-row", row_id))
-        .h(px(super::super::style::TASK_ROW_HEIGHT))
+        .h(ui_px(super::super::style::TASK_ROW_HEIGHT))
         .border_t_1()
         .border_color(rgb(theme.divider))
         .bg(rgb(if selected {
@@ -84,7 +85,7 @@ pub(crate) fn task_row(
             line.child(
                 TaskColumns::cell(TaskColumns::SOURCE)
                     .id(("agenda-task-source", row_id))
-                    .h(px(28.))
+                    .h(ui_px(28.))
                     .px_1()
                     .flex()
                     .items_center()
@@ -92,7 +93,7 @@ pub(crate) fn task_row(
                     .overflow_hidden()
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_size(px(12.))
+                    .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground_dim))
                     .hover(|style| style.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent)))
                     .active(|style| style.opacity(0.72))
@@ -111,14 +112,14 @@ pub(crate) fn task_row(
         .child(
             TaskColumns::cell(TaskColumns::TIME)
                 .id(("agenda-task-time", row_id))
-                .h(px(28.))
+                .h(ui_px(28.))
                 .px_1()
                 .flex()
                 .items_center()
                 .rounded(px(5.))
-                .font_family("SFMono-Regular")
+                .font_family(ui_family("SFMono-Regular"))
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .text_size(px(12.))
+                .text_size(ui_px(12.))
                 .hover(|style| style.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent)))
                 .active(|style| style.opacity(0.72))
                 .child(time)
@@ -128,12 +129,12 @@ pub(crate) fn task_row(
             line.child(
                 TaskColumns::cell(TaskColumns::plan_width(language))
                     .id(("agenda-task-plan", row_id))
-                    .h(px(28.))
+                    .h(ui_px(28.))
                     .px_1()
                     .flex()
                     .items_center()
                     .rounded(px(5.))
-                    .text_size(px(11.))
+                    .text_size(ui_px(11.))
                     .text_color(rgb(
                         if matches!(row.date_kind, Some(AgendaDateKind::Deadline)) {
                             theme.warning
@@ -156,7 +157,7 @@ pub(crate) fn task_row(
                     div()
                         .id(("agenda-task-status", row_id))
                         .max_w_full()
-                        .h(px(22.))
+                        .h(ui_px(22.))
                         .px(px(7.))
                         .flex()
                         .items_center()
@@ -171,7 +172,7 @@ pub(crate) fn task_row(
                         }))
                         .text_color(rgb(if waiting { theme.accent } else { theme.success }))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .hover(|style| {
                             style
                                 .bg(rgb(if waiting {
@@ -188,7 +189,7 @@ pub(crate) fn task_row(
         )
         .when(columns.priority, |line| {
             line.child(row.priority.map_or_else(
-                || TaskColumns::cell(TaskColumns::PRIORITY).h(px(24.)),
+                || TaskColumns::cell(TaskColumns::PRIORITY).h(ui_px(24.)),
                 |priority| {
                     TaskColumns::cell(TaskColumns::PRIORITY)
                         .flex()
@@ -196,8 +197,8 @@ pub(crate) fn task_row(
                         .justify_center()
                         .child(
                             div()
-                                .w(px(24.))
-                                .h(px(22.))
+                                .w(ui_px(24.))
+                                .h(ui_px(22.))
                                 .flex()
                                 .items_center()
                                 .justify_center()
@@ -206,7 +207,7 @@ pub(crate) fn task_row(
                                 .border_color(rgb(theme.warning))
                                 .bg(rgb(theme.hover))
                                 .text_color(rgb(theme.warning))
-                                .text_size(px(10.))
+                                .text_size(ui_px(10.))
                                 .child(priority.to_string()),
                         )
                 },
@@ -221,7 +222,7 @@ pub(crate) fn task_row(
                 .text_ellipsis()
                 .text_color(rgb(theme.foreground))
                 .font_weight(gpui::FontWeight::MEDIUM)
-                .text_size(px(14.))
+                .text_size(ui_px(14.))
                 .child(row.title.to_string()),
         )
         .when(columns.tags, |line| {
@@ -235,14 +236,14 @@ pub(crate) fn task_row(
                         let tag_value = tag.clone();
                         div()
                             .id(("agenda-task-tag", row_id * 2 + tag_index))
-                            .h(px(24.))
+                            .h(ui_px(24.))
                             .px_3()
                             .flex()
                             .items_center()
                             .rounded_full()
                             .bg(rgb(theme.accent_bg))
                             .text_color(rgb(theme.todo_active))
-                            .text_size(px(11.))
+                            .text_size(ui_px(11.))
                             .hover(|style| style.bg(rgb(theme.accent_bg)))
                             .active(|style| style.opacity(0.72))
                             .child(tag.to_string())

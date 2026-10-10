@@ -3,6 +3,7 @@ use super::*;
 use crate::components::selection_style::{
     HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
 };
+use crate::typography::{ui_family, ui_px};
 
 impl TimestampPicker {
     fn button(
@@ -20,7 +21,7 @@ impl TimestampPicker {
             .py_1()
             .rounded(px(7.))
             .cursor_pointer()
-            .text_size(px(12.))
+            .text_size(ui_px(12.))
             .text_color(rgb(if selected {
                 0xffffff
             } else {
@@ -80,7 +81,7 @@ impl TimestampPicker {
             .flex()
             .items_center()
             .gap_2()
-            .min_h(px(36.))
+            .min_h(ui_px(36.))
             .when_some(icon, |s, icon| s.child(Self::icon(icon)))
             .child(div().flex_1().min_w_0().child(label))
     }
@@ -216,7 +217,7 @@ impl TimestampPicker {
                             },
                         ))
                 } else {
-                    Self::row("", None).min_h(px(24.)).child(self.button(
+                    Self::row("", None).min_h(ui_px(24.)).child(self.button(
                         "add-end-time",
                         self.t("timestamp.add_end_time"),
                         false,
@@ -331,7 +332,7 @@ impl TimestampPicker {
                     },
                     None,
                 )
-                .min_h(px(48.))
+                .min_h(ui_px(48.))
                 .when(end, |s| s.border_t_1().border_color(rgb(theme.divider)))
                 .child(
                     self.button(
@@ -378,7 +379,7 @@ impl TimestampPicker {
                     .child(
                         div()
                             .flex_1()
-                            .text_size(px(11.))
+                            .text_size(ui_px(11.))
                             .text_color(rgb(theme.foreground_muted))
                             .child(self.t("timestamp.endpoint_settings")),
                     )
@@ -449,8 +450,8 @@ impl TimestampPicker {
                 Self::row(self.t("timestamp.add_to_agenda"), Some("calendar-blank")).child(
                     div()
                         .id("active")
-                        .w(px(36.))
-                        .h(px(22.))
+                        .w(ui_px(36.))
+                        .h(ui_px(22.))
                         .p(px(3.))
                         .rounded_full()
                         .cursor_pointer()
@@ -479,7 +480,7 @@ impl TimestampPicker {
             )
             .child(
                 div()
-                    .text_size(px(11.))
+                    .text_size(ui_px(11.))
                     .text_color(rgb(theme.foreground_muted))
                     .child(if value.active {
                         self.t("timestamp.inactive_hint")
@@ -623,7 +624,7 @@ impl TimestampPicker {
             )
             .child(
                 div()
-                    .text_size(px(12.))
+                    .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground_muted))
                     .child(if restart {
                         self.t("timestamp.restart_hint")
@@ -668,7 +669,7 @@ impl TimestampPicker {
                 .child(
                     Self::row(self.t("timestamp.repeat_interval"), None)
                         .child(self.t("timestamp.every"))
-                        .child(div().w(px(48.)).child(self.count_input.clone()))
+                        .child(div().w(ui_px(48.)).child(self.count_input.clone()))
                         .child(self.button(
                             "repeat-unit",
                             format!(
@@ -771,7 +772,7 @@ impl TimestampPicker {
                             div()
                                 .pl_4()
                                 .mt_1()
-                                .text_size(px(11.))
+                                .text_size(ui_px(11.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(subtitle),
                         )
@@ -779,7 +780,11 @@ impl TimestampPicker {
                 );
             }
             page = page
-                .child(div().text_size(px(12.)).child(self.t("timestamp.missed")))
+                .child(
+                    div()
+                        .text_size(ui_px(12.))
+                        .child(self.t("timestamp.missed")),
+                )
                 .child(choices);
         }
         let example = repeat_example(value.start_date, repeater, self.language);
@@ -793,13 +798,13 @@ impl TimestampPicker {
                 .child(
                     div()
                         .mt_2()
-                        .text_size(px(12.))
+                        .text_size(ui_px(12.))
                         .text_color(rgb(theme.foreground_muted))
                         .children(example.lines().enumerate().map(|(i, line)| {
                             div()
                                 .when(i == 2, |s| {
                                     s.mt_1()
-                                        .text_size(px(15.))
+                                        .text_size(ui_px(15.))
                                         .text_color(rgb(theme.accent))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                 })
@@ -857,10 +862,10 @@ impl Render for TimestampPicker {
             .border_color(rgb(theme.border))
             .bg(rgb(theme.background))
             .shadow_lg()
-            .font_family(".SystemUIFont")
+            .font_family(ui_family(".SystemUIFont"))
             .font_weight(gpui::FontWeight::NORMAL)
-            .text_size(px(13.))
-            .line_height(px(20.))
+            .text_size(ui_px(13.))
+            .line_height(ui_px(20.))
             .text_color(rgb(theme.foreground))
             .cursor_default()
             .flex()
@@ -964,13 +969,13 @@ impl Render for TimestampPicker {
                     },
                 ))
                 .when(self.source_open, |s| {
-                    s.child(div().min_h(px(34.)).child(self.source_input.clone()))
+                    s.child(div().min_h(ui_px(34.)).child(self.source_input.clone()))
                 })
             })
             .when(!valid, |s| {
                 s.child(
                     div()
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .text_color(rgb(theme.error))
                         .child(self.t("timestamp.invalid")),
                 )

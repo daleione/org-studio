@@ -1,6 +1,7 @@
 use super::labels::{Group, Item};
 use crate::app::status_line::shell::ShellShape;
-use gpui::{TextRun, Window, font, px, rgb};
+use crate::typography::{ui_font, ui_px, ui_size};
+use gpui::{TextRun, Window, rgb};
 use std::ops::Range;
 
 pub(super) const FONT: &str = ".SystemUIFont";
@@ -50,7 +51,7 @@ pub(super) struct Layout {
 fn measure(window: &Window, text: &str, family: &str, size: f32) -> f32 {
     let run = TextRun {
         len: text.len(),
-        font: font(family),
+        font: ui_font(family),
         color: rgb(crate::theme::current_theme().foreground_dim).into(),
         background_color: None,
         underline: None,
@@ -59,7 +60,7 @@ fn measure(window: &Window, text: &str, family: &str, size: f32) -> f32 {
     f32::from(
         window
             .text_system()
-            .shape_line(text.to_owned().into(), px(size), &[run], None)
+            .shape_line(text.to_owned().into(), ui_px(size), &[run], None)
             .width,
     )
     .ceil()
@@ -127,14 +128,14 @@ impl Layout {
             .chunks(count)
             .map(|columns| Row {
                 height: columns.iter().map(|c| c.items.len()).max().unwrap_or(0) as f32
-                    * ROW_HEIGHT
-                    + if grouped { HEADER_HEIGHT } else { 0. },
+                    * ui_size(ROW_HEIGHT)
+                    + if grouped { ui_size(HEADER_HEIGHT) } else { 0. },
                 columns: columns.to_vec(),
             })
             .collect::<Vec<_>>();
         let body_height =
             rows.iter().map(|r| r.height).sum::<f32>() + GAP * rows.len().saturating_sub(1) as f32;
-        let height = (body_height + 2. * (PADDING + BORDER) + FOOTER_HEIGHT)
+        let height = (body_height + 2. * (PADDING + BORDER) + ui_size(FOOTER_HEIGHT))
             .min((viewport_height - 100.).clamp(110., 420.));
         Self {
             width,

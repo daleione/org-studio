@@ -1,3 +1,4 @@
+use crate::typography::{ui_family, ui_px};
 use std::{sync::Arc, time::Duration};
 
 use gpui::{Context, Entity, MouseButton, Task, div, prelude::*, px, rgb};
@@ -157,7 +158,7 @@ fn render_echo_content(
     div()
         .id("workspace-echo-area")
         .when(!inline, |area| {
-            area.h(px(ECHO_AREA_HEIGHT))
+            area.h(ui_px(ECHO_AREA_HEIGHT))
                 .w_full()
                 .flex_none()
                 .border_t_1()
@@ -170,8 +171,8 @@ fn render_echo_content(
         .gap_2()
         .px_3()
         .overflow_hidden()
-        .font_family(".SystemUIFont")
-        .text_size(px(11.0))
+        .font_family(ui_family(".SystemUIFont"))
+        .text_size(ui_px(11.0))
         .when_some(message, |area, message| {
             let (icon, color) = match message.tone {
                 EchoTone::Working => ("ⓘ", theme.info),

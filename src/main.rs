@@ -190,7 +190,9 @@ fn main() {
         // Restore the persisted theme mode (Auto/Light/Dark). Auto hands the
         // native chrome back to the system; explicit modes pin the matching
         // appearance so the traffic-light row stays in sync with the palette.
-        let theme_mode = org_studio::settings::WorkspaceSettings::load().theme_mode;
+        let settings = org_studio::settings::WorkspaceSettings::load();
+        org_studio::typography::init(settings.fonts.clone(), cx.text_system());
+        let theme_mode = settings.theme_mode;
         org_studio::theme::set_theme_mode(theme_mode);
         cx.set_window_appearance(org_studio::app::native_window_appearance(theme_mode));
         // Give command-line documents a head start while menus, displays and the native window are
@@ -250,9 +252,7 @@ fn main() {
                 Some(DOCUMENT_WORKSPACE_KEY_CONTEXT),
             ),
         ]);
-        cx.set_menus(org_studio::app::application_menus(
-            org_studio::settings::WorkspaceSettings::load().language,
-        ));
+        cx.set_menus(org_studio::app::application_menus(settings.language));
         cx.intercept_keystrokes(WorkspaceWindow::intercept_fullscreen_escape)
             .detach();
         cx.intercept_keystrokes(WorkspaceWindow::intercept_quick_open_shortcuts)

@@ -122,7 +122,6 @@ pub(crate) struct ActivateReadOnlyLine {
 }
 
 const LINE_HEIGHT: f32 = 22.0;
-const EDITOR_FONT_FAMILY: &str = "JetBrains Mono";
 
 pub fn init(cx: &mut App) {
     crate::components::timestamp_picker::init(cx);
@@ -440,6 +439,7 @@ pub(super) struct ShapeKey {
     pub(super) active_inline_code: Option<(usize, usize)>,
     pub(super) text: SharedString,
     pub(super) font_size_bits: u32,
+    pub(super) font: gpui::Font,
     pub(super) wrap_width_bits: u32,
     pub(super) syntax_key: u8,
     pub(super) code_language: Option<Arc<str>>,
@@ -1072,6 +1072,10 @@ impl SemanticEditor {
         });
         let initial_snapshot = session.read(cx).snapshot();
         let mut display_map = EditorLayoutMap::default();
+        display_map.set_base_line_height(
+            LINE_HEIGHT * crate::typography::fonts().settings.editor_font_size as f32
+                / crate::typography::ContentFontSize::DEFAULT as f32,
+        );
         display_map.configure(initial_snapshot.len_lines(), 1.0);
         Self {
             ui_language: crate::i18n::Language::system(),
@@ -1184,11 +1188,15 @@ impl SemanticEditor {
     }
 
     pub(super) fn font_size_px(&self) -> f32 {
-        self.content_font_size.get() as f32
+        crate::typography::fonts().editor_size(self.content_font_size())
+    }
+
+    pub(super) fn typography_scale(&self) -> f32 {
+        self.font_size_px() / crate::typography::ContentFontSize::DEFAULT as f32
     }
 
     pub(super) fn base_line_height(&self) -> f32 {
-        LINE_HEIGHT * self.content_font_size.scale()
+        LINE_HEIGHT * self.typography_scale()
     }
 
     fn table_columns(

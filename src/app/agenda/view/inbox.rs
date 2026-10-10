@@ -1,4 +1,5 @@
 use super::super::UiIntent;
+use crate::typography::ui_px;
 use crate::{
     agenda::{InboxSession, TaskRecord},
     app::WorkspaceWindow,
@@ -13,7 +14,7 @@ pub(super) fn button(
 ) -> gpui::Div {
     let theme = crate::theme::current_theme();
     div()
-        .h(px(34.))
+        .h(ui_px(34.))
         .px_4()
         .flex()
         .items_center()
@@ -35,7 +36,7 @@ pub(super) fn button(
         } else {
             theme.foreground_dim
         }))
-        .text_size(px(11.))
+        .text_size(ui_px(11.))
         .cursor_pointer()
         .hover(move |style| {
             if primary {
@@ -68,7 +69,7 @@ pub(crate) fn inbox_view(
         .justify_between()
         .child(
             div()
-                .text_size(px(11.))
+                .text_size(ui_px(11.))
                 .text_color(rgb(theme.foreground_dim))
                 .child(
                     language
@@ -125,7 +126,7 @@ pub(crate) fn inbox_view(
                             .bg(rgb(theme.background))
                             .child(
                                 div()
-                                    .text_size(px(10.))
+                                    .text_size(ui_px(10.))
                                     .text_color(rgb(theme.foreground_dim))
                                     .child(
                                         language
@@ -137,14 +138,14 @@ pub(crate) fn inbox_view(
                             .child(
                                 div()
                                     .mt_5()
-                                    .text_size(px(22.))
+                                    .text_size(ui_px(22.))
                                     .font_weight(gpui::FontWeight::BOLD)
                                     .child(title),
                             )
                             .child(
                                 div()
                                     .mt_4()
-                                    .text_size(px(11.))
+                                    .text_size(ui_px(11.))
                                     .text_color(rgb(theme.foreground_dim))
                                     .child(language.text("agenda.add_note")),
                             )
@@ -154,7 +155,7 @@ pub(crate) fn inbox_view(
                                     .pt_4()
                                     .border_t_1()
                                     .border_color(rgb(theme.divider))
-                                    .text_size(px(10.))
+                                    .text_size(ui_px(10.))
                                     .text_color(rgb(theme.foreground_dim))
                                     .child(format!("{source} · Capture template: task")),
                             ),
@@ -277,7 +278,7 @@ pub(crate) fn inbox_view(
                                     .border_1()
                                     .border_color(rgb(theme.border_hover))
                                     .text_color(rgb(theme.foreground_muted))
-                                    .text_size(px(12.))
+                                    .text_size(ui_px(12.))
                                     .child("✓"),
                             )
                             .child(
@@ -289,7 +290,7 @@ pub(crate) fn inbox_view(
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_ellipsis()
-                                            .text_size(px(12.))
+                                            .text_size(ui_px(12.))
                                             .font_weight(gpui::FontWeight::SEMIBOLD)
                                             .text_color(rgb(theme.foreground))
                                             .child(task.title.to_string()),
@@ -300,7 +301,7 @@ pub(crate) fn inbox_view(
                                             .overflow_hidden()
                                             .whitespace_nowrap()
                                             .text_ellipsis()
-                                            .text_size(px(10.))
+                                            .text_size(ui_px(10.))
                                             .text_color(rgb(theme.foreground_muted))
                                             .child(format!(
                                                 "{} · {} · {}",
@@ -319,7 +320,7 @@ pub(crate) fn inbox_view(
                                     .w(px(90.))
                                     .flex_none()
                                     .text_right()
-                                    .text_size(px(10.))
+                                    .text_size(ui_px(10.))
                                     .text_color(rgb(theme.foreground_dim))
                                     .child(language.text("agenda.just_now")),
                             )
@@ -328,7 +329,7 @@ pub(crate) fn inbox_view(
                                     .w(px(18.))
                                     .flex_none()
                                     .text_color(rgb(theme.foreground_disabled))
-                                    .text_size(px(16.))
+                                    .text_size(ui_px(16.))
                                     .child("›"),
                             )
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -342,7 +343,7 @@ pub(crate) fn inbox_view(
                 div()
                     .mt_3()
                     .px_4()
-                    .text_size(px(9.))
+                    .text_size(ui_px(9.))
                     .text_color(rgb(theme.foreground_muted))
                     .child(language.text("agenda.inbox_hint")),
             )
@@ -366,7 +367,7 @@ fn choice_group(label: &'static str, values: &[&'static str]) -> gpui::Div {
         .child(
             div()
                 .mb_2()
-                .text_size(px(10.))
+                .text_size(ui_px(10.))
                 .text_color(rgb(theme.foreground_dim))
                 .child(label),
         )
@@ -377,7 +378,7 @@ fn choice_group(label: &'static str, values: &[&'static str]) -> gpui::Div {
                 .gap_2()
                 .children(values.iter().enumerate().map(|(index, value)| {
                     div()
-                        .min_h(px(32.))
+                        .min_h(ui_px(32.))
                         .px_3()
                         .flex()
                         .items_center()
@@ -398,7 +399,7 @@ fn choice_group(label: &'static str, values: &[&'static str]) -> gpui::Div {
                         } else {
                             theme.foreground_dim
                         }))
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .child(*value)
                 })),
         )

@@ -244,16 +244,79 @@ pub(crate) fn visual_thumb_geometry(
 type TextRasterizer = Mutex<(cosmic_text::FontSystem, cosmic_text::SwashCache)>;
 static TEXT_RASTERIZER: OnceLock<TextRasterizer> = OnceLock::new();
 
+struct ConfiguredFallback {
+    preferred: Vec<&'static str>,
+    common: Vec<&'static str>,
+    // Script is repr(u8); this FontSystem keeps a fixed startup locale.
+    scripts: [OnceLock<Vec<&'static str>>; u8::MAX as usize + 1],
+}
+
+impl ConfiguredFallback {
+    fn new() -> Self {
+        use cosmic_text::Fallback;
+        let preferred = crate::typography::fonts()
+            .fallbacks
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let mut common = preferred.clone();
+        common.extend(cosmic_text::PlatformFallback.common_fallback());
+        Self {
+            preferred,
+            common,
+            scripts: std::array::from_fn(|_| OnceLock::new()),
+        }
+    }
+}
+
+impl cosmic_text::Fallback for ConfiguredFallback {
+    fn common_fallback(&self) -> &[&'static str] {
+        &self.common
+    }
+    fn forbidden_fallback(&self) -> &[&'static str] {
+        cosmic_text::PlatformFallback.forbidden_fallback()
+    }
+    fn script_fallback(&self, script: unicode_script::Script, locale: &str) -> &[&'static str] {
+        self.scripts[script as usize].get_or_init(|| {
+            let mut families = self.preferred.clone();
+            families.extend(cosmic_text::PlatformFallback.script_fallback(script, locale));
+            families
+        })
+    }
+}
+
 pub(crate) fn text_rasterizer_initialized() -> bool {
     TEXT_RASTERIZER.get().is_some()
 }
 
 pub(crate) fn text_rasterizer() -> &'static TextRasterizer {
     TEXT_RASTERIZER.get_or_init(|| {
-        Mutex::new((
-            cosmic_text::FontSystem::new(),
-            cosmic_text::SwashCache::new(),
-        ))
+        let mut database = fontdb::Database::new();
+        database.load_system_fonts();
+        database.set_monospace_family(&crate::typography::fonts().editor_family);
+        let sans_serif = [
+            ".AppleSystemUIFont",
+            ".SF NS",
+            "SF Pro Text",
+            "Helvetica",
+            "Arial",
+            "Noto Sans",
+            "DejaVu Sans",
+        ]
+        .into_iter()
+        .find(|name| {
+            database
+                .faces()
+                .any(|face| face.families.iter().any(|(family, _)| family == name))
+        })
+        .unwrap_or("Arial");
+        database.set_sans_serif_family(sans_serif);
+        let system = cosmic_text::FontSystem::new_with_locale_and_db_and_fallback(
+            sys_locale::get_locale().unwrap_or_else(|| "en-US".into()),
+            database,
+            ConfiguredFallback::new(),
+        );
+        Mutex::new((system, cosmic_text::SwashCache::new()))
     })
 }
 

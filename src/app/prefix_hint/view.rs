@@ -1,3 +1,4 @@
+use crate::typography::{ui_family, ui_px};
 use gpui::{AnyElement, Entity, MouseButton, div, prelude::*, px, rgb};
 
 use super::{
@@ -12,15 +13,15 @@ fn keycap(key: &str, active: bool) -> gpui::Div {
     let label = key_label(key);
     div()
         .flex_none()
-        .h(px(KEY_HEIGHT))
+        .h(ui_px(KEY_HEIGHT))
         .min_w(px(32.))
         .px(px(KEY_PADDING))
         .flex()
         .items_center()
         .justify_center()
         .rounded(px(5.))
-        .font_family(KEY_FONT)
-        .text_size(px(KEY_SIZE))
+        .font_family(ui_family(KEY_FONT))
+        .text_size(ui_px(KEY_SIZE))
         .bg(rgb(if active {
             theme.accent
         } else {
@@ -69,7 +70,7 @@ impl WorkspaceWindow {
                             .absolute()
                             .bottom_0()
                             .w_full()
-                            .h(px(status_line::FLOATING_STATUS_HEIGHT))
+                            .h(ui_px(status_line::FLOATING_STATUS_HEIGHT))
                             .opacity(1. - shape.content_opacity)
                             .children(status),
                     )
@@ -98,10 +99,10 @@ impl WorkspaceWindow {
                             .when_some(column.group, |view, group| {
                                 view.child(
                                     div()
-                                        .h(px(HEADER_HEIGHT))
+                                        .h(ui_px(HEADER_HEIGHT))
                                         .flex_none()
                                         .px(px(ROW_PADDING))
-                                        .text_size(px(KEY_SIZE))
+                                        .text_size(ui_px(KEY_SIZE))
                                         .text_color(rgb(
                                             crate::theme::current_theme().foreground_muted
                                         ))
@@ -141,8 +142,8 @@ impl WorkspaceWindow {
         let theme = crate::theme::current_theme();
         div()
             .size_full()
-            .font_family(FONT)
-            .text_size(px(FONT_SIZE))
+            .font_family(ui_family(FONT))
+            .text_size(ui_px(FONT_SIZE))
             .text_color(rgb(theme.foreground_dim))
             .flex()
             .flex_col()
@@ -160,7 +161,7 @@ impl WorkspaceWindow {
             )
             .child(
                 div()
-                    .h(px(FOOTER_HEIGHT))
+                    .h(ui_px(FOOTER_HEIGHT))
                     .flex_none()
                     .mx(px(PADDING))
                     .border_t_1()
@@ -198,7 +199,7 @@ impl WorkspaceWindow {
         let enabled = !item.disabled && !p.returning;
         div()
             .id(format!("prefix-hint-key-{}", item.key))
-            .h(px(ROW_HEIGHT))
+            .h(ui_px(ROW_HEIGHT))
             .flex_none()
             .w_full()
             .min_w_0()

@@ -311,7 +311,9 @@ mod tests {
                 None,
                 Some(AxisEdit::Insert(1))
             ),
-            Some(vec!["#+TBLFM: $4=remote($2,@1$2)+remote(base1,@1$2)".into()])
+            Some(vec![
+                "#+TBLFM: $4=remote($2,@1$2)+remote(base1,@1$2)".into()
+            ])
         );
     }
 

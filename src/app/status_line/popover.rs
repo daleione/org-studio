@@ -1,3 +1,4 @@
+use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{Entity, MouseButton, ParentElement, Styled, div, prelude::*, px, rgb};
 
 use crate::{
@@ -29,9 +30,9 @@ pub(crate) fn render_status_popover(
         super::model::DOCUMENT_PANE_ID | super::model::RIGHT_DOCUMENT_PANE_ID
     );
     let bottom = if floating {
-        super::FLOATING_STATUS_HEIGHT + super::FLOATING_STATUS_BOTTOM + 8.0
+        ui_size(super::FLOATING_STATUS_HEIGHT) + super::FLOATING_STATUS_BOTTOM + 8.0
     } else {
-        STATUS_LINE_HEIGHT + 8.0
+        ui_size(STATUS_LINE_HEIGHT) + 8.0
     };
     let edge = if floating {
         super::FLOATING_STATUS_INSET
@@ -71,16 +72,20 @@ pub(crate) fn render_status_popover(
         .border_color(rgb(theme.border))
         .bg(rgb(theme.background))
         .shadow_lg()
-        .text_size(px(11.0))
+        .text_size(ui_px(11.0))
         .when(is_outline, |panel| {
-            panel.rounded(px(14.0)).font_family(".SystemUIFont")
+            panel
+                .rounded(px(14.0))
+                .font_family(ui_family(".SystemUIFont"))
         })
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .h(px(34.0))
+                .h(ui_px(34.0))
                 .px(px(12.0))
-                .when(is_outline, |header| header.px(px(16.0)).text_size(px(13.0)))
+                .when(is_outline, |header| {
+                    header.px(px(16.0)).text_size(ui_px(13.0))
+                })
                 .flex()
                 .items_center()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
@@ -96,7 +101,7 @@ pub(crate) fn render_status_popover(
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(17.0))
+                                .text_size(ui_px(17.0))
                                 .hover(|style| style.bg(rgb(theme.background_alt)))
                         })
                         .cursor_pointer()
@@ -173,10 +178,10 @@ pub(crate) fn render_status_popover(
                 let fold = div()
                     .id(("status-outline-fold", index))
                     .debug_selector(move || format!("outline-fold-{index}"))
-                    .w(px(20.0))
+                    .w(ui_px(20.0))
                     .flex_shrink_0()
                     .py(px(10.0))
-                    .text_size(px(11.0))
+                    .text_size(ui_px(11.0))
                     .text_color(rgb(theme.foreground_dim))
                     .child(if has_children {
                         if is_collapsed { "▸" } else { "▾" }
@@ -224,8 +229,8 @@ pub(crate) fn render_status_popover(
                                 .flex_1()
                                 .min_w_0()
                                 .py(px(9.0))
-                                .text_size(px(13.0))
-                                .line_height(px(20.0))
+                                .text_size(ui_px(13.0))
+                                .line_height(ui_px(20.0))
                                 .line_clamp(2)
                                 .when(depth <= 1, |label| {
                                     label.font_weight(gpui::FontWeight::MEDIUM)
@@ -239,7 +244,7 @@ pub(crate) fn render_status_popover(
                                 .ml(px(10.0))
                                 .pt(px(12.0))
                                 .text_right()
-                                .text_size(px(10.0))
+                                .text_size(ui_px(10.0))
                                 .text_color(rgb(theme.foreground_dim))
                                 .child(entry.line.to_string()),
                         )
@@ -290,7 +295,7 @@ pub(crate) fn render_status_popover(
                 panel = panel.child(
                     div()
                         .id(("reading-style", style_id as usize))
-                        .h(px(34.0))
+                        .h(ui_px(34.0))
                         .mx(px(7.0))
                         .px(px(8.0))
                         .rounded(px(6.0))
@@ -320,7 +325,7 @@ pub(crate) fn render_status_popover(
                 panel = panel.child(
                     div()
                         .id(("status-setting", segment as usize))
-                        .h(px(34.0))
+                        .h(ui_px(34.0))
                         .mx(px(7.0))
                         .px(px(8.0))
                         .rounded(px(6.0))
@@ -331,7 +336,7 @@ pub(crate) fn render_status_popover(
                         .child(div().flex_1().child(segment_title(segment, language)))
                         .child(
                             div()
-                                .w(px(28.0))
+                                .w(ui_px(28.0))
                                 .h(px(16.0))
                                 .rounded_full()
                                 .flex()
@@ -363,7 +368,7 @@ pub(crate) fn render_status_popover(
                     .mx(px(12.0))
                     .border_t_1()
                     .border_color(rgb(theme.border))
-                    .text_size(px(9.0))
+                    .text_size(ui_px(9.0))
                     .text_color(rgb(theme.foreground_dim))
                     .child(match language {
                         Language::Chinese => "模式和更多入口始终保留；其余配置自动保存。",
@@ -377,7 +382,7 @@ pub(crate) fn render_status_popover(
                 panel = panel.child(
                     div()
                         .id(("status-overflow", segment as usize))
-                        .h(px(34.0))
+                        .h(ui_px(34.0))
                         .mx(px(7.0))
                         .px(px(8.0))
                         .rounded(px(6.0))
@@ -398,7 +403,7 @@ pub(crate) fn render_status_popover(
             panel = panel.child(
                 div()
                     .id("status-overflow-customize")
-                    .h(px(34.0))
+                    .h(ui_px(34.0))
                     .mt(px(4.0))
                     .mx(px(7.0))
                     .px(px(8.0))
@@ -460,7 +465,7 @@ impl gpui::Render for OutlineTooltip {
             .border_1()
             .border_color(rgb(theme.border))
             .text_color(rgb(theme.foreground))
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .child(self.0.to_string())
     }
 }

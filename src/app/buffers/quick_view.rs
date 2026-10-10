@@ -1,4 +1,5 @@
 use super::*;
+use crate::typography::ui_px;
 use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
 
 impl WorkspaceWindow {
@@ -57,7 +58,7 @@ impl WorkspaceWindow {
                 div()
                     .id(("quick-open-row", index))
                     .debug_selector(move || format!("quick-open-row-{index}"))
-                    .h(px(34.))
+                    .h(ui_px(34.))
                     .flex_none()
                     .px(px(10.))
                     .rounded(px(6.))
@@ -71,7 +72,7 @@ impl WorkspaceWindow {
                         div()
                             .w(px(18.))
                             .flex_none()
-                            .text_size(px(12.))
+                            .text_size(ui_px(12.))
                             .text_color(rgb(theme.accent))
                             .child(if index < 10 {
                                 ((index + 1) % 10).to_string()
@@ -84,7 +85,7 @@ impl WorkspaceWindow {
                             .flex_1()
                             .min_w_0()
                             .truncate()
-                            .text_size(px(13.))
+                            .text_size(ui_px(13.))
                             .text_color(rgb(theme.foreground))
                             .child(item.name),
                     )
@@ -94,7 +95,7 @@ impl WorkspaceWindow {
                                 .w(px(200.))
                                 .min_w_0()
                                 .truncate()
-                                .text_size(px(11.))
+                                .text_size(ui_px(11.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(detail),
                         )
@@ -105,7 +106,7 @@ impl WorkspaceWindow {
                             .flex_none()
                             .text_right()
                             .truncate()
-                            .text_size(px(11.))
+                            .text_size(ui_px(11.))
                             .text_color(rgb(if item.dirty {
                                 theme.warning
                             } else {
@@ -130,13 +131,13 @@ impl WorkspaceWindow {
             .flex_col()
             .child(
                 div()
-                    .h(px(40.))
+                    .h(ui_px(40.))
                     .flex_none()
                     .px(px(14.))
                     .flex()
                     .items_center()
                     .gap(px(10.))
-                    .text_size(px(12.))
+                    .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground_dim))
                     .child(if headings {
                         self.buffer_text("当前文档标题", "Document headings")
@@ -170,7 +171,7 @@ impl WorkspaceWindow {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_size(px(12.))
+                                .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(if headings {
                                     self.buffer_text("没有匹配的标题", "No matching headings")
@@ -183,12 +184,12 @@ impl WorkspaceWindow {
             )
             .child(
                 div()
-                    .h(px(28.))
+                    .h(ui_px(28.))
                     .flex_none()
                     .px(px(14.))
                     .flex()
                     .items_center()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_muted))
                     .child(self.buffer_text(
                         "↑↓ 选择 · ↵ 确认 · ⌘1–9 / ⌘0 快选 · Esc 取消",
@@ -197,7 +198,7 @@ impl WorkspaceWindow {
             )
             .child(
                 div()
-                    .h(px(48.))
+                    .h(ui_px(48.))
                     .flex_none()
                     .px(px(14.))
                     .border_t_1()
@@ -208,10 +209,10 @@ impl WorkspaceWindow {
                     .child(
                         div()
                             .debug_selector(|| "quick-open-input-label".into())
-                            .h(px(22.))
-                            .line_height(px(22.))
+                            .h(ui_px(22.))
+                            .line_height(ui_px(22.))
                             .flex_none()
-                            .text_size(px(13.))
+                            .text_size(ui_px(13.))
                             .text_color(rgb(theme.accent))
                             .child(if headings {
                                 self.buffer_text("跳转", "Go")
@@ -223,7 +224,7 @@ impl WorkspaceWindow {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .h(px(34.))
+                            .h(ui_px(34.))
                             .flex()
                             .items_center()
                             .child(p.input.clone()),
@@ -290,7 +291,7 @@ impl WorkspaceWindow {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(theme.foreground_dim))
-                    .text_size(px(16.))
+                    .text_size(ui_px(16.))
                     .opacity(if enabled { 1. } else { 0.3 })
                     .when(enabled, |button| {
                         button.cursor_pointer().hover(|s| s.bg(rgb(theme.hover)))
@@ -315,7 +316,7 @@ impl WorkspaceWindow {
                     .min_w_0()
                     .truncate()
                     .px(px(8.))
-                    .text_size(px(11.))
+                    .text_size(ui_px(11.))
                     .text_color(rgb(theme.accent))
                     .cursor_pointer()
                     .child(format!("{} {label}", self.buffer_text("返回", "Back to")))

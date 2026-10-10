@@ -196,9 +196,7 @@ impl RowShaping<'_> {
             .soft_wrap()
             .then_some(px(row_wrap_width));
         let row_text_origin_x = self.text_origin_x + px(text_inset);
-        let mut metrics = line_style
-            .metrics
-            .scaled(self.editor.content_font_size().scale());
+        let mut metrics = line_style.metrics.scaled(self.editor.typography_scale());
         let display_text = folded_display_text(display.text.clone(), folded);
         let inline_image_source = (!folded)
             .then(|| self.inline_images.get(&line_number).cloned())
@@ -268,6 +266,7 @@ impl RowShaping<'_> {
         let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
         let mut shape_key = shape_key(
             &text,
+            self.style.font(),
             shaped_font_size,
             marked_display,
             effective_wrap_width,

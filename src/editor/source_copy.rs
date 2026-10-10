@@ -5,6 +5,7 @@ use crate::document::{
     DocumentFormat, LineCursor,
     markdown::{fence_close, fence_open},
 };
+use crate::typography::{ui_family, ui_font, ui_px};
 use gpui::{
     Corners, Edges, Hitbox, HitboxBehavior, ShapedLine, TextAlign, TextRun, point, quad, size,
 };
@@ -45,7 +46,7 @@ impl CopyButtonPaint {
                 px(14.),
                 &[TextRun {
                     len: "✓".len(),
-                    font: gpui::font(".SystemUIFont"),
+                    font: ui_font(".SystemUIFont"),
                     color: rgb(current_theme().link).into(),
                     ..Default::default()
                 }],
@@ -227,10 +228,10 @@ impl SemanticEditor {
             .text_system()
             .shape_line(
                 label.into(),
-                px(11.),
+                ui_px(11.),
                 &[TextRun {
                     len: label.len(),
-                    font: gpui::font(".SystemUIFont"),
+                    font: ui_font(".SystemUIFont"),
                     ..Default::default()
                 }],
                 None,
@@ -262,9 +263,9 @@ impl SemanticEditor {
                             .bg(rgb(theme.background))
                             .border_1()
                             .border_color(rgb(theme.border))
-                            .font_family(".SystemUIFont")
-                            .text_size(px(11.))
-                            .line_height(px(16.))
+                            .font_family(ui_family(".SystemUIFont"))
+                            .text_size(ui_px(11.))
+                            .line_height(ui_px(16.))
                             .text_color(rgb(theme.foreground))
                             .child(label),
                     ),

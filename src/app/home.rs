@@ -1,6 +1,7 @@
 use super::WorkspaceWindow;
 use crate::i18n::Language;
 use crate::recent_documents::RecentDocument;
+use crate::typography::{ui_family, ui_px};
 use gpui::{Entity, ExternalPaths, FontWeight, SharedString, div, img, prelude::*, px, rgb};
 use std::{
     path::PathBuf,
@@ -20,7 +21,7 @@ pub(crate) fn render_home(
     div()
         .size_full()
         .bg(rgb(theme.surface))
-        .font_family(".SystemUIFont")
+        .font_family(ui_family(".SystemUIFont"))
         .child(
             div()
                 .id("home-scroll")
@@ -55,8 +56,8 @@ pub(crate) fn render_home(
                         .child(
                             div()
                                 .mt_5()
-                                .text_size(px(27.0))
-                                .line_height(px(32.0))
+                                .text_size(ui_px(27.0))
+                                .line_height(ui_px(32.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(theme.foreground))
                                 .child("Org Studio"),
@@ -64,7 +65,7 @@ pub(crate) fn render_home(
                         .child(
                             div()
                                 .mt_2()
-                                .text_size(px(14.0))
+                                .text_size(ui_px(14.0))
                                 .text_color(rgb(theme.foreground_dim))
                                 .child(language.text("home.tagline")),
                         )
@@ -142,7 +143,7 @@ pub(crate) fn render_home(
                             .bg(rgb(theme.hover))
                             .px_4()
                             .py_3()
-                            .text_size(px(13.0))
+                            .text_size(ui_px(13.0))
                             .text_color(rgb(theme.error))
                             .child(error),
                     )
@@ -151,14 +152,14 @@ pub(crate) fn render_home(
                     div()
                         .flex_none()
                         .mt(px(42.0))
-                        .h(px(32.0))
+                        .h(ui_px(32.0))
                         .px_2()
                         .flex()
                         .items_center()
                         .justify_between()
                         .child(
                             div()
-                                .text_size(px(13.0))
+                                .text_size(ui_px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(theme.foreground_dim))
                                 .child(language.text("home.recent")),
@@ -171,7 +172,7 @@ pub(crate) fn render_home(
                                     .px_2()
                                     .py_1()
                                     .rounded(px(5.0))
-                                    .text_size(px(12.0))
+                                    .text_size(ui_px(12.0))
                                     .text_color(rgb(theme.foreground_muted))
                                     .hover(|style| {
                                         style.bg(rgb(theme.hover)).text_color(rgb(theme.foreground))
@@ -196,7 +197,7 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
     div()
         .size_full()
         .bg(rgb(crate::theme::current_theme().surface))
-        .font_family(".SystemUIFont")
+        .font_family(ui_family(".SystemUIFont"))
         .flex()
         .items_center()
         .justify_center()
@@ -209,7 +210,7 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
                 .items_center()
                 .child(
                     div()
-                        .text_size(px(14.0))
+                        .text_size(ui_px(14.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(crate::theme::current_theme().foreground))
                         .child(format!("{} {name}", language.text("home.opening"))),
@@ -217,7 +218,7 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
                 .child(
                     div()
                         .mt_2()
-                        .text_size(px(12.0))
+                        .text_size(ui_px(12.0))
                         .text_color(rgb(crate::theme::current_theme().foreground_muted))
                         .overflow_hidden()
                         .child(path.display().to_string()),
@@ -237,7 +238,7 @@ fn picker_copy(
         .items_center()
         .child(
             div()
-                .text_size(px(14.0))
+                .text_size(ui_px(14.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(title_color))
                 .child(title.into()),
@@ -245,7 +246,7 @@ fn picker_copy(
         .child(
             div()
                 .mt_1()
-                .text_size(px(12.0))
+                .text_size(ui_px(12.0))
                 .text_color(rgb(detail_color))
                 .child(detail.into()),
         )
@@ -274,7 +275,7 @@ fn render_recents(
             div()
                 .py_6()
                 .text_align(gpui::TextAlign::Center)
-                .text_size(px(13.0))
+                .text_size(ui_px(13.0))
                 .text_color(rgb(theme.foreground_muted))
                 .child(language.text("home.empty")),
         );
@@ -319,8 +320,8 @@ fn render_recents(
                     })
                     .child(
                         div()
-                            .w(px(30.0))
-                            .h(px(35.0))
+                            .w(ui_px(30.0))
+                            .h(ui_px(35.0))
                             .rounded(px(4.0))
                             .border_1()
                             .border_color(rgb(theme.border))
@@ -329,7 +330,7 @@ fn render_recents(
                             .items_end()
                             .justify_center()
                             .pb_1()
-                            .text_size(px(8.0))
+                            .text_size(ui_px(8.0))
                             .font_weight(FontWeight::BOLD)
                             .text_color(rgb(kind_color))
                             .child(kind),
@@ -342,7 +343,7 @@ fn render_recents(
                             .flex_col()
                             .child(
                                 div()
-                                    .text_size(px(14.0))
+                                    .text_size(ui_px(14.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(theme.foreground))
                                     .overflow_hidden()
@@ -351,7 +352,7 @@ fn render_recents(
                             .child(
                                 div()
                                     .mt_1()
-                                    .text_size(px(12.0))
+                                    .text_size(ui_px(12.0))
                                     .text_color(rgb(theme.foreground_muted))
                                     .overflow_hidden()
                                     .child(parent),
@@ -360,7 +361,7 @@ fn render_recents(
                     .child(
                         div()
                             .flex_none()
-                            .text_size(px(11.0))
+                            .text_size(ui_px(11.0))
                             .text_color(rgb(theme.foreground_muted))
                             .child(relative_time(document.opened_at)),
                     ),

@@ -3,6 +3,7 @@ use super::{
     native_input::{InputConfig, InputEvent, NativeInput},
     selection_style::*,
 };
+use crate::typography::{ui_font, ui_px, ui_size};
 use crate::{i18n::Language, org_semantic::valid_tag, theme::current_theme};
 use gpui::{prelude::*, *};
 
@@ -133,7 +134,7 @@ impl InlinePicker {
                     .sum::<f32>()
                     + 10.
                     + self.remove_width(window),
-                QUICK_BAR_HEIGHT,
+                ui_size(QUICK_BAR_HEIGHT),
             ),
             InlineValue::Tags(TagsValue {
                 available,
@@ -288,13 +289,13 @@ fn text_width(text: &str, size: f32, window: &Window) -> f32 {
     let text: SharedString = text.to_owned().into();
     let run = TextRun {
         len: text.len(),
-        font: font(".SystemUIFont"),
+        font: ui_font(".SystemUIFont"),
         ..Default::default()
     };
     f32::from(
         window
             .text_system()
-            .shape_line(text, px(size), &[run], None)
+            .shape_line(text, ui_px(size), &[run], None)
             .width,
     )
 }

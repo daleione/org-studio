@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::{
     path::PathBuf,
     sync::{
@@ -309,7 +310,7 @@ pub(crate) fn render_export_panel(
 
     let section_label = |label: &'static str| {
         div()
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(rgb(palette.foreground))
             .child(label)
@@ -325,7 +326,7 @@ pub(crate) fn render_export_panel(
         let button_entity = entity.clone();
         div()
             .id(("export-format", id))
-            .h(px(36.0))
+            .h(ui_px(36.0))
             .flex_1()
             .flex()
             .items_center()
@@ -366,7 +367,7 @@ pub(crate) fn render_export_panel(
         let paper_entity = entity.clone();
         div()
             .id(("export-paper", id))
-            .h(px(36.0))
+            .h(ui_px(36.0))
             .flex_1()
             .flex()
             .items_center()
@@ -400,7 +401,7 @@ pub(crate) fn render_export_panel(
         let orientation_entity = entity.clone();
         div()
             .id(("export-orientation", id))
-            .h(px(36.0))
+            .h(ui_px(36.0))
             .flex_1()
             .flex()
             .items_center()
@@ -462,7 +463,7 @@ pub(crate) fn render_export_panel(
                     )
                     .child(
                         div()
-                            .h(px(32.0))
+                            .h(ui_px(32.0))
                             .px_2()
                             .flex()
                             .items_center()
@@ -475,7 +476,7 @@ pub(crate) fn render_export_panel(
                                     .whitespace_nowrap()
                                     .text_ellipsis()
                                     .text_align(gpui::TextAlign::Center)
-                                    .text_size(px(10.0))
+                                    .text_size(ui_px(10.0))
                                     .text_color(rgb(if selected {
                                         palette.accent
                                     } else {
@@ -547,14 +548,14 @@ pub(crate) fn render_export_panel(
                             div()
                                 .child(
                                     div()
-                                        .text_size(px(21.0))
+                                        .text_size(ui_px(21.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(language.text("export.title")),
                                 )
                                 .child(
                                     div()
                                         .mt(px(3.0))
-                                        .text_size(px(11.0))
+                                        .text_size(ui_px(11.0))
                                         .text_color(rgb(palette.foreground_dim))
                                         .child(language.text("export.subtitle")),
                                 ),
@@ -570,7 +571,7 @@ pub(crate) fn render_export_panel(
                                 .border_1()
                                 .border_color(rgb(palette.border))
                                 .bg(rgb(palette.background_alt))
-                                .text_size(px(19.0))
+                                .text_size(ui_px(19.0))
                                 .text_color(rgb(palette.foreground_dim))
                                 .hover(|style| {
                                     style
@@ -725,7 +726,7 @@ pub(crate) fn render_export_panel(
                                                         row.child(
                                                             div()
                                                                 .id("export-long-image")
-                                                                .h(px(44.0))
+                                                                .h(ui_px(44.0))
                                                                 .flex_1()
                                                                 .px_4()
                                                                 .flex()
@@ -755,7 +756,7 @@ pub(crate) fn render_export_panel(
                                                         .justify_between()
                                                         .child(
                                                             div()
-                                                                .text_size(px(11.0))
+                                                                .text_size(ui_px(11.0))
                                                                 .text_color(rgb(
                                                                     palette.foreground_dim,
                                                                 ))
@@ -770,7 +771,7 @@ pub(crate) fn render_export_panel(
                                                                 .child(
                                                                     div()
                                                                         .id("export-ppi-144")
-                                                                        .h(px(32.0))
+                                                                        .h(ui_px(32.0))
                                                                         .px_3()
                                                                         .flex()
                                                                         .items_center()
@@ -816,7 +817,7 @@ pub(crate) fn render_export_panel(
                                                                 .child(
                                                                     div()
                                                                         .id("export-ppi-300")
-                                                                        .h(px(32.0))
+                                                                        .h(ui_px(32.0))
                                                                         .px_3()
                                                                         .flex()
                                                                         .items_center()
@@ -876,7 +877,7 @@ pub(crate) fn render_export_panel(
                                                 )))
                                                 .child(
                                                     div()
-                                                        .text_size(px(10.0))
+                                                        .text_size(ui_px(10.0))
                                                         .text_color(rgb(palette.accent))
                                                         .child(format!(
                                                             "{} · {}",
@@ -911,14 +912,14 @@ pub(crate) fn render_export_panel(
                                                 .min_w_0()
                                                 .child(
                                                     div()
-                                                        .text_size(px(11.0))
+                                                        .text_size(ui_px(11.0))
                                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                                         .child(language.text("export.advanced")),
                                                 )
                                                 .child(
                                                     div()
                                                         .mt(px(3.0))
-                                                        .text_size(px(10.0))
+                                                        .text_size(ui_px(10.0))
                                                         .text_color(rgb(palette.foreground_dim))
                                                         .child(language.text(
                                                             "export.advanced_summary",
@@ -929,7 +930,7 @@ pub(crate) fn render_export_panel(
                                             div()
                                                 .ml_3()
                                                 .flex_none()
-                                                .text_size(px(10.0))
+                                                .text_size(ui_px(10.0))
                                                 .text_color(rgb(palette.foreground_dim))
                                                 .child(language.text("export.template_default")),
                                         ),
@@ -951,7 +952,7 @@ pub(crate) fn render_export_panel(
                             div()
                                 .flex_1()
                                 .overflow_hidden()
-                                .text_size(px(11.0))
+                                .text_size(ui_px(11.0))
                                 .text_color(rgb(palette.foreground_dim))
                                 .when(status.is_none(), |view| {
                                     view.child(format!(
@@ -983,7 +984,7 @@ pub(crate) fn render_export_panel(
                                         view.child(
                                             div()
                                                 .id("export-reveal")
-                                                .h(px(38.0))
+                                                .h(ui_px(38.0))
                                                 .px_4()
                                                 .flex()
                                                 .items_center()
@@ -1009,7 +1010,7 @@ pub(crate) fn render_export_panel(
                                 .child(
                                     div()
                                         .id("export-cancel")
-                                        .h(px(38.0))
+                                        .h(ui_px(38.0))
                                         .px_4()
                                         .flex()
                                         .items_center()
@@ -1027,7 +1028,7 @@ pub(crate) fn render_export_panel(
                                 .child(
                                     div()
                                         .id("export-confirm")
-                                        .h(px(38.0))
+                                        .h(ui_px(38.0))
                                         .min_w(px(112.0))
                                         .px_5()
                                         .flex()

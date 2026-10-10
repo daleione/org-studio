@@ -1,4 +1,5 @@
 use crate::app::WorkspaceWindow;
+use crate::typography::ui_px;
 use gpui::{
     Div, Entity, InteractiveElement, MouseButton, ParentElement, Stateful,
     StatefulInteractiveElement, Styled, div, prelude::FluentBuilder, px, rgb, svg,
@@ -10,7 +11,7 @@ pub(crate) fn badge(text: impl Into<String>) -> Div {
     let theme = current_theme();
     div()
         .min_w(px(23.))
-        .h(px(23.))
+        .h(ui_px(23.))
         .px_2()
         .flex()
         .items_center()
@@ -18,7 +19,7 @@ pub(crate) fn badge(text: impl Into<String>) -> Div {
         .rounded_full()
         .bg(rgb(theme.accent_bg))
         .text_color(rgb(theme.accent))
-        .text_size(px(11.))
+        .text_size(ui_px(11.))
         .child(text.into())
 }
 
@@ -35,20 +36,20 @@ pub(crate) fn compact_badge(text: impl Into<String>) -> Div {
         .bg(rgb(theme.accent_bg))
         .text_color(rgb(theme.accent))
         .font_weight(gpui::FontWeight::SEMIBOLD)
-        .text_size(px(9.))
+        .text_size(ui_px(9.))
         .child(text.into())
 }
 pub(crate) fn pill(text: impl Into<String>) -> Div {
     let theme = current_theme();
     div()
-        .h(px(24.))
+        .h(ui_px(24.))
         .px_3()
         .flex()
         .items_center()
         .rounded_full()
         .bg(rgb(theme.accent_bg))
         .text_color(rgb(theme.todo_active))
-        .text_size(px(11.))
+        .text_size(ui_px(11.))
         .child(text.into())
 }
 pub(crate) fn icon_button(path: &'static str) -> Div {
@@ -112,7 +113,7 @@ pub(crate) fn text_action_button(
     let theme = current_theme();
     div()
         .id(format!("agenda-text-action-{label}"))
-        .h(px(28.))
+        .h(ui_px(28.))
         .px_3()
         .flex()
         .items_center()
@@ -120,7 +121,7 @@ pub(crate) fn text_action_button(
         .border_1()
         .border_color(rgb(theme.warning))
         .bg(rgb(theme.background))
-        .text_size(px(10.))
+        .text_size(ui_px(10.))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(theme.hover)).border_color(rgb(theme.warning)))
         .active(|style| style.opacity(0.72))
@@ -135,7 +136,7 @@ pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
     div()
         .id("agenda-search-field")
         .w(px(250.))
-        .h(px(38.))
+        .h(ui_px(38.))
         .px_3()
         .flex()
         .items_center()
@@ -144,7 +145,7 @@ pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
         .border_color(rgb(theme.border))
         .bg(rgb(theme.background))
         .text_color(rgb(theme.foreground_muted))
-        .text_size(px(12.))
+        .text_size(ui_px(12.))
         .gap_2()
         .cursor_text()
         .hover(|style| {
@@ -164,7 +165,7 @@ pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
         .child(div().flex_1().min_w_0().child(value))
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_px(10.))
                 .text_color(rgb(theme.foreground_disabled))
                 .child("⌘K"),
         )

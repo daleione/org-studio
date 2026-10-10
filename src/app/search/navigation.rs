@@ -1,5 +1,6 @@
 use super::notice::Notice;
 use super::session::Step;
+use crate::typography::ui_size;
 use crate::{
     app::{ContentRoute, PaneSurface, WorkspaceWindow},
     document::{ByteRange, RevisionRange, TextSnapshot},
@@ -223,7 +224,7 @@ impl WorkspaceWindow {
         }
         let pane = s.pane;
         let clearance = self.search.presentation.as_ref().map_or(
-            crate::app::status_line::FLOATING_STATUS_CLEARANCE,
+            ui_size(crate::app::status_line::FLOATING_STATUS_CLEARANCE),
             |p| {
                 self.status
                     .sample_shell(p.available_width, Instant::now())

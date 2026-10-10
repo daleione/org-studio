@@ -28,7 +28,16 @@ pub(super) fn render_markdown_block(
     let display_runs = display_map.runs(display_row);
     let row_layout = display_map.layout(display_row, style).scaled(context.zoom);
     let text = display_runs.text.clone();
-    let inline = || reading_inline(document, display_row, &display_runs, style, interaction);
+    let inline = || {
+        reading_inline(
+            document,
+            display_row,
+            &display_runs,
+            style,
+            context.zoom,
+            interaction,
+        )
+    };
     if let Some(VisualRowKind::Diagram(diagram)) = document
         .projection
         .rows

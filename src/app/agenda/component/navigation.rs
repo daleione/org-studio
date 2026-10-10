@@ -1,3 +1,4 @@
+use crate::typography::{ui_px, ui_size};
 use crate::{
     agenda::{BuiltinQuery, FileId},
     app::WorkspaceWindow,
@@ -23,7 +24,7 @@ impl Render for AgendaTooltip {
             .rounded(px(7.))
             .bg(gpui::rgb(theme.foreground))
             .text_color(gpui::rgb(theme.background))
-            .text_size(px(11.))
+            .text_size(ui_px(11.))
             .shadow_md()
             .child(self.0.clone())
     }
@@ -44,12 +45,12 @@ pub(crate) fn sidebar_section_header(
     let theme = current_theme();
     div()
         .id(format!("agenda-sidebar-section-{label}"))
-        .h(px(29.))
+        .h(ui_px(29.))
         .px_5()
         .flex()
         .items_center()
         .gap_2()
-        .text_size(px(11.))
+        .text_size(ui_px(11.))
         .text_color(gpui::rgb(theme.foreground_muted))
         .cursor_pointer()
         .rounded(px(6.))
@@ -123,14 +124,14 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
     div()
         .id(format!("agenda-static-sidebar-item-{label}"))
         .relative()
-        .h(px(super::super::style::SIDEBAR_ITEM_HEIGHT))
+        .h(ui_px(super::super::style::SIDEBAR_ITEM_HEIGHT))
         .px_3()
         .when(compact, |item| item.px_0().justify_center())
         .flex()
         .items_center()
         .gap_2()
         .rounded(px(8.))
-        .text_size(px(14.))
+        .text_size(ui_px(14.))
         .text_color(gpui::rgb(if selected {
             theme.todo_active
         } else {
@@ -142,7 +143,7 @@ pub(crate) fn static_sidebar_item(props: StaticSidebarItem) -> Stateful<Div> {
         })
         .child(
             div()
-                .w(px(20.))
+                .w(ui_px(20.))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -211,13 +212,13 @@ pub(crate) fn sidebar_filter_item(
             .child(label)
     } else {
         div()
-            .h(px(23.))
+            .h(ui_px(23.))
             .px_3()
             .flex()
             .items_center()
             .rounded(px(12.))
             .bg(gpui::rgb(theme.accent_bg))
-            .text_size(px(11.))
+            .text_size(ui_px(11.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(gpui::rgb(theme.todo_active))
             .child(label)
@@ -225,9 +226,9 @@ pub(crate) fn sidebar_filter_item(
     div()
         .id(format!("agenda-sidebar-filter-{element_id}"))
         .min_h(px(if is_source {
-            super::super::style::SIDEBAR_SOURCE_HEIGHT
+            ui_size(super::super::style::SIDEBAR_SOURCE_HEIGHT)
         } else {
-            super::super::style::SIDEBAR_TAG_HEIGHT
+            ui_size(super::super::style::SIDEBAR_TAG_HEIGHT)
         }))
         .px_3()
         .flex()
@@ -237,7 +238,7 @@ pub(crate) fn sidebar_filter_item(
         .when(selected, |item| {
             item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION()))
         })
-        .text_size(px(12.))
+        .text_size(ui_px(12.))
         .text_color(gpui::rgb(theme.foreground_dim))
         .cursor_pointer()
         .hover(move |style| {
@@ -258,7 +259,7 @@ pub(crate) fn sidebar_filter_item(
         )
         .child(
             div()
-                .text_size(px(10.))
+                .text_size(ui_px(10.))
                 .text_color(gpui::rgb(theme.foreground_muted))
                 .child(count.to_string()),
         )
@@ -311,14 +312,14 @@ pub(crate) fn source_context_menu(
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
-                .h(px(30.))
+                .h(ui_px(30.))
                 .px_3()
                 .flex()
                 .items_center()
                 .gap_2()
                 .rounded(px(5.))
                 .cursor_pointer()
-                .text_size(px(12.))
+                .text_size(ui_px(12.))
                 .text_color(gpui::rgb(theme.foreground))
                 .hover(|style| style.bg(gpui::rgb(theme.hover)))
                 .child(
@@ -345,7 +346,7 @@ pub(crate) fn saved_view_item(
     let theme = current_theme();
     div()
         .id(("agenda-saved-view", index))
-        .h(px(super::super::style::SIDEBAR_SAVED_VIEW_HEIGHT))
+        .h(ui_px(super::super::style::SIDEBAR_SAVED_VIEW_HEIGHT))
         .px_3()
         .flex()
         .items_center()
@@ -354,7 +355,7 @@ pub(crate) fn saved_view_item(
         .when(selected, |item| {
             item.bg(gpui::rgb(super::super::style::PURPLE_SELECTION()))
         })
-        .text_size(px(12.))
+        .text_size(ui_px(12.))
         .text_color(gpui::rgb(if selected {
             theme.todo_active
         } else {
@@ -412,14 +413,14 @@ pub(crate) fn sidebar_item(
     div()
         .id(format!("agenda-sidebar-item-{label}"))
         .relative()
-        .h(px(super::super::style::SIDEBAR_ITEM_HEIGHT))
+        .h(ui_px(super::super::style::SIDEBAR_ITEM_HEIGHT))
         .px_3()
         .when(compact, |item| item.px_0().justify_center())
         .flex()
         .items_center()
         .gap_2()
         .rounded(px(8.))
-        .text_size(px(14.))
+        .text_size(ui_px(14.))
         .text_color(gpui::rgb(if selected {
             theme.todo_active
         } else {
@@ -449,7 +450,7 @@ pub(crate) fn sidebar_item(
         })
         .child(
             div()
-                .w(px(20.))
+                .w(ui_px(20.))
                 .flex()
                 .items_center()
                 .justify_center()

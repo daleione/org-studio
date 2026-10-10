@@ -1,4 +1,5 @@
 use super::super::{UiIntent, state::AgendaOverlay};
+use crate::typography::ui_px;
 use crate::{
     agenda::{CaptureDraft, CaptureTemplate, RefileTarget},
     app::WorkspaceWindow,
@@ -14,7 +15,7 @@ fn action(
     let theme = crate::theme::current_theme();
     div()
         .debug_selector(move || format!("agenda-workflow-{label}"))
-        .h(px(34.))
+        .h(ui_px(34.))
         .px_4()
         .flex()
         .items_center()
@@ -36,7 +37,7 @@ fn action(
         } else {
             theme.foreground_dim
         }))
-        .text_size(px(11.))
+        .text_size(ui_px(11.))
         .cursor_pointer()
         .hover(move |style| {
             if primary {
@@ -104,14 +105,14 @@ pub(crate) fn capture_overlay(
                             div()
                                 .child(
                                     div()
-                                        .text_size(px(19.))
+                                        .text_size(ui_px(19.))
                                         .font_weight(gpui::FontWeight::BOLD)
                                         .child(language.text("agenda.capture")),
                                 )
                                 .child(
                                     div()
                                         .mt_1()
-                                        .text_size(px(10.))
+                                        .text_size(ui_px(10.))
                                         .text_color(rgb(theme.foreground_dim))
                                         .child(language.text("agenda.capture_hint")),
                                 ),
@@ -150,14 +151,14 @@ pub(crate) fn capture_overlay(
                 .child(
                     div()
                         .mt_4()
-                        .min_h(px(46.))
+                        .min_h(ui_px(46.))
                         .px_3()
                         .flex()
                         .items_center()
                         .rounded(px(8.))
                         .border_1()
                         .border_color(rgb(theme.border))
-                        .text_size(px(13.))
+                        .text_size(ui_px(13.))
                         .child(if draft.title.is_empty() {
                             language.text("agenda.title_hint").into()
                         } else {
@@ -168,7 +169,7 @@ pub(crate) fn capture_overlay(
                     panel.child(
                         div()
                             .mt_3()
-                            .text_size(px(10.))
+                            .text_size(ui_px(10.))
                             .text_color(rgb(theme.warning))
                             .child(message),
                     )
@@ -226,28 +227,28 @@ pub(crate) fn refile_overlay(
                 .flex_col()
                 .child(
                     div()
-                        .text_size(px(19.))
+                        .text_size(ui_px(19.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(language.text("agenda.move_to")),
                 )
                 .child(
                     div()
                         .mt_1()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.refile_hint")),
                 )
                 .child(
                     div()
                         .mt_4()
-                        .h(px(40.))
+                        .h(ui_px(40.))
                         .px_3()
                         .flex()
                         .items_center()
                         .rounded(px(8.))
                         .border_1()
                         .border_color(rgb(theme.border))
-                        .text_size(px(12.))
+                        .text_size(ui_px(12.))
                         .child(if search.is_empty() {
                             language.text("agenda.search_target").into()
                         } else {
@@ -267,7 +268,7 @@ pub(crate) fn refile_overlay(
                             let choose = workspace.clone();
                             div()
                                 .id(("agenda-refile-target", index))
-                                .min_h(px(48.))
+                                .min_h(ui_px(48.))
                                 .px_3()
                                 .flex()
                                 .items_center()
@@ -286,14 +287,14 @@ pub(crate) fn refile_overlay(
                                         .flex_1()
                                         .child(
                                             div()
-                                                .text_size(px(11.))
+                                                .text_size(ui_px(11.))
                                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                                                 .child(target.title.to_string()),
                                         )
                                         .child(
                                             div()
                                                 .mt_1()
-                                                .text_size(px(9.))
+                                                .text_size(ui_px(9.))
                                                 .text_color(rgb(theme.foreground_dim))
                                                 .child(
                                                     target
@@ -317,7 +318,7 @@ pub(crate) fn refile_overlay(
                     panel.child(
                         div()
                             .mt_2()
-                            .text_size(px(10.))
+                            .text_size(ui_px(10.))
                             .text_color(rgb(theme.warning))
                             .child(message),
                     )
@@ -400,14 +401,14 @@ fn repeat_overlay(
                 .shadow_lg()
                 .child(
                     div()
-                        .text_size(px(19.))
+                        .text_size(ui_px(19.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .child(language.text("agenda.complete_repeat")),
                 )
                 .child(
                     div()
                         .mt_2()
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.repeat_hint")),
                 )

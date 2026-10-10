@@ -3,6 +3,7 @@ use super::{
     session::Session,
 };
 use crate::app::status_line::shell::{ShellKind, ShellRequest};
+use crate::typography::ui_size;
 use crate::{
     app::{PaneSide, PaneSurface},
     document::DocumentId,
@@ -75,9 +76,13 @@ impl BarSnapshot {
                 available,
                 layout,
             ),
-            height: crate::app::status_line::FLOATING_STATUS_HEIGHT
+            height: ui_size(crate::app::status_line::FLOATING_STATUS_HEIGHT)
                 + replacement
-                + if self.detail.is_some() { 26. } else { 0. },
+                + if self.detail.is_some() {
+                    ui_size(26.)
+                } else {
+                    0.
+                },
             expansion_height: replacement,
             content_opacity: 1.,
         }

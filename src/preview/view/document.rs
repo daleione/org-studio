@@ -95,7 +95,10 @@ pub(crate) fn render_reading_document(
         .flex()
         .relative()
         .bg(rgb(palette.background))
-        .font_family(style.typography.body_family)
+        .font(crate::typography::font_with_fallbacks(
+            style.typography.body_family,
+            style.typography.body_fallbacks,
+        ))
         .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
             clear_selection_panel.update(cx, |panel, cx| {
                 if panel.clear_text_selection_unless_dragging() {
@@ -484,7 +487,16 @@ fn render_block(
         );
     }
     let text = display_runs.text.clone();
-    let inline = || reading_inline(document, display_row, &display_runs, style, interaction);
+    let inline = || {
+        reading_inline(
+            document,
+            display_row,
+            &display_runs,
+            style,
+            context.zoom,
+            interaction,
+        )
+    };
     if matches!(display_map.row_kind(display_row), PreviewLineKind::Caption) {
         return div()
             .w_full()
@@ -1140,11 +1152,13 @@ pub(crate) fn reading_inline(
     display_row: usize,
     runs: &DisplayRuns,
     style: super::PreviewStyle,
+    zoom: f32,
     interaction: Option<&ReadingInteraction>,
 ) -> gpui::AnyElement {
     let styled = styled_inline_runs(runs.text.clone(), runs.inline_spans.clone(), style);
     let Some(interaction) = interaction.cloned() else {
-        return styled.into_any_element();
+        return crate::preview::view::inline_text::ReadingText::inline(styled, runs, style, zoom)
+            .into_any_element();
     };
     let text_offset = document
         .projection
@@ -1169,6 +1183,7 @@ pub(crate) fn reading_inline(
         display_row,
         selection,
     )
+    .with_inline_fonts(runs, style, zoom)
     .with_search_ranges(reading_search_ranges(
         &interaction.search_ranges,
         interaction.search_current,

@@ -8,9 +8,10 @@ use std::time::Instant;
 
 mod code_block;
 mod document;
+pub(in crate::preview) mod inline_text;
 mod markdown_block;
 mod selectable_text;
-mod styled_text;
+pub(in crate::preview) mod styled_text;
 
 #[derive(Clone, Copy)]
 struct ReadingRowContext<'a> {

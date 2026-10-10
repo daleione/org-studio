@@ -4,8 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use gpui::FontFallbacks;
-use gpui::{FontWeight, SharedString, TextRun, font, px};
+use gpui::{FontWeight, SharedString, TextRun, px};
 
 use crate::{
     document::SharedTextSnapshot,
@@ -312,37 +311,27 @@ impl PreviewDisplayMap {
         let layout = self.layout(row, style).scaled(zoom);
         if kind == PreviewLineKind::Table {
             let table = self.table_projection(row);
-            let resolved_table = table.map(|table| {
+            let (resolved_table, cell_height) = if let Some(table) = table {
                 let table_layout = self
                     .reading_table_layout(row, available_width, zoom, style)
                     .expect("table row has a resolved layout");
-                let wrapped_cells = if table.is_separator() {
-                    Vec::new()
-                } else {
-                    table.shaped_display_cells(
-                        &display.text,
-                        &table_layout,
-                        zoom,
-                        style,
-                        text_system,
-                    )
-                };
-                ResolvedTableDisplay {
-                    layout: table_layout,
-                    wrapped_cells: wrapped_cells.into(),
-                }
-            });
-            let line_count = resolved_table
-                .as_ref()
-                .map(|table| {
-                    table
-                        .wrapped_cells
-                        .iter()
-                        .map(|lines| lines.len().max(1))
-                        .max()
-                        .unwrap_or(1)
-                })
-                .unwrap_or(1);
+                let cells = table.shaped_display_cells(
+                    &display.text,
+                    &table_layout,
+                    zoom,
+                    style,
+                    text_system,
+                );
+                (
+                    Some(ResolvedTableDisplay {
+                        layout: table_layout,
+                        wrapped_cells: cells.wrapped_cells.into(),
+                    }),
+                    cells.height,
+                )
+            } else {
+                (None, layout.line_height)
+            };
             let lines = DisplayLines {
                 ranges: std::iter::once(0..display.text.len())
                     .collect::<Vec<_>>()
@@ -350,9 +339,7 @@ impl PreviewDisplayMap {
                 parent_height: if table.is_some_and(TableRowProjection::is_separator) {
                     2.0 + layout.margin_top + layout.margin_bottom
                 } else {
-                    (line_count as f32 * layout.line_height
-                        + style.spacing.table_cell_y * 2.0 * zoom)
-                        .max(layout.min_height)
+                    (cell_height + style.spacing.table_cell_y * 2.0 * zoom).max(layout.min_height)
                         + layout.margin_top
                         + layout.margin_bottom
                 },
@@ -370,7 +357,13 @@ impl PreviewDisplayMap {
             PreviewLineKind::Heading(_) => FontWeight::MEDIUM,
             _ => FontWeight::NORMAL,
         };
-        let text_runs = minimap_text_runs(kind, &display, base_font, style);
+        let inherited = gpui::TextStyle {
+            font_family: base_font.family.clone(),
+            font_fallbacks: base_font.fallbacks.clone(),
+            font_weight: base_font.weight,
+            font_size: px(layout.font_size).into(),
+            ..Default::default()
+        };
         let marker_width = if matches!(kind, PreviewLineKind::Heading(_)) {
             20.0
         } else {
@@ -379,11 +372,37 @@ impl PreviewDisplayMap {
         let wrap_width =
             (available_width - layout.padding_left - layout.padding_right - marker_width).max(1.0);
         let mut starts = vec![0];
-        if !display.text.is_empty()
+        let mut measured_line_height = layout.line_height;
+        if kind != PreviewLineKind::Code
+            && super::inline_layout::needs_sized_inline(&display.inline_spans, style)
+        {
+            let text_runs = super::view::styled_text::inline_text_runs(
+                &display.text,
+                &display.inline_spans,
+                style,
+                &inherited,
+            );
+            let shaped = super::inline_layout::shape_inline(
+                &display.text,
+                &text_runs,
+                &display.inline_spans,
+                super::inline_layout::InlineTextMetrics {
+                    font_size: layout.font_size,
+                    code_font_size: style
+                        .typography
+                        .inline_code_font_size(layout.font_size, zoom),
+                    line_height: layout.line_height,
+                    wrap_width,
+                },
+                text_system,
+            );
+            starts = shaped.line_starts;
+            measured_line_height = f32::from(shaped.line_height);
+        } else if !display.text.is_empty()
             && let Ok(shaped) = text_system.shape_text(
                 display.text.clone(),
                 px(layout.font_size),
-                &text_runs,
+                &minimap_text_runs(kind, &display, base_font, style),
                 Some(px(wrap_width)),
                 None,
             )
@@ -396,16 +415,7 @@ impl PreviewDisplayMap {
                     .map(|glyph| glyph.index)
             }));
         }
-        starts.push(display.text.len());
-        starts.sort_unstable();
-        starts.dedup();
-        let mut ranges = starts
-            .windows(2)
-            .filter_map(|pair| (pair[0] < pair[1]).then_some(pair[0]..pair[1]))
-            .collect::<Vec<_>>();
-        if ranges.is_empty() {
-            ranges.push(0..display.text.len());
-        }
+        let ranges = super::inline_layout::wrapped_ranges(&display.text, starts);
         let parent_height = self
             .image_size(row, available_width)
             .map(|(_, height)| {
@@ -416,7 +426,7 @@ impl PreviewDisplayMap {
             })
             .or(layout.fixed_height)
             .unwrap_or_else(|| {
-                (ranges.len().max(1) as f32 * layout.line_height
+                (ranges.len().max(1) as f32 * measured_line_height
                     + layout.padding_top
                     + layout.padding_bottom)
                     .max(layout.min_height)
@@ -793,14 +803,8 @@ pub(crate) fn preview_minimap_font(style: PreviewStyle, kind: PreviewLineKind) -
             style.typography.body_fallbacks,
         )
     };
-    let mut minimap_font = font(family);
+    let mut minimap_font = crate::typography::font_with_fallbacks(family, fallbacks);
     minimap_font.weight = FontWeight::BLACK;
-    minimap_font.fallbacks = Some(FontFallbacks::from_fonts(
-        fallbacks
-            .iter()
-            .map(|family| (*family).to_owned())
-            .collect(),
-    ));
     minimap_font
 }
 
@@ -933,7 +937,8 @@ pub(crate) fn minimap_text_runs(
                         InlineKind::Italic => run_font.style = gpui::FontStyle::Italic,
                         InlineKind::Strike => strikethrough = Some(Default::default()),
                         InlineKind::Code | InlineKind::Verbatim => {
-                            color = gpui::rgb(palette.code_foreground).into()
+                            color = gpui::rgb(palette.code_foreground).into();
+                            run_font.family = preview_style.typography.code_family.into();
                         }
                         InlineKind::Link | InlineKind::FootnoteReference => {
                             color = gpui::rgb(palette.link).into()

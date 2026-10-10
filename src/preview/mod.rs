@@ -6,6 +6,7 @@ use gpui::{
 mod action;
 mod display_map;
 mod document;
+mod inline_layout;
 mod input;
 pub(crate) mod layout;
 mod loading;

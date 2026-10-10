@@ -1,3 +1,4 @@
+use crate::typography::{ui_px, ui_size};
 use gpui::{
     Bounds, ClipboardItem, Context, ElementInputHandler, EntityInputHandler, FocusHandle,
     KeyDownEvent, MouseButton, MouseDownEvent, Pixels, Point, ShapedLine, SharedString, TextAlign,
@@ -517,7 +518,7 @@ impl Render for NativeInput {
                                 underline: None,
                                 strikethrough: None,
                             };
-                            let font_size = this.config.font_size;
+                            let font_size = ui_size(this.config.font_size);
                             let line =
                                 window
                                     .text_system()
@@ -561,7 +562,7 @@ impl Render for NativeInput {
                                 window.paint_quad(fill(
                                     Bounds::new(
                                         point(origin.x + caret, bounds.top() + px(3.)),
-                                        size(px(1.), px(16.)),
+                                        size(px(1.), ui_px(16.)),
                                     ),
                                     rgb(theme.accent),
                                 ));
@@ -598,7 +599,7 @@ impl Render for NativeInput {
                     },
                 )
                 .w_full()
-                .h(px(22.)),
+                .h(ui_px(22.)),
             )
     }
 }
@@ -608,7 +609,7 @@ pub(crate) fn input_frame(outlined: bool, invalid: bool) -> gpui::Div {
     div()
         .w_full()
         .min_w_0()
-        .h(px(if outlined { 30. } else { 22. }))
+        .h(ui_px(if outlined { 30. } else { 22. }))
         .flex()
         .items_center()
         .overflow_hidden()

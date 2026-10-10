@@ -1,9 +1,10 @@
+use crate::typography::{ui_family, ui_font, ui_px, ui_size};
 use std::f32::consts::PI;
 use std::sync::Arc;
 
 use gpui::{
     Entity, Hsla, MouseButton, ParentElement, PathBuilder, SharedString, Styled, TextRun, Window,
-    canvas, div, font, point, prelude::*, px, rgb,
+    canvas, div, point, prelude::*, px, rgb,
 };
 #[cfg(test)]
 use unicode_width::UnicodeWidthStr;
@@ -489,14 +490,14 @@ fn measured_text_width(text: &str, window: &Window) -> f32 {
     let text: SharedString = text.to_owned().into();
     let run = TextRun {
         len: text.len(),
-        font: font(".SystemUIFont"),
+        font: ui_font(".SystemUIFont"),
         color: Hsla::default(),
         ..Default::default()
     };
     f32::from(
         window
             .text_system()
-            .shape_line(text, px(11.0), &[run], None)
+            .shape_line(text, ui_px(11.0), &[run], None)
             .width,
     )
 }
@@ -708,7 +709,7 @@ pub(crate) fn render_floating_status_line(
     window: &Window,
     echo: Option<gpui::AnyElement>,
 ) -> gpui::AnyElement {
-    floating_status_container(FLOATING_STATUS_HEIGHT)
+    floating_status_container(ui_size(FLOATING_STATUS_HEIGHT))
         .id(format!("pane-{}-floating-status", snapshot.pane.0))
         .child(render_status_line_content(
             snapshot, layout, entity, window, echo, true, None,
@@ -759,7 +760,7 @@ pub(crate) fn render_buffer_status_trigger(
             div()
                 .id("buffer-status-trigger")
                 .debug_selector(|| "buffer-status-trigger".to_owned())
-                .h(px(28.0))
+                .h(ui_px(28.0))
                 .w(px(buffer_status_width(count) - 8.0))
                 .px(px(6.0))
                 .flex()
@@ -767,7 +768,7 @@ pub(crate) fn render_buffer_status_trigger(
                 .justify_center()
                 .gap(px(5.0))
                 .rounded(px(5.0))
-                .text_size(px(11.0))
+                .text_size(ui_px(11.0))
                 .text_color(rgb(status_colors().foreground))
                 .cursor_pointer()
                 .hover(|s| {
@@ -786,7 +787,11 @@ pub(crate) fn render_buffer_status_trigger(
                         .size(px(16.0))
                         .flex_none(),
                 )
-                .child(div().font_family("Menlo").child(count.to_string()))
+                .child(
+                    div()
+                        .font_family(ui_family("Menlo"))
+                        .child(count.to_string()),
+                )
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
                     entity.update(cx, |w, cx| {
@@ -814,7 +819,7 @@ pub(crate) fn render_status_line_content(
         .w(px(mode_slot_width(layout.mode) - 16.0))
         .flex_none()
         .my(px(5.0))
-        .h(px(28.0))
+        .h(ui_px(28.0))
         .px(px(if layout.mode == Variant::Compact {
             7.0
         } else {
@@ -879,7 +884,7 @@ pub(crate) fn render_status_line_content(
                     })
                     .child(
                         div()
-                            .text_size(px(8.0))
+                            .text_size(ui_px(8.0))
                             .text_color(rgb(theme.foreground_dim))
                             .child("▾"),
                     ),
@@ -1015,7 +1020,7 @@ pub(crate) fn render_status_line_content(
                                 .overflow_hidden()
                                 .whitespace_nowrap()
                                 .text_ellipsis()
-                                .font_family("Menlo")
+                                .font_family(ui_family("Menlo"))
                                 .child(position_text(position, compact, snapshot.language)),
                         ),
                 ),
@@ -1038,7 +1043,7 @@ pub(crate) fn render_status_line_content(
                 .when(layout.progress == Variant::Full, |button| {
                     button.child(progress_ring(progress))
                 })
-                .child(status_value(format!("{progress}%"), None).font_family("Menlo")),
+                .child(status_value(format!("{progress}%"), None).font_family(ui_family("Menlo"))),
         );
     }
     if layout.format != Variant::Hidden
@@ -1066,14 +1071,14 @@ pub(crate) fn render_status_line_content(
                 .id(("status-command", pane_id))
                 .debug_selector(|| "status-command".into())
                 .w(px(COMMAND_WIDTH))
-                .h(px(28.))
+                .h(ui_px(28.))
                 .flex_none()
                 .flex()
                 .items_center()
                 .justify_center()
                 .rounded(px(5.))
-                .font_family("Menlo")
-                .text_size(px(17.))
+                .font_family(ui_family("Menlo"))
+                .text_size(ui_px(17.))
                 .text_color(rgb(status_colors().foreground))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(status_colors().hover_background)))
@@ -1123,7 +1128,7 @@ pub(crate) fn render_status_line_content(
                         .justify_center()
                         .bg(rgb(status_colors().badge_background))
                         .text_color(rgb(status_colors().badge_foreground))
-                        .text_size(px(8.0))
+                        .text_size(ui_px(8.0))
                         .child(layout.overflow.len().to_string()),
                 )
             })
@@ -1145,9 +1150,9 @@ pub(crate) fn render_status_line_content(
     div()
         .id(format!("pane-{pane_id}-status-line"))
         .h(px(if floating {
-            FLOATING_STATUS_HEIGHT - 2.0
+            ui_size(FLOATING_STATUS_HEIGHT) - 2.0
         } else {
-            STATUS_LINE_HEIGHT
+            ui_size(STATUS_LINE_HEIGHT)
         }))
         .w_full()
         .flex_none()
@@ -1159,8 +1164,8 @@ pub(crate) fn render_status_line_content(
         })
         .border_color(rgb(status_colors().border))
         .text_color(rgb(status_colors().foreground))
-        .font_family(".SystemUIFont")
-        .text_size(px(11.0))
+        .font_family(ui_family(".SystemUIFont"))
+        .text_size(ui_px(11.0))
         .on_mouse_down(MouseButton::Right, move |_, _, cx| {
             cx.stop_propagation();
             customize_entity.update(cx, |this, cx| {
@@ -1186,7 +1191,7 @@ fn status_button(
     let button = div()
         .id(format!("status-{pane_id}-segment-{}", segment as usize))
         .debug_selector(|| format!("status-{pane_id}-segment-{}", segment as usize))
-        .h(px(26.0))
+        .h(ui_px(26.0))
         .flex_none()
         .px(px(8.0))
         .flex()
@@ -1524,7 +1529,7 @@ fn render_document_statistics(
     for (index, (label, value)) in labels.into_iter().zip(values).enumerate() {
         content = content.child(
             div()
-                .h(px(28.0))
+                .h(ui_px(28.0))
                 .flex()
                 .items_center()
                 .when(index > 0, |row| {

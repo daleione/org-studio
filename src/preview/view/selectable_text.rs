@@ -7,6 +7,7 @@ use gpui::{
     rgba,
 };
 
+use super::inline_text::{ReadingText, ReadingTextLayout};
 use crate::preview::ReadingPreviewPanel;
 
 type ClickListener = Box<dyn Fn(usize, &mut Window, &mut App)>;
@@ -51,7 +52,7 @@ impl Element for ReadingRowScope {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        __inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (LayoutId, Self::RequestLayoutState) {
@@ -66,7 +67,7 @@ impl Element for ReadingRowScope {
     fn prepaint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        __inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _state: &mut Self::RequestLayoutState,
         window: &mut Window,
@@ -78,7 +79,7 @@ impl Element for ReadingRowScope {
     fn paint(
         &mut self,
         _id: Option<&GlobalElementId>,
-        _inspector_id: Option<&InspectorElementId>,
+        __inspector_id: Option<&InspectorElementId>,
         _bounds: Bounds<Pixels>,
         _request_state: &mut Self::RequestLayoutState,
         _prepaint_state: &mut Self::PrepaintState,
@@ -102,7 +103,7 @@ impl IntoElement for ReadingRowScope {
 /// recycling and can span multiple rendered rows.
 pub(in crate::preview) struct SelectableReadingText {
     id: ElementId,
-    text: StyledText,
+    text: ReadingText,
     panel: gpui::Entity<ReadingPreviewPanel>,
     row: usize,
     text_offset: usize,
@@ -126,7 +127,7 @@ impl SelectableReadingText {
     ) -> Self {
         Self {
             id: id.into(),
-            text,
+            text: ReadingText::uniform(text),
             panel,
             row,
             text_offset: 0,
@@ -146,6 +147,18 @@ impl SelectableReadingText {
         ranges: Vec<(Range<usize>, bool)>,
     ) -> Self {
         self.search_ranges = ranges;
+        self
+    }
+
+    pub(in crate::preview) fn with_inline_fonts(
+        mut self,
+        runs: &crate::preview::display_map::DisplayRuns,
+        style: crate::preview::PreviewStyle,
+        zoom: f32,
+    ) -> Self {
+        if crate::preview::inline_layout::needs_sized_inline(&runs.inline_spans, style) {
+            self.text = ReadingText::sized(runs, style, zoom);
+        }
         self
     }
 
@@ -209,11 +222,11 @@ impl Element for SelectableReadingText {
     fn request_layout(
         &mut self,
         _id: Option<&GlobalElementId>,
-        inspector_id: Option<&InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
-        let (text_layout_id, ()) = self.text.request_layout(None, inspector_id, window, cx);
+        let text_layout_id = self.text.element.request_layout(window, cx);
         let mut style = Style::default();
         style.size.width = relative(1.0).into();
         let text_style = window.text_style();
@@ -233,15 +246,14 @@ impl Element for SelectableReadingText {
     fn prepaint(
         &mut self,
         _global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         state: &mut Self::RequestLayoutState,
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
         let text_bounds = window.layout_bounds(state.text_layout_id);
-        self.text
-            .prepaint(None, inspector_id, text_bounds, &mut (), window, cx);
+        self.text.element.prepaint(window, cx);
         let hit_bounds = self
             .row_bounds
             .as_ref()
@@ -256,7 +268,7 @@ impl Element for SelectableReadingText {
     fn paint(
         &mut self,
         _global_id: Option<&GlobalElementId>,
-        inspector_id: Option<&InspectorElementId>,
+        _inspector_id: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
         _request_state: &mut Self::RequestLayoutState,
         state: &mut Self::PrepaintState,
@@ -364,15 +376,7 @@ impl Element for SelectableReadingText {
             }
         });
 
-        self.text.paint(
-            None,
-            inspector_id,
-            text_bounds,
-            &mut (),
-            &mut (),
-            window,
-            cx,
-        );
+        self.text.element.paint(window, cx);
         for (range, current) in &self.search_ranges {
             paint_search(&layout, text_bounds, range.clone(), false, window, *current);
         }
@@ -403,14 +407,14 @@ impl IntoElement for SelectableReadingText {
     }
 }
 
-fn nearest_index(layout: &gpui::TextLayout, position: gpui::Point<Pixels>) -> usize {
+fn nearest_index(layout: &ReadingTextLayout, position: gpui::Point<Pixels>) -> usize {
     match layout.index_for_position(position) {
         Ok(index) | Err(index) => index.min(layout.len()),
     }
 }
 
 fn nearest_document_index(
-    layout: &gpui::TextLayout,
+    layout: &ReadingTextLayout,
     position: gpui::Point<Pixels>,
     text_offset: usize,
     row_text_len: Option<usize>,
@@ -426,7 +430,7 @@ fn nearest_document_index(
 }
 
 fn paint_selection(
-    layout: &gpui::TextLayout,
+    layout: &ReadingTextLayout,
     bounds: Bounds<Pixels>,
     range: Range<usize>,
     include_newline: bool,
@@ -488,7 +492,7 @@ fn paint_selection(
 }
 
 fn paint_search(
-    layout: &gpui::TextLayout,
+    layout: &ReadingTextLayout,
     bounds: Bounds<Pixels>,
     range: Range<usize>,
     include_newline: bool,

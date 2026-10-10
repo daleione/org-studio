@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
@@ -40,7 +41,7 @@ pub(super) fn file_manager_breadcrumb(
                     .mx_1()
                     .flex_none()
                     .text_color(rgb(current_theme().foreground_dim))
-                    .text_size(px(11.0))
+                    .text_size(ui_px(11.0))
                     .child("›")
                     .into_any_element()
             });
@@ -68,7 +69,7 @@ fn render_breadcrumb_item(
             .rounded_sm()
             .cursor_pointer()
             .text_color(rgb(current_theme().foreground_dim))
-            .text_size(px(12.0))
+            .text_size(ui_px(12.0))
             .hover(|style| style.bg(rgb(current_theme().background_alt)))
             .on_click(move |_, _, cx| {
                 entity.update(cx, |this, cx| {
@@ -93,7 +94,7 @@ fn render_breadcrumb_item(
             .whitespace_nowrap()
             .text_ellipsis()
             .cursor_pointer()
-            .text_size(px(12.5))
+            .text_size(ui_px(12.5))
             .font_weight(if current {
                 gpui::FontWeight::SEMIBOLD
             } else {

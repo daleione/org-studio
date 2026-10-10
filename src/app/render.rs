@@ -1,3 +1,4 @@
+use crate::typography::{ui_font, ui_px};
 use std::time::Instant;
 
 use gpui::{
@@ -249,7 +250,7 @@ fn document_titlebar(
                         .debug_selector(|| "document-titlebar-filename".to_owned())
                         .min_w_0()
                         .truncate()
-                        .text_size(px(13.0))
+                        .text_size(ui_px(13.0))
                         .text_color(rgb(theme.foreground))
                         .child(title),
                 ),
@@ -432,8 +433,8 @@ impl Render for WorkspaceWindow {
             .size_full()
             .bg(rgb(current_theme().background))
             .text_color(rgb(current_theme().foreground))
-            .font_family("Menlo")
-            .text_size(px(14.0))
+            .font(ui_font("Menlo"))
+            .text_size(ui_px(14.0))
             .when(content_font_size_actions_enabled, |view| {
                 view.key_context(DOCUMENT_WORKSPACE_KEY_CONTEXT)
             })

@@ -1,4 +1,5 @@
 //! Reusable month grid. Hosts receive dates/ranges; no Org or document knowledge.
+use crate::typography::ui_px;
 use gpui::{
     App, IntoElement, MouseButton, ParentElement, Styled, Window, div, prelude::*, px, rgb,
 };
@@ -102,8 +103,8 @@ impl Calendar {
                 div()
                     .id(id)
                     .debug_selector(move || id.into())
-                    .w(px(30.))
-                    .h(px(28.))
+                    .w(ui_px(30.))
+                    .h(ui_px(28.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -120,7 +121,7 @@ impl Calendar {
         }
         // Explicit seven-cell rows avoid percentage rounding wrapping Sunday onto
         // the next line. Headers and dates share identical flex geometry.
-        let mut weekdays = div().flex().w_full().h(px(28.));
+        let mut weekdays = div().flex().w_full().h(ui_px(28.));
         for (column, name) in [
             "calendar.weekday.0",
             "calendar.weekday.1",
@@ -143,14 +144,14 @@ impl Calendar {
                     .items_center()
                     .justify_center()
                     .text_color(rgb(theme.foreground_muted))
-                    .text_size(px(11.))
+                    .text_size(ui_px(11.))
                     .child(self.language.text(name)),
             );
         }
         let mut grid = div().w_full().flex().flex_col().child(weekdays);
         let range_mode = self.range.is_some();
         for week in month_days(self.month).chunks(7) {
-            let mut row = div().flex().w_full().h(px(34.)).flex_none();
+            let mut row = div().flex().w_full().h(ui_px(34.)).flex_none();
             for (column, &date) in week.iter().enumerate() {
                 if self.hide_outside_month && date.month() != self.month.month() {
                     row = row.child(div().flex_1().min_w_0().h_full());

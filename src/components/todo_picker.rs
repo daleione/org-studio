@@ -2,6 +2,7 @@
 use super::selection_style::{
     HOVER_BACKGROUND, QUICK_BAR_HEIGHT, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
 };
+use crate::typography::{ui_family, ui_font, ui_px, ui_size};
 use crate::{
     i18n::Language,
     org_semantic::{TodoState, TodoStateKind},
@@ -95,7 +96,7 @@ impl TodoPicker {
     }
     fn button_width(&self, state: &TodoState, window: &Window) -> f32 {
         let text: gpui::SharedString = state.keyword.to_string().into();
-        let mut font = gpui::font("Menlo");
+        let mut font = ui_font("Menlo");
         font.weight = gpui::FontWeight::MEDIUM;
         let run = gpui::TextRun {
             len: text.len(),
@@ -105,7 +106,7 @@ impl TodoPicker {
         let width = f32::from(
             window
                 .text_system()
-                .shape_line(text, px(12.), &[run], None)
+                .shape_line(text, ui_px(12.), &[run], None)
                 .width,
         );
         (width
@@ -240,7 +241,7 @@ impl Render for TodoPicker {
                         .id(("todo-option", index))
                         .debug_selector(move || format!("todo-option-{debug_keyword}"))
                         .w(px(self.button_width(state, window)))
-                        .h(px(26.))
+                        .h(ui_px(26.))
                         .flex_none()
                         .px(px(8.))
                         .rounded(px(6.))
@@ -287,7 +288,7 @@ impl Render for TodoPicker {
                                 .min_w_0()
                                 .overflow_hidden()
                                 .text_ellipsis()
-                                .font_family("Menlo")
+                                .font_family(ui_family("Menlo"))
                                 .font_weight(gpui::FontWeight::MEDIUM)
                                 .child(keyword),
                         )
@@ -295,7 +296,7 @@ impl Render for TodoPicker {
                             s.child(
                                 div()
                                     .flex_none()
-                                    .text_size(px(10.))
+                                    .text_size(ui_px(10.))
                                     .opacity(0.65)
                                     .child(key.to_string()),
                             )
@@ -306,7 +307,7 @@ impl Render for TodoPicker {
         let bar = div()
             .id("todo-bar")
             .debug_selector(|| "todo-bar".into())
-            .h(px(QUICK_BAR_HEIGHT))
+            .h(ui_px(QUICK_BAR_HEIGHT))
             .w_full()
             .p(px(4.))
             .border_1()
@@ -322,8 +323,8 @@ impl Render for TodoPicker {
                 div()
                     .id("todo-more")
                     .debug_selector(|| "todo-more".into())
-                    .w(px(28.))
-                    .h(px(26.))
+                    .w(ui_px(28.))
+                    .h(ui_px(26.))
                     .flex_none()
                     .rounded(px(6.))
                     .flex()
@@ -350,7 +351,7 @@ impl Render for TodoPicker {
                 .id("todo-more-menu")
                 .debug_selector(|| "todo-more-menu".into())
                 .w(px(self.width.min(190.)))
-                .h(px(MORE_HEIGHT - 4.))
+                .h(px(ui_size(MORE_HEIGHT) - 4.))
                 .p(px(4.))
                 .rounded(px(8.))
                 .border_1()
@@ -370,7 +371,7 @@ impl Render for TodoPicker {
                     div()
                         .id(id)
                         .debug_selector(move || id.into())
-                        .h(px(32.))
+                        .h(ui_px(32.))
                         .px(px(8.))
                         .rounded(px(5.))
                         .flex()
@@ -401,10 +402,10 @@ impl Render for TodoPicker {
             .key_context("TodoPicker")
             .track_focus(&self.focus)
             .w(px(self.width))
-            .font_family(".SystemUIFont")
+            .font_family(ui_family(".SystemUIFont"))
             .font_weight(gpui::FontWeight::NORMAL)
-            .text_size(px(12.))
-            .line_height(px(18.))
+            .text_size(ui_px(12.))
+            .line_height(ui_px(18.))
             .text_color(rgb(theme.foreground))
             .cursor_default()
             .flex()

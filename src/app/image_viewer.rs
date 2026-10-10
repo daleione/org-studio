@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::{
     cell::RefCell,
     path::{Path, PathBuf},
@@ -296,7 +297,7 @@ pub(super) fn render_image_viewer(
                     div()
                         .id("image-viewer-zoom-reset")
                         .debug_selector(|| "image-viewer-zoom-reset".to_owned())
-                        .h(px(28.0))
+                        .h(ui_px(28.0))
                         .min_w(px(52.0))
                         .flex()
                         .items_center()
@@ -348,7 +349,7 @@ pub(super) fn render_image_viewer(
                                     .debug_selector(|| "image-viewer-filename".to_owned())
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(px(13.0))
+                                    .text_size(ui_px(13.0))
                                     .text_color(rgb(theme.foreground))
                                     .child(filename.clone()),
                             ),
@@ -363,7 +364,7 @@ pub(super) fn render_image_viewer(
                             .min_w_0()
                             .ml(px(8.0))
                             .truncate()
-                            .text_size(px(13.0))
+                            .text_size(ui_px(13.0))
                             .text_color(rgb(theme.foreground))
                             .child(filename),
                     )

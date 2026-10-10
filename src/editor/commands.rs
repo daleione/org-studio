@@ -2122,7 +2122,7 @@ impl Render for SemanticEditor {
             .size_full()
             .overflow_hidden()
             .bg(rgb(current_theme().background))
-            .font_family(super::EDITOR_FONT_FAMILY)
+            .font(crate::typography::editor_font())
             .font_weight(gpui::FontWeight::NORMAL)
             .text_size(px(self.font_size_px()))
             .line_height(px(self.base_line_height()))

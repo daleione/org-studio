@@ -94,6 +94,11 @@ pub(crate) struct PreviewTypography {
     pub(crate) code_fallbacks: &'static [&'static str],
     pub(crate) body_size: f32,
     pub(crate) body_line_height: f32,
+    pub(crate) body_scale: f32,
+    pub(crate) code_size: f32,
+    pub(crate) code_line_height: f32,
+    pub(crate) code_min_height: f32,
+    pub(crate) inline_code_size: Option<f32>,
     pub(crate) heading_sizes: [f32; 4],
     pub(crate) heading_line_heights: [f32; 4],
 }
@@ -149,6 +154,23 @@ pub(crate) struct PreviewStyle {
     pub(crate) variants: PreviewComponentVariants,
 }
 
+impl PreviewTypography {
+    pub(crate) fn inline_code_font_size(self, font_size: f32, zoom: f32) -> f32 {
+        self.inline_code_size.map_or(font_size, |size| size * zoom)
+    }
+
+    pub(crate) fn inline_scale(self, font_size: f32, zoom: f32) -> f32 {
+        self.inline_code_font_size(font_size, zoom) / font_size
+    }
+
+    pub(crate) fn relative_size(self, offset: f32, minimum: f32) -> f32 {
+        (self.body_size / self.body_scale - offset).max(minimum) * self.body_scale
+    }
+    pub(crate) fn relative_line_height(self, offset: f32, minimum: f32) -> f32 {
+        (self.body_line_height / self.body_scale - offset).max(minimum) * self.body_scale
+    }
+}
+
 impl PreviewStyle {
     pub fn name(self, language: Language) -> &'static str {
         match language {
@@ -172,6 +194,15 @@ impl PreviewStyle {
         self.typography.code_fallbacks.hash(&mut hasher);
         self.typography.body_size.to_bits().hash(&mut hasher);
         self.typography.body_line_height.to_bits().hash(&mut hasher);
+        self.typography.body_scale.to_bits().hash(&mut hasher);
+        self.typography.code_size.to_bits().hash(&mut hasher);
+        self.typography.code_line_height.to_bits().hash(&mut hasher);
+        self.typography.code_min_height.to_bits().hash(&mut hasher);
+        self.typography
+            .inline_code_size
+            .map(f32::to_bits)
+            .hash(&mut hasher);
+        crate::typography::fonts().fallbacks.hash(&mut hasher);
         for value in self.typography.heading_sizes {
             value.to_bits().hash(&mut hasher);
         }
@@ -236,8 +267,8 @@ impl PreviewStyle {
             RowStyleKind::Keyword | RowStyleKind::Metadata => RowLayout {
                 min_height: self.typography.body_line_height,
                 ..RowLayout::text(
-                    (self.typography.body_size - 1.0).max(11.0),
-                    (self.typography.body_line_height - 2.0).max(16.0),
+                    self.typography.relative_size(1.0, 11.0),
+                    self.typography.relative_line_height(2.0, 16.0),
                 )
             },
             RowStyleKind::Image => RowLayout {
@@ -250,11 +281,8 @@ impl PreviewStyle {
                 padding_right: 16.0,
                 padding_top: 3.0,
                 padding_bottom: 3.0,
-                min_height: (self.typography.body_line_height - 3.0).max(18.0),
-                ..RowLayout::text(
-                    (self.typography.body_size - 2.0).max(12.0),
-                    (self.typography.body_line_height - 5.0).max(18.0),
-                )
+                min_height: self.typography.code_min_height,
+                ..RowLayout::text(self.typography.code_size, self.typography.code_line_height)
             },
             RowStyleKind::RawCode | RowStyleKind::Special => RowLayout {
                 padding_left: 16.0,
@@ -278,7 +306,10 @@ impl PreviewStyle {
                 },
                 ..body()
             },
-            RowStyleKind::Verse => RowLayout::text(13.0, 22.0),
+            RowStyleKind::Verse => RowLayout::text(
+                13.0 * self.typography.body_scale,
+                22.0 * self.typography.body_scale,
+            ),
             RowStyleKind::Center => body(),
             RowStyleKind::Drawer => RowLayout {
                 padding_left: 12.0,
@@ -301,8 +332,8 @@ impl PreviewStyle {
             RowStyleKind::Table => RowLayout {
                 min_height: self.typography.body_line_height,
                 ..RowLayout::text(
-                    (self.typography.body_size - 1.0).max(12.0),
-                    (self.typography.body_line_height - 3.0).max(18.0),
+                    self.typography.relative_size(1.0, 12.0),
+                    self.typography.relative_line_height(3.0, 18.0),
                 )
             },
             RowStyleKind::Caption => RowLayout {
@@ -310,8 +341,8 @@ impl PreviewStyle {
                 padding_bottom: 8.0,
                 min_height: 18.0,
                 ..RowLayout::text(
-                    (self.typography.body_size - 3.0).max(11.0),
-                    (self.typography.body_line_height - 7.0).max(17.0),
+                    self.typography.relative_size(3.0, 11.0),
+                    self.typography.relative_line_height(7.0, 17.0),
                 )
             },
         }
@@ -365,6 +396,11 @@ const BASE_STYLE: PreviewStyle = PreviewStyle {
         code_fallbacks: &[".SF NS Mono", "PingFang SC", "Apple Color Emoji"],
         body_size: 14.0,
         body_line_height: 22.0,
+        body_scale: 1.0,
+        code_size: 12.0,
+        code_line_height: 18.0,
+        code_min_height: 19.0,
+        inline_code_size: None,
         heading_sizes: [22.0, 18.0, 15.0, 14.0],
         heading_line_heights: [24.0; 4],
     },
@@ -436,6 +472,11 @@ const WARM_CLAY_STYLE: PreviewStyle = PreviewStyle {
         code_fallbacks: &[".SF NS Mono", "Menlo", "PingFang SC", "Apple Color Emoji"],
         body_size: 16.0,
         body_line_height: 27.52,
+        body_scale: 1.0,
+        code_size: 14.0,
+        code_line_height: 22.52,
+        code_min_height: 24.52,
+        inline_code_size: None,
         heading_sizes: [24.0, 20.0, 17.0, 16.0],
         heading_line_heights: [32.0, 28.0, 26.0, 24.0],
     },
@@ -544,19 +585,117 @@ const WARM_CLAY_STYLE_DARK: PreviewStyle = PreviewStyle {
     ..WARM_CLAY_STYLE
 };
 
+impl PreviewStyle {
+    fn with_font_settings(
+        mut self,
+        settings: &crate::typography::FontSettings,
+        body_family: Option<&'static str>,
+        code_family: Option<&'static str>,
+    ) -> Self {
+        let body_scale = settings
+            .reading_font_size
+            .map_or(1.0, |size| size as f32 / self.typography.body_size);
+        if let Some(family) = body_family {
+            self.typography.body_family = family;
+        }
+        if let Some(family) = code_family {
+            self.typography.code_family = family;
+        }
+        self.typography.body_size *= body_scale;
+        self.typography.body_line_height *= body_scale;
+        self.typography.body_scale *= body_scale;
+        for size in &mut self.typography.heading_sizes {
+            *size *= body_scale;
+        }
+        for height in &mut self.typography.heading_line_heights {
+            *height *= body_scale;
+        }
+        self.spacing.paragraph_min_height *= body_scale;
+        if let Some(size) = settings.code_font_size {
+            let code_scale = size as f32 / self.typography.code_size;
+            self.typography.code_size = size as f32;
+            self.typography.code_line_height *= code_scale;
+            self.typography.code_min_height *= code_scale;
+            self.typography.inline_code_size = Some(size as f32);
+        }
+        self
+    }
+}
+
 pub(crate) fn preview_style(id: PreviewStyleId) -> &'static PreviewStyle {
+    static STYLES: std::sync::OnceLock<[PreviewStyle; 4]> = std::sync::OnceLock::new();
+    let styles = STYLES.get_or_init(|| {
+        let fonts = crate::typography::fonts();
+        [
+            BASE_STYLE,
+            BASE_STYLE_DARK,
+            WARM_CLAY_STYLE,
+            WARM_CLAY_STYLE_DARK,
+        ]
+        .map(|style| {
+            style.with_font_settings(
+                &fonts.settings,
+                fonts.reading_family.as_deref(),
+                fonts.code_family.as_deref(),
+            )
+        })
+    });
     let dark = crate::theme::effective_theme_is_dark();
     match (id, dark) {
-        (PreviewStyleId::Base, false) => &BASE_STYLE,
-        (PreviewStyleId::Base, true) => &BASE_STYLE_DARK,
-        (PreviewStyleId::WarmClay, false) => &WARM_CLAY_STYLE,
-        (PreviewStyleId::WarmClay, true) => &WARM_CLAY_STYLE_DARK,
+        (PreviewStyleId::Base, false) => &styles[0],
+        (PreviewStyleId::Base, true) => &styles[1],
+        (PreviewStyleId::WarmClay, false) => &styles[2],
+        (PreviewStyleId::WarmClay, true) => &styles[3],
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn configured_body_and_code_sizes_are_independent_and_headings_keep_their_ratio() {
+        let settings = crate::typography::FontSettings {
+            reading_font_size: Some(32),
+            code_font_size: Some(14),
+            ..Default::default()
+        };
+        let warm = WARM_CLAY_STYLE.with_font_settings(&settings, Some("Helvetica"), Some("Menlo"));
+        assert_eq!(warm.typography.body_family, "Helvetica");
+        assert_eq!(warm.typography.code_family, "Menlo");
+        assert_eq!(warm.typography.body_size, 32.0);
+        assert_eq!(warm.typography.heading_sizes, [48.0, 40.0, 34.0, 32.0]);
+        assert_eq!(warm.row_layout(RowStyleKind::Code).font_size, 14.0);
+        assert_eq!(warm.typography.inline_code_size, Some(14.0));
+        assert_eq!(warm.typography.inline_scale(48.0, 1.0), 14.0 / 48.0);
+        assert_eq!(warm.typography.inline_scale(26.0, 2.0), 28.0 / 26.0);
+        assert_ne!(warm.layout_key(), WARM_CLAY_STYLE.layout_key());
+        assert_eq!(warm.paint_key(), WARM_CLAY_STYLE.paint_key());
+        let auto_code = BASE_STYLE.with_font_settings(
+            &crate::typography::FontSettings {
+                reading_font_size: Some(32),
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert_eq!(
+            auto_code.typography.code_size,
+            BASE_STYLE.typography.code_size
+        );
+        assert_eq!(auto_code.typography.inline_code_size, None);
+        let small = BASE_STYLE.with_font_settings(
+            &crate::typography::FontSettings {
+                reading_font_size: Some(5),
+                ..Default::default()
+            },
+            None,
+            None,
+        );
+        assert!(
+            (small.row_layout(RowStyleKind::Table).font_size - 13.0 / 14.0 * 5.0).abs() < 0.001
+        );
+    }
 
     #[test]
     fn style_ids_round_trip_and_unknown_values_do_not_alias() {

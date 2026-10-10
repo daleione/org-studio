@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use crate::{agenda::AgendaResultSnapshot, app::WorkspaceWindow};
 use gpui::{
     AnyElement, Entity, InteractiveElement, ListState, MouseButton, div, list, prelude::*, px, rgb,
@@ -116,7 +117,7 @@ pub(crate) fn agenda_list(
                             );
                         });
                     })
-                    .h(gpui::px(super::super::style::DAY_HEADER_HEIGHT))
+                    .h(ui_px(super::super::style::DAY_HEADER_HEIGHT))
                     .px_4()
                     .flex()
                     .items_center()
@@ -140,7 +141,7 @@ pub(crate) fn agenda_list(
                             )))
                             .text_color(rgb(theme.foreground_dim)),
                     )
-                    .child(div().text_size(px(13.)).child(day))
+                    .child(div().text_size(ui_px(13.)).child(day))
                     .child(
                         div()
                             .size(px(3.))
@@ -149,7 +150,7 @@ pub(crate) fn agenda_list(
                     )
                     .child(
                         div()
-                            .text_size(px(12.))
+                            .text_size(ui_px(12.))
                             .font_weight(gpui::FontWeight::NORMAL)
                             .text_color(rgb(theme.foreground_dim))
                             .child(date),
@@ -158,14 +159,14 @@ pub(crate) fn agenda_list(
                         header.child(
                             div()
                                 .ml_1()
-                                .h(px(22.))
+                                .h(ui_px(22.))
                                 .px_2()
                                 .flex()
                                 .items_center()
                                 .rounded_full()
                                 .bg(rgb(theme.accent))
                                 .text_color(rgb(0xffffff))
-                                .text_size(px(10.))
+                                .text_size(ui_px(10.))
                                 .child(marker),
                         )
                     }),

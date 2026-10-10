@@ -1,4 +1,5 @@
 use crate::app::WorkspaceWindow;
+use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{
     CursorStyle, Entity, MouseButton, ParentElement, Styled, Window, div, prelude::*, px, rgb,
 };
@@ -79,22 +80,28 @@ impl super::AgendaHost {
             .collect::<Vec<_>>();
         let smart_views_height = stacked_height(
             6,
-            super::style::SIDEBAR_ITEM_HEIGHT,
+            ui_size(super::style::SIDEBAR_ITEM_HEIGHT),
             super::style::SIDEBAR_ITEM_GAP,
         );
         let saved_views_height = if saved_view_names.is_empty() {
-            super::style::SIDEBAR_SAVED_VIEW_HEIGHT
+            ui_size(super::style::SIDEBAR_SAVED_VIEW_HEIGHT)
         } else {
             stacked_height(
                 saved_view_names.len(),
-                super::style::SIDEBAR_SAVED_VIEW_HEIGHT,
+                ui_size(super::style::SIDEBAR_SAVED_VIEW_HEIGHT),
                 super::style::SIDEBAR_ITEM_GAP,
             )
         };
-        let tags_height = stacked_height(tag_counts.len(), super::style::SIDEBAR_TAG_HEIGHT, 0.);
-        let sources_height =
-            stacked_height(source_counts.len(), super::style::SIDEBAR_SOURCE_HEIGHT, 0.)
-                + super::style::SIDEBAR_SOURCE_BOTTOM_PADDING;
+        let tags_height = stacked_height(
+            tag_counts.len(),
+            ui_size(super::style::SIDEBAR_TAG_HEIGHT),
+            0.,
+        );
+        let sources_height = stacked_height(
+            source_counts.len(),
+            ui_size(super::style::SIDEBAR_SOURCE_HEIGHT),
+            0.,
+        ) + super::style::SIDEBAR_SOURCE_BOTTOM_PADDING;
         let sidebar_content = div()
             .w_full()
             .flex_none()
@@ -285,7 +292,7 @@ impl super::AgendaHost {
                             div()
                                 .px_3()
                                 .py_2()
-                                .text_size(px(12.))
+                                .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(language.text("agenda.no_saved_views")),
                         )
@@ -473,9 +480,9 @@ impl super::AgendaHost {
         let content_gutter = TaskColumns::GUTTER;
         let columns = TaskColumns::row()
             .mx(px(content_gutter + 1.))
-            .h(px(super::style::COLUMN_HEADER_HEIGHT))
+            .h(ui_px(super::style::COLUMN_HEADER_HEIGHT))
             .text_color(rgb(super::style::MUTED()))
-            .text_size(px(11.))
+            .text_size(ui_px(11.))
             .child(TaskColumns::cell(TaskColumns::CHECK))
             .when(task_columns.source, |h| {
                 h.child(
@@ -520,7 +527,7 @@ impl super::AgendaHost {
             .size_full()
             .relative()
             .flex()
-            .font_family("SF Pro Text")
+            .font_family(ui_family("SF Pro Text"))
             .text_color(rgb(super::style::INK()))
             .on_scroll_wheel(move |event, _, cx| {
                 if !event.delta.precise() {
@@ -741,7 +748,7 @@ impl super::AgendaHost {
                         .bg(rgb(theme.hover))
                         .text_color(rgb(theme.warning))
                         .shadow_md()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .child(language.text("agenda.recovery"))
                         .child(super::component::text_action_button(
                             workspace.clone(),

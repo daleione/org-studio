@@ -279,7 +279,19 @@ fn plan_frame(
 ) -> FramePlan {
     let digits = snapshot.len_lines().max(1).ilog10() + 1;
     let editor_font_size = host.read(cx).font_size_px();
-    let gutter_width = digits as f32 * editor_font_size * 0.6 + GUTTER_PADDING * 2.0;
+    let font_id = cx
+        .text_system()
+        .resolve_font(&crate::typography::editor_font());
+    let digit_width = ('0'..='9')
+        .filter_map(|digit| {
+            cx.text_system()
+                .advance(font_id, px(editor_font_size), digit)
+                .ok()
+        })
+        .map(|advance| f32::from(advance.width))
+        .fold(0.0_f32, f32::max)
+        .max(1.0);
+    let gutter_width = digits as f32 * digit_width + GUTTER_PADDING * 2.0;
     let (minimap_full_width, minimap_visible, minimap_reveal) = {
         let editor = host.read(cx);
         (

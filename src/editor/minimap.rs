@@ -43,7 +43,7 @@ fn perf_enabled() -> bool {
 }
 
 pub(crate) fn prewarm_text_rasterizer() {
-    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Style, Weight, Wrap};
+    use cosmic_text::{Attrs, Buffer, Color, Metrics, Shaping, Style, Weight, Wrap};
     static PREWARMED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
     PREWARMED.get_or_init(|| {
         let started = Instant::now();
@@ -64,7 +64,9 @@ pub(crate) fn prewarm_text_rasterizer() {
             (Weight::SEMIBOLD, Style::Italic),
         ] {
             let attrs = Attrs::new()
-                .family(Family::Name(super::EDITOR_FONT_FAMILY))
+                .family(crate::typography::cosmic_family(
+                    &crate::typography::fonts().editor_family,
+                ))
                 .weight(weight)
                 .style(style);
             buffer.set_text(
@@ -393,7 +395,7 @@ pub(super) fn rasterize_text_rows(
     epoch: &AtomicU64,
     expected_epoch: u64,
 ) -> Option<RasterizedRows> {
-    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
+    use cosmic_text::{Attrs, Buffer, Color, Metrics, Shaping, Wrap};
 
     let scale_factor = scale_factor.max(1.0);
     let physical_line_height = line_height * scale_factor;
@@ -414,7 +416,9 @@ pub(super) fn rasterize_text_rows(
         return None;
     }
     let (font_system, swash_cache) = &mut *rasterizer;
-    let attrs = Attrs::new().family(Family::Name(super::EDITOR_FONT_FAMILY));
+    let attrs = Attrs::new().family(crate::typography::cosmic_family(
+        &crate::typography::fonts().editor_family,
+    ));
     let mut buffer = Buffer::new(
         font_system,
         Metrics::new(density.font_px() * scale_factor, physical_line_height),

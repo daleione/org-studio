@@ -1,6 +1,7 @@
 use super::FLOATING_STATUS_HEIGHT;
 use crate::app::{PaneSide, WorkspaceWindow};
 use crate::motion::{Easing, MotionSpec, Tween};
+use crate::typography::ui_size;
 use gpui::{Context, Window};
 use std::time::{Duration, Instant};
 #[cfg(test)]
@@ -102,7 +103,7 @@ impl ShellShape {
     pub fn status(width: f32) -> Self {
         Self {
             width,
-            height: FLOATING_STATUS_HEIGHT,
+            height: ui_size(FLOATING_STATUS_HEIGHT),
             expansion_height: 0.,
             content_opacity: 0.,
         }

@@ -3,6 +3,7 @@ use crate::app::status_line::{
     self,
     shell::{ShellKind, ShellRequest, ShellShape},
 };
+use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
 
 const INPUT_HEIGHT: f32 = 46.;
@@ -14,9 +15,10 @@ const MAX_COMMAND_WIDTH: f32 = 600.;
 impl WorkspaceWindow {
     pub(crate) fn command_shell_request(&mut self, window: &Window) -> Option<ShellRequest> {
         let s = self.command_line.session.as_mut()?;
-        s.visible_limit = ((f32::from(window.viewport_size().height) - 252.) / CANDIDATE_ROW_HEIGHT)
-            .floor()
-            .clamp(1., 6.) as usize;
+        s.visible_limit = ((f32::from(window.viewport_size().height) - 252.)
+            / ui_size(CANDIDATE_ROW_HEIGHT))
+        .floor()
+        .clamp(1., 6.) as usize;
         let pane = s.pane;
         let returning = s.returning;
         let expanded = matches!(s.phase, Phase::Input);
@@ -25,13 +27,13 @@ impl WorkspaceWindow {
             - 2. * status_line::FLOATING_STATUS_INSET)
             .max(1.);
         let height = if expanded {
-            INPUT_HEIGHT
-                + DETAIL_HEIGHT
-                + rows as f32 * CANDIDATE_ROW_HEIGHT
+            ui_size(INPUT_HEIGHT)
+                + ui_size(DETAIL_HEIGHT)
+                + rows as f32 * ui_size(CANDIDATE_ROW_HEIGHT)
                 + 2. * LIST_INSET
                 + 2. * SHELL_BORDER
         } else {
-            status_line::FLOATING_STATUS_HEIGHT
+            ui_size(status_line::FLOATING_STATUS_HEIGHT)
         };
         Some(ShellRequest {
             kind: ShellKind::Command,
@@ -44,7 +46,7 @@ impl WorkspaceWindow {
                 ShellShape {
                     width: available.min(MAX_COMMAND_WIDTH),
                     height,
-                    expansion_height: height - status_line::FLOATING_STATUS_HEIGHT,
+                    expansion_height: height - ui_size(status_line::FLOATING_STATUS_HEIGHT),
                     content_opacity: 1.,
                 }
             },
@@ -89,7 +91,7 @@ impl WorkspaceWindow {
                 .gap(px(10.))
                 .flex()
                 .items_center()
-                .text_size(px(12.))
+                .text_size(ui_px(12.))
                 .text_color(rgb(theme.foreground_dim))
                 .child(div().text_color(rgb(theme.accent)).child("◌"))
                 .child(div().flex_1().child(if started.elapsed() >= RUNNING_DELAY {
@@ -112,7 +114,7 @@ impl WorkspaceWindow {
                     .gap(px(8.))
                     .flex()
                     .items_center()
-                    .text_size(px(12.))
+                    .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground))
                     .child(div().text_color(rgb(theme.success)).child("✓"))
                     .child(
@@ -128,7 +130,7 @@ impl WorkspaceWindow {
                                 .id("command-line-undo")
                                 .debug_selector(|| "command-line-undo".into())
                                 .px(px(7.))
-                                .h(px(28.))
+                                .h(ui_px(28.))
                                 .flex()
                                 .items_center()
                                 .text_color(rgb(theme.accent))
@@ -151,7 +153,7 @@ impl WorkspaceWindow {
                 .occlude()
                 .on_scroll_wheel(move |event, _, cx| {
                     cx.stop_propagation();
-                    let pixels = -f32::from(event.delta.pixel_delta(px(CANDIDATE_ROW_HEIGHT)).y);
+                    let pixels = -f32::from(event.delta.pixel_delta(ui_px(CANDIDATE_ROW_HEIGHT)).y);
                     scroll.update(cx, |w, cx| {
                         if let Some(s) = w.command_line.session.as_mut()
                             && !s.returning
@@ -187,7 +189,9 @@ impl WorkspaceWindow {
                             .bottom_0()
                             .left_0()
                             .right_0()
-                            .h(px(status_line::FLOATING_STATUS_HEIGHT - 2. * SHELL_BORDER))
+                            .h(px(
+                                ui_size(status_line::FLOATING_STATUS_HEIGHT) - 2. * SHELL_BORDER
+                            ))
                             .rounded(px(10. - SHELL_BORDER))
                             .overflow_hidden()
                             .opacity(1. - shape.content_opacity)
@@ -228,7 +232,7 @@ impl WorkspaceWindow {
             .child(
                 div()
                     .absolute()
-                    .bottom(px(INPUT_HEIGHT + DETAIL_HEIGHT))
+                    .bottom(px(ui_size(INPUT_HEIGHT) + ui_size(DETAIL_HEIGHT)))
                     .left(px(LIST_INSET))
                     .right(px(LIST_INSET))
                     .py(px(LIST_INSET))
@@ -238,11 +242,11 @@ impl WorkspaceWindow {
                     .when(s.candidates.is_empty(), |view| {
                         view.child(
                             div()
-                                .h(px(CANDIDATE_ROW_HEIGHT))
+                                .h(ui_px(CANDIDATE_ROW_HEIGHT))
                                 .flex()
                                 .items_center()
                                 .px(px(10.))
-                                .text_size(px(12.))
+                                .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(self.command_text("没有匹配的命令", "No matching command")),
                         )
@@ -251,15 +255,15 @@ impl WorkspaceWindow {
             .child(
                 div()
                     .absolute()
-                    .bottom(px(INPUT_HEIGHT))
+                    .bottom(ui_px(INPUT_HEIGHT))
                     .w_full()
-                    .h(px(DETAIL_HEIGHT))
+                    .h(ui_px(DETAIL_HEIGHT))
                     .border_t_1()
                     .border_color(rgb(theme.border))
                     .px(px(12.))
                     .flex()
                     .items_center()
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .text_color(rgb(if s.error.is_some() {
                         theme.error
                     } else {
@@ -273,7 +277,7 @@ impl WorkspaceWindow {
                     .absolute()
                     .bottom_0()
                     .w_full()
-                    .h(px(INPUT_HEIGHT))
+                    .h(ui_px(INPUT_HEIGHT))
                     .px(px(9.))
                     .gap(px(6.))
                     .flex()
@@ -283,7 +287,7 @@ impl WorkspaceWindow {
                     .child(
                         div()
                             .w(px(18.))
-                            .text_size(px(20.))
+                            .text_size(ui_px(20.))
                             .text_color(rgb(theme.accent))
                             .child(":"),
                     )
@@ -291,7 +295,7 @@ impl WorkspaceWindow {
                     .when(!narrow, |row| {
                         row.child(
                             div()
-                                .text_size(px(10.))
+                                .text_size(ui_px(10.))
                                 .text_color(rgb(theme.foreground_dim))
                                 .child(format!(
                                     "⌃1–{} · Tab",
@@ -304,12 +308,12 @@ impl WorkspaceWindow {
                             .id("command-line-execute")
                             .debug_selector(|| "command-line-execute".into())
                             .px(px(8.))
-                            .h(px(28.))
+                            .h(ui_px(28.))
                             .flex_none()
                             .flex()
                             .items_center()
                             .rounded(px(5.))
-                            .text_size(px(11.))
+                            .text_size(ui_px(11.))
                             .text_color(rgb(theme.accent))
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(theme.hover)))
@@ -340,7 +344,7 @@ fn candidate_row(
     div()
         .id(("command-candidate", index))
         .debug_selector(move || format!("command-candidate-{index}"))
-        .h(px(CANDIDATE_ROW_HEIGHT))
+        .h(ui_px(CANDIDATE_ROW_HEIGHT))
         .flex_none()
         .w_full()
         .px(px(10.))
@@ -357,8 +361,8 @@ fn candidate_row(
                 .debug_selector(move || format!("command-candidate-number-{}", index - begin + 1))
                 .w(px(18.))
                 .flex_none()
-                .font_family("Menlo")
-                .text_size(px(12.))
+                .font_family(ui_family("Menlo"))
+                .text_size(ui_px(12.))
                 .text_color(rgb(theme.accent))
                 .child((index - begin + 1).to_string()),
         )
@@ -366,8 +370,8 @@ fn candidate_row(
             div()
                 .flex_1()
                 .min_w_0()
-                .font_family("Menlo")
-                .text_size(px(13.))
+                .font_family(ui_family("Menlo"))
+                .text_size(ui_px(13.))
                 .text_ellipsis()
                 .child(entry.input.clone()),
         )
@@ -385,8 +389,8 @@ fn close_button(entity: Entity<WorkspaceWindow>) -> impl IntoElement {
     div()
         .id("command-line-close")
         .debug_selector(|| "command-line-close".into())
-        .w(px(28.))
-        .h(px(28.))
+        .w(ui_px(28.))
+        .h(ui_px(28.))
         .flex_none()
         .flex()
         .items_center()

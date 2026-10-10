@@ -1753,7 +1753,7 @@ fn minimap_font_has_black_weight_and_cjk_fallback() {
         *crate::preview::preview_style(crate::preview::PreviewStyleId::WarmClay),
         PreviewLineKind::Text,
     );
-    assert_eq!(warm.family.as_ref(), "System Font");
+    assert_eq!(warm.family.as_ref(), ".SystemUIFont");
     assert!(
         warm.fallbacks
             .expect("warm fallbacks")

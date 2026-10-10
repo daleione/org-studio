@@ -1,4 +1,5 @@
 use super::*;
+use crate::typography::{ui_family, ui_px};
 
 const ROW_HEIGHT: f32 = 30.;
 const HEADER_HEIGHT: f32 = 34.;
@@ -180,7 +181,7 @@ impl SemanticEditor {
                         .child(
                             div()
                                 .flex_shrink_0()
-                                .text_size(px(11.))
+                                .text_size(ui_px(11.))
                                 .text_color(rgb(theme.foreground_muted))
                                 .child(item.shortcut),
                         ),
@@ -221,7 +222,7 @@ impl SemanticEditor {
             .px(px(14.))
             .flex()
             .items_center()
-            .text_size(px(11.))
+            .text_size(ui_px(11.))
             .text_color(rgb(theme.foreground_dim))
             .child(title)
             .when(popup.sorting, |header| {
@@ -254,8 +255,8 @@ impl SemanticEditor {
             .border_color(rgb(theme.floating_border))
             .bg(rgba(theme.floating_background))
             .shadow_lg()
-            .font_family(".SystemUIFont")
-            .text_size(px(13.))
+            .font_family(ui_family(".SystemUIFont"))
+            .text_size(ui_px(13.))
             .line_height(px(18.))
             .on_key_down(cx.listener(Self::table_menu_key))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())

@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use std::sync::Arc;
 
 use crate::{
@@ -16,7 +17,7 @@ fn section_title(title: &'static str) -> Div {
         .pt_4()
         .border_t_1()
         .border_color(rgb(theme.divider))
-        .text_size(px(10.))
+        .text_size(ui_px(10.))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_color(rgb(theme.foreground_dim))
         .child(title)
@@ -26,27 +27,27 @@ fn inspector_field(label: &'static str, value: &'static str) -> Div {
     let theme = crate::theme::current_theme();
     div()
         .flex_none()
-        .h(px(38.))
+        .h(ui_px(38.))
         .flex()
         .items_center()
         .gap_2()
         .child(
             div()
                 .w(px(82.))
-                .text_size(px(11.))
+                .text_size(ui_px(11.))
                 .text_color(rgb(theme.foreground_dim))
                 .child(label),
         )
         .child(
             div()
                 .flex_1()
-                .h(px(30.))
+                .h(ui_px(30.))
                 .px_2()
                 .flex()
                 .items_center()
                 .rounded(px(6.))
                 .bg(rgb(theme.elevated))
-                .text_size(px(11.))
+                .text_size(ui_px(11.))
                 .text_color(rgb(theme.foreground))
                 .child(value),
         )
@@ -81,7 +82,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
             let value = state.clone();
             row.child(
                 div()
-                    .h(px(25.))
+                    .h(ui_px(25.))
                     .px_3()
                     .flex()
                     .items_center()
@@ -97,7 +98,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     } else {
                         theme.foreground_muted
                     }))
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .font_weight(gpui::FontWeight::BOLD)
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(theme.hover)))
@@ -121,7 +122,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
             row.child(
                 div()
                     .min_w(px(27.))
-                    .h(px(25.))
+                    .h(ui_px(25.))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -136,7 +137,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                     } else {
                         theme.foreground_muted
                     }))
-                    .text_size(px(10.))
+                    .text_size(ui_px(10.))
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(theme.background)).shadow_sm())
                     .child(
@@ -224,7 +225,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
         .child(
             div()
                 .flex_none()
-                .h(px(48.))
+                .h(ui_px(48.))
                 .px_5()
                 .flex()
                 .items_center()
@@ -232,7 +233,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .border_color(rgb(theme.border))
                 .child(
                     div()
-                        .text_size(px(12.))
+                        .text_size(ui_px(12.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .child(language.text("agenda.details")),
                 )
@@ -284,7 +285,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(20.))
+                        .text_size(ui_px(20.))
                         .font_weight(gpui::FontWeight::BOLD)
                         .text_color(rgb(theme.foreground))
                         .child(props.title.to_string()),
@@ -292,7 +293,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.status")),
                 )
@@ -300,7 +301,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.priority")),
                 )
@@ -308,7 +309,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                 .child(
                     div()
                         .flex_none()
-                        .text_size(px(10.))
+                        .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
                         .child(language.text("agenda.tags")),
                 )
@@ -371,14 +372,14 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                         .text_center()
                                         .child(
                                             div()
-                                                .text_size(px(17.))
+                                                .text_size(ui_px(17.))
                                                 .font_weight(gpui::FontWeight::BOLD)
                                                 .child(value),
                                         )
                                         .child(
                                             div()
                                                 .mt_1()
-                                                .text_size(px(9.))
+                                                .text_size(ui_px(9.))
                                                 .text_color(rgb(theme.foreground_dim))
                                                 .child(label),
                                         )
@@ -455,7 +456,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                             div()
                                 .child(
                                     div()
-                                        .text_size(px(13.))
+                                        .text_size(ui_px(13.))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                         .child(if props.clock_active {
                                             language.text("agenda.clock_running")
@@ -466,7 +467,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                                 .child(
                                     div()
                                         .mt_1()
-                                        .text_size(px(9.))
+                                        .text_size(ui_px(9.))
                                         .text_color(rgb(theme.foreground_muted))
                                         .child(if props.clock_active {
                                             language.text("agenda.clock_stop")
@@ -497,7 +498,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .border_1()
                         .border_color(rgb(theme.border))
                         .bg(rgb(theme.background))
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .text_color(rgb(theme.foreground_muted))
                         .child(language.text("agenda.notes_hint")),
                 )
@@ -510,7 +511,7 @@ pub(crate) fn agenda_inspector(props: InspectorProps) -> Div {
                         .rounded(px(8.))
                         .bg(rgb(theme.accent_bg))
                         .text_color(rgb(theme.accent))
-                        .text_size(px(11.))
+                        .text_size(ui_px(11.))
                         .flex()
                         .items_center()
                         .gap_2()

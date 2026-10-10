@@ -3,11 +3,11 @@ use crate::theme::ThemeMode;
 use std::{
     fs, io,
     io::Write,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 7;
+const SETTINGS_VERSION: u32 = 8;
 
 // Keep the help shown in settings.conf beside the corresponding Rust fields.
 // Doc comments are not available at runtime, so this small macro reuses them.
@@ -33,7 +33,7 @@ macro_rules! documented_settings {
 }
 
 documented_settings! {
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    #[derive(Clone, Debug, Eq, PartialEq)]
     pub struct WorkspaceSettings {
         /// Left pane share, 1000..9000; 5000 means 50%.
         pub split_ratio: u16,
@@ -53,6 +53,8 @@ documented_settings! {
         pub status_line: StatusLineSettings,
         /// auto (follow system) | light | dark.
         pub theme_mode: ThemeMode,
+        /// Fonts configured by the *_font_family, *_font_size and font_fallbacks keys.
+        pub fonts: crate::typography::FontSettings,
     }
 }
 
@@ -78,7 +80,8 @@ fn setting_description(key: &str) -> Option<&'static str> {
     } else if let Some(field) = key.strip_prefix("status_") {
         StatusLineSettings::description(field)
     } else {
-        WorkspaceSettings::description(key)
+        crate::typography::FontSettings::description(key)
+            .or_else(|| WorkspaceSettings::description(key))
     }
 }
 
@@ -91,6 +94,22 @@ fn append_setting(source: &mut String, key: &str, value: impl std::fmt::Display)
     source.push('=');
     source.push_str(&value.to_string());
     source.push('\n');
+}
+
+/// A unique sibling file keeps migration and background preference saves from sharing a
+/// temporary path. Persist replaces the destination atomically and cleans up on failure.
+fn write_settings_file(path: &Path, source: &str) -> io::Result<()> {
+    let parent = path.parent().expect("settings path has a parent");
+    fs::create_dir_all(parent)?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    if let Ok(metadata) = fs::metadata(path) {
+        temporary
+            .as_file()
+            .set_permissions(metadata.permissions())?;
+    }
+    temporary.write_all(source.as_bytes())?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
 }
 
 impl Default for StatusLineSettings {
@@ -123,12 +142,13 @@ impl Default for WorkspaceSettings {
             reading_style: crate::preview::PreviewStyleId::Base,
             status_line: StatusLineSettings::default(),
             theme_mode: ThemeMode::default(),
+            fonts: crate::typography::FontSettings::default(),
         }
     }
 }
 
 impl WorkspaceSettings {
-    pub(crate) fn ensure_editable_file(self) -> io::Result<PathBuf> {
+    pub(crate) fn ensure_editable_file(&self) -> io::Result<PathBuf> {
         let path = settings_path().ok_or_else(|| {
             io::Error::new(
                 io::ErrorKind::NotFound,
@@ -138,7 +158,7 @@ impl WorkspaceSettings {
         self.ensure_editable_file_at(path)
     }
 
-    fn ensure_editable_file_at(self, path: PathBuf) -> io::Result<PathBuf> {
+    fn ensure_editable_file_at(&self, path: PathBuf) -> io::Result<PathBuf> {
         let parent = path.parent().expect("settings path has a parent");
         fs::create_dir_all(parent)?;
         match fs::OpenOptions::new()
@@ -147,10 +167,56 @@ impl WorkspaceSettings {
             .open(&path)
         {
             Ok(mut file) => file.write_all(self.serialize().as_bytes())?,
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                let source = fs::read_to_string(&path)?;
+                if let Some(updated) = Self::add_missing_font_settings(&source) {
+                    write_settings_file(&path, &updated)?;
+                }
+            }
             Err(error) => return Err(error),
         }
         Ok(path)
+    }
+
+    fn add_missing_font_settings(source: &str) -> Option<String> {
+        let settings = Self::parse(source)?;
+        let missing = settings
+            .fonts
+            .entries()
+            .into_iter()
+            .filter(|(key, _)| {
+                !source.lines().any(|line| {
+                    line.split_once('=')
+                        .is_some_and(|(existing, _)| existing.trim() == *key)
+                })
+            })
+            .collect::<Vec<_>>();
+        if missing.is_empty() {
+            return None;
+        }
+        let mut updated = String::new();
+        for line in source.lines() {
+            if line
+                .split_once('=')
+                .is_some_and(|(key, _)| key.trim() == "version")
+            {
+                updated.push_str(&format!("version={SETTINGS_VERSION}"));
+            } else {
+                updated.push_str(line);
+            }
+            updated.push('\n');
+        }
+        updated.push_str("\n# Font preferences. Save and restart to apply changes.\n");
+        for (key, value) in missing {
+            append_setting(&mut updated, key, value);
+        }
+        Some(updated)
+    }
+
+    fn preserve_font_edits(&mut self, source: &str) {
+        if let Some(existing) = Self::parse(source) {
+            self.fonts = existing.fonts;
+        }
     }
 
     pub fn load() -> Self {
@@ -167,13 +233,7 @@ impl WorkspaceSettings {
         let Some(path) = settings_path() else {
             return Ok(());
         };
-        let Some(parent) = path.parent() else {
-            return Ok(());
-        };
-        fs::create_dir_all(parent)?;
-        let temporary = path.with_extension(format!("tmp-{}", std::process::id()));
-        fs::write(&temporary, self.serialize())?;
-        fs::rename(temporary, path)
+        write_settings_file(&path, &self.serialize())
     }
 
     pub fn save_async(self) {
@@ -186,6 +246,14 @@ impl WorkspaceSettings {
                     while let Ok(mut latest) = receiver.recv() {
                         while let Ok(newer) = receiver.try_recv() {
                             latest = newer;
+                        }
+                        // Fonts are edited in the configuration buffer and apply on restart.
+                        // Toggling an unrelated preference must preserve even edits made since
+                        // this window was opened, rather than restore its startup snapshot.
+                        if let Some(source) =
+                            settings_path().and_then(|path| fs::read_to_string(path).ok())
+                        {
+                            latest.preserve_font_edits(&source);
                         }
                         if let Err(error) = latest.save() {
                             eprintln!("org_studio_settings_save_failed error={error}");
@@ -213,6 +281,7 @@ impl WorkspaceSettings {
         let mut status_statistics = None;
         let mut status_format = None;
         let mut theme_mode = None;
+        let mut fonts = crate::typography::FontSettings::default();
         for line in source.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -271,7 +340,9 @@ impl WorkspaceSettings {
                 "status_statistics" => status_statistics = value.trim().parse::<bool>().ok(),
                 "status_format" => status_format = value.trim().parse::<bool>().ok(),
                 "theme_mode" => theme_mode = ThemeMode::parse(value.trim()),
-                _ => {}
+                _ => {
+                    fonts.parse_entry(key.trim(), value);
+                }
             }
         }
         let version = version?;
@@ -295,10 +366,11 @@ impl WorkspaceSettings {
                 format: status_format.unwrap_or(true),
             },
             theme_mode: theme_mode.unwrap_or_default(),
+            fonts,
         })
     }
 
-    fn serialize(self) -> String {
+    fn serialize(&self) -> String {
         let mut source = String::from(
             "# Org Studio settings\n# Save and restart to apply changes. Invalid values use defaults.\n\n",
         );
@@ -340,6 +412,9 @@ impl WorkspaceSettings {
         );
         append_setting(&mut source, "status_format", self.status_line.format);
         append_setting(&mut source, "theme_mode", self.theme_mode.as_str());
+        for (key, value) in self.fonts.entries() {
+            append_setting(&mut source, key, value);
+        }
         source
     }
 }
@@ -460,6 +535,7 @@ mod tests {
                 format: false,
             },
             theme_mode: ThemeMode::Dark,
+            fonts: crate::typography::FontSettings::default(),
         };
         assert_eq!(
             WorkspaceSettings::parse(&settings.serialize()),
@@ -575,13 +651,141 @@ mod tests {
         );
         assert_eq!(fs::read_to_string(&path).unwrap(), settings.serialize());
 
-        fs::write(&path, "version=7\ntheme_mode=dark\n# my own note").unwrap();
-        settings.ensure_editable_file_at(path.clone()).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            "version=7\ntheme_mode=dark\n# my own note"
+        let edited = format!(
+            "{}# my own note\n",
+            WorkspaceSettings {
+                theme_mode: ThemeMode::Dark,
+                ..settings.clone()
+            }
+            .serialize()
         );
+        fs::write(&path, &edited).unwrap();
+        settings.ensure_editable_file_at(path.clone()).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), edited);
         fs::remove_file(path).unwrap();
         fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
+    fn font_preferences_round_trip_and_invalid_fields_are_independent() {
+        let settings = WorkspaceSettings::parse(
+            r#"version=8
+editor_font_family=JetBrains Mono
+editor_font_size=19
+reading_font_family=PingFang SC
+reading_font_size=24
+code_font_family=Menlo
+code_font_size=13
+ui_font_family=Helvetica
+ui_font_size=16
+font_fallbacks=PingFang SC, Apple Color Emoji, pingfang sc
+"#,
+        )
+        .unwrap();
+        assert_eq!(settings.fonts.editor_font_size, 19);
+        assert_eq!(settings.fonts.reading_font_size, Some(24));
+        assert_eq!(settings.fonts.code_font_size, Some(13));
+        assert_eq!(settings.fonts.ui_font_size, 16);
+        assert_eq!(
+            settings.fonts.font_fallbacks,
+            ["PingFang SC", "Apple Color Emoji"]
+        );
+        assert_eq!(
+            WorkspaceSettings::parse(&settings.serialize()),
+            Some(settings)
+        );
+
+        let invalid = WorkspaceSettings::parse(
+            r#"version=8
+theme_mode=dark
+minimap_enabled=false
+editor_font_family=
+editor_font_size=0
+reading_font_size=97
+code_font_size=-1
+ui_font_size=word
+font_fallbacks=auto
+"#,
+        )
+        .unwrap();
+        assert_eq!(invalid.fonts, crate::typography::FontSettings::default());
+        assert_eq!(invalid.theme_mode, ThemeMode::Dark);
+        assert!(!invalid.minimap_enabled);
+        for version in 5..=7 {
+            assert_eq!(
+                WorkspaceSettings::parse(&format!("version={version}\n"))
+                    .unwrap()
+                    .fonts,
+                crate::typography::FontSettings::default()
+            );
+        }
+    }
+
+    #[test]
+    fn opening_legacy_configuration_adds_fonts_and_preserves_authored_text() {
+        let source = "# my own note\nversion=7\nlanguage=zh-CN\neditor_font_family=My Font\neditor_font_size=21\nunknown_key=keep me\n";
+        let upgraded = WorkspaceSettings::add_missing_font_settings(source).unwrap();
+        assert!(upgraded.starts_with("# my own note\nversion=8\nlanguage=zh-CN\neditor_font_family=My Font\neditor_font_size=21\nunknown_key=keep me\n"));
+        let fonts = WorkspaceSettings::parse(&upgraded).unwrap().fonts;
+        assert_eq!(fonts.editor_font_family.as_deref(), Some("My Font"));
+        assert_eq!(fonts.editor_font_size, 21);
+        assert_eq!(fonts.reading_font_size, None);
+        assert_eq!(upgraded.matches("editor_font_family=").count(), 1);
+        assert!(WorkspaceSettings::add_missing_font_settings(&upgraded).is_none());
+        assert!(WorkspaceSettings::add_missing_font_settings("version=99\n# preserve\n").is_none());
+    }
+
+    #[test]
+    fn unrelated_preference_save_keeps_font_edits_made_after_startup() {
+        let mut settings = WorkspaceSettings {
+            minimap_enabled: false,
+            ..WorkspaceSettings::default()
+        };
+        settings.preserve_font_edits("version=8\neditor_font_size=22\nreading_font_size=18\ncode_font_size=12\nui_font_size=16\neditor_font_family=My Font\n");
+        assert!(!settings.minimap_enabled);
+        assert_eq!(settings.fonts.editor_font_size, 22);
+        assert_eq!(settings.fonts.reading_font_size, Some(18));
+        assert_eq!(
+            settings.fonts.editor_font_family.as_deref(),
+            Some("My Font")
+        );
+        assert_eq!(
+            WorkspaceSettings::parse(&settings.serialize())
+                .unwrap()
+                .fonts,
+            settings.fonts
+        );
+    }
+
+    #[test]
+    fn concurrent_settings_writes_are_atomic_and_clean_up_temporary_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.conf");
+        let barrier = std::sync::Barrier::new(2);
+        let first = WorkspaceSettings::default().serialize();
+        let second = WorkspaceSettings {
+            fonts: crate::typography::FontSettings {
+                editor_font_size: 22,
+                ..Default::default()
+            },
+            ..Default::default()
+        }
+        .serialize();
+        std::thread::scope(|scope| {
+            for source in [&first, &second] {
+                let path = &path;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    for _ in 0..16 {
+                        barrier.wait();
+                        super::write_settings_file(path, source).unwrap();
+                    }
+                });
+            }
+        });
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(source == first || source == second);
+        assert!(WorkspaceSettings::parse(&source).is_some());
+        assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
     }
 }

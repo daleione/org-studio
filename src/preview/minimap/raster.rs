@@ -311,6 +311,9 @@ pub(crate) fn cosmic_runs(
     kind: PreviewLineKind,
     line: &DisplayRuns,
     preview_style: PreviewStyle,
+    font_size: f32,
+    line_height: f32,
+    inline_scale: f32,
 ) -> Vec<(&str, cosmic_text::Attrs<'static>)> {
     let family = if kind == PreviewLineKind::Code {
         preview_style.typography.code_family
@@ -348,6 +351,7 @@ pub(crate) fn cosmic_runs(
             let mut color = kind_color(kind, preview_style);
             let mut weight = cosmic_text::Weight::BLACK;
             let mut style = cosmic_text::Style::Normal;
+            let mut inline_code = false;
             for inline in line
                 .inline_spans
                 .iter()
@@ -357,7 +361,10 @@ pub(crate) fn cosmic_runs(
                 match inline {
                     InlineKind::Bold => weight = cosmic_text::Weight::BLACK,
                     InlineKind::Italic => style = cosmic_text::Style::Italic,
-                    InlineKind::Code | InlineKind::Verbatim => color = palette.inline_code,
+                    InlineKind::Code | InlineKind::Verbatim => {
+                        color = palette.inline_code;
+                        inline_code = true;
+                    }
                     InlineKind::Link | InlineKind::FootnoteReference | InlineKind::Underline => {
                         color = palette.link
                     }
@@ -377,14 +384,23 @@ pub(crate) fn cosmic_runs(
                     style = cosmic_text::Style::Italic;
                 }
             }
-            Some((
-                &line.text[start..end],
-                cosmic_text::Attrs::new()
-                    .family(cosmic_text::Family::Name(family))
-                    .weight(weight)
-                    .style(style)
-                    .color(cosmic_color(color)),
-            ))
+            let family = if inline_code {
+                preview_style.typography.code_family
+            } else {
+                family
+            };
+            let mut attrs = cosmic_text::Attrs::new()
+                .family(crate::typography::cosmic_family(family))
+                .weight(weight)
+                .style(style)
+                .color(cosmic_color(color));
+            if inline_code && kind != PreviewLineKind::Code {
+                attrs = attrs.metrics(cosmic_text::Metrics::new(
+                    font_size * inline_scale,
+                    line_height,
+                ));
+            }
+            Some((&line.text[start..end], attrs))
         })
         .collect()
 }
@@ -415,7 +431,7 @@ pub(crate) fn fill_bgra(
 pub(crate) static TEXT_RASTERIZER_PREWARMED: OnceLock<()> = OnceLock::new();
 
 pub(crate) fn prewarm_text_rasterizer() {
-    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
+    use cosmic_text::{Attrs, Buffer, Color, Metrics, Shaping, Wrap};
 
     let started = Instant::now();
     let rasterizer = crate::minimap::text_rasterizer();
@@ -428,7 +444,9 @@ pub(crate) fn prewarm_text_rasterizer() {
         let mut rasterizer = rasterizer.lock().expect("minimap rasterizer poisoned");
         let (font_system, swash_cache) = &mut *rasterizer;
         let attrs = Attrs::new()
-            .family(Family::Name("Menlo"))
+            .family(crate::typography::cosmic_family(
+                &crate::typography::fonts().editor_family,
+            ))
             .weight(cosmic_text::Weight::BLACK);
         let mut buffer = Buffer::new(font_system, Metrics::new(3.6, 5.0));
         buffer.set_size(Some(480.0), Some(20.0));
@@ -465,7 +483,7 @@ pub(crate) fn rasterize_tile(
     density: MinimapDensity,
     style: PreviewStyle,
 ) -> RasterizedTile {
-    use cosmic_text::{Attrs, Buffer, Color, Family, Metrics, Shaping, Wrap};
+    use cosmic_text::{Attrs, Buffer, Color, Metrics, Shaping, Wrap};
 
     let started = Instant::now();
     let line_count = presentation_rows
@@ -547,11 +565,13 @@ pub(crate) fn rasterize_tile(
             );
         }
         let attrs = Attrs::new()
-            .family(Family::Name(if kind == PreviewLineKind::Code {
-                style.typography.code_family
-            } else {
-                style.typography.body_family
-            }))
+            .family(crate::typography::cosmic_family(
+                if kind == PreviewLineKind::Code {
+                    style.typography.code_family
+                } else {
+                    style.typography.body_family
+                },
+            ))
             .weight(cosmic_text::Weight::BLACK);
         let base = Color::rgb((color >> 16) as u8, (color >> 8) as u8, color as u8);
         if let Some(marker) = scene.list_marker.as_ref() {
@@ -640,6 +660,7 @@ pub(crate) fn rasterize_tile(
                 );
             } else {
                 let wrapped_cells = &table_geometry.wrapped_cells;
+                let cell_runs = projection.display_cell_runs(&display_runs.text);
                 for (index, column) in columns.iter().enumerate() {
                     let Some(cell) = projection.cells().get(index) else {
                         continue;
@@ -651,6 +672,7 @@ pub(crate) fn rasterize_tile(
                         .get(index)
                         .map(|column| column.alignment())
                         .unwrap_or_default();
+                    let mut cell_offset = 0;
                     for (inner_line, cell_text) in wrapped_cells
                         .get(index)
                         .into_iter()
@@ -659,13 +681,34 @@ pub(crate) fn rasterize_tile(
                         .enumerate()
                     {
                         buffer.set_size(Some(cell_width), Some(physical_line_height));
-                        buffer.set_text(cell_text, &attrs, Shaping::Advanced, None);
+                        if let Some(runs) = cell_runs.get(index) {
+                            let segment = slice_display_runs(
+                                runs,
+                                cell_offset..cell_offset + cell_text.len(),
+                            );
+                            buffer.set_rich_text(
+                                cosmic_runs(
+                                    PreviewLineKind::Text,
+                                    &segment,
+                                    style,
+                                    density.font_px() * scale_factor,
+                                    physical_line_height,
+                                    style.typography.inline_scale(
+                                        style.typography.relative_size(1.0, 12.0),
+                                        1.0,
+                                    ),
+                                ),
+                                &attrs,
+                                Shaping::Advanced,
+                                None,
+                            );
+                        } else {
+                            buffer.set_text(cell_text, &attrs, Shaping::Advanced, None);
+                        }
+                        cell_offset += cell_text.len();
                         buffer.shape_until_scroll(font_system, false);
-                        let estimated_text_width = UnicodeWidthStr::width(cell_text.as_str())
-                            as f32
-                            * density.font_px()
-                            * 0.62
-                            * scale_factor;
+                        let estimated_text_width =
+                            buffer.layout_runs().next().map_or(0.0, |run| run.line_w);
                         let free = (cell_width - estimated_text_width).max(0.0);
                         let align_offset = match alignment {
                             Alignment::Center => free * 0.5,
@@ -721,7 +764,16 @@ pub(crate) fn rasterize_tile(
         {
             let segment = slice_display_runs(&display_runs, range);
             buffer.set_rich_text(
-                cosmic_runs(kind, &segment, style),
+                cosmic_runs(
+                    kind,
+                    &segment,
+                    style,
+                    density.font_px() * scale_factor,
+                    physical_line_height,
+                    style
+                        .typography
+                        .inline_scale(model.layout(document_index, style).font_size, 1.0),
+                ),
                 &attrs,
                 Shaping::Advanced,
                 None,

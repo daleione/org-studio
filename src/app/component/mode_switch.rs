@@ -1,3 +1,4 @@
+use crate::typography::ui_px;
 use gpui::{
     AnimationExt, Div, ElementId, InteractiveElement, IntoElement, ParentElement, Pixels, Rgba,
     SharedString, SpringAnimation, SpringConfig, Stateful, StatefulInteractiveElement, Styled, div,
@@ -49,7 +50,7 @@ impl ModeSwitch {
             .id(id)
             .flex_none()
             .w(self.item_width)
-            .h(px(26.))
+            .h(ui_px(26.))
             .flex()
             .items_center()
             .justify_center()
@@ -73,7 +74,7 @@ impl ModeSwitch {
         let items = items.into_iter().collect::<Vec<_>>();
         let mut control = div()
             .flex_none()
-            .h(px(30.))
+            .h(ui_px(30.))
             .p(px(2.))
             .flex()
             .items_center()
@@ -92,7 +93,7 @@ impl ModeSwitch {
                 .absolute()
                 .top(px(2.))
                 .w(self.item_width)
-                .h(px(26.))
+                .h(ui_px(26.))
                 .rounded(px(6.))
                 .bg(rgb(theme.elevated))
                 .shadow_sm();

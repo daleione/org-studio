@@ -48,7 +48,51 @@ pub(crate) fn styled_inline_runs(
     preview_style: PreviewStyle,
 ) -> StyledText {
     let highlights = inline_highlights(&text, &spans, preview_style);
-    StyledText::new(text).with_highlights(highlights)
+    let overrides = highlights
+        .iter()
+        .filter(|(range, _)| {
+            spans.iter().any(|span| {
+                span.is_code() && span.range.start <= range.start && span.range.end >= range.end
+            })
+        })
+        .map(|(range, _)| (range.clone(), preview_style.typography.code_family.into()))
+        .collect::<Vec<_>>();
+    StyledText::new(text)
+        .with_highlights(highlights)
+        .with_font_family_overrides(overrides)
+}
+
+pub(in crate::preview) fn inline_text_runs(
+    text: &str,
+    spans: &[InlineSpan],
+    style: PreviewStyle,
+    inherited: &gpui::TextStyle,
+) -> Vec<gpui::TextRun> {
+    let highlights = inline_highlights(text, spans, style);
+    let mut runs = Vec::new();
+    let mut offset = 0;
+    for (range, highlight) in highlights {
+        if offset < range.start {
+            runs.push(inherited.to_run(range.start - offset));
+        }
+        let mut run = inherited.clone().highlight(highlight).to_run(range.len());
+        if spans.iter().any(|span| {
+            span.is_code() && span.range.start <= range.start && span.range.end >= range.end
+        }) {
+            let font = crate::typography::font_with_fallbacks(
+                style.typography.code_family,
+                style.typography.code_fallbacks,
+            );
+            run.font.family = font.family;
+            run.font.fallbacks = font.fallbacks;
+        }
+        runs.push(run);
+        offset = range.end;
+    }
+    if offset < text.len() {
+        runs.push(inherited.to_run(text.len() - offset));
+    }
+    runs
 }
 
 fn inline_highlights(

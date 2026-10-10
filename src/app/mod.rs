@@ -340,6 +340,7 @@ pub struct WorkspaceWindow {
     pub(crate) document_workspace: DocumentWorkspaceState,
     pub(crate) document_view_preferences: DocumentViewPreferences,
     pub(crate) content_font_sizes: PanePair<crate::typography::ContentFontSize>,
+    pub(crate) font_settings: crate::typography::FontSettings,
     pub(crate) split_resize: Option<split_layout::ResizeSession>,
     pub(crate) soft_wrap: bool,
     pub(crate) minimap_visible: bool,

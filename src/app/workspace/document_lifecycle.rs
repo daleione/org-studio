@@ -1,3 +1,4 @@
+use crate::typography::ui_size;
 use std::{
     path::PathBuf,
     sync::Arc,
@@ -649,9 +650,9 @@ impl WorkspaceWindow {
                                     );
                                 editor.set_ui_language(language, cx);
                                 editor.set_content_font_size(*content_font_sizes.get(pane), cx);
-                                editor.set_bottom_overlay_clearance(
+                                editor.set_bottom_overlay_clearance(ui_size(
                                     crate::app::status_line::FLOATING_STATUS_CLEARANCE,
-                                );
+                                ));
                                 editor.set_soft_wrap(soft_wrap, cx);
                                 editor.set_minimap(minimap_visible, minimap_width, cx);
                                 editor

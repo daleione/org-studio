@@ -2,6 +2,7 @@ use super::super::{
     UiIntent,
     state::{AgendaProjection, AgendaViewState, AgendaWorkspace, CalendarRange},
 };
+use crate::typography::ui_px;
 use crate::{
     app::{WorkspaceWindow, component::ModeSwitch},
     i18n::Language,
@@ -39,7 +40,7 @@ fn button(
             move || format!("agenda-toolbar-{label}")
         })
         .flex_none()
-        .h(px(34.))
+        .h(ui_px(34.))
         .px(px(9.))
         .flex()
         .items_center()
@@ -59,7 +60,7 @@ fn button(
         } else {
             theme.foreground_dim
         }))
-        .text_size(px(12.))
+        .text_size(ui_px(12.))
         .child(label)
         .hover(move |style| {
             if selected {
@@ -173,7 +174,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .text_size(px(22.))
+                .text_size(ui_px(22.))
                 .font_weight(gpui::FontWeight::BOLD)
                 .child(title),
         );
@@ -188,7 +189,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
             row.child(
                 super::field(div().children(search.clone()))
                     .w(px(240.))
-                    .h(px(30.))
+                    .h(ui_px(30.))
                     .flex_none(),
             )
         })
@@ -366,9 +367,9 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                     .into_iter()
                     .map(|key| {
                         div()
-                            .w(px(32.))
+                            .w(ui_px(32.))
                             .text_center()
-                            .text_size(px(10.))
+                            .text_size(ui_px(10.))
                             .child(language.text(key))
                     }),
                 ),
@@ -390,7 +391,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                                 date == state.calendar_anchor.unwrap_or(today),
                                 true,
                             )
-                            .w(px(32.))
+                            .w(ui_px(32.))
                             .px_0()
                             .when(
                                 date.month() != month.month(),
@@ -441,7 +442,7 @@ fn calendar_range_switch(
                 control
                     .item(index, format!("agenda-calendar-range-{range:?}"), |_| label)
                     .debug_selector(move || format!("agenda-toolbar-{label}"))
-                    .text_size(px(12.))
+                    .text_size(ui_px(12.))
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                         workspace.update(cx, |this, cx| {

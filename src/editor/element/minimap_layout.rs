@@ -59,7 +59,7 @@ pub(super) fn prepare_minimap_layout_request(
         soft_wrap: editor.display_map.soft_wrap(),
         font: font.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
-        content_scale_bits: editor.content_font_size().scale().to_bits(),
+        content_scale_bits: editor.typography_scale().to_bits(),
         fold_revision: editor.fold_animation_revision,
         inline_images: editor.inline_image_previews,
         inline_image_overrides: inline_image_overrides.into(),
