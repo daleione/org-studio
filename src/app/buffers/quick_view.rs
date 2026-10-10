@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
 
@@ -87,7 +88,7 @@ impl WorkspaceWindow {
                             .truncate()
                             .text_size(ui_px(13.))
                             .text_color(rgb(theme.foreground))
-                            .child(item.name),
+                            .child_text(item.name),
                     )
                     .when(!narrow, |row| {
                         row.child(
@@ -97,7 +98,7 @@ impl WorkspaceWindow {
                                 .truncate()
                                 .text_size(ui_px(11.))
                                 .text_color(rgb(theme.foreground_muted))
-                                .child(detail),
+                                .child_text(detail),
                         )
                     })
                     .child(
@@ -112,7 +113,7 @@ impl WorkspaceWindow {
                             } else {
                                 theme.foreground_dim
                             }))
-                            .child(state),
+                            .child_text(state),
                     )
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
@@ -139,7 +140,7 @@ impl WorkspaceWindow {
                     .gap(px(10.))
                     .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground_dim))
-                    .child(if headings {
+                    .child_text(if headings {
                         self.buffer_text("当前文档标题", "Document headings")
                     } else {
                         self.buffer_text("快速打开", "Quick open")
@@ -151,7 +152,7 @@ impl WorkspaceWindow {
                             .truncate()
                             .text_right()
                             .text_color(rgb(theme.foreground_muted))
-                            .child(scope),
+                            .child_text(scope),
                     )
                     .child(close),
             )
@@ -173,7 +174,7 @@ impl WorkspaceWindow {
                                 .justify_center()
                                 .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
-                                .child(if headings {
+                                .child_text(if headings {
                                     self.buffer_text("没有匹配的标题", "No matching headings")
                                 } else {
                                     self.buffer_text("没有匹配的文档", "No matching documents")
@@ -191,7 +192,7 @@ impl WorkspaceWindow {
                     .items_center()
                     .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_muted))
-                    .child(self.buffer_text(
+                    .child_text(self.buffer_text(
                         "↑↓ 选择 · ↵ 确认 · ⌘1–9 / ⌘0 快选 · Esc 取消",
                         "↑↓ Select · ↵ Confirm · ⌘1–9 / ⌘0 Pick · Esc Cancel",
                     )),
@@ -214,7 +215,7 @@ impl WorkspaceWindow {
                             .flex_none()
                             .text_size(ui_px(13.))
                             .text_color(rgb(theme.accent))
-                            .child(if headings {
+                            .child_text(if headings {
                                 self.buffer_text("跳转", "Go")
                             } else {
                                 self.buffer_text("打开", "Open")

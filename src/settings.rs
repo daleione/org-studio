@@ -7,7 +7,7 @@ use std::{
     sync::{OnceLock, mpsc},
 };
 
-const SETTINGS_VERSION: u32 = 8;
+const SETTINGS_VERSION: u32 = 9;
 
 // Keep the help shown in settings.conf beside the corresponding Rust fields.
 // Doc comments are not available at runtime, so this small macro reuses them.
@@ -180,11 +180,11 @@ impl WorkspaceSettings {
 
     fn add_missing_font_settings(source: &str) -> Option<String> {
         let settings = Self::parse(source)?;
-        let missing = settings
-            .fonts
-            .entries()
-            .into_iter()
-            .filter(|(key, _)| {
+        let entries = settings.fonts.entries();
+        let missing = entries
+            .iter()
+            .enumerate()
+            .filter(|(_, (key, _))| {
                 !source.lines().any(|line| {
                     line.split_once('=')
                         .is_some_and(|(existing, _)| existing.trim() == *key)
@@ -194,23 +194,58 @@ impl WorkspaceSettings {
         if missing.is_empty() {
             return None;
         }
-        let mut updated = String::new();
-        for line in source.lines() {
-            if line
-                .split_once('=')
-                .is_some_and(|(key, _)| key.trim() == "version")
-            {
-                updated.push_str(&format!("version={SETTINGS_VERSION}"));
-            } else {
-                updated.push_str(line);
-            }
-            updated.push('\n');
+        let mut lines = source
+            .lines()
+            .map(|line| {
+                if line
+                    .split_once('=')
+                    .is_some_and(|(key, _)| key.trim() == "version")
+                {
+                    format!("version={SETTINGS_VERSION}")
+                } else {
+                    line.to_owned()
+                }
+            })
+            .collect::<Vec<_>>();
+        if missing.len() == entries.len() {
+            lines.extend([
+                String::new(),
+                "# Font preferences. Save and restart to apply changes.".into(),
+            ]);
         }
-        updated.push_str("\n# Font preferences. Save and restart to apply changes.\n");
-        for (key, value) in missing {
-            append_setting(&mut updated, key, value);
+        let position = |key: &str, lines: &[String]| {
+            lines.iter().rposition(|line| {
+                line.split_once('=')
+                    .is_some_and(|(existing, _)| existing.trim() == key)
+            })
+        };
+        for (index, (key, value)) in missing {
+            // Keep newly added preferences beside their role's existing settings.
+            let preceding = entries[..index]
+                .iter()
+                .rev()
+                .find_map(|(key, _)| position(key, &lines));
+            let insertion = preceding.map_or_else(
+                || {
+                    let Some(mut next) = entries[index + 1..]
+                        .iter()
+                        .find_map(|(key, _)| position(key, &lines))
+                    else {
+                        return lines.len();
+                    };
+                    // The following setting keeps its original help comments.
+                    while next > 0 && lines[next - 1].trim_start().starts_with('#') {
+                        next -= 1;
+                    }
+                    next
+                },
+                |previous| previous + 1,
+            );
+            let mut setting = String::new();
+            append_setting(&mut setting, key, value);
+            lines.splice(insertion..insertion, setting.lines().map(str::to_owned));
         }
-        Some(updated)
+        Some(format!("{}\n", lines.join("\n")))
     }
 
     fn preserve_font_edits(&mut self, source: &str) {
@@ -725,7 +760,10 @@ font_fallbacks=auto
     fn opening_legacy_configuration_adds_fonts_and_preserves_authored_text() {
         let source = "# my own note\nversion=7\nlanguage=zh-CN\neditor_font_family=My Font\neditor_font_size=21\nunknown_key=keep me\n";
         let upgraded = WorkspaceSettings::add_missing_font_settings(source).unwrap();
-        assert!(upgraded.starts_with("# my own note\nversion=8\nlanguage=zh-CN\neditor_font_family=My Font\neditor_font_size=21\nunknown_key=keep me\n"));
+        assert!(upgraded.starts_with("# my own note\nversion=9\nlanguage=zh-CN\n"));
+        for line in source.lines().filter(|line| !line.starts_with("version=")) {
+            assert!(upgraded.lines().any(|updated| updated == line));
+        }
         let fonts = WorkspaceSettings::parse(&upgraded).unwrap().fonts;
         assert_eq!(fonts.editor_font_family.as_deref(), Some("My Font"));
         assert_eq!(fonts.editor_font_size, 21);

@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_px, ui_size};
 use crate::{
     agenda::{BuiltinQuery, FileId},
@@ -26,7 +27,7 @@ impl Render for AgendaTooltip {
             .text_color(gpui::rgb(theme.background))
             .text_size(ui_px(11.))
             .shadow_md()
-            .child(self.0.clone())
+            .child_text(self.0.clone())
     }
 }
 
@@ -65,7 +66,7 @@ pub(crate) fn sidebar_section_header(
                     std::f32::consts::FRAC_PI_2 * reveal,
                 ))),
         )
-        .child(label)
+        .child_text(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
                 this.dispatch_agenda_intent(
@@ -209,7 +210,7 @@ pub(crate) fn sidebar_filter_item(
             .overflow_hidden()
             .whitespace_nowrap()
             .text_ellipsis()
-            .child(label)
+            .child_text(label)
     } else {
         div()
             .h(ui_px(23.))
@@ -221,7 +222,7 @@ pub(crate) fn sidebar_filter_item(
             .text_size(ui_px(11.))
             .font_weight(gpui::FontWeight::MEDIUM)
             .text_color(gpui::rgb(theme.todo_active))
-            .child(label)
+            .child_text(label)
     };
     div()
         .id(format!("agenda-sidebar-filter-{element_id}"))
@@ -261,7 +262,7 @@ pub(crate) fn sidebar_filter_item(
             div()
                 .text_size(ui_px(10.))
                 .text_color(gpui::rgb(theme.foreground_muted))
-                .child(count.to_string()),
+                .child_text(count.to_string()),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             let tag = tag.clone();
@@ -329,7 +330,7 @@ pub(crate) fn source_context_menu(
                         ))
                         .size(px(15.)),
                 )
-                .child(language.text("agenda.open_file"))
+                .child_text(language.text("agenda.open_file"))
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
                     workspace.update(cx, |this, cx| this.open_agenda_source_file(menu.file, cx));
@@ -383,7 +384,7 @@ pub(crate) fn saved_view_item(
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .child(label),
+                .child_text(label),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
@@ -465,6 +466,8 @@ pub(crate) fn sidebar_item(
                         })),
                 ),
         )
-        .when(!compact, |item| item.child(div().flex_1().child(label)))
+        .when(!compact, |item| {
+            item.child(div().flex_1().child_text(label))
+        })
         .child(count_badge)
 }

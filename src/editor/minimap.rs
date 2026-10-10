@@ -568,7 +568,7 @@ fn draw_minimap_text(
     use cosmic_text::Shaping;
 
     buffer.set_size(Some(width as f32), Some(line_height));
-    if spans.is_empty() {
+    if spans.is_empty() && crate::typography::FontRole::Editor.cjk_family().is_none() {
         buffer.set_text(text, attrs, Shaping::Advanced, None);
     } else {
         buffer.set_rich_text(
@@ -646,9 +646,18 @@ fn rich_text_segments<'a>(
 ) -> Vec<(&'a str, cosmic_text::Attrs<'static>)> {
     use cosmic_text::{Color, Style, UnderlineStyle};
 
+    let chinese_family = crate::typography::FontRole::Editor.cjk_family();
+    let chinese = if chinese_family.is_some() {
+        crate::typography::cjk_ranges(text)
+    } else {
+        Vec::new()
+    };
     let mut boundaries = vec![0, text.len()];
     for span in spans {
         boundaries.extend([span.bytes.start, span.bytes.end]);
+    }
+    for range in &chinese {
+        boundaries.extend([range.start, range.end]);
     }
     boundaries.sort_unstable();
     boundaries.dedup();
@@ -660,6 +669,11 @@ fn rich_text_segments<'a>(
                 return None;
             }
             let mut attrs = base.clone();
+            if let Some(family) = chinese_family
+                && chinese.iter().any(|r| r.contains(&range.start))
+            {
+                attrs = attrs.family(crate::typography::cosmic_family(family));
+            }
             for span in spans
                 .iter()
                 .filter(|span| span.bytes.start <= range.start && range.start < span.bytes.end)

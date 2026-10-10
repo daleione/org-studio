@@ -518,11 +518,16 @@ impl Render for NativeInput {
                                 underline: None,
                                 strikethrough: None,
                             };
+                            let runs = crate::typography::cjk_runs(
+                                &text,
+                                vec![run],
+                                crate::typography::FontRole::Ui,
+                            );
                             let font_size = ui_size(this.config.font_size);
                             let line =
                                 window
                                     .text_system()
-                                    .shape_line(text, px(font_size), &[run], None);
+                                    .shape_line(text, px(font_size), &runs, None);
                             let content_width = f32::from(line.width);
                             if (this.content_width - content_width).abs() > 0.5 {
                                 this.content_width = content_width;

@@ -2,6 +2,7 @@
 use super::selection_style::{
     HOVER_BACKGROUND, QUICK_BAR_HEIGHT, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
 };
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_font, ui_px, ui_size};
 use crate::{
     i18n::Language,
@@ -103,10 +104,11 @@ impl TodoPicker {
             font,
             ..Default::default()
         };
+        let runs = crate::typography::cjk_runs(&text, vec![run], crate::typography::FontRole::Ui);
         let width = f32::from(
             window
                 .text_system()
-                .shape_line(text, ui_px(12.), &[run], None)
+                .shape_line(text, ui_px(12.), &runs, None)
                 .width,
         );
         (width
@@ -280,7 +282,7 @@ impl Render for TodoPicker {
                                     .debug_selector(move || {
                                         format!("todo-current-{current_keyword}")
                                     })
-                                    .child("✓"),
+                                    .child_text("✓"),
                             )
                         })
                         .child(
@@ -290,7 +292,7 @@ impl Render for TodoPicker {
                                 .text_ellipsis()
                                 .font_family(ui_family("Menlo"))
                                 .font_weight(gpui::FontWeight::MEDIUM)
-                                .child(keyword),
+                                .child_text(keyword),
                         )
                         .when_some(self.fast_key(state), |s, key| {
                             s.child(
@@ -298,7 +300,7 @@ impl Render for TodoPicker {
                                     .flex_none()
                                     .text_size(ui_px(10.))
                                     .opacity(0.65)
-                                    .child(key.to_string()),
+                                    .child_text(key.to_string()),
                             )
                         })
                         .on_click(cx.listener(move |this, _, _, cx| this.choose(index, cx))),
@@ -338,7 +340,7 @@ impl Render for TodoPicker {
                     )
                     .hover(|s| s.bg(rgb(HOVER_BACKGROUND())))
                     .text_color(rgb(theme.foreground_dim))
-                    .child("···")
+                    .child_text("···")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.more_open = !this.more_open;
                         this.more_selected = 0;
@@ -384,7 +386,7 @@ impl Render for TodoPicker {
                         )
                         .hover(|s| s.bg(rgb(HOVER_BACKGROUND())))
                         .child(icon)
-                        .child(self.language.text(key))
+                        .child_text(self.language.text(key))
                         .on_click(cx.listener(move |_, _, _, cx| {
                             cx.emit(if index == 0 {
                                 TodoPickerEvent::Selected(None)

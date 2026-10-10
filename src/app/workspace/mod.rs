@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_size;
 use std::{sync::Arc, time::Instant};
 
@@ -781,7 +782,7 @@ impl WorkspaceWindow {
                         .items_center()
                         .justify_center()
                         .text_color(rgb(current_theme().foreground_dim))
-                        .child("Opening Editor…")
+                        .child_text("Opening Editor…")
                 },
                 |editor| div().size_full().child(editor.clone()),
             ),
@@ -957,7 +958,7 @@ impl WorkspaceWindow {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(current_theme().foreground_dim))
-                .child("Preparing Reading…");
+                .child_text("Preparing Reading…");
         };
         let panel = panel_entity.read(render.cx);
         let session = ready.session.read(render.cx);
@@ -973,7 +974,7 @@ impl WorkspaceWindow {
                 .items_center()
                 .justify_center()
                 .text_color(rgb(current_theme().foreground_dim))
-                .child("Preparing Reading…");
+                .child_text("Preparing Reading…");
         }
         // A previous revision is still a complete, internally coherent immutable snapshot.
         // Keep painting it until the derived projection is atomically replaced. Each pane owns

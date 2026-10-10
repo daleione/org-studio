@@ -173,7 +173,10 @@ pub(super) fn render_markdown_block(
         MarkdownKind::TableRow => display_map.table_projection(display_row).map_or_else(
             || {
                 reading_fallback(
-                    text.clone(),
+                    crate::typography::role_text(
+                        text.clone(),
+                        crate::typography::FontRole::Reading,
+                    ),
                     row_layout.font_size,
                     row_layout.line_height,
                     style,

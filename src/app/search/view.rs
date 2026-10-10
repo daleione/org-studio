@@ -2,6 +2,7 @@ use super::{geometry::BarLayout, presentation::PresentationPhase};
 use crate::app::status_line::{
     FLOATING_STATUS_HEIGHT, FLOATING_STATUS_INSET, floating_status_container,
 };
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px, ui_size};
 use crate::{
     app::{PaneSide, PaneSurface, WorkspaceWindow, component::ModeSwitch},
@@ -95,7 +96,7 @@ impl gpui::Render for SearchTooltip {
             .shadow_md()
             .text_size(ui_px(12.))
             .text_color(rgb(theme.foreground_muted))
-            .child(self.0)
+            .child_text(self.0)
     }
 }
 
@@ -180,7 +181,7 @@ impl WorkspaceWindow {
                             .min_w_0()
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child(text),
+                            .child_text(text),
                     )
                     .into_any_element()
             }
@@ -262,7 +263,7 @@ impl WorkspaceWindow {
                         .hover(|style| style.bg(rgb(theme.hover)).text_color(rgb(theme.accent)))
                 })
                 .when_some(icon, |b, icon| b.child(search_icon(icon)))
-                .when(icon.is_none(), |b| b.child(label))
+                .when(icon.is_none(), |b| b.child_text(label))
                 .when(interactive, |b| {
                     b.tooltip(move |_, cx| cx.new(|_| SearchTooltip(hint)).into())
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -345,7 +346,7 @@ impl WorkspaceWindow {
                             } else {
                                 theme.foreground_muted
                             }))
-                            .child(s.count.clone()),
+                            .child_text(s.count.clone()),
                     )
                     .child(button(ToolbarButton::Previous, can_navigate))
                     .child(button(ToolbarButton::Next, can_navigate))
@@ -383,7 +384,7 @@ impl WorkspaceWindow {
                             .text_size(ui_px(12.))
                             .text_color(rgb(theme.foreground_muted))
                             .text_center()
-                            .child(self.language.text("search.replace_with")),
+                            .child_text(self.language.text("search.replace_with")),
                     )
                 })
                 .child(div().flex_1().min_w_0().h(ui_px(30.)).child(field(true)))
@@ -430,7 +431,7 @@ impl WorkspaceWindow {
                     } else {
                         theme.foreground_muted
                     }))
-                    .child(detail.to_owned()),
+                    .child_text(detail.to_owned()),
             );
         }
         Some(
@@ -518,7 +519,7 @@ impl WorkspaceWindow {
                 .child(div().w(px(16.)).h(px(16.)).when(selected, |slot| {
                     slot.child(search_icon(SearchIcon::Check).text_color(rgb(theme.accent)))
                 }))
-                .child(label)
+                .child_text(label)
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
                     if enabled {
@@ -534,7 +535,7 @@ impl WorkspaceWindow {
                 .items_center()
                 .text_size(ui_px(11.))
                 .text_color(rgb(theme.foreground_muted))
-                .child(label)
+                .child_text(label)
         };
         let separator = || div().h(px(1.)).mx(px(8.)).my(px(5.)).bg(rgb(theme.divider));
         let mut menu = div()

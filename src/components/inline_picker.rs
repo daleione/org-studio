@@ -226,10 +226,11 @@ fn text_width(text: &str, size: f32, window: &Window) -> f32 {
         font: ui_font(".SystemUIFont"),
         ..Default::default()
     };
+    let runs = crate::typography::cjk_runs(&text, vec![run], crate::typography::FontRole::Ui);
     f32::from(
         window
             .text_system()
-            .shape_line(text, ui_px(size), &[run], None)
+            .shape_line(text, ui_px(size), &runs, None)
             .width,
     )
 }

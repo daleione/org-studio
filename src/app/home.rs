@@ -1,4 +1,5 @@
 use super::WorkspaceWindow;
+use crate::components::UiTextExt;
 use crate::i18n::Language;
 use crate::recent_documents::RecentDocument;
 use crate::typography::{ui_family, ui_px};
@@ -67,7 +68,7 @@ pub(crate) fn render_home(
                                 .mt_2()
                                 .text_size(ui_px(14.0))
                                 .text_color(rgb(theme.foreground_dim))
-                                .child(language.text("home.tagline")),
+                                .child_text(language.text("home.tagline")),
                         )
                         .child(
                             div()
@@ -145,7 +146,7 @@ pub(crate) fn render_home(
                             .py_3()
                             .text_size(ui_px(13.0))
                             .text_color(rgb(theme.error))
-                            .child(error),
+                            .child_text(error),
                     )
                 })
                 .child(
@@ -162,7 +163,7 @@ pub(crate) fn render_home(
                                 .text_size(ui_px(13.0))
                                 .font_weight(FontWeight::SEMIBOLD)
                                 .text_color(rgb(theme.foreground_dim))
-                                .child(language.text("home.recent")),
+                                .child_text(language.text("home.recent")),
                         )
                         .when(!recent_documents.is_empty(), |view| {
                             view.child(
@@ -181,7 +182,7 @@ pub(crate) fn render_home(
                                         clear_entity
                                             .update(cx, |this, cx| this.clear_recent_documents(cx));
                                     })
-                                    .child(language.text("home.clear")),
+                                    .child_text(language.text("home.clear")),
                             )
                         }),
                 )
@@ -213,7 +214,7 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
                         .text_size(ui_px(14.0))
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_color(rgb(crate::theme::current_theme().foreground))
-                        .child(format!("{} {name}", language.text("home.opening"))),
+                        .child_text(format!("{} {name}", language.text("home.opening"))),
                 )
                 .child(
                     div()
@@ -221,7 +222,7 @@ pub(crate) fn render_loading(path: &std::path::Path, language: Language) -> gpui
                         .text_size(ui_px(12.0))
                         .text_color(rgb(crate::theme::current_theme().foreground_muted))
                         .overflow_hidden()
-                        .child(path.display().to_string()),
+                        .child_text(path.display().to_string()),
                 ),
         )
 }
@@ -241,14 +242,14 @@ fn picker_copy(
                 .text_size(ui_px(14.0))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(title_color))
-                .child(title.into()),
+                .child_text(title),
         )
         .child(
             div()
                 .mt_1()
                 .text_size(ui_px(12.0))
                 .text_color(rgb(detail_color))
-                .child(detail.into()),
+                .child_text(detail),
         )
 }
 
@@ -277,7 +278,7 @@ fn render_recents(
                 .text_align(gpui::TextAlign::Center)
                 .text_size(ui_px(13.0))
                 .text_color(rgb(theme.foreground_muted))
-                .child(language.text("home.empty")),
+                .child_text(language.text("home.empty")),
         );
     }
     let theme = crate::theme::current_theme();
@@ -347,7 +348,7 @@ fn render_recents(
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(theme.foreground))
                                     .overflow_hidden()
-                                    .child(name),
+                                    .child_text(name),
                             )
                             .child(
                                 div()
@@ -355,7 +356,7 @@ fn render_recents(
                                     .text_size(ui_px(12.0))
                                     .text_color(rgb(theme.foreground_muted))
                                     .overflow_hidden()
-                                    .child(parent),
+                                    .child_text(parent),
                             ),
                     )
                     .child(

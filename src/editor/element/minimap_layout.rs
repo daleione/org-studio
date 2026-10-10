@@ -232,6 +232,11 @@ pub(super) fn schedule_minimap_layout_preparation(
                         None,
                         &request.theme,
                     );
+                    let runs = crate::typography::cjk_runs(
+                        &text,
+                        runs,
+                        crate::typography::FontRole::Editor,
+                    );
                     let shaped_font_size = px(f32::from(request.font_size) * metrics.font_scale);
                     let effective_wrap_width = request.key.soft_wrap.then_some(px(row_wrap_width));
                     let columns = if line_style.id == syntax::EditorStyleId::Table {

@@ -1,4 +1,5 @@
 use super::super::{UiIntent, state::AgendaOverlay};
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use crate::{
     agenda::{CaptureDraft, CaptureTemplate, RefileTarget},
@@ -50,7 +51,7 @@ fn action(
                     .border_color(rgb(theme.border_hover))
             }
         })
-        .child(label)
+        .child_text(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             let intent = intent.clone();
@@ -107,14 +108,14 @@ pub(crate) fn capture_overlay(
                                     div()
                                         .text_size(ui_px(19.))
                                         .font_weight(gpui::FontWeight::BOLD)
-                                        .child(language.text("agenda.capture")),
+                                        .child_text(language.text("agenda.capture")),
                                 )
                                 .child(
                                     div()
                                         .mt_1()
                                         .text_size(ui_px(10.))
                                         .text_color(rgb(theme.foreground_dim))
-                                        .child(language.text("agenda.capture_hint")),
+                                        .child_text(language.text("agenda.capture_hint")),
                                 ),
                         )
                         .child(action(
@@ -159,7 +160,7 @@ pub(crate) fn capture_overlay(
                         .border_1()
                         .border_color(rgb(theme.border))
                         .text_size(ui_px(13.))
-                        .child(if draft.title.is_empty() {
+                        .child_text(if draft.title.is_empty() {
                             language.text("agenda.title_hint").into()
                         } else {
                             draft.title.clone()
@@ -171,7 +172,7 @@ pub(crate) fn capture_overlay(
                             .mt_3()
                             .text_size(ui_px(10.))
                             .text_color(rgb(theme.warning))
-                            .child(message),
+                            .child_text(message),
                     )
                 })
                 .child(
@@ -229,14 +230,14 @@ pub(crate) fn refile_overlay(
                     div()
                         .text_size(ui_px(19.))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child(language.text("agenda.move_to")),
+                        .child_text(language.text("agenda.move_to")),
                 )
                 .child(
                     div()
                         .mt_1()
                         .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(language.text("agenda.refile_hint")),
+                        .child_text(language.text("agenda.refile_hint")),
                 )
                 .child(
                     div()
@@ -249,7 +250,7 @@ pub(crate) fn refile_overlay(
                         .border_1()
                         .border_color(rgb(theme.border))
                         .text_size(ui_px(12.))
-                        .child(if search.is_empty() {
+                        .child_text(if search.is_empty() {
                             language.text("agenda.search_target").into()
                         } else {
                             search.to_owned()
@@ -289,14 +290,14 @@ pub(crate) fn refile_overlay(
                                             div()
                                                 .text_size(ui_px(11.))
                                                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                .child(target.title.to_string()),
+                                                .child_text(target.title.to_string()),
                                         )
                                         .child(
                                             div()
                                                 .mt_1()
                                                 .text_size(ui_px(9.))
                                                 .text_color(rgb(theme.foreground_dim))
-                                                .child(
+                                                .child_text(
                                                     target
                                                         .path
                                                         .file_name()
@@ -320,7 +321,7 @@ pub(crate) fn refile_overlay(
                             .mt_2()
                             .text_size(ui_px(10.))
                             .text_color(rgb(theme.warning))
-                            .child(message),
+                            .child_text(message),
                     )
                 })
                 .child(
@@ -403,14 +404,14 @@ fn repeat_overlay(
                     div()
                         .text_size(ui_px(19.))
                         .font_weight(gpui::FontWeight::BOLD)
-                        .child(language.text("agenda.complete_repeat")),
+                        .child_text(language.text("agenda.complete_repeat")),
                 )
                 .child(
                     div()
                         .mt_2()
                         .text_size(ui_px(11.))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(language.text("agenda.repeat_hint")),
+                        .child_text(language.text("agenda.repeat_hint")),
                 )
                 .child(
                     div()

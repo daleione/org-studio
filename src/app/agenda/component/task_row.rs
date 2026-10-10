@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px};
 use gpui::{
     Div, Entity, MouseButton, ParentElement, Stateful, StatefulInteractiveElement, Styled, div,
@@ -97,7 +98,7 @@ pub(crate) fn task_row(
                     .text_color(rgb(theme.foreground_dim))
                     .hover(|style| style.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent)))
                     .active(|style| style.opacity(0.72))
-                    .child(source.to_owned())
+                    .child_text(source.to_owned())
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                         open.update(cx, |this, cx| {
@@ -122,7 +123,7 @@ pub(crate) fn task_row(
                 .text_size(ui_px(12.))
                 .hover(|style| style.bg(rgb(theme.accent_bg)).text_color(rgb(theme.accent)))
                 .active(|style| style.opacity(0.72))
-                .child(time)
+                .child_text(time)
                 .on_mouse_down(MouseButton::Left, select(workspace.clone())),
         )
         .when(columns.plan, |line| {
@@ -144,7 +145,7 @@ pub(crate) fn task_row(
                     ))
                     .hover(|style| style.bg(rgb(theme.hover)))
                     .active(|style| style.opacity(0.72))
-                    .child(plan)
+                    .child_text(plan)
                     .on_mouse_down(MouseButton::Left, select(workspace.clone())),
             )
         })
@@ -183,7 +184,7 @@ pub(crate) fn task_row(
                                 .shadow_sm()
                         })
                         .active(|style| style.opacity(0.7))
-                        .child(row.todo.to_string())
+                        .child_text(row.todo.to_string())
                         .on_mouse_down(MouseButton::Left, select(workspace.clone())),
                 ),
         )
@@ -208,7 +209,7 @@ pub(crate) fn task_row(
                                 .bg(rgb(theme.hover))
                                 .text_color(rgb(theme.warning))
                                 .text_size(ui_px(10.))
-                                .child(priority.to_string()),
+                                .child_text(priority.to_string()),
                         )
                 },
             ))
@@ -223,7 +224,7 @@ pub(crate) fn task_row(
                 .text_color(rgb(theme.foreground))
                 .font_weight(gpui::FontWeight::MEDIUM)
                 .text_size(ui_px(14.))
-                .child(row.title.to_string()),
+                .child_text(row.title.to_string()),
         )
         .when(columns.tags, |line| {
             line.child(
@@ -246,7 +247,7 @@ pub(crate) fn task_row(
                             .text_size(ui_px(11.))
                             .hover(|style| style.bg(rgb(theme.accent_bg)))
                             .active(|style| style.opacity(0.72))
-                            .child(tag.to_string())
+                            .child_text(tag.to_string())
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 cx.stop_propagation();
                                 workspace.update(cx, |this, cx| {

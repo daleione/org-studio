@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px};
 use std::{sync::Arc, time::Duration};
 
@@ -203,14 +204,14 @@ fn render_echo_content(
                     .whitespace_nowrap()
                     .text_ellipsis()
                     .text_color(rgb(theme.foreground))
-                    .child(message.text.to_string()),
+                    .child_text(message.text.to_string()),
             )
             .child(
                 div()
                     .flex_1()
                     .text_color(rgb(theme.foreground_muted))
                     .when(is_prefix, |hint| {
-                        hint.child(match language {
+                        hint.child_text(match language {
                             crate::i18n::Language::Chinese => "（按下组合键…）",
                             crate::i18n::Language::English => "(waiting for next key…)",
                         })
@@ -224,7 +225,7 @@ fn render_echo_content(
                     .cursor_pointer()
                     .text_color(rgb(theme.foreground_muted))
                     .hover(|style| style.bg(rgb(theme.hover)))
-                    .child("×")
+                    .child_text("×")
                     .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                         cx.stop_propagation();
                         dismiss_entity.update(cx, |this, cx| {

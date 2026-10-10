@@ -251,6 +251,7 @@ impl RowShaping<'_> {
             syntax::apply_swatch_text(&mut runs, &semantic_row, self.theme);
             runs
         };
+        let runs = crate::typography::cjk_runs(&text, runs, crate::typography::FontRole::Editor);
         let shaped_font_size = px(f32::from(self.font_size) * metrics.font_scale);
         let table_layout = table_columns.as_ref().and_then(|columns| {
             TableVisualLayout::shape(

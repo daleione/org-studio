@@ -1,8 +1,13 @@
 use std::sync::OnceLock;
 
 mod settings;
+mod text;
 
 pub use settings::FontSettings;
+pub(crate) use text::{
+    FontRole, apply_font_runs, cjk_ranges, cjk_runs, font_overrides, role_text, styled_text,
+    styled_text_with_overrides,
+};
 
 const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 
@@ -11,9 +16,13 @@ const SYSTEM_FONT_FAMILY: &str = ".SystemUIFont";
 pub(crate) struct ResolvedFonts {
     pub(crate) settings: FontSettings,
     pub(crate) editor_family: String,
+    pub(crate) editor_cjk_family: Option<String>,
     pub(crate) reading_family: Option<String>,
+    pub(crate) reading_cjk_family: Option<String>,
     pub(crate) code_family: Option<String>,
+    pub(crate) code_cjk_family: Option<String>,
     pub(crate) ui_family: Option<String>,
+    pub(crate) ui_cjk_family: Option<String>,
     pub(crate) fallbacks: Vec<String>,
     pub(crate) warnings: Vec<String>,
 }
@@ -51,8 +60,14 @@ impl ResolvedFonts {
             })
             .unwrap_or_else(|| SYSTEM_FONT_FAMILY.into());
         let reading_family = configured("reading_font_family", &settings.reading_font_family);
+        let editor_cjk_family =
+            configured("editor_cjk_font_family", &settings.editor_cjk_font_family);
+        let reading_cjk_family =
+            configured("reading_cjk_font_family", &settings.reading_cjk_font_family);
         let code_family = configured("code_font_family", &settings.code_font_family);
+        let code_cjk_family = configured("code_cjk_font_family", &settings.code_cjk_font_family);
         let ui_family = configured("ui_font_family", &settings.ui_font_family);
+        let ui_cjk_family = configured("ui_cjk_font_family", &settings.ui_cjk_font_family);
         let mut fallbacks = Vec::new();
         for name in &settings.font_fallbacks {
             if let Some(family) = find(name) {
@@ -66,9 +81,13 @@ impl ResolvedFonts {
         Self {
             settings,
             editor_family,
+            editor_cjk_family,
             reading_family,
+            reading_cjk_family,
             code_family,
+            code_cjk_family,
             ui_family,
+            ui_cjk_family,
             fallbacks,
             warnings,
         }
@@ -103,9 +122,13 @@ pub(crate) fn fonts() -> &'static ResolvedFonts {
     FONTS.get_or_init(|| ResolvedFonts {
         settings: FontSettings::default(),
         editor_family: "JetBrains Mono".into(),
+        editor_cjk_family: None,
         reading_family: None,
+        reading_cjk_family: None,
         code_family: None,
+        code_cjk_family: None,
         ui_family: None,
+        ui_cjk_family: None,
         fallbacks: Vec::new(),
         warnings: Vec::new(),
     })
@@ -121,6 +144,18 @@ pub(crate) fn editor_font() -> gpui::Font {
 pub(crate) fn font_with_fallbacks(family: &str, defaults: &[&str]) -> gpui::Font {
     let mut font = gpui::font(normalize_family(family).to_owned());
     let mut names = fonts().fallbacks.clone();
+    // Lazy StyledText overrides inherit this cascade when selecting a Chinese family.
+    if [
+        FontRole::Editor,
+        FontRole::Reading,
+        FontRole::Code,
+        FontRole::Ui,
+    ]
+    .iter()
+    .any(|role| role.cjk_family().is_some())
+    {
+        names.insert(0, normalize_family(family).to_owned());
+    }
     for name in defaults {
         append_fallback(&mut names, name);
     }

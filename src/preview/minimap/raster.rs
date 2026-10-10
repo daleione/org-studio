@@ -315,6 +315,18 @@ pub(crate) fn cosmic_runs(
     line_height: f32,
     inline_scale: f32,
 ) -> Vec<(&str, cosmic_text::Attrs<'static>)> {
+    let role = if kind == PreviewLineKind::Code {
+        crate::typography::FontRole::Code
+    } else {
+        crate::typography::FontRole::Reading
+    };
+    let chinese = if role.cjk_family().is_some()
+        || crate::typography::FontRole::Code.cjk_family().is_some()
+    {
+        crate::typography::cjk_ranges(&line.text)
+    } else {
+        Vec::new()
+    };
     let family = if kind == PreviewLineKind::Code {
         preview_style.typography.code_family
     } else {
@@ -323,6 +335,9 @@ pub(crate) fn cosmic_runs(
     let mut boundaries =
         Vec::with_capacity((line.inline_spans.len() + line.code_spans.len()) * 2 + 2);
     boundaries.extend([0, line.text.len()]);
+    for range in &chinese {
+        boundaries.extend([range.start, range.end]);
+    }
     for span in line.inline_spans.iter() {
         boundaries.extend([
             span.range.start.min(line.text.len()),
@@ -386,6 +401,16 @@ pub(crate) fn cosmic_runs(
             }
             let family = if inline_code {
                 preview_style.typography.code_family
+            } else {
+                family
+            };
+            let family = if chinese.iter().any(|r| r.contains(&start)) {
+                let role = if inline_code {
+                    crate::typography::FontRole::Code
+                } else {
+                    role
+                };
+                role.cjk_family().unwrap_or(family)
             } else {
                 family
             };

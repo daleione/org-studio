@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::UiTextExt;
 use crate::components::selection_style::{
     HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
 };
@@ -22,7 +23,7 @@ fn button_base(
         .text_size(ui_px(12.))
         .text_color(rgb(theme.foreground_dim))
         .cursor_pointer()
-        .child(label.into())
+        .child_text(label)
 }
 
 fn button(
@@ -146,7 +147,7 @@ impl WorkspaceWindow {
                             .justify_between()
                             .text_size(ui_px(12.))
                             .text_color(rgb(theme.foreground_dim))
-                            .child(self.buffer_text("新建", "New"))
+                            .child_text(self.buffer_text("新建", "New"))
                             .child(close),
                     )
                     .child(
@@ -174,7 +175,11 @@ impl WorkspaceWindow {
                                     },
                                 ),
                             )
-                            .child(div().text_color(rgb(theme.foreground_muted)).child("↵")),
+                            .child(
+                                div()
+                                    .text_color(rgb(theme.foreground_muted))
+                                    .child_text("↵"),
+                            ),
                     )
                     .into_any_element();
             }
@@ -189,7 +194,7 @@ impl WorkspaceWindow {
                         .flex_none()
                         .text_size(ui_px(12.))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(self.buffer_text("新建", "New")),
+                        .child_text(self.buffer_text("新建", "New")),
                 )
                 .child(
                     div()
@@ -213,7 +218,11 @@ impl WorkspaceWindow {
                         });
                     }),
                 )
-                .child(div().text_color(rgb(theme.foreground_muted)).child("↵"))
+                .child(
+                    div()
+                        .text_color(rgb(theme.foreground_muted))
+                        .child_text("↵"),
+                )
                 .child(close)
                 .into_any_element();
         }
@@ -274,14 +283,14 @@ impl WorkspaceWindow {
                                     .truncate()
                                     .text_size(ui_px(13.))
                                     .text_color(rgb(theme.foreground))
-                                    .child(c.name),
+                                    .child_text(c.name),
                             )
                             .child(
                                 div()
                                     .truncate()
                                     .text_size(ui_px(10.))
                                     .text_color(rgb(theme.foreground_muted))
-                                    .child(path),
+                                    .child_text(path),
                             ),
                     )
                     .child(
@@ -294,7 +303,7 @@ impl WorkspaceWindow {
                             } else {
                                 theme.foreground_muted
                             }))
-                            .child(state),
+                            .child_text(state),
                     )
                     .when_some(id, |row, id| {
                         row.child(
@@ -354,7 +363,7 @@ impl WorkspaceWindow {
                     .child(
                         div()
                             .text_color(rgb(theme.foreground_muted))
-                            .child(total.to_string()),
+                            .child_text(total.to_string()),
                     )
                     .child(div().flex_1())
                     .child(close),
@@ -376,7 +385,9 @@ impl WorkspaceWindow {
                                 .justify_center()
                                 .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
-                                .child(self.buffer_text("没有匹配的文档", "No matching documents")),
+                                .child_text(
+                                    self.buffer_text("没有匹配的文档", "No matching documents"),
+                                ),
                         )
                     })
                     .children(rows),
@@ -390,7 +401,7 @@ impl WorkspaceWindow {
                     .items_center()
                     .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_muted))
-                    .child(hint),
+                    .child_text(hint),
             )
             .child(
                 div()
@@ -439,7 +450,7 @@ impl WorkspaceWindow {
                     div()
                         .text_size(ui_px(12.))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(self.buffer_text("已保存", "Saved"))
+                        .child_text(self.buffer_text("已保存", "Saved"))
                 } else {
                     div()
                         .flex()
@@ -511,7 +522,7 @@ impl WorkspaceWindow {
                                         .truncate()
                                         .text_size(ui_px(13.))
                                         .text_color(rgb(theme.foreground_dim))
-                                        .child(s.display_name()),
+                                        .child_text(s.display_name()),
                                 )
                                 .child(
                                     div()
@@ -563,10 +574,10 @@ impl WorkspaceWindow {
                     .items_center()
                     .text_size(ui_px(13.))
                     .text_color(rgb(theme.foreground_dim))
-                    .child(title),
+                    .child_text(title),
             )
             .child(div().px(px(18.)).pb(px(12.)).flex_none().text_size(ui_px(12.)).text_color(rgb(theme.foreground_dim))
-                .child(if r.kind == ReviewKind::Save {
+                .child_text(if r.kind == ReviewKind::Save {
                     self.buffer_text("选择要保存的文档；跳过的修改会保留。", "Choose documents to save. Skipped edits will be kept.")
                 } else {
                     self.buffer_text("为每份文档选择保存或丢弃。丢弃的修改无法恢复。", "Choose Save or Discard for each document. Discarded edits cannot be recovered.")

@@ -2,6 +2,7 @@ use super::super::{
     UiIntent,
     state::{AgendaProjection, AgendaViewState, AgendaWorkspace, CalendarRange},
 };
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use crate::{
     app::{WorkspaceWindow, component::ModeSwitch},
@@ -61,7 +62,7 @@ fn button(
             theme.foreground_dim
         }))
         .text_size(ui_px(12.))
-        .child(label)
+        .child_text(label)
         .hover(move |style| {
             if selected {
                 style
@@ -176,7 +177,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                 .text_ellipsis()
                 .text_size(ui_px(22.))
                 .font_weight(gpui::FontWeight::BOLD)
-                .child(title),
+                .child_text(title),
         );
     let titlebar_actions = div()
         .debug_selector(|| "agenda-toolbar-actions".to_owned())
@@ -346,7 +347,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                         "assets/icons/agenda/caret-left.svg",
                         UiIntent::ShiftDatePicker(-1),
                     ))
-                    .child(format!("{}-{:02}", month.year(), month.month()))
+                    .child_text(format!("{}-{:02}", month.year(), month.month()))
                     .child(icon(
                         workspace.clone(),
                         "assets/icons/agenda/caret-right.svg",
@@ -370,7 +371,7 @@ pub(crate) fn agenda_toolbar(props: AgendaToolbarProps<'_>) -> Div {
                             .w(ui_px(32.))
                             .text_center()
                             .text_size(ui_px(10.))
-                            .child(language.text(key))
+                            .child_text(language.text(key))
                     }),
                 ),
             );

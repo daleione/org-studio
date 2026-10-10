@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use std::{
     path::PathBuf,
@@ -313,7 +314,7 @@ pub(crate) fn render_export_panel(
             .text_size(ui_px(12.0))
             .font_weight(gpui::FontWeight::SEMIBOLD)
             .text_color(rgb(palette.foreground))
-            .child(label)
+            .child_text(label)
     };
 
     let format_button = |label: &'static str, format: ExportFormat| {
@@ -356,7 +357,7 @@ pub(crate) fn render_export_panel(
             .when(selected, |button| button.shadow_sm())
             .hover(|style| style.border_color(rgb(palette.accent_border)))
             .cursor_pointer()
-            .child(label)
+            .child_text(label)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 button_entity.update(cx, |this, cx| this.select_export_format(format, cx));
             })
@@ -388,7 +389,7 @@ pub(crate) fn render_export_panel(
             .when(selected, |button| button.shadow_sm())
             .hover(|style| style.border_color(rgb(palette.accent_border)))
             .cursor_pointer()
-            .child(label)
+            .child_text(label)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 paper_entity.update(cx, |this, cx| this.select_export_paper(paper, cx));
             })
@@ -422,7 +423,7 @@ pub(crate) fn render_export_panel(
             .when(selected, |button| button.shadow_sm())
             .hover(|style| style.border_color(rgb(palette.accent_border)))
             .cursor_pointer()
-            .child(label)
+            .child_text(label)
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 orientation_entity.update(cx, |this, cx| {
                     this.select_export_orientation(orientation, cx)
@@ -482,7 +483,7 @@ pub(crate) fn render_export_panel(
                                     } else {
                                         palette.foreground
                                     }))
-                                    .child(template.name(language)),
+                                    .child_text(template.name(language)),
                             ),
                     )
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
@@ -550,14 +551,14 @@ pub(crate) fn render_export_panel(
                                     div()
                                         .text_size(ui_px(21.0))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                        .child(language.text("export.title")),
+                                        .child_text(language.text("export.title")),
                                 )
                                 .child(
                                     div()
                                         .mt(px(3.0))
                                         .text_size(ui_px(11.0))
                                         .text_color(rgb(palette.foreground_dim))
-                                        .child(language.text("export.subtitle")),
+                                        .child_text(language.text("export.subtitle")),
                                 ),
                         )
                         .child(
@@ -579,7 +580,7 @@ pub(crate) fn render_export_panel(
                                         .border_color(rgb(palette.border_hover))
                                 })
                                 .cursor_pointer()
-                                .child("×")
+                                .child_text("×")
                                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                     close_entity.update(cx, |this, cx| this.close_export_panel(cx));
                                 }),
@@ -737,10 +738,10 @@ pub(crate) fn render_export_panel(
                                                                 .border_color(rgb(palette.accent))
                                                                 .bg(rgb(palette.background))
                                                                 .text_color(rgb(palette.accent))
-                                                                .child(language.text(
+                                                                .child_text(language.text(
                                                                     "export.long_image",
                                                                 ))
-                                                                .child("✓"),
+                                                                .child_text("✓"),
                                                         )
                                                     },
                                                 ),
@@ -760,7 +761,7 @@ pub(crate) fn render_export_panel(
                                                                 .text_color(rgb(
                                                                     palette.foreground_dim,
                                                                 ))
-                                                                .child(language.text(
+                                                                .child_text(language.text(
                                                                     "export.quality",
                                                                 )),
                                                         )
@@ -796,7 +797,7 @@ pub(crate) fn render_export_panel(
                                                                             },
                                                                         ))
                                                                         .cursor_pointer()
-                                                                        .child(format!(
+                                                                        .child_text(format!(
                                                                             "{} · 144 PPI",
                                                                             language.text(
                                                                                 "export.standard"
@@ -842,7 +843,7 @@ pub(crate) fn render_export_panel(
                                                                             },
                                                                         ))
                                                                         .cursor_pointer()
-                                                                        .child(format!(
+                                                                        .child_text(format!(
                                                                             "{} · 300 PPI",
                                                                             language.text(
                                                                                 "export.high"
@@ -879,7 +880,7 @@ pub(crate) fn render_export_panel(
                                                     div()
                                                         .text_size(ui_px(10.0))
                                                         .text_color(rgb(palette.accent))
-                                                        .child(format!(
+                                                        .child_text(format!(
                                                             "{} · {}",
                                                             export_templates().len(),
                                                             language.text("export.themes")
@@ -914,14 +915,14 @@ pub(crate) fn render_export_panel(
                                                     div()
                                                         .text_size(ui_px(11.0))
                                                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                                                        .child(language.text("export.advanced")),
+                                                        .child_text(language.text("export.advanced")),
                                                 )
                                                 .child(
                                                     div()
                                                         .mt(px(3.0))
                                                         .text_size(ui_px(10.0))
                                                         .text_color(rgb(palette.foreground_dim))
-                                                        .child(language.text(
+                                                        .child_text(language.text(
                                                             "export.advanced_summary",
                                                         )),
                                                 ),
@@ -932,7 +933,7 @@ pub(crate) fn render_export_panel(
                                                 .flex_none()
                                                 .text_size(ui_px(10.0))
                                                 .text_color(rgb(palette.foreground_dim))
-                                                .child(language.text("export.template_default")),
+                                                .child_text(language.text("export.template_default")),
                                         ),
                                 ),
                         ),
@@ -955,7 +956,7 @@ pub(crate) fn render_export_panel(
                                 .text_size(ui_px(11.0))
                                 .text_color(rgb(palette.foreground_dim))
                                 .when(status.is_none(), |view| {
-                                    view.child(format!(
+                                    view.child_text(format!(
                                         "{} · {format_name}",
                                         language.text("export.snapshot_hint")
                                     ))
@@ -970,7 +971,7 @@ pub(crate) fn render_export_panel(
                                         }
                                         ExportRunState::Error(message) => (message, palette.error),
                                     };
-                                    view.text_color(rgb(color)).child(message.to_string())
+                                    view.text_color(rgb(color)).child_text(message.to_string())
                                 }),
                         )
                         .child(
@@ -995,7 +996,7 @@ pub(crate) fn render_export_panel(
                                                     style.bg(rgb(palette.background_alt))
                                                 })
                                                 .cursor_pointer()
-                                                .child(language.text("export.reveal"))
+                                                .child_text(language.text("export.reveal"))
                                                 .on_mouse_down(
                                                     MouseButton::Left,
                                                     move |_, _, cx| {
@@ -1018,7 +1019,7 @@ pub(crate) fn render_export_panel(
                                         .bg(rgb(palette.background_alt))
                                         .hover(|style| style.bg(rgb(palette.hover)))
                                         .cursor_pointer()
-                                        .child(language.text("export.cancel"))
+                                        .child_text(language.text("export.cancel"))
                                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                             cancel_entity.update(cx, |this, cx| {
                                                 this.close_export_panel(cx)
@@ -1051,7 +1052,7 @@ pub(crate) fn render_export_panel(
                                                 },
                                             )
                                         })
-                                        .child(if working {
+                                        .child_text(if working {
                                             language.text("export.working_action").to_owned()
                                         } else {
                                             action_label

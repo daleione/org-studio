@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_font, ui_px};
 use std::time::Instant;
 
@@ -252,7 +253,7 @@ fn document_titlebar(
                         .truncate()
                         .text_size(ui_px(13.0))
                         .text_color(rgb(theme.foreground))
-                        .child(title),
+                        .child_text(title),
                 ),
         )
 }

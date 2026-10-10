@@ -3,6 +3,7 @@ use crate::app::status_line::{
     self,
     shell::{ShellKind, ShellRequest, ShellShape},
 };
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
 
@@ -93,12 +94,16 @@ impl WorkspaceWindow {
                 .items_center()
                 .text_size(ui_px(12.))
                 .text_color(rgb(theme.foreground_dim))
-                .child(div().text_color(rgb(theme.accent)).child("◌"))
-                .child(div().flex_1().child(if started.elapsed() >= RUNNING_DELAY {
-                    self.command_text("正在对齐表格…", "Aligning tables…")
-                } else {
-                    "table-align"
-                }))
+                .child(div().text_color(rgb(theme.accent)).child_text("◌"))
+                .child(
+                    div()
+                        .flex_1()
+                        .child_text(if started.elapsed() >= RUNNING_DELAY {
+                            self.command_text("正在对齐表格…", "Aligning tables…")
+                        } else {
+                            "table-align"
+                        }),
+                )
                 .child(close_button)
                 .into_any_element(),
             Phase::Result { message, undo, .. } => {
@@ -116,13 +121,13 @@ impl WorkspaceWindow {
                     .items_center()
                     .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground))
-                    .child(div().text_color(rgb(theme.success)).child("✓"))
+                    .child(div().text_color(rgb(theme.success)).child_text("✓"))
                     .child(
                         div()
                             .flex_1()
                             .min_w_0()
                             .text_ellipsis()
-                            .child(message.clone()),
+                            .child_text(message.clone()),
                     )
                     .when(can_undo, |row| {
                         row.child(
@@ -135,7 +140,7 @@ impl WorkspaceWindow {
                                 .items_center()
                                 .text_color(rgb(theme.accent))
                                 .cursor_pointer()
-                                .child(self.command_text("撤销", "Undo"))
+                                .child_text(self.command_text("撤销", "Undo"))
                                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                     cx.stop_propagation();
                                     undo_entity.update(cx, |w, cx| w.undo_command_result(cx));
@@ -248,7 +253,9 @@ impl WorkspaceWindow {
                                 .px(px(10.))
                                 .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
-                                .child(self.command_text("没有匹配的命令", "No matching command")),
+                                .child_text(
+                                    self.command_text("没有匹配的命令", "No matching command"),
+                                ),
                         )
                     }),
             )
@@ -270,7 +277,7 @@ impl WorkspaceWindow {
                         theme.foreground_dim
                     }))
                     .overflow_hidden()
-                    .child(div().text_ellipsis().child(detail)),
+                    .child(div().text_ellipsis().child_text(detail)),
             )
             .child(
                 div()
@@ -297,7 +304,7 @@ impl WorkspaceWindow {
                             div()
                                 .text_size(ui_px(10.))
                                 .text_color(rgb(theme.foreground_dim))
-                                .child(format!(
+                                .child_text(format!(
                                     "⌃1–{} · Tab",
                                     s.candidates.len().min(s.visible_limit).max(1)
                                 )),
@@ -317,7 +324,7 @@ impl WorkspaceWindow {
                             .text_color(rgb(theme.accent))
                             .cursor_pointer()
                             .hover(|s| s.bg(rgb(theme.hover)))
-                            .child("↵")
+                            .child_text("↵")
                             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                                 cx.stop_propagation();
                                 execute.update(cx, |w, cx| {
@@ -364,7 +371,7 @@ fn candidate_row(
                 .font_family(ui_family("Menlo"))
                 .text_size(ui_px(12.))
                 .text_color(rgb(theme.accent))
-                .child((index - begin + 1).to_string()),
+                .child_text((index - begin + 1).to_string()),
         )
         .child(
             div()
@@ -373,7 +380,7 @@ fn candidate_row(
                 .font_family(ui_family("Menlo"))
                 .text_size(ui_px(13.))
                 .text_ellipsis()
-                .child(entry.input.clone()),
+                .child_text(entry.input.clone()),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
@@ -399,7 +406,7 @@ fn close_button(entity: Entity<WorkspaceWindow>) -> impl IntoElement {
         .cursor_pointer()
         .text_color(rgb(theme.foreground_dim))
         .hover(|s| s.bg(rgb(theme.hover)))
-        .child("×")
+        .child_text("×")
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             close.update(cx, |w, cx| w.close_command_line(cx));

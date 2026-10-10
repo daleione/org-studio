@@ -1,4 +1,5 @@
 use super::super::UiIntent;
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use crate::{agenda::ProjectSummary, app::WorkspaceWindow};
 use gpui::{Entity, MouseButton, div, prelude::*, px, rgb};
@@ -58,7 +59,7 @@ pub(crate) fn projects_view(
                         div()
                             .text_size(ui_px(12.))
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(project.project.title.to_string()),
+                            .child_text(project.project.title.to_string()),
                     )
                     .child(
                         div()
@@ -69,7 +70,7 @@ pub(crate) fn projects_view(
                             } else {
                                 theme.foreground_dim
                             }))
-                            .child(if project.stuck {
+                            .child_text(if project.stuck {
                                 project
                                     .blocked_reason
                                     .as_deref()
@@ -130,14 +131,14 @@ pub(crate) fn projects_view(
                                     },
                                 ))
                                 .text_size(ui_px(9.))
-                                .child(task.todo.to_string()),
+                                .child_text(task.todo.to_string()),
                         )
                         .child(
                             div()
                                 .flex_1()
                                 .min_w_0()
                                 .text_size(ui_px(11.))
-                                .child(task.title.to_string()),
+                                .child_text(task.title.to_string()),
                         )
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             target.update(cx, |this, cx| {
@@ -161,14 +162,14 @@ pub(crate) fn projects_view(
                                 div()
                                     .text_size(ui_px(10.))
                                     .text_color(rgb(theme.todo_active))
-                                    .child(language.text("agenda.project_details")),
+                                    .child_text(language.text("agenda.project_details")),
                             )
                             .child(
                                 div()
                                     .mt_2()
                                     .text_size(ui_px(19.))
                                     .font_weight(gpui::FontWeight::BOLD)
-                                    .child(project.project.title.to_string()),
+                                    .child_text(project.project.title.to_string()),
                             ),
                     )
                     .child(super::inbox::button(
@@ -187,7 +188,7 @@ pub(crate) fn projects_view(
                         .bg(rgb(theme.hover))
                         .text_color(rgb(theme.warning))
                         .text_size(ui_px(10.))
-                        .child(
+                        .child_text(
                             project
                                 .blocked_reason
                                 .as_deref()
@@ -217,7 +218,7 @@ pub(crate) fn projects_view(
             .items_center()
             .justify_center()
             .text_color(rgb(theme.foreground_dim))
-            .child(language.text("agenda.no_projects"))
+            .child_text(language.text("agenda.no_projects"))
     };
     div()
         .size_full()
@@ -255,13 +256,13 @@ fn metric(value: usize, label: &'static str) -> gpui::Div {
             div()
                 .text_size(ui_px(18.))
                 .font_weight(gpui::FontWeight::BOLD)
-                .child(value.to_string()),
+                .child_text(value.to_string()),
         )
         .child(
             div()
                 .mt_1()
                 .text_size(ui_px(10.))
                 .text_color(rgb(theme.foreground_dim))
-                .child(label),
+                .child_text(label),
         )
 }

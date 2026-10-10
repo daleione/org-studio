@@ -2,12 +2,16 @@
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FontSettings {
     pub editor_font_family: Option<String>,
+    pub editor_cjk_font_family: Option<String>,
     pub editor_font_size: u16,
     pub reading_font_family: Option<String>,
+    pub reading_cjk_font_family: Option<String>,
     pub reading_font_size: Option<u16>,
     pub code_font_family: Option<String>,
+    pub code_cjk_font_family: Option<String>,
     pub code_font_size: Option<u16>,
     pub ui_font_family: Option<String>,
+    pub ui_cjk_font_family: Option<String>,
     pub ui_font_size: u16,
     pub font_fallbacks: Vec<String>,
 }
@@ -16,12 +20,16 @@ impl Default for FontSettings {
     fn default() -> Self {
         Self {
             editor_font_family: None,
+            editor_cjk_font_family: None,
             editor_font_size: Self::DEFAULT_EDITOR_SIZE,
             reading_font_family: None,
+            reading_cjk_font_family: None,
             reading_font_size: None,
             code_font_family: None,
+            code_cjk_font_family: None,
             code_font_size: None,
             ui_font_family: None,
+            ui_cjk_font_family: None,
             ui_font_size: Self::DEFAULT_UI_SIZE,
             font_fallbacks: Vec::new(),
         }
@@ -37,16 +45,28 @@ impl FontSettings {
     pub(crate) fn description(key: &str) -> Option<&'static str> {
         Some(match key {
             "editor_font_family" => "Installed font family, or auto (editor default).",
+            "editor_cjk_font_family" => {
+                "Chinese editor font family, or auto (keep the base font and fallbacks). Shares the editor size."
+            }
             "editor_font_size" => "Editor base font size, 5..96 logical pixels; default 15.",
             "reading_font_family" => "Installed font family, or auto (reading style default).",
+            "reading_cjk_font_family" => {
+                "Chinese reading font family, or auto (keep the base font and fallbacks). Shares the reading size."
+            }
             "reading_font_size" => {
                 "Reading body size, auto (style default) or 5..96 logical pixels; headings scale proportionally."
             }
             "code_font_family" => "Installed font family, or auto (reading style code default).",
+            "code_cjk_font_family" => {
+                "Chinese font for reading code blocks and inline code, or auto. Shares the code size."
+            }
             "code_font_size" => {
                 "Reading code size, auto (style default) or 5..96 logical pixels, including inline code."
             }
             "ui_font_family" => "Installed font family, or auto (interface default).",
+            "ui_cjk_font_family" => {
+                "Chinese interface font family, or auto (keep the base font and fallbacks). Shares the interface size."
+            }
             "ui_font_size" => {
                 "Interface base font size, 5..96 logical pixels; default 14. Labels scale proportionally."
             }
@@ -61,14 +81,18 @@ impl FontSettings {
         let value = value.trim();
         match key {
             "editor_font_family" => self.editor_font_family = parse_family(value),
+            "editor_cjk_font_family" => self.editor_cjk_font_family = parse_family(value),
             "editor_font_size" => {
                 self.editor_font_size = parse_size(value).unwrap_or(Self::DEFAULT_EDITOR_SIZE)
             }
             "reading_font_family" => self.reading_font_family = parse_family(value),
+            "reading_cjk_font_family" => self.reading_cjk_font_family = parse_family(value),
             "reading_font_size" => self.reading_font_size = parse_size(value),
             "code_font_family" => self.code_font_family = parse_family(value),
+            "code_cjk_font_family" => self.code_cjk_font_family = parse_family(value),
             "code_font_size" => self.code_font_size = parse_size(value),
             "ui_font_family" => self.ui_font_family = parse_family(value),
+            "ui_cjk_font_family" => self.ui_cjk_font_family = parse_family(value),
             "ui_font_size" => {
                 self.ui_font_size = parse_size(value).unwrap_or(Self::DEFAULT_UI_SIZE)
             }
@@ -78,18 +102,28 @@ impl FontSettings {
         true
     }
 
-    pub(crate) fn entries(&self) -> [(&'static str, String); 9] {
+    pub(crate) fn entries(&self) -> [(&'static str, String); 13] {
         let family = |value: &Option<String>| value.clone().unwrap_or_else(|| "auto".into());
         let size =
             |value: Option<u16>| value.map_or_else(|| "auto".into(), |size| size.to_string());
         [
             ("editor_font_family", family(&self.editor_font_family)),
+            (
+                "editor_cjk_font_family",
+                family(&self.editor_cjk_font_family),
+            ),
             ("editor_font_size", self.editor_font_size.to_string()),
             ("reading_font_family", family(&self.reading_font_family)),
+            (
+                "reading_cjk_font_family",
+                family(&self.reading_cjk_font_family),
+            ),
             ("reading_font_size", size(self.reading_font_size)),
             ("code_font_family", family(&self.code_font_family)),
+            ("code_cjk_font_family", family(&self.code_cjk_font_family)),
             ("code_font_size", size(self.code_font_size)),
             ("ui_font_family", family(&self.ui_font_family)),
+            ("ui_cjk_font_family", family(&self.ui_cjk_font_family)),
             ("ui_font_size", self.ui_font_size.to_string()),
             (
                 "font_fallbacks",

@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{Entity, MouseButton, ParentElement, Styled, div, prelude::*, px, rgb};
 
@@ -89,7 +90,7 @@ pub(crate) fn render_status_popover(
                 .flex()
                 .items_center()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(div().flex_1().child(title))
+                .child(div().flex_1().child_text(title))
                 .child(
                     div()
                         .id("status-popover-close")
@@ -106,7 +107,7 @@ pub(crate) fn render_status_popover(
                         })
                         .cursor_pointer()
                         .text_color(rgb(theme.foreground_dim))
-                        .child("×")
+                        .child_text("×")
                         .on_click(move |_, _, cx| {
                             close_entity.update(cx, |this, cx| {
                                 this.status.popover = None;
@@ -235,7 +236,7 @@ pub(crate) fn render_status_popover(
                                 .when(depth <= 1, |label| {
                                     label.font_weight(gpui::FontWeight::MEDIUM)
                                 })
-                                .child(entry.title.to_string()),
+                                .child_text(entry.title.to_string()),
                         )
                         .child(
                             div()
@@ -246,7 +247,7 @@ pub(crate) fn render_status_popover(
                                 .text_right()
                                 .text_size(ui_px(10.0))
                                 .text_color(rgb(theme.foreground_dim))
-                                .child(entry.line.to_string()),
+                                .child_text(entry.line.to_string()),
                         )
                         .on_click(move |_, _, cx| {
                             row_entity.update(cx, |this, cx| {
@@ -278,7 +279,7 @@ pub(crate) fn render_status_popover(
                         .px(px(12.0))
                         .py(px(8.0))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(match language {
+                        .child_text(match language {
                             Language::Chinese => "此文档暂无标题",
                             Language::English => "No headings in this document",
                         }),
@@ -307,9 +308,9 @@ pub(crate) fn render_status_popover(
                             row.bg(rgb(theme.background_alt))
                                 .font_weight(gpui::FontWeight::SEMIBOLD)
                         })
-                        .child(div().flex_1().child(style.name(language)))
+                        .child(div().flex_1().child_text(style.name(language)))
                         .when(selected == Some(style_id), |row| {
-                            row.child(div().text_color(rgb(theme.heading[0])).child("✓"))
+                            row.child(div().text_color(rgb(theme.heading[0])).child_text("✓"))
                         })
                         .on_click(move |_, _, cx| {
                             row_entity
@@ -333,7 +334,7 @@ pub(crate) fn render_status_popover(
                         .items_center()
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(theme.background_alt)))
-                        .child(div().flex_1().child(segment_title(segment, language)))
+                        .child(div().flex_1().child_text(segment_title(segment, language)))
                         .child(
                             div()
                                 .w(ui_px(28.0))
@@ -370,7 +371,7 @@ pub(crate) fn render_status_popover(
                     .border_color(rgb(theme.border))
                     .text_size(ui_px(9.0))
                     .text_color(rgb(theme.foreground_dim))
-                    .child(match language {
+                    .child_text(match language {
                         Language::Chinese => "模式和更多入口始终保留；其余配置自动保存。",
                         Language::English => "Mode and More stay visible; other choices are saved.",
                     }),
@@ -390,8 +391,8 @@ pub(crate) fn render_status_popover(
                         .items_center()
                         .cursor_pointer()
                         .hover(|style| style.bg(rgb(theme.background_alt)))
-                        .child(div().flex_1().child(segment_title(segment, language)))
-                        .child(div().text_color(rgb(theme.foreground_dim)).child("›"))
+                        .child(div().flex_1().child_text(segment_title(segment, language)))
+                        .child(div().text_color(rgb(theme.foreground_dim)).child_text("›"))
                         .on_click(move |_, _, cx| {
                             row_entity.update(cx, |this, cx| {
                                 this.activate_status_segment(pane, segment, None, cx)
@@ -413,7 +414,7 @@ pub(crate) fn render_status_popover(
                     .items_center()
                     .cursor_pointer()
                     .hover(|style| style.bg(rgb(theme.background_alt)))
-                    .child(match language {
+                    .child_text(match language {
                         Language::Chinese => "定制状态栏…",
                         Language::English => "Customize status line…",
                     })
@@ -439,7 +440,7 @@ pub(crate) fn render_status_popover(
                         .px(px(12.0))
                         .pb(px(9.0))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(info_text(segment, snapshot, language)),
+                        .child_text(info_text(segment, snapshot, language)),
                 );
             }
         }
@@ -466,6 +467,6 @@ impl gpui::Render for OutlineTooltip {
             .border_color(rgb(theme.border))
             .text_color(rgb(theme.foreground))
             .text_size(ui_px(12.0))
-            .child(self.0.to_string())
+            .child_text(self.0.to_string())
     }
 }

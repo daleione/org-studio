@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_font, ui_px, ui_size};
 use std::f32::consts::PI;
 use std::sync::Arc;
@@ -494,10 +495,11 @@ fn measured_text_width(text: &str, window: &Window) -> f32 {
         color: Hsla::default(),
         ..Default::default()
     };
+    let runs = crate::typography::cjk_runs(&text, vec![run], crate::typography::FontRole::Ui);
     f32::from(
         window
             .text_system()
-            .shape_line(text, ui_px(11.0), &[run], None)
+            .shape_line(text, ui_px(11.0), &runs, None)
             .width,
     )
 }
@@ -623,7 +625,7 @@ fn statistic_field(icon: StatusIcon, value: String, width: f32) -> gpui::Div {
                         .overflow_hidden()
                         .whitespace_nowrap()
                         .text_ellipsis()
-                        .child(value),
+                        .child_text(value),
                 ),
         )
 }
@@ -675,7 +677,7 @@ fn breadcrumb(path: &str, compact: bool) -> gpui::Div {
                 .overflow_hidden()
                 .whitespace_nowrap()
                 .text_ellipsis()
-                .child((*title).to_owned()),
+                .child_text((*title).to_owned()),
         );
     }
     row
@@ -689,7 +691,7 @@ fn status_value(text: String, width: Option<f32>) -> gpui::Div {
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
-        .child(text)
+        .child_text(text)
 }
 
 pub(crate) fn render_status_line(
@@ -790,7 +792,7 @@ pub(crate) fn render_buffer_status_trigger(
                 .child(
                     div()
                         .font_family(ui_family("Menlo"))
-                        .child(count.to_string()),
+                        .child_text(count.to_string()),
                 )
                 .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                     cx.stop_propagation();
@@ -860,7 +862,7 @@ pub(crate) fn render_status_line_content(
                 ),
         )
         .when(layout.mode == Variant::Full, |button| {
-            button.child(snapshot.mode_label())
+            button.child_text(snapshot.mode_label())
         });
 
     let left = div()
@@ -874,7 +876,7 @@ pub(crate) fn render_status_line_content(
                 status_button(entity.clone(), pane_id, StatusSegment::ReadingStyle)
                     .w(px(style_slot_width(layout.reading_style)))
                     .overflow_hidden()
-                    .child(if layout.reading_style == Variant::Compact {
+                    .child_text(if layout.reading_style == Variant::Compact {
                         match snapshot.language {
                             Language::Chinese => "样式",
                             Language::English => "Style",
@@ -886,7 +888,7 @@ pub(crate) fn render_status_line_content(
                         div()
                             .text_size(ui_px(8.0))
                             .text_color(rgb(theme.foreground_dim))
-                            .child("▾"),
+                            .child_text("▾"),
                     ),
             )
         })
@@ -951,7 +953,7 @@ pub(crate) fn render_status_line_content(
                     StatusTone::Working => "◌",
                     StatusTone::Error => "!",
                 })
-                .child(message.text.to_string())
+                .child_text(message.text.to_string())
         });
 
     let mut right = div().h_full().flex().items_center().flex_none();
@@ -1129,7 +1131,7 @@ pub(crate) fn render_status_line_content(
                         .bg(rgb(status_colors().badge_background))
                         .text_color(rgb(status_colors().badge_foreground))
                         .text_size(ui_px(8.0))
-                        .child(layout.overflow.len().to_string()),
+                        .child_text(layout.overflow.len().to_string()),
                 )
             })
             .on_click(move |_, _, cx| {
@@ -1539,13 +1541,13 @@ fn render_document_statistics(
                     div()
                         .flex_1()
                         .text_color(rgb(theme.foreground_dim))
-                        .child(label),
+                        .child_text(label),
                 )
                 .child(
                     div()
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(theme.foreground))
-                        .child(value),
+                        .child_text(value),
                 ),
         );
     }

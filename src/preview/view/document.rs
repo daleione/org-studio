@@ -5,6 +5,7 @@ use super::{
     render_code_row, render_markdown_block, render_table_row, resolve_image_path, rgb,
     styled_inline_runs,
 };
+use crate::components::UiTextExt;
 use crate::preview::BlockId;
 use crate::preview::{
     CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
@@ -15,6 +16,7 @@ use crate::preview::{
     projection::{ReadingCodeRow, ReadingListMarker, VisualRowKind},
     style::CodeBlockVariant,
 };
+use crate::typography::{FontRole, role_text};
 use gpui::{list, prelude::*};
 
 pub(crate) struct ReadingRenderOptions {
@@ -487,6 +489,12 @@ fn render_block(
         );
     }
     let text = display_runs.text.clone();
+    let font_role = if display_map.row_kind(display_row) == PreviewLineKind::Code {
+        FontRole::Code
+    } else {
+        FontRole::Reading
+    };
+    let plain = |text| selectable_plain_text(text, display_row, interaction, font_role);
     let inline = || {
         reading_inline(
             document,
@@ -635,7 +643,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.date))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::ListItem => render_list_item(
             document,
             display_row,
@@ -650,17 +658,17 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.code_foreground))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::FootnoteDefinition => div()
             .font_family("Menlo")
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.link))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::TableRow => display_map.table_projection(display_row).map_or_else(
             || {
                 reading_fallback(
-                    text.clone(),
+                    role_text(text.clone(), FontRole::Reading),
                     row_layout.font_size,
                     row_layout.line_height,
                     style,
@@ -737,7 +745,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.code_foreground))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::QuoteBlock => div()
             .pl(px(row_layout.padding_left))
             .pr(px(row_layout.padding_right))
@@ -753,21 +761,21 @@ fn render_block(
             .text_color(rgb(palette.quote))
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::VerseBlock => div()
             .pl(px(row_layout.padding_left))
             .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.quote))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::CenterBlock => div()
             .w_full()
             .text_center()
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.foreground))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::SpecialBlock { name } => div()
             .min_h(px(row_layout.min_height))
             .pl(px(row_layout.padding_left))
@@ -779,7 +787,7 @@ fn render_block(
             .font_family(style.typography.code_family)
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
-            .child(format!("{name}: {text}")),
+            .child(role_text(format!("{name}: {text}"), font_role)),
         BlockKind::Drawer { .. } => div()
             .pl(px(row_layout.padding_left))
             .pr(px(row_layout.padding_right))
@@ -790,7 +798,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.meta))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::Keyword => div()
             .pt(px(row_layout.padding_top))
             .pb(px(row_layout.padding_bottom))
@@ -798,7 +806,7 @@ fn render_block(
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .text_color(rgb(palette.meta))
-            .child(selectable_plain_text(text, display_row, interaction)),
+            .child(plain(text)),
         BlockKind::Comment | BlockKind::CommentBlock => div(),
         BlockKind::HorizontalRule => div()
             .h(px(row_layout.fixed_height.unwrap_or(1.0)))
@@ -851,7 +859,7 @@ pub(super) fn render_diagram(
                         .w_full()
                         .text_size(px(11.0))
                         .text_color(rgb(palette.meta))
-                        .child(warning.to_string())
+                        .child_text(warning.to_string())
                 }))
         }
         DiagramProjection::Error { diagnostics } => div()
@@ -876,7 +884,7 @@ pub(super) fn render_diagram(
                 diagnostics
                     .iter()
                     .take(3)
-                    .map(|diagnostic| div().child(diagnostic.to_string())),
+                    .map(|diagnostic| div().child_text(diagnostic.to_string())),
             ),
     };
     div().w_full().child(label).child(body)
@@ -897,7 +905,7 @@ fn reading_chip(
         .text_size(px(10.0 * zoom))
         .font_weight(FontWeight::MEDIUM)
         .text_color(rgb(color))
-        .child(text.into())
+        .child(role_text(text, FontRole::Reading))
 }
 
 pub(crate) fn render_list_item(
@@ -1012,7 +1020,7 @@ fn reading_list_marker(
     let label = prefix.trim_end();
     let width = reading_marker_width(label, ordered) * scale;
     let marker_content = interaction.map_or_else(
-        || gpui::StyledText::new(prefix.clone()).into_any_element(),
+        || role_text(prefix.clone(), FontRole::Reading).into_any_element(),
         |interaction| {
             let content_len = document
                 .display_map
@@ -1023,7 +1031,7 @@ fn reading_list_marker(
                 reading_segment_selection(interaction, display_row, row_text_len, 0..prefix.len());
             super::SelectableReadingText::new(
                 ("reading-list-prefix", display_row),
-                gpui::StyledText::new(prefix.clone()),
+                role_text(prefix.clone(), FontRole::Reading),
                 interaction.panel.clone(),
                 display_row,
                 selection,
@@ -1116,7 +1124,10 @@ pub(crate) fn reading_code_label(
         .text_size(px(10.0))
         .text_color(rgb(palette.meta))
         .justify_between()
-        .child(language.unwrap_or("code").to_owned())
+        .child(role_text(
+            language.unwrap_or("code").to_owned(),
+            FontRole::Code,
+        ))
         .when_some(action.zip(interaction), |element, (action, interaction)| {
             element.child(
                 div()
@@ -1134,7 +1145,7 @@ pub(crate) fn reading_code_label(
                     .when(copy_feedback.is_some(), |element| {
                         element.bg(rgb(palette.surface))
                     })
-                    .child(copy_label)
+                    .child_text(copy_label)
                     .on_click(move |_, window, cx| {
                         (interaction.dispatch)(
                             action.clone(),
@@ -1282,14 +1293,15 @@ fn selectable_plain_text(
     text: gpui::SharedString,
     display_row: usize,
     interaction: Option<&ReadingInteraction>,
+    role: FontRole,
 ) -> gpui::AnyElement {
     let Some(interaction) = interaction else {
-        return gpui::StyledText::new(text).into_any_element();
+        return role_text(text, role).into_any_element();
     };
     let selection = reading_row_selection(interaction, display_row, text.len());
     super::SelectableReadingText::new(
         ("reading-plain", display_row),
-        gpui::StyledText::new(text),
+        role_text(text, role),
         interaction.panel.clone(),
         display_row,
         selection,

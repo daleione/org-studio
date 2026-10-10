@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px};
 use gpui::{AnyElement, Entity, MouseButton, div, prelude::*, px, rgb};
 
@@ -29,7 +30,7 @@ fn keycap(key: &str, active: bool) -> gpui::Div {
         }))
         // White on the active accent blue stays fixed for contrast.
         .text_color(rgb(if active { 0xffffff } else { theme.accent }))
-        .child(label.to_owned())
+        .child_text(label.to_owned())
 }
 
 impl WorkspaceWindow {
@@ -106,7 +107,7 @@ impl WorkspaceWindow {
                                         .text_color(rgb(
                                             crate::theme::current_theme().foreground_muted
                                         ))
-                                        .child(group.title(self.language)),
+                                        .child_text(group.title(self.language)),
                                 )
                             })
                             .children(
@@ -129,7 +130,7 @@ impl WorkspaceWindow {
                 breadcrumb = breadcrumb.child(
                     div()
                         .text_color(rgb(crate::theme::current_theme().foreground_muted))
-                        .child("›"),
+                        .child_text("›"),
                 );
             }
             breadcrumb = breadcrumb.child(keycap(key, index + 1 == prefix_keys.len()));
@@ -170,7 +171,7 @@ impl WorkspaceWindow {
                     .items_center()
                     .gap(px(8.))
                     .child(breadcrumb.when(p.layout.width > 360., |row| {
-                        row.child(div().ml(px(5.)).child(caption))
+                        row.child(div().ml(px(5.)).child_text(caption))
                     }))
                     .child(
                         div()
@@ -181,7 +182,7 @@ impl WorkspaceWindow {
                             .gap(px(7.))
                             .cursor_pointer()
                             .child(keycap("C-g", false))
-                            .child(text(self.language, "取消", "Cancel"))
+                            .child_text(text(self.language, "取消", "Cancel"))
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();
                                 cancel.update(cx, |w, cx| w.cancel_prefix_input(window, cx));
@@ -219,13 +220,13 @@ impl WorkspaceWindow {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(item.title.clone()),
+                    .child_text(item.title.clone()),
             )
             .when(item.prefix, |row| {
                 row.child(
                     div()
                         .text_color(rgb(crate::theme::current_theme().foreground_muted))
-                        .child("›"),
+                        .child_text("›"),
                 )
             })
             .on_mouse_down(MouseButton::Left, move |_, window, cx| {

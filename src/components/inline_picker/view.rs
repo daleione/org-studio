@@ -1,5 +1,6 @@
 //! Floating shell and theme-consistent controls for each picker.
 use super::*;
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px};
 
 fn button(
@@ -36,7 +37,7 @@ fn button(
                 HOVER_BACKGROUND()
             }))
         })
-        .when(!label.is_empty(), |s| s.child(label))
+        .when(!label.is_empty(), |s| s.child_text(label))
 }
 impl Render for InlinePicker {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -135,9 +136,9 @@ impl InlinePicker {
                 button(("priority", index), "", selected)
                     .gap(px(6.))
                     .when(selected, |s| {
-                        s.child(div().w(px(12.)).flex_none().child("✓"))
+                        s.child(div().w(px(12.)).flex_none().child_text("✓"))
                     })
-                    .child(label)
+                    .child_text(label)
                     .debug_selector({
                         let choice = choice.clone();
                         move || format!("priority-{choice}")
@@ -230,7 +231,7 @@ impl InlinePicker {
                             .flex_none()
                             .child(if selected { "✓" } else { "" }),
                     )
-                    .child(label)
+                    .child_text(label)
                     .debug_selector({
                         let tag = tag.clone();
                         move || format!("tag-{tag}")
@@ -297,7 +298,7 @@ impl InlinePicker {
                         .line_height(ui_px(14.))
                         .text_size(ui_px(10.))
                         .text_color(rgb(theme.foreground_dim))
-                        .child(self.language.text("inline.inherited_short")),
+                        .child_text(self.language.text("inline.inherited_short")),
                 )
                 .child(chips)
         });
@@ -308,7 +309,7 @@ impl InlinePicker {
                     .flex_none()
                     .h(px(19.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(self.language.text("inline.tags")),
+                    .child_text(self.language.text("inline.tags")),
             )
             .child(div().h(ui_px(30.)).flex_none().child(self.input.clone()))
             .child(list)

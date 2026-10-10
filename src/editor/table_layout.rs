@@ -147,6 +147,9 @@ impl TableVisualLayout {
             return None;
         }
         let mut base = runs.first()?.clone();
+        if crate::typography::FontRole::Editor.cjk_family().is_some() {
+            base.font.family = crate::typography::fonts().editor_family.clone().into();
+        }
         base.len = 1;
         let advance = |glyph: &str| {
             text_system

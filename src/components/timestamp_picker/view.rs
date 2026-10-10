@@ -1,5 +1,6 @@
 //! Calendar and repeat subviews for the shared timestamp picker.
 use super::*;
+use crate::components::UiTextExt;
 use crate::components::selection_style::{
     HOVER_BACKGROUND, SELECTED_BACKGROUND, SELECTED_HOVER_BACKGROUND,
 };
@@ -35,7 +36,7 @@ impl TimestampPicker {
                     HOVER_BACKGROUND()
                 }))
             })
-            .child(text.into())
+            .child_text(text)
             .on_click(cx.listener(move |this, _, window, cx| click(this, window, cx)))
     }
     fn segmented() -> gpui::Div {
@@ -83,7 +84,7 @@ impl TimestampPicker {
             .gap_2()
             .min_h(ui_px(36.))
             .when_some(icon, |s, icon| s.child(Self::icon(icon)))
-            .child(div().flex_1().min_w_0().child(label))
+            .child(div().flex_1().min_w_0().child_text(label))
     }
     fn finish_repeat(&mut self, cx: &mut Context<Self>) {
         if self.input_invalid(InputField::RepeatCount, cx) {
@@ -261,7 +262,7 @@ impl TimestampPicker {
                 .p_3()
                 .rounded_lg()
                 .bg(rgb(theme.surface))
-                .child(self.t("timestamp.special"))
+                .child_text(self.t("timestamp.special"))
                 .into_any_element();
         };
         let value = &endpoint.value;
@@ -381,7 +382,7 @@ impl TimestampPicker {
                             .flex_1()
                             .text_size(ui_px(11.))
                             .text_color(rgb(theme.foreground_muted))
-                            .child(self.t("timestamp.endpoint_settings")),
+                            .child_text(self.t("timestamp.endpoint_settings")),
                     )
                     .child(self.button(
                         "start-settings",
@@ -482,7 +483,7 @@ impl TimestampPicker {
                 div()
                     .text_size(ui_px(11.))
                     .text_color(rgb(theme.foreground_muted))
-                    .child(if value.active {
+                    .child_text(if value.active {
                         self.t("timestamp.inactive_hint")
                     } else {
                         self.t("timestamp.inactive")
@@ -626,7 +627,7 @@ impl TimestampPicker {
                 div()
                     .text_size(ui_px(12.))
                     .text_color(rgb(theme.foreground_muted))
-                    .child(if restart {
+                    .child_text(if restart {
                         self.t("timestamp.restart_hint")
                     } else {
                         self.t("timestamp.planned_hint")
@@ -668,7 +669,7 @@ impl TimestampPicker {
             Self::group()
                 .child(
                     Self::row(self.t("timestamp.repeat_interval"), None)
-                        .child(self.t("timestamp.every"))
+                        .child_text(self.t("timestamp.every"))
                         .child(div().w(ui_px(48.)).child(self.count_input.clone()))
                         .child(self.button(
                             "repeat-unit",
@@ -763,7 +764,7 @@ impl TimestampPicker {
                                 } else {
                                     theme.foreground
                                 }))
-                                .child(format!(
+                                .child_text(format!(
                                     "{}  {title}",
                                     if repeater.mode == mode { "●" } else { "○" }
                                 )),
@@ -774,7 +775,7 @@ impl TimestampPicker {
                                 .mt_1()
                                 .text_size(ui_px(11.))
                                 .text_color(rgb(theme.foreground_muted))
-                                .child(subtitle),
+                                .child_text(subtitle),
                         )
                         .on_click(cx.listener(move |this, _, _, cx| this.set_mode(mode, cx))),
                 );
@@ -783,7 +784,7 @@ impl TimestampPicker {
                 .child(
                     div()
                         .text_size(ui_px(12.))
-                        .child(self.t("timestamp.missed")),
+                        .child_text(self.t("timestamp.missed")),
                 )
                 .child(choices);
         }
@@ -794,7 +795,7 @@ impl TimestampPicker {
                 .rounded_lg()
                 .bg(rgb(theme.accent_bg))
                 .text_color(rgb(theme.accent))
-                .child(self.t("timestamp.example"))
+                .child_text(self.t("timestamp.example"))
                 .child(
                     div()
                         .mt_2()
@@ -808,7 +809,7 @@ impl TimestampPicker {
                                         .text_color(rgb(theme.accent))
                                         .font_weight(gpui::FontWeight::SEMIBOLD)
                                 })
-                                .child(line.to_owned())
+                                .child_text(line.to_owned())
                         })),
                 ),
         );
@@ -919,7 +920,7 @@ impl Render for TimestampPicker {
                     .child(
                         div()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(self.t("timestamp.repeat")),
+                            .child_text(self.t("timestamp.repeat")),
                     )
                     .child(self.button(
                         "repeat-done",
@@ -939,7 +940,7 @@ impl Render for TimestampPicker {
                         div()
                             .flex_1()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
-                            .child(self.t("timestamp.title")),
+                            .child_text(self.t("timestamp.title")),
                     )
                     .child(
                         self.button("close", "×", false, cx, |_, _, cx| {
@@ -977,7 +978,7 @@ impl Render for TimestampPicker {
                     div()
                         .text_size(ui_px(11.))
                         .text_color(rgb(theme.error))
-                        .child(self.t("timestamp.invalid")),
+                        .child_text(self.t("timestamp.invalid")),
                 )
             })
             .when(!self.repeat_page, |s| {

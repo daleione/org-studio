@@ -1,4 +1,5 @@
 use crate::app::WorkspaceWindow;
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{
     CursorStyle, Entity, MouseButton, ParentElement, Styled, Window, div, prelude::*, px, rgb,
@@ -294,7 +295,7 @@ impl super::AgendaHost {
                                 .py_2()
                                 .text_size(ui_px(12.))
                                 .text_color(rgb(theme.foreground_muted))
-                                .child(language.text("agenda.no_saved_views")),
+                                .child_text(language.text("agenda.no_saved_views")),
                         )
                     })
                     .children(
@@ -486,31 +487,39 @@ impl super::AgendaHost {
             .child(TaskColumns::cell(TaskColumns::CHECK))
             .when(task_columns.source, |h| {
                 h.child(
-                    TaskColumns::cell(TaskColumns::SOURCE).child(language.text("agenda.source")),
+                    TaskColumns::cell(TaskColumns::SOURCE)
+                        .child_text(language.text("agenda.source")),
                 )
             })
-            .child(TaskColumns::cell(TaskColumns::TIME).child(language.text("agenda.time")))
+            .child(TaskColumns::cell(TaskColumns::TIME).child_text(language.text("agenda.time")))
             .when(task_columns.plan, |h| {
                 h.child(
                     TaskColumns::cell(TaskColumns::plan_width(language))
-                        .child(language.text("agenda.scheduled")),
+                        .child_text(language.text("agenda.scheduled")),
                 )
             })
             .child(
                 TaskColumns::cell(TaskColumns::STATUS)
                     .text_center()
-                    .child(language.text("agenda.status")),
+                    .child_text(language.text("agenda.status")),
             )
             .when(task_columns.priority, |h| {
                 h.child(
                     TaskColumns::cell(TaskColumns::PRIORITY)
                         .text_center()
-                        .child(language.text("agenda.priority_short")),
+                        .child_text(language.text("agenda.priority_short")),
                 )
             })
-            .child(div().flex_1().min_w_0().child(language.text("agenda.task")))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .child_text(language.text("agenda.task")),
+            )
             .when(task_columns.tags, |h| {
-                h.child(TaskColumns::cell(TaskColumns::TAGS).child(language.text("agenda.tags")))
+                h.child(
+                    TaskColumns::cell(TaskColumns::TAGS).child_text(language.text("agenda.tags")),
+                )
             });
         let toolbar = super::component::agenda_toolbar(super::component::AgendaToolbarProps {
             workspace: workspace.clone(),
@@ -749,7 +758,7 @@ impl super::AgendaHost {
                         .text_color(rgb(theme.warning))
                         .shadow_md()
                         .text_size(ui_px(10.))
-                        .child(language.text("agenda.recovery"))
+                        .child_text(language.text("agenda.recovery"))
                         .child(super::component::text_action_button(
                             workspace.clone(),
                             language.text("agenda.resume_move"),

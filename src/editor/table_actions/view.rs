@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px};
 
 const ROW_HEIGHT: f32 = 30.;
@@ -191,7 +192,7 @@ impl SemanticEditor {
                                 this.table_menu_choose(action, cx);
                             }),
                         )
-                        .child(div().flex_1().min_w_0().truncate().child(if chinese {
+                        .child(div().flex_1().min_w_0().truncate().child_text(if chinese {
                             item.zh
                         } else {
                             item.en
@@ -242,7 +243,7 @@ impl SemanticEditor {
             .items_center()
             .text_size(ui_px(11.))
             .text_color(rgb(theme.foreground_dim))
-            .child(title)
+            .child_text(title)
             .when(popup.sorting, |header| {
                 header.cursor_pointer().on_mouse_down(
                     MouseButton::Left,

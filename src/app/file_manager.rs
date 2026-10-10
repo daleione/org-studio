@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use std::{
     collections::HashMap,
@@ -879,7 +880,7 @@ impl WorkspaceWindow {
                             .bg(rgb(current_theme().background_alt))
                             .text_color(rgb(current_theme().foreground_dim))
                             .text_size(ui_px(10.5))
-                            .child(format!("{} items", entries.len())),
+                            .child_text(format!("{} items", entries.len())),
                     ),
             )
             .child(
@@ -1010,7 +1011,7 @@ impl WorkspaceWindow {
                             .text_ellipsis()
                             .font_weight(gpui::FontWeight::SEMIBOLD)
                             .text_size(ui_px(12.5))
-                            .child(directory),
+                            .child_text(directory),
                     ),
             )
             .child(
@@ -1049,7 +1050,7 @@ impl WorkspaceWindow {
                         .border_color(rgb(current_theme().border))
                         .text_color(rgb(current_theme().foreground_dim))
                         .text_size(ui_px(10.5))
-                        .child(status.to_string()),
+                        .child_text(status.to_string()),
                 )
             })
     }
@@ -1087,7 +1088,7 @@ fn dired_context_menu(entity: Entity<WorkspaceWindow>, menu: DiredContextMenu) -
                 .cursor_pointer()
                 .text_size(ui_px(11.5))
                 .hover(|style| style.bg(rgb(current_theme().code_boundary_background)))
-                .child(div().flex_1().child(label))
+                .child(div().flex_1().child_text(label))
                 .child(
                     div()
                         .text_size(ui_px(10.0))
@@ -1191,13 +1192,13 @@ fn dired_row(
         div()
             .flex_1()
             .text_size(ui_px(12.5))
-            .child(entry.display_name.to_string()),
+            .child_text(entry.display_name.to_string()),
     )
     .child(
         div()
             .w(px(104.0))
             .text_color(rgb(current_theme().foreground_dim))
-            .child(modified),
+            .child_text(modified),
     )
     .child(
         div()
@@ -1205,7 +1206,7 @@ fn dired_row(
             .flex()
             .justify_end()
             .text_color(rgb(current_theme().foreground_dim))
-            .child(size),
+            .child_text(size),
     )
     .into_any_element()
 }
@@ -1317,7 +1318,7 @@ fn sidebar_row(
                 name.font_weight(gpui::FontWeight::SEMIBOLD)
                     .text_color(accent)
             })
-            .child(entry.display_name.to_string()),
+            .child_text(entry.display_name.to_string()),
     )
     .into_any_element()
 }

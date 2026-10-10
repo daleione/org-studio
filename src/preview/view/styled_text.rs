@@ -2,6 +2,9 @@ use super::{
     Arc, CodeHighlightKind, CodeHighlightSpan, FontStyle, FontWeight, HighlightStyle, InlineKind,
     InlineSpan, PreviewStyle, StyledText, rgb,
 };
+use crate::typography::{
+    FontRole, apply_font_runs, font_overrides, styled_text, styled_text_with_overrides,
+};
 use std::ops::Range;
 
 pub(super) fn styled_code_runs(
@@ -15,7 +18,7 @@ pub(super) fn styled_code_runs(
             code_highlight_style(span.kind, preview_style),
         )
     });
-    StyledText::new(text).with_highlights(highlights)
+    styled_text(text, FontRole::Code, highlights)
 }
 
 pub(in crate::preview) fn code_highlight_style(
@@ -55,11 +58,16 @@ pub(crate) fn styled_inline_runs(
                 span.is_code() && span.range.start <= range.start && span.range.end >= range.end
             })
         })
-        .map(|(range, _)| (range.clone(), preview_style.typography.code_family.into()))
+        .map(|(range, _)| {
+            (
+                range.clone(),
+                FontRole::Code,
+                preview_style.typography.code_family.into(),
+            )
+        })
         .collect::<Vec<_>>();
-    StyledText::new(text)
-        .with_highlights(highlights)
-        .with_font_family_overrides(overrides)
+    let overrides = font_overrides(&text, FontRole::Reading, &overrides);
+    styled_text_with_overrides(text, highlights, overrides)
 }
 
 pub(in crate::preview) fn inline_text_runs(
@@ -92,7 +100,18 @@ pub(in crate::preview) fn inline_text_runs(
     if offset < text.len() {
         runs.push(inherited.to_run(text.len() - offset));
     }
-    runs
+    let overrides = spans
+        .iter()
+        .filter(|span| span.is_code())
+        .map(|span| {
+            (
+                span.range.clone(),
+                FontRole::Code,
+                style.typography.code_family.into(),
+            )
+        })
+        .collect::<Vec<_>>();
+    apply_font_runs(runs, &font_overrides(text, FontRole::Reading, &overrides))
 }
 
 fn inline_highlights(

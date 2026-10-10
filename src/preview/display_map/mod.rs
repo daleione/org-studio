@@ -915,7 +915,7 @@ pub(crate) fn minimap_text_runs(
     boundaries.sort_unstable();
     boundaries.dedup();
 
-    boundaries
+    let runs = boundaries
         .windows(2)
         .filter_map(|range| {
             let start = range[0];
@@ -976,7 +976,28 @@ pub(crate) fn minimap_text_runs(
                 }
             })
         })
-        .collect()
+        .collect();
+    let role = if kind == PreviewLineKind::Code {
+        crate::typography::FontRole::Code
+    } else {
+        crate::typography::FontRole::Reading
+    };
+    let overrides = line
+        .inline_spans
+        .iter()
+        .filter(|span| span.is_code())
+        .map(|span| {
+            (
+                span.range.clone(),
+                crate::typography::FontRole::Code,
+                preview_style.typography.code_family.into(),
+            )
+        })
+        .collect::<Vec<_>>();
+    crate::typography::apply_font_runs(
+        runs,
+        &crate::typography::font_overrides(&line.text, role, &overrides),
+    )
 }
 
 #[cfg(test)]

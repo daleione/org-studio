@@ -57,10 +57,11 @@ fn measure(window: &Window, text: &str, family: &str, size: f32) -> f32 {
         underline: None,
         strikethrough: None,
     };
+    let runs = crate::typography::cjk_runs(text, vec![run], crate::typography::FontRole::Ui);
     f32::from(
         window
             .text_system()
-            .shape_line(text.to_owned().into(), ui_px(size), &[run], None)
+            .shape_line(text.to_owned().into(), ui_px(size), &runs, None)
             .width,
     )
     .ceil()

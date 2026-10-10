@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use std::{
     path::{Path, PathBuf},
@@ -42,7 +43,7 @@ pub(super) fn file_manager_breadcrumb(
                     .flex_none()
                     .text_color(rgb(current_theme().foreground_dim))
                     .text_size(ui_px(11.0))
-                    .child("›")
+                    .child_text("›")
                     .into_any_element()
             });
             separator
@@ -77,7 +78,7 @@ fn render_breadcrumb_item(
                     this.open_file_manager(path.to_path_buf(), cx);
                 });
             })
-            .child("…")
+            .child_text("…")
             .into_any_element(),
         BreadcrumbItem::Segment {
             label,
@@ -121,7 +122,7 @@ fn render_breadcrumb_item(
                     }
                 });
             })
-            .child(label.to_string())
+            .child_text(label.to_string())
             .into_any_element(),
     }
 }

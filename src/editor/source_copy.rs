@@ -1,5 +1,6 @@
 //! Copy code blocks without changing selection or document state.
 use super::*;
+use crate::components::UiTextExt;
 use crate::components::selection_style::HOVER_BACKGROUND;
 use crate::document::{
     DocumentFormat, LineCursor,
@@ -224,18 +225,18 @@ impl SemanticEditor {
         } else {
             "inline.copy_code"
         });
+        let runs = crate::typography::cjk_runs(
+            label,
+            vec![TextRun {
+                len: label.len(),
+                font: ui_font(".SystemUIFont"),
+                ..Default::default()
+            }],
+            crate::typography::FontRole::Ui,
+        );
         let width = window
             .text_system()
-            .shape_line(
-                label.into(),
-                ui_px(11.),
-                &[TextRun {
-                    len: label.len(),
-                    font: ui_font(".SystemUIFont"),
-                    ..Default::default()
-                }],
-                None,
-            )
+            .shape_line(label.into(), ui_px(11.), &runs, None)
             .width()
             + px(18.);
         let viewport = self.viewport?;
@@ -267,7 +268,7 @@ impl SemanticEditor {
                             .text_size(ui_px(11.))
                             .line_height(ui_px(16.))
                             .text_color(rgb(theme.foreground))
-                            .child(label),
+                            .child_text(label),
                     ),
             )
             .with_priority(11)

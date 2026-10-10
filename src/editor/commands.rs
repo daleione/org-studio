@@ -1,4 +1,5 @@
 use super::*;
+use crate::components::UiTextExt;
 use crate::motion::FOLD_MOTION;
 
 impl SemanticEditor {
@@ -2233,7 +2234,7 @@ impl Render for SemanticEditor {
                         .border_1()
                         .border_color(rgb(current_theme().border))
                         .text_color(rgb(current_theme().foreground_dim))
-                        .child(message),
+                        .child_text(message),
                 )
             })
     }

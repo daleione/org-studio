@@ -1,4 +1,5 @@
 use crate::app::WorkspaceWindow;
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use gpui::{
     Div, Entity, InteractiveElement, MouseButton, ParentElement, Stateful,
@@ -7,7 +8,7 @@ use gpui::{
 
 use crate::theme::current_theme;
 
-pub(crate) fn badge(text: impl Into<String>) -> Div {
+pub(crate) fn badge(text: impl Into<gpui::SharedString>) -> Div {
     let theme = current_theme();
     div()
         .min_w(px(23.))
@@ -20,10 +21,10 @@ pub(crate) fn badge(text: impl Into<String>) -> Div {
         .bg(rgb(theme.accent_bg))
         .text_color(rgb(theme.accent))
         .text_size(ui_px(11.))
-        .child(text.into())
+        .child_text(text)
 }
 
-pub(crate) fn compact_badge(text: impl Into<String>) -> Div {
+pub(crate) fn compact_badge(text: impl Into<gpui::SharedString>) -> Div {
     let theme = current_theme();
     div()
         .min_w(px(18.))
@@ -37,9 +38,9 @@ pub(crate) fn compact_badge(text: impl Into<String>) -> Div {
         .text_color(rgb(theme.accent))
         .font_weight(gpui::FontWeight::SEMIBOLD)
         .text_size(ui_px(9.))
-        .child(text.into())
+        .child_text(text)
 }
-pub(crate) fn pill(text: impl Into<String>) -> Div {
+pub(crate) fn pill(text: impl Into<gpui::SharedString>) -> Div {
     let theme = current_theme();
     div()
         .h(ui_px(24.))
@@ -50,7 +51,7 @@ pub(crate) fn pill(text: impl Into<String>) -> Div {
         .bg(rgb(theme.accent_bg))
         .text_color(rgb(theme.todo_active))
         .text_size(ui_px(11.))
-        .child(text.into())
+        .child_text(text)
 }
 pub(crate) fn icon_button(path: &'static str) -> Div {
     let theme = current_theme();
@@ -125,7 +126,7 @@ pub(crate) fn text_action_button(
         .cursor_pointer()
         .hover(|style| style.bg(rgb(theme.hover)).border_color(rgb(theme.warning)))
         .active(|style| style.opacity(0.72))
-        .child(label)
+        .child_text(label)
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             let intent = intent.clone();
             workspace.update(cx, |this, cx| this.dispatch_agenda_intent(intent, cx));
@@ -167,10 +168,10 @@ pub(crate) fn field(value: impl gpui::IntoElement) -> Stateful<Div> {
             div()
                 .text_size(ui_px(10.))
                 .text_color(rgb(theme.foreground_disabled))
-                .child("⌘K"),
+                .child_text("⌘K"),
         )
 }
-pub(crate) fn empty_state(text: impl Into<String>) -> Div {
+pub(crate) fn empty_state(text: impl Into<gpui::SharedString>) -> Div {
     let theme = current_theme();
     div()
         .size_full()
@@ -178,5 +179,5 @@ pub(crate) fn empty_state(text: impl Into<String>) -> Div {
         .items_center()
         .justify_center()
         .text_color(rgb(theme.foreground_muted))
-        .child(text.into())
+        .child_text(text)
 }

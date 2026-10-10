@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use std::{collections::HashMap, sync::Arc};
 
@@ -36,7 +37,7 @@ impl Render for CalendarDrag {
                 .text_color(rgb(theme.success))
                 .text_size(ui_px(10.))
                 .shadow_md()
-                .child(self.title.to_string()),
+                .child_text(self.title.to_string()),
         )
     }
 }
@@ -129,13 +130,13 @@ fn task_chip(workspace: Entity<WorkspaceWindow>, row: &AgendaRow, index: usize) 
         .child(
             div()
                 .font_weight(gpui::FontWeight::SEMIBOLD)
-                .child(row.title.to_string()),
+                .child_text(row.title.to_string()),
         )
         .child(
             div()
                 .mt_1()
                 .text_size(ui_px(9.))
-                .child(row.todo.to_string()),
+                .child_text(row.todo.to_string()),
         )
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             workspace.update(cx, |this, cx| {
@@ -203,7 +204,7 @@ fn month_view(
                 div()
                     .text_size(ui_px(10.))
                     .text_color(rgb(theme.foreground_dim))
-                    .child(format!("{} · {}", weekday(language, *date), date.day())),
+                    .child_text(format!("{} · {}", weekday(language, *date), date.day())),
             );
         for (index, row) in rows.into_iter().take(3) {
             cell = cell.child(draggable_task(
@@ -265,7 +266,7 @@ fn time_view(
                         .justify_center()
                         .text_size(ui_px(15.))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
-                        .child(date.day().to_string()),
+                        .child_text(date.day().to_string()),
                 ),
         );
     }
@@ -288,7 +289,7 @@ fn time_view(
                     .text_color(rgb(theme.foreground_muted))
                     .border_r_1()
                     .border_color(rgb(theme.divider))
-                    .child(language.text("agenda.all_day")),
+                    .child_text(language.text("agenda.all_day")),
             );
         for date in days {
             let drop_workspace = workspace.clone();
@@ -359,7 +360,7 @@ fn time_view(
                         .text_right()
                         .text_size(ui_px(9.))
                         .text_color(rgb(theme.foreground_muted))
-                        .child(format!("{hour:02}:00"))
+                        .child_text(format!("{hour:02}:00"))
                 })),
         );
     for (day_index, date) in days.iter().enumerate() {
@@ -530,7 +531,7 @@ pub(crate) fn agenda_calendar(
                                 .hover(|style| style.bg(rgb(theme.hover)))
                                 .active(|style| style.opacity(0.72))
                                 .text_color(rgb(theme.foreground_dim))
-                                .child(if all_day {
+                                .child_text(if all_day {
                                     language.text("agenda.collapse_all_day")
                                 } else {
                                     language.text("agenda.expand_all_day")

@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use std::sync::Arc;
 
@@ -103,7 +104,7 @@ fn command_window_header(title: Arc<str>, close: Option<CommandItem>) -> gpui::D
                     div()
                         .font_weight(FontWeight::SEMIBOLD)
                         .text_size(ui_px(13.0))
-                        .child(title.to_string()),
+                        .child_text(title.to_string()),
                 ),
         )
         .when_some(close, |header, (key, label)| {
@@ -115,7 +116,7 @@ fn command_window_header(title: Arc<str>, close: Option<CommandItem>) -> gpui::D
                     .text_size(ui_px(12.0))
                     .text_color(rgb(current_theme().foreground_dim))
                     .child(key_cap(key, px(44.0)))
-                    .child(label.to_string()),
+                    .child_text(label.to_string()),
             )
         })
 }
@@ -138,7 +139,7 @@ fn render_group(group: CommandGroup) -> gpui::Div {
                 .text_size(ui_px(10.5))
                 .font_weight(FontWeight::SEMIBOLD)
                 .text_color(rgb(current_theme().foreground_dim))
-                .child(group.title.to_string()),
+                .child_text(group.title.to_string()),
         )
         .child(
             div()
@@ -172,7 +173,7 @@ fn command_row((key, title): CommandItem) -> gpui::Div {
                 .text_ellipsis()
                 .text_size(ui_px(12.5))
                 .text_color(rgb(current_theme().foreground))
-                .child(title.to_string()),
+                .child_text(title.to_string()),
         )
 }
 
@@ -188,5 +189,5 @@ fn key_cap(key: Arc<str>, width: Pixels) -> gpui::Div {
         .text_color(rgb(current_theme().heading[0]))
         .font_weight(FontWeight::SEMIBOLD)
         .text_size(ui_px(12.0))
-        .child(key.to_string())
+        .child_text(key.to_string())
 }

@@ -1,4 +1,5 @@
 //! Reusable month grid. Hosts receive dates/ranges; no Org or document knowledge.
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use gpui::{
     App, IntoElement, MouseButton, ParentElement, Styled, Window, div, prelude::*, px, rgb,
@@ -111,7 +112,7 @@ impl Calendar {
                     .rounded_md()
                     .cursor_pointer()
                     .hover(|s| s.bg(rgb(theme.hover)))
-                    .child(label)
+                    .child_text(label)
                     .on_click(move |_, window, cx| {
                         if let Some(date) = target {
                             on_month(date, window, cx);
@@ -145,7 +146,7 @@ impl Calendar {
                     .justify_center()
                     .text_color(rgb(theme.foreground_muted))
                     .text_size(ui_px(11.))
-                    .child(self.language.text(name)),
+                    .child_text(self.language.text(name)),
             );
         }
         let mut grid = div().w_full().flex().flex_col().child(weekdays);
@@ -218,7 +219,7 @@ impl Calendar {
                                         } else {
                                             theme.foreground
                                         }))
-                                        .child(date.day().to_string())
+                                        .child_text(date.day().to_string())
                                         .when(date == self.today, |s| {
                                             s.child(
                                                 div()

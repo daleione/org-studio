@@ -1,3 +1,4 @@
+use crate::components::UiTextExt;
 use crate::typography::ui_px;
 use std::{
     cell::RefCell,
@@ -285,7 +286,7 @@ pub(super) fn render_image_viewer(
                         .cursor_pointer()
                         .rounded_full()
                         .hover(move |style| style.bg(rgb(theme.background_alt)))
-                        .child("−")
+                        .child_text("−")
                         .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                             cx.stop_propagation();
                             zoom_out_workspace.update(cx, |workspace, cx| {
@@ -305,7 +306,7 @@ pub(super) fn render_image_viewer(
                         .cursor_pointer()
                         .rounded(px(6.0))
                         .hover(move |style| style.bg(rgb(theme.background_alt)))
-                        .child(format!("{:.0}%", zoom * 100.0))
+                        .child_text(format!("{:.0}%", zoom * 100.0))
                         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                             cx.stop_propagation();
                             reset_workspace
@@ -351,7 +352,7 @@ pub(super) fn render_image_viewer(
                                     .truncate()
                                     .text_size(ui_px(13.0))
                                     .text_color(rgb(theme.foreground))
-                                    .child(filename.clone()),
+                                    .child_text(filename.clone()),
                             ),
                     )
                 })
@@ -366,7 +367,7 @@ pub(super) fn render_image_viewer(
                             .truncate()
                             .text_size(ui_px(13.0))
                             .text_color(rgb(theme.foreground))
-                            .child(filename),
+                            .child_text(filename),
                     )
                 }),
         )

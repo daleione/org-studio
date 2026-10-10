@@ -131,7 +131,7 @@ fn styled_code_boundary(text: SharedString, role: CodeRowRole, style: PreviewSty
             ));
         }
     }
-    StyledText::new(text).with_highlights(highlights)
+    crate::typography::styled_text(text, crate::typography::FontRole::Code, highlights)
 }
 
 fn fence_metadata_ranges(source: &str) -> Option<(Range<usize>, Option<Range<usize>>)> {
