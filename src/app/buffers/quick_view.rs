@@ -233,29 +233,23 @@ impl WorkspaceWindow {
             .into_any_element()
     }
 
-    pub(crate) fn navigation_status_width(
-        &self,
-        pane: crate::app::PaneSide,
-        width: f32,
-        cx: &App,
-    ) -> f32 {
+    pub(crate) fn navigation_status_width(&self, pane: crate::app::PaneSide, cx: &App) -> f32 {
         if pane != self.document_workspace.active_pane
             || !self.navigation_can_go(false, cx) && !self.navigation_can_go(true, cx)
         {
             return 0.;
         }
-        if width >= 1000. { 230. } else { 60. }
+        60.
     }
 
     pub(crate) fn with_navigation_status(
         &self,
         content: gpui::AnyElement,
         pane: crate::app::PaneSide,
-        width: f32,
         entity: Entity<Self>,
         cx: &App,
     ) -> gpui::AnyElement {
-        let width = self.navigation_status_width(pane, width, cx);
+        let width = self.navigation_status_width(pane, cx);
         if width == 0. {
             return content;
         }
@@ -302,27 +296,6 @@ impl WorkspaceWindow {
                         if enabled {
                             entity.update(cx, |w, cx| w.navigate_history(forward, cx));
                         }
-                    }),
-            );
-        }
-        if width > 60.
-            && let Some(label) = self.navigation_back_label(cx)
-        {
-            let entity = entity.clone();
-            controls = controls.child(
-                div()
-                    .id("navigation-return")
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .px(px(8.))
-                    .text_size(ui_px(11.))
-                    .text_color(rgb(theme.accent))
-                    .cursor_pointer()
-                    .child(format!("{} {label}", self.buffer_text("返回", "Back to")))
-                    .on_mouse_down(MouseButton::Left, move |_, _, cx| {
-                        cx.stop_propagation();
-                        entity.update(cx, |w, cx| w.navigate_history(false, cx));
                     }),
             );
         }

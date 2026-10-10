@@ -231,29 +231,4 @@ impl WorkspaceWindow {
             .iter()
             .any(|target| self.buffer_session(target.document, cx).is_some())
     }
-
-    pub(crate) fn navigation_back_label(&self, cx: &App) -> Option<String> {
-        let target = self
-            .buffers
-            .navigation
-            .back
-            .iter()
-            .rev()
-            .find(|target| self.buffer_session(target.document, cx).is_some())?;
-        let session = self.buffer_session(target.document, cx)?;
-        let session = session.read(cx);
-        let line = session
-            .map_range_to_current(target.source)
-            .ok()
-            .and_then(|source| {
-                let head = if target.reversed {
-                    source.range.start
-                } else {
-                    source.range.end
-                };
-                session.snapshot().line_index_at(head).ok()
-            })
-            .map_or(target.line, |line| line.0);
-        Some(format!("{} · {}", session.display_name(), line + 1))
-    }
 }

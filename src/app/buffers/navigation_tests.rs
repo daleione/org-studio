@@ -331,7 +331,7 @@ fn navigation_reading_history_restores_active_split_pane(cx: &mut TestAppContext
 }
 
 #[gpui::test]
-fn navigation_preserves_selection_direction_and_labels_the_caret_line(cx: &mut TestAppContext) {
+fn navigation_preserves_selection_direction(cx: &mut TestAppContext) {
     let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     let doc = w.update(cx, |w, cx| {
         w.create_buffer("selection.org".into(), None, cx);
@@ -341,14 +341,10 @@ fn navigation_preserves_selection_direction_and_labels_the_caret_line(cx: &mut T
     cx.run_until_parked();
     w.update(cx, |w, cx| {
         let editor = w.editor(w.document_workspace.active_pane).unwrap();
-        for (anchor, head, line) in [(1, 8, 2), (8, 1, 1)] {
+        for (anchor, head) in [(1, 8), (8, 1)] {
             let selection = Selection::new(ByteOffset(anchor), ByteOffset(head));
             editor.update(cx, |e, cx| e.set_selection(selection, cx));
             w.navigate_to_source(ByteOffset(13), cx);
-            assert_eq!(
-                w.navigation_back_label(cx).unwrap(),
-                format!("selection.org · {line}")
-            );
             w.navigate_history(false, cx);
             assert_eq!(editor.read(cx).selection(), selection);
         }
