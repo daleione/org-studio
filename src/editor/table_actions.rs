@@ -11,6 +11,7 @@ mod tests;
 mod view;
 
 const BUTTON_SIZE: f32 = 20.;
+const BUTTON_INSET: f32 = 1.;
 
 #[derive(Clone, Debug, PartialEq)]
 struct CellHit {
@@ -185,10 +186,13 @@ impl SemanticEditor {
                         .map(|position| position.x)
                 })
                 .unwrap_or(right);
-            let button_width = (right - padding_start - px(2.)).clamp(px(0.), px(BUTTON_SIZE));
+            let inset = px(BUTTON_INSET);
+            let button_width = (right - padding_start - inset * 2.).clamp(px(0.), px(BUTTON_SIZE));
+            // Keep the button next to the aligned delimiter even when measured text
+            // leaves extra space at the end of the cell.
             let button = Bounds::new(
                 point(
-                    row.text_origin_x + (padding_start + right - button_width) / 2.,
+                    row.text_origin_x + right - inset - button_width,
                     top.max(row.visible_top),
                 ),
                 size(button_width, row.line_height),

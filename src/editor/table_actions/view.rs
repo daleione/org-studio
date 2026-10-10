@@ -10,13 +10,24 @@ pub(super) fn menu_bounds(
     anchor: Bounds<Pixels>,
     height: f32,
 ) -> Bounds<Pixels> {
-    let width = px(MENU_WIDTH).min((viewport.size.width - px(16.)).max(px(1.)));
+    let margin = px(8.);
+    let gap = px(6.);
+    let width = px(MENU_WIDTH).min((viewport.size.width - margin * 2.).max(px(1.)));
+    let height = px(height).min((viewport.size.height - margin * 2.).max(px(1.)));
     let x = anchor
         .left()
-        .min(viewport.right() - width - px(8.))
-        .max(viewport.left() + px(8.));
-    let y = anchor.bottom() + px(6.);
-    let height = px(height).min((viewport.bottom() - y - px(8.)).max(px(0.)));
+        .min(viewport.right() - width - margin)
+        .max(viewport.left() + margin);
+    let below = anchor.bottom() + gap;
+    let y = if below + height <= viewport.bottom() - margin {
+        below
+    } else {
+        anchor.top() - gap - height
+    };
+    // Shift into the viewport when neither side can hold the full menu.
+    let y = y
+        .min(viewport.bottom() - height - margin)
+        .max(viewport.top() + margin);
     Bounds::new(point(x, y), size(width, height))
 }
 
@@ -53,9 +64,12 @@ impl SemanticEditor {
             .as_ref()
             .map(|p| &p.target)
             .or(self.table_actions.hover.as_ref());
+        // Compare edges directly; intersecting fractional bounds can change their width.
         if let Some(target) = target.filter(|hit| {
             hit.button.size.width >= px(3.)
-                && hit.button.intersect(&viewport) == hit.button
+                && hit.button.left() >= viewport.left()
+                && hit.button.right() <= viewport.right()
+                && hit.button.top() >= viewport.top()
                 && hit.button.bottom()
                     <= viewport.bottom() - px(self.display_map.bottom_overlay_clearance)
         }) {
@@ -98,7 +112,11 @@ impl SemanticEditor {
                         .w((icon_height * 0.3).min(target.button.size.width))
                         .h(icon_height)
                         .flex_shrink_0()
-                        .text_color(rgb(if open { theme.accent } else { theme.foreground })),
+                        .text_color(rgb(if open {
+                            theme.accent
+                        } else {
+                            theme.foreground_muted
+                        })),
                 );
             overlays.push(
                 deferred(anchored().position(target.button.origin).child(button))

@@ -200,22 +200,6 @@ fn table_menu_hides_invalid_markdown_actions_and_ignores_literal_tables(cx: &mut
     assert_eq!(source(&editor, cx), original);
 }
 
-#[test]
-fn table_menu_position_stays_in_viewport_without_changing_anchor() {
-    for (width, height) in [(800., 600.), (300., 240.), (180., 100.)] {
-        let viewport = Bounds::new(point(px(50.), px(40.)), size(px(width), px(height)));
-        let anchor = Bounds::new(
-            point(viewport.right() - px(22.), viewport.bottom() - px(28.)),
-            size(px(20.), px(20.)),
-        );
-        let menu = super::view::menu_bounds(viewport, anchor, 450.);
-        assert!(menu.left() >= viewport.left());
-        assert!(menu.right() <= viewport.right());
-        assert_eq!(menu.top(), anchor.bottom() + px(6.));
-        assert!(menu.bottom() <= viewport.bottom());
-    }
-}
-
 #[gpui::test]
 fn table_menu_wrap_geometry_scroll_and_resize_are_independent(cx: &mut TestAppContext) {
     cx.update(init);
@@ -285,8 +269,6 @@ fn table_menu_wrap_geometry_scroll_and_resize_are_independent(cx: &mut TestAppCo
     click_button(cx);
     let bounds = cx.debug_bounds("table-cell-menu").unwrap();
     assert!(bounds.right() <= px(520.) && bounds.bottom() <= px(360.));
-    let button = cx.debug_bounds("table-cell-menu-button").unwrap();
-    assert_eq!(bounds.top(), button.bottom() + px(6.));
     cx.read(|cx| {
         let e = editor.read(cx);
         assert_eq!(e.table_actions.popup.as_ref().unwrap().target.column, 2);

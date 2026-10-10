@@ -1603,6 +1603,7 @@ impl SemanticEditor {
         self.image_resize_up(cx);
         self.source_copy_up(event.position, cx);
         self.inline_mouse_up(event.position, cx);
+        self.table_hover(event.position, cx);
     }
 
     pub(super) fn seek_from_minimap(&mut self, pointer_y: Pixels, cx: &mut Context<Self>) {
