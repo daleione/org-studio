@@ -252,7 +252,9 @@ pub(super) fn editor_row_background(
     theme: &crate::theme::Theme,
 ) -> Option<PaintQuad> {
     let color = match style {
-        syntax::EditorStyleId::CodeBoundary | syntax::EditorStyleId::Code => return None,
+        syntax::EditorStyleId::CodeBoundary | syntax::EditorStyleId::Code if active => {
+            theme.code_active_background
+        }
         _ if active => theme.background_alt,
         _ => return None,
     };
