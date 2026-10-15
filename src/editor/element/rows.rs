@@ -259,8 +259,9 @@ impl RowShaping<'_> {
                 &runs,
                 shaped_font_size,
                 columns,
-                self.document_format,
                 effective_wrap_width,
+                self.editor
+                    .preferred_table_widths(columns.source_range.start.0),
                 self.window.text_system(),
             )
         });

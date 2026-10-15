@@ -41,7 +41,10 @@ pub(super) fn prepare_minimap_layout_request(
     font_size: Pixels,
     text_system: Arc<gpui::TextSystem>,
 ) -> Option<MinimapLayoutPreparationRequest> {
-    if !editor.minimap.visible && !editor.layout_reflow_pending || editor.fold_animation.is_some() {
+    if !editor.minimap.visible && !editor.layout_reflow_pending
+        || editor.fold_animation.is_some()
+        || editor.table_resize_is_dragging()
+    {
         return None;
     }
     let mut inline_image_overrides = editor
@@ -64,6 +67,7 @@ pub(super) fn prepare_minimap_layout_request(
         inline_images: editor.inline_image_previews,
         inline_image_overrides: inline_image_overrides.into(),
         inline_image_resource_generation: editor.inline_image_cache.borrow().resource_generation,
+        table_layout_revision: editor.table_resize.revision,
     };
     let epoch = editor.minimap.reserve_layout_preparation(key.clone())?;
     let mut layout = editor.display_map.clone();
@@ -266,8 +270,8 @@ pub(super) fn schedule_minimap_layout_preparation(
                             &runs,
                             shaped_font_size,
                             columns,
-                            format,
                             effective_wrap_width,
+                            None,
                             &text_system,
                         )
                     });

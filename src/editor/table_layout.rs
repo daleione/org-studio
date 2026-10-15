@@ -61,6 +61,10 @@ pub(crate) struct TableVisualLayout {
     pub(super) width: Pixels,
     pub(super) len: usize,
     pub(super) visual_rows: usize,
+    pub(super) column_widths: Vec<Pixels>,
+    pub(super) natural_column_widths: Vec<Pixels>,
+    pub(super) font_size: Pixels,
+    pub(super) space_width: Pixels,
 }
 
 impl TableVisualLayout {
@@ -136,13 +140,13 @@ impl TableVisualLayout {
         runs: &[TextRun],
         font_size: Pixels,
         columns: &TableColumns,
-        format: crate::document::DocumentFormat,
         wrap_width: Option<Pixels>,
+        preferred_widths_em: Option<&[f32]>,
         text_system: &gpui::WindowTextSystem,
     ) -> Option<Arc<TableVisualLayout>> {
         // Leave room to paint the caret after the final column boundary.
         let wrap_width = wrap_width.map(|width| (width - gpui::px(2.)).max(gpui::px(1.)));
-        let delimiters = crate::document::table::delimiter_offsets(text, format);
+        let delimiters = crate::document::table::delimiter_offsets(text, columns.format);
         if delimiters.len() < 2 || columns.widths.is_empty() {
             return None;
         }
@@ -171,18 +175,41 @@ impl TableVisualLayout {
                 None,
             )
             .width();
-        let mut widths = columns
+        let preferred = preferred_widths_em.filter(|widths| {
+            widths.len() == columns.widths.len()
+                && widths.iter().all(|width| width.is_finite() && *width > 0.)
+        });
+        let natural_column_widths = columns
             .widths
             .iter()
             .map(|width| space * (width + 2))
             .collect::<Vec<_>>();
+        let source_widths = columns.source_widths.as_ref();
+        let mut widths = preferred.map_or_else(
+            || {
+                source_widths.map_or_else(
+                    || natural_column_widths.clone(),
+                    |widths| widths.iter().map(|width| space * (width + 2)).collect(),
+                )
+            },
+            |widths| widths.iter().map(|width| font_size * *width).collect(),
+        );
+        // With wrapping disabled, keep enough space for each column's text.
+        if wrap_width.is_none() {
+            for (width, minimum) in widths.iter_mut().zip(&natural_column_widths) {
+                *width = (*width).max(*minimum);
+            }
+        }
         let natural_width =
             indent + pipe * (columns.widths.len() + 1) + widths.iter().copied().sum::<Pixels>();
-        let wrapped = wrap_width.is_some_and(|width| natural_width > width);
-        if !columns.aligned && !wrapped {
+        let constrained = wrap_width.is_some_and(|width| natural_width > width);
+        let fit_cells =
+            constrained || preferred.is_some() || source_widths.is_some() && !columns.aligned;
+        let wrap_cells = wrap_width.is_some() && fit_cells;
+        if source_widths.is_none() && !fit_cells {
             return None;
         }
-        if let Some(width) = wrap_width.filter(|_| wrapped) {
+        if let Some(width) = wrap_width.filter(|_| constrained) {
             let budget = (width - indent - pipe * (columns.widths.len() + 1))
                 .max(px(columns.widths.len() as f32));
             fit_columns(&mut widths, budget);
@@ -233,24 +260,24 @@ impl TableVisualLayout {
             let width = widths.get(column).copied().unwrap_or_default();
             if !range.is_empty() {
                 let raw = &text[range.clone()];
-                let padding = if wrapped {
+                let padding = if fit_cells {
                     space.min(width / 4.)
                 } else {
                     Pixels::ZERO
                 };
-                let content_width = if wrapped {
+                let content_width = if fit_cells {
                     (width - padding * 2.).max(gpui::px(1.))
                 } else {
                     width
                 };
-                let content_range = if wrapped {
+                let content_range = if fit_cells {
                     let trimmed = raw.trim();
                     let start = range.start + raw.len() - raw.trim_start().len();
                     start..start + trimmed.len()
                 } else {
                     range.clone()
                 };
-                let (layout, scaled_source) = if wrapped && separator {
+                let (layout, scaled_source) = if fit_cells && separator {
                     let count = (f32::from(content_width) / f32::from(advance("-")))
                         .floor()
                         .max(1.) as usize;
@@ -269,7 +296,7 @@ impl TableVisualLayout {
                         shape(
                             text[content_range.clone()].to_owned().into(),
                             &slice_text_runs(runs, content_range.clone()),
-                            wrapped.then_some(content_width),
+                            wrap_cells.then_some(content_width),
                         ),
                         false,
                     )
@@ -278,7 +305,7 @@ impl TableVisualLayout {
                     display_range: range,
                     content_range,
                     x: x + pipe + padding,
-                    width: if wrapped {
+                    width: if fit_cells {
                         content_width
                     } else {
                         layout.width()
@@ -307,6 +334,10 @@ impl TableVisualLayout {
             width,
             len: text.len(),
             visual_rows,
+            column_widths: widths,
+            natural_column_widths,
+            font_size,
+            space_width: space,
         }))
     }
 }

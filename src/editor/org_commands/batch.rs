@@ -27,14 +27,8 @@ impl TableAlignmentPlan {
                     0
                 } else {
                     let (column, character) = table_position_at(old, local, self.format);
-                    let cells = source_table::parse_line(new, self.format);
-                    cells.cells.get(column).map_or(new.len(), |cell| {
-                        cell.text_range.start
-                            + new[cell.text_range.clone()]
-                                .char_indices()
-                                .nth(character)
-                                .map_or(cell.text_range.len(), |(byte, _)| byte)
-                    })
+                    let line = new.lines().next().unwrap_or(new);
+                    cell_offset(line, column, character, self.format)
                 };
                 return ByteOffset((range.start.0 as i128 + shift + mapped as i128) as u64);
             }
@@ -49,6 +43,110 @@ impl TableAlignmentPlan {
             self.map_offset(selection.head()),
         )
     }
+
+    fn add_row(&mut self, range: ByteRange, old: String, new: String) {
+        if old == new {
+            return;
+        }
+        // Preserve unchanged prefixes/suffixes so viewport anchors survive the edit.
+        let mut prefix = old
+            .bytes()
+            .zip(new.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !old.is_char_boundary(prefix) || !new.is_char_boundary(prefix) {
+            prefix -= 1;
+        }
+        let mut suffix = old[prefix..]
+            .bytes()
+            .rev()
+            .zip(new[prefix..].bytes().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix)
+        {
+            suffix -= 1;
+        }
+        self.edits.push(TextEdit::new(
+            ByteRange::new(range.start.0 + prefix as u64, range.end.0 - suffix as u64),
+            &new[prefix..new.len() - suffix],
+        ));
+        self.rows.push((range, old, new));
+    }
+}
+
+/// Resize by changing padding and rules, retaining every cell's source text.
+/// `None` restores the compact widths used by double-clicking a boundary.
+pub(in crate::editor) fn resize_table(
+    snapshot: &DocumentSnapshot,
+    anchor: ByteOffset,
+    requested: Option<&[usize]>,
+    format: DocumentFormat,
+    newline: &str,
+) -> Option<TableAlignmentPlan> {
+    let start = snapshot.line_index_at(anchor).ok()?.0;
+    let mut source = Vec::new();
+    let mut ranges = Vec::new();
+    for line in start..snapshot.len_lines() {
+        let Some(text) = table_line(snapshot, line, format) else {
+            break;
+        };
+        ranges.push(snapshot.line_content_range(LineIndex(line)).ok()?);
+        source.push(text);
+    }
+    let rows = source
+        .iter()
+        .map(|text| parse_source_row(text, format))
+        .collect::<Vec<_>>();
+    let columns = rows.iter().map(|row| row.cells.len()).max()?;
+    let natural = table_widths(&rows, columns, format);
+    let widths = if let Some(widths) = requested {
+        if widths.len() != columns {
+            return None;
+        }
+        let mut minimum = minimum_table_widths(&rows, columns, format);
+        for (minimum, natural) in minimum.iter_mut().zip(&natural) {
+            *minimum = (*minimum).max((*natural).min(MIN_RESIZED_COLUMN_WIDTH));
+        }
+        widths
+            .iter()
+            .zip(minimum)
+            .map(|(width, minimum)| (*width).max(minimum))
+            .collect()
+    } else {
+        natural.clone()
+    };
+    // With no rule, a column narrower than all of its cells cannot be recovered
+    // from padding alone. A standard Org separator makes the width explicit.
+    let add_separator = !rows.iter().any(|row| row.separator)
+        && widths
+            .iter()
+            .zip(&natural)
+            .any(|(width, natural)| width < natural);
+    let mut plan = TableAlignmentPlan {
+        edits: vec![],
+        tables: 1,
+        changed: 0,
+        skipped: 0,
+        format,
+        rows: vec![],
+    };
+    for (index, ((range, old), row)) in ranges.into_iter().zip(source).zip(&rows).enumerate() {
+        let (mut new, _) = aligned_row(row, &widths, None, format);
+        if index == 0 && add_separator {
+            let separator = ParsedRow {
+                indent: row.indent.clone(),
+                cells: vec![String::new(); columns],
+                separator: true,
+                separator_alignments: vec![(false, false); columns],
+            };
+            new.push_str(newline);
+            new.push_str(&aligned_row(&separator, &widths, None, format).0);
+        }
+        plan.add_row(range, old, new);
+    }
+    plan.changed = usize::from(!plan.edits.is_empty());
+    Some(plan)
 }
 
 /// Parse once on the worker. Only actual syntax tables participate, including folded tables.
@@ -166,39 +264,18 @@ pub(crate) fn plan_table_alignment(
             plan.skipped += 1;
             continue;
         }
-        let widths = table_widths(&parsed, columns, format);
+        let source = rows
+            .iter()
+            .map(|(_, text)| text.clone())
+            .collect::<Vec<_>>();
+        if source_rows_aligned(&source, columns, format) {
+            continue;
+        }
+        let widths = formatting_widths(&source, &parsed, columns, format);
         let before = plan.edits.len();
         for ((range, old), parsed) in rows.into_iter().zip(parsed) {
             let (new, _) = aligned_row(&parsed, &widths, None, format);
-            if old == new {
-                continue;
-            }
-            // Keep unchanged line prefixes/suffixes out of the edit so viewport anchors map
-            // through the transaction. Newlines are never rewritten, including mixed CRLF/LF.
-            let mut prefix = old
-                .bytes()
-                .zip(new.bytes())
-                .take_while(|(a, b)| a == b)
-                .count();
-            while !old.is_char_boundary(prefix) || !new.is_char_boundary(prefix) {
-                prefix -= 1;
-            }
-            let mut suffix = old[prefix..]
-                .bytes()
-                .rev()
-                .zip(new[prefix..].bytes().rev())
-                .take_while(|(a, b)| a == b)
-                .count();
-            while !old.is_char_boundary(old.len() - suffix)
-                || !new.is_char_boundary(new.len() - suffix)
-            {
-                suffix -= 1;
-            }
-            plan.edits.push(TextEdit::new(
-                ByteRange::new(range.start.0 + prefix as u64, range.end.0 - suffix as u64),
-                &new[prefix..new.len() - suffix],
-            ));
-            plan.rows.push((range, old, new));
+            plan.add_row(range, old, new);
         }
         plan.changed += usize::from(plan.edits.len() > before);
     }
@@ -292,6 +369,112 @@ mod tests {
         let (formatted, plan) = align(text, "notes.md", TableScope::Document, Selection::default());
         assert_eq!(formatted, text);
         assert_eq!((plan.tables, plan.skipped), (2, 2));
+    }
+
+    #[test]
+    fn already_aligned_wide_tables_preserve_spacing_in_both_formatters() {
+        for (path, rule) in [
+            ("wide.org", "|--------+----------|"),
+            ("wide.md", "| ------ | -------- |"),
+        ] {
+            let source = format!("| 名     | v        |\n{rule}\n|      x | value    |\n");
+            let (formatted, plan) =
+                align(&source, path, TableScope::Document, Selection::default());
+            assert_eq!(formatted, source);
+            assert!(plan.edits.is_empty());
+            let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let context =
+                EditorCommandContext::at(Path::new(path), &snapshot, ByteOffset(2)).unwrap();
+            let change = align_table(&snapshot, &context, "\n", TableNavigation::Stay).unwrap();
+            assert_eq!(change.replacement, snapshot.copy_range(change.range));
+        }
+    }
+
+    #[test]
+    fn narrow_resize_retains_cell_text_and_format_expands_only_necessary_columns() {
+        for (path, literal, rule) in [
+            ("narrow.org", "=x|y=", "|---+---|"),
+            ("narrow.md", "`x\\|y`", "| --- | :---: |"),
+        ] {
+            let source = format!(
+                "intro\r\n\r\n| 中文很长 | {literal} and \\| |\r\n{rule}\r\n| a | z\tt |\r\n\r\nend"
+            );
+            let format = DocumentFormat::from_path(Path::new(path));
+            let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let snapshot = buffer.snapshot();
+            let selection = Selection::new(
+                ByteOffset(source.len() as u64),
+                ByteOffset(source.find('文').unwrap() as u64),
+            );
+            let plan =
+                resize_table(&snapshot, ByteOffset(9), Some(&[3, 30]), format, "\r\n").unwrap();
+            let mapped = plan.map_selection(selection);
+            buffer
+                .commit(EditTransaction::new(snapshot.revision(), plan.edits))
+                .unwrap();
+            let snapshot = buffer.snapshot();
+            let resized = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+            assert!(resized.contains("中文很长"));
+            assert!(resized.contains(&format!("{literal} and \\|")));
+            assert!(resized.contains("z\tt"));
+            assert_eq!(resized.matches('\r').count(), resized.matches('\n').count());
+            assert_eq!(mapped.anchor().0, resized.len() as u64);
+            assert!(resized[mapped.head().0 as usize..].starts_with('文'));
+            let columns = table_columns(&snapshot, 2, format).unwrap();
+            assert!(!columns.aligned);
+            assert_eq!(columns.source_widths, Some(vec![3, 30]));
+            let (formatted, plan) = align(&resized, path, TableScope::Document, mapped);
+            assert_eq!(
+                plan.changed, 1,
+                "{path}: {resized:?}, tables={}",
+                plan.tables
+            );
+            let snapshot = DocumentSnapshot::from_utf8(formatted.as_bytes().to_vec()).unwrap();
+            let columns = table_columns(&snapshot, 2, format).unwrap();
+            assert!(columns.aligned);
+            assert_eq!(columns.source_widths, Some(vec![8, 30]));
+            assert!(
+                align(&formatted, path, TableScope::Document, Selection::default())
+                    .1
+                    .edits
+                    .is_empty()
+            );
+        }
+    }
+
+    #[test]
+    fn narrow_org_table_without_a_rule_adds_one_and_preserves_selection() {
+        let source = "| longer | content |\r\n| another | value |\r\n\r\nend";
+        let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let snapshot = buffer.snapshot();
+        let selection = Selection::new(
+            ByteOffset(source.find("another").unwrap() as u64),
+            ByteOffset(4),
+        );
+        let plan = resize_table(
+            &snapshot,
+            ByteOffset(0),
+            Some(&[3, 12]),
+            DocumentFormat::Org,
+            "\r\n",
+        )
+        .unwrap();
+        let mapped = plan.map_selection(selection);
+        buffer
+            .commit(EditTransaction::new(snapshot.revision(), plan.edits))
+            .unwrap();
+        let snapshot = buffer.snapshot();
+        let resized = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+        assert_eq!(resized.matches("|-----+--------------|").count(), 1);
+        assert!(resized[mapped.anchor().0 as usize..].starts_with("another"));
+        assert!(resized[mapped.head().0 as usize..].starts_with("nger"));
+        assert_eq!(resized.matches('\r').count(), resized.matches('\n').count());
+        assert_eq!(
+            table_columns(&snapshot, 0, DocumentFormat::Org)
+                .unwrap()
+                .source_widths,
+            Some(vec![3, 12])
+        );
     }
 
     #[test]

@@ -18,6 +18,7 @@ mod source_copy;
 mod syntax;
 mod table_actions;
 mod table_layout;
+mod table_resize;
 mod timestamp;
 mod todo;
 
@@ -198,6 +199,8 @@ pub fn init(cx: &mut App) {
         KeyBinding::new("ctrl-t", TransposeChars, Some("SemanticEditor")),
         KeyBinding::new("ctrl-space", SetMark, Some("SemanticEditor")),
         KeyBinding::new("ctrl-g", KeyboardQuit, Some("SemanticEditor")),
+        KeyBinding::new("escape", KeyboardQuit, Some("TableResize")),
+        KeyBinding::new("ctrl-g", KeyboardQuit, Some("TableResize")),
         KeyBinding::new("ctrl-/", Undo, Some("SemanticEditor")),
         KeyBinding::new("ctrl-_", Undo, Some("SemanticEditor")),
         KeyBinding::new("ctrl-v", ScrollPageDown, Some("SemanticEditor")),
@@ -598,6 +601,7 @@ pub struct SemanticEditor {
     timestamp: timestamp::TimestampInteraction,
     inline_actions: inline_actions::InlineActions,
     table_actions: table_actions::TableActions,
+    table_resize: table_resize::TableResize,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_copy: source_copy::SourceCopy,
     source_run_button_hovered: bool,
@@ -825,6 +829,7 @@ impl SemanticEditor {
                     | DocumentEvent::Reloaded { .. }
                     | DocumentEvent::PathChanged { .. }
             ) {
+                this.cancel_table_resize(cx);
                 retain_inline_geometry = this.inline_document_changed(event, cx);
                 this.dismiss_table_actions(cx);
                 this.dismiss_todo(cx);
@@ -1117,6 +1122,7 @@ impl SemanticEditor {
             timestamp: timestamp::TimestampInteraction::default(),
             inline_actions: inline_actions::InlineActions::default(),
             table_actions: table_actions::TableActions::default(),
+            table_resize: table_resize::TableResize::default(),
             source_run_buttons: Arc::from([]),
             source_copy: source_copy::SourceCopy::default(),
             source_run_button_hovered: false,
@@ -2585,8 +2591,18 @@ mod tests {
                     .find(|row| row.line.0 == 0)
                     .unwrap()
                     .table_layout
-                    .is_none(),
-                "making a table noncanonical must disable pixel alignment"
+                    .is_some(),
+                "an overflowing cell retains the source column widths"
+            );
+            assert!(
+                !editor
+                    .table_columns(
+                        &editor.snapshot(cx),
+                        LineIndex(0),
+                        crate::document::DocumentFormat::Org
+                    )
+                    .unwrap()
+                    .aligned
             );
             assert!(
                 editor

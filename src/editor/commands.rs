@@ -1344,6 +1344,9 @@ impl SemanticEditor {
     }
 
     fn keyboard_quit(&mut self, _: &KeyboardQuit, _: &mut Window, cx: &mut Context<Self>) {
+        if self.cancel_table_resize(cx) {
+            return;
+        }
         self.dismiss_table_actions(cx);
         self.dismiss_inline(cx);
         self.dismiss_todo(cx);
@@ -1431,6 +1434,9 @@ impl SemanticEditor {
         self.finish_composition(cx);
         self.vertical_goal_x = None;
         self.emacs_mark_active = false;
+        if self.table_resize_down(event, cx) {
+            return;
+        }
         if self.image_resize_down(event, cx) {
             return;
         }
@@ -1528,6 +1534,9 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.table_resize_move(event.position, cx) {
+            return;
+        }
         self.table_hover(event.position, cx);
         if self.table_menu_is_open() {
             return;
@@ -1594,6 +1603,9 @@ impl SemanticEditor {
     }
 
     fn on_mouse_up(&mut self, event: &MouseUpEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.table_resize_up(event.position, cx) {
+            return;
+        }
         self.minimap.drag = None;
         if self.minimap.resizing.take().is_some() {
             cx.emit(super::EditorMinimapWidthEvent(self.minimap.width));
@@ -2086,6 +2098,7 @@ impl Render for SemanticEditor {
         }
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
+                this.cancel_table_resize(cx);
                 this.finish_composition(cx);
             }));
         }
@@ -2098,7 +2111,9 @@ impl Render for SemanticEditor {
         let source_copy_tooltip = self.source_copy_tooltip(window);
         div()
             .id("semantic-editor")
-            .key_context(if self.table_menu_is_open() {
+            .key_context(if self.table_resize_is_dragging() {
+                "TableResize"
+            } else if self.table_menu_is_open() {
                 "TableMenu"
             } else if self.inline_actions.popup.is_some() {
                 "InlinePicker"
@@ -2188,6 +2203,9 @@ impl Render for SemanticEditor {
             }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !hovered {
+                    if !this.table_resize_is_dragging() {
+                        this.clear_table_resize_hover(cx);
+                    }
                     this.table_hover(window.mouse_position(), cx);
                     this.source_copy_hover(window.mouse_position(), cx);
                     this.inline_hover(window.mouse_position(), cx);

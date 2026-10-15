@@ -491,7 +491,7 @@ fn command_line_number_shortcuts_follow_visible_rows_and_preserve_digit_input(
     cx.update(crate::editor::init);
     cx.update(|cx| cx.set_reduce_motion(true));
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
-    let original = "|a|long|\n\n|second|x|\n";
+    let original = "|a|long|\n|wide|x|\n\n|second|x|\n";
     let doc = w.update(cx, |w, cx| install(w, original, cx));
     cx.run_until_parked();
     cx.simulate_keystrokes("alt-x");
@@ -518,7 +518,10 @@ fn command_line_number_shortcuts_follow_visible_rows_and_preserve_digit_input(
     cx.simulate_keystrokes("ctrl-1");
     cx.run_until_parked();
     w.update(cx, |w, cx| {
-        assert_eq!(source(doc.read(cx)), "| a | long |\n\n|second|x|\n");
+        assert_eq!(
+            source(doc.read(cx)),
+            "| a    | long |\n| wide | x    |\n\n|second|x|\n"
+        );
         assert!(matches!(
             w.command_line.session.as_ref().unwrap().phase,
             Phase::Result { .. }
@@ -837,7 +840,7 @@ fn command_line_expiry_and_outgoing_controls_cannot_execute_or_undo(cx: &mut gpu
     cx.update(crate::editor::init);
     let w = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     let doc = w.update(cx, |w, cx| {
-        let doc = install(w, "|a|long|\n", cx);
+        let doc = install(w, "|a|long|\n|wide|x|\n", cx);
         w.open_command_line(cx);
         w.start_table_alignment(crate::command::TableScope::Document, cx);
         doc
@@ -867,7 +870,7 @@ fn command_line_expiry_and_outgoing_controls_cannot_execute_or_undo(cx: &mut gpu
         w.activate_command_candidate(0, cx);
         w.command_input_key("enter", Modifiers::default(), cx);
         assert!(!w.command_line.session.as_ref().unwrap().execute_pending);
-        assert_eq!(source(doc.read(cx)), "| a | long |\n");
+        assert_eq!(source(doc.read(cx)), "| a    | long |\n| wide | x    |\n");
     });
 }
 

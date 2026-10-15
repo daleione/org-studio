@@ -777,6 +777,7 @@ pub(super) struct PreparedLayoutKey {
     pub(super) inline_images: bool,
     pub(super) inline_image_overrides: Arc<[(u64, bool)]>,
     pub(super) inline_image_resource_generation: u64,
+    pub(super) table_layout_revision: u64,
 }
 
 #[derive(Clone)]
@@ -1929,6 +1930,7 @@ mod tests {
             inline_images: true,
             inline_image_overrides: Arc::from([]),
             inline_image_resource_generation: 0,
+            table_layout_revision: 0,
         }
     }
 

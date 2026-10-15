@@ -5,6 +5,7 @@ use unicode_width::UnicodeWidthStr;
 mod batch;
 mod edit;
 mod formula;
+pub(super) use batch::resize_table;
 pub(crate) use batch::{TableAlignmentPlan, plan_table_alignment};
 pub(super) use edit::EditableTable;
 pub(super) use formula::recalculate as recalculate_table;
@@ -21,6 +22,7 @@ use crate::{
 };
 
 pub(super) type LineCycle = fn(&str) -> Option<(Range<usize>, &'static str)>;
+pub(super) const MIN_RESIZED_COLUMN_WIDTH: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum EditorCommandKind {
@@ -237,18 +239,22 @@ pub(super) fn align_table(
         TableNavigation::Stay => character,
         _ => 0,
     };
-    let widths = table_widths(&parsed, columns, format);
+    let aligned = source_rows_aligned(&rows, columns, format);
+    let widths = formatting_widths(&rows, &parsed, columns, format);
     let mut replacement = String::new();
     let mut caret_local = None;
     for (row_index, row) in parsed.iter().enumerate() {
         let line = start + row_index as u64;
         let replacement_start = replacement.len();
-        let (formatted, caret) = aligned_row(
-            row,
-            &widths,
-            (row_index == target.0).then_some((target.1, target_character)),
-            format,
-        );
+        let caret_position = (row_index == target.0).then_some((target.1, target_character));
+        let (formatted, caret) = if aligned {
+            let text = rows[row_index].clone();
+            let caret = caret_position
+                .map(|(column, character)| cell_offset(&text, column, character, format));
+            (text, caret)
+        } else {
+            aligned_row(row, &widths, caret_position, format)
+        };
         replacement.push_str(&formatted);
         if let Some(caret) = caret {
             caret_local = Some(replacement_start + caret);
@@ -290,7 +296,7 @@ struct ParsedRow {
     separator_alignments: Vec<(bool, bool)>,
 }
 
-fn table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> Vec<usize> {
+fn minimum_table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> Vec<usize> {
     let mut widths = vec![
         if format == DocumentFormat::Markdown {
             3
@@ -304,15 +310,113 @@ fn table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> V
             for (index, (left, right)) in row.separator_alignments.iter().copied().enumerate() {
                 widths[index] = widths[index].max(3 + usize::from(left) + usize::from(right));
             }
-            continue;
-        } else if row.separator {
-            continue;
-        }
-        for (index, cell) in row.cells.iter().enumerate() {
-            widths[index] = widths[index].max(UnicodeWidthStr::width(cell.as_str()));
         }
     }
     widths
+}
+
+fn table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> Vec<usize> {
+    let mut widths = minimum_table_widths(rows, columns, format);
+    for row in rows.iter().filter(|row| !row.separator) {
+        for (index, cell) in row.cells.iter().enumerate() {
+            widths[index] = widths[index].max(table_text_width(cell));
+        }
+    }
+    widths
+}
+
+fn table_text_width(text: &str) -> usize {
+    text.split('\t').map(UnicodeWidthStr::width).sum::<usize>()
+        + text.bytes().filter(|byte| *byte == b'\t').count() * 4
+}
+
+/// Compare display columns, not byte offsets: Chinese text and escaped/literal pipes
+/// must not make an otherwise aligned table look misaligned.
+fn source_rows_aligned(rows: &[String], columns: usize, format: DocumentFormat) -> bool {
+    let positions = |row: &str| {
+        source_table::delimiter_offsets(row, format)
+            .into_iter()
+            .map(|offset| table_text_width(&row[..offset]))
+            .collect::<Vec<_>>()
+    };
+    let Some(first) = rows.first().map(|row| positions(row)) else {
+        return false;
+    };
+    first.len() == columns + 1 && rows.iter().all(|row| positions(row) == first)
+}
+
+/// A separator records the requested width even when a cell is too long to fit.
+/// Only recognize that case when the other rows have the corresponding padding,
+/// so an ordinary unformatted Markdown `|---|---|` is not treated as a resize.
+fn source_table_widths(
+    source: &[String],
+    rows: &[ParsedRow],
+    columns: usize,
+    format: DocumentFormat,
+) -> Option<Vec<usize>> {
+    let index = rows.iter().position(|row| row.separator).unwrap_or(0);
+    let text = source.get(index)?;
+    let widths = source_row_widths(text, columns, format)?;
+    if !source_rows_aligned(source, columns, format) {
+        // Dragging keeps at least three content columns. Short placeholder
+        // rules in an unformatted table carry no reliable width preference.
+        let natural = table_widths(rows, columns, format);
+        if widths
+            .iter()
+            .zip(natural)
+            .any(|(width, natural)| *width < MIN_RESIZED_COLUMN_WIDTH && *width < natural)
+            || !source.iter().zip(rows).all(|(text, row)| {
+                row.cells.len() == columns && aligned_row(row, &widths, None, format).0 == *text
+            })
+        {
+            return None;
+        }
+    }
+    Some(widths)
+}
+
+fn source_row_widths(text: &str, columns: usize, format: DocumentFormat) -> Option<Vec<usize>> {
+    let row = source_table::parse_line(text, format);
+    if row.cells.len() != columns {
+        return None;
+    }
+    row.cells
+        .iter()
+        .map(|cell| table_text_width(&text[cell.raw_range.clone()]).checked_sub(2))
+        .collect()
+}
+
+fn formatting_widths(
+    source: &[String],
+    rows: &[ParsedRow],
+    columns: usize,
+    format: DocumentFormat,
+) -> Vec<usize> {
+    let mut widths = table_widths(rows, columns, format);
+    let authored = rows
+        .iter()
+        .position(|row| row.separator)
+        .and_then(|index| source_row_widths(&source[index], columns, format))
+        .or_else(|| source_table_widths(source, rows, columns, format));
+    if let Some(authored) = authored {
+        for (width, authored) in widths.iter_mut().zip(authored) {
+            *width = (*width).max(authored);
+        }
+    }
+    widths
+}
+
+fn cell_offset(text: &str, column: usize, character: usize, format: DocumentFormat) -> usize {
+    source_table::parse_line(text, format)
+        .cells
+        .get(column)
+        .map_or(text.len(), |cell| {
+            cell.text_range.start
+                + text[cell.text_range.clone()]
+                    .char_indices()
+                    .nth(character)
+                    .map_or(cell.text_range.len(), |(byte, _)| byte)
+        })
 }
 
 fn aligned_row(
@@ -366,7 +470,7 @@ fn aligned_row(
                 caret = Some(output.len() + byte);
             }
             output.push_str(cell);
-            output.push_str(&" ".repeat(width.saturating_sub(UnicodeWidthStr::width(cell))));
+            output.push_str(&" ".repeat(width.saturating_sub(table_text_width(cell))));
             output.push_str(" |");
         }
     }
@@ -446,8 +550,12 @@ pub(super) fn table_start(
 }
 
 pub(super) struct TableColumns {
+    pub(super) format: DocumentFormat,
     pub(super) widths: Vec<usize>,
+    pub(super) minimum_widths: Vec<usize>,
+    pub(super) source_widths: Option<Vec<usize>>,
     pub(super) aligned: bool,
+    pub(super) source_range: ByteRange,
 }
 
 pub(super) fn table_columns(
@@ -466,18 +574,28 @@ pub(super) fn table_columns(
     }
     let rows = source_rows
         .iter()
-        .map(|row| parse_row(row, format))
+        .map(|row| parse_source_row(row, format))
         .collect::<Vec<_>>();
     let columns = rows.iter().map(|row| row.cells.len()).max().unwrap_or(0);
     if columns == 0 {
         return None;
     }
     let widths = table_widths(&rows, columns, format);
-    let aligned = source_rows
-        .iter()
-        .zip(&rows)
-        .all(|(source, row)| aligned_row(row, &widths, None, format).0 == *source);
-    Some(TableColumns { widths, aligned })
+    let minimum_widths = minimum_table_widths(&rows, columns, format);
+    let aligned = source_rows_aligned(&source_rows, columns, format);
+    let source_widths = source_table_widths(&source_rows, &rows, columns, format);
+    let source_range = ByteRange {
+        start: snapshot.line_content_range(LineIndex(start)).ok()?.start,
+        end: snapshot.line_content_range(LineIndex(line - 1)).ok()?.end,
+    };
+    Some(TableColumns {
+        format,
+        widths,
+        minimum_widths,
+        source_widths,
+        aligned,
+        source_range,
+    })
 }
 
 #[cfg(test)]

@@ -93,6 +93,9 @@ pub(super) fn publish_frame(
         let viewport_changed = editor.viewport != Some(bounds);
         if viewport_changed {
             editor.dismiss_table_actions(cx);
+            if !editor.table_resize_is_dragging() {
+                editor.clear_table_resize_hover(cx);
+            }
         }
         editor.viewport = Some(bounds);
         editor.minimap.bounds =

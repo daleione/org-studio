@@ -312,6 +312,7 @@ pub(super) fn paint_frame(
                         );
                     }
                 }
+                host.read(cx).paint_table_resize(&_hits, window, cx);
                 for button in &state.source_copy_buttons {
                     button.paint(window, cx);
                 }
@@ -325,8 +326,11 @@ pub(super) fn paint_frame(
         );
     });
 
+    SemanticEditor::capture_table_resize(host, window, cx);
     let editor = host.read(cx);
-    if editor.inline_highlight().is_some() || editor.hovered_link.is_some() {
+    if editor.table_resize_is_hovered() {
+        window.set_window_cursor_style(CursorStyle::ResizeLeftRight);
+    } else if editor.inline_highlight().is_some() || editor.hovered_link.is_some() {
         window.set_window_cursor_style(CursorStyle::PointingHand);
     }
     let _benchmark = publish_frame(host, bounds, state, cx);
