@@ -132,6 +132,10 @@ impl WorkspaceWindow {
     }
 
     pub fn open(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if self.file_overview_is_open() && !crate::preview::is_supported_image(&path) {
+            self.open_background_buffer(path, cx);
+            return;
+        }
         if self.buffer_busy() {
             return;
         }

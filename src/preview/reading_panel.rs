@@ -1166,6 +1166,20 @@ impl ReadingPreviewPanel {
         self.list_state.scrollbar_drag_ended();
         was_dragging
     }
+
+    pub(crate) fn has_active_pointer_interaction(&self) -> bool {
+        self.minimap_state
+            .drag
+            .lock()
+            .expect("minimap drag state poisoned")
+            .is_some()
+            || self
+                .minimap_state
+                .resize_drag
+                .lock()
+                .expect("minimap resize state poisoned")
+                .is_some()
+    }
 }
 
 fn selected_reading_text(

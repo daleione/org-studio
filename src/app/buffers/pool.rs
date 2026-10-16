@@ -3,6 +3,136 @@ use crate::app::{ContentRoute, WorkspaceLoadState};
 use gpui::AppContext;
 
 impl WorkspaceWindow {
+    /// Prepare retained view entities without changing the active document,
+    /// navigation history, subscriptions, focus, or undo state.
+    pub(crate) fn overview_document_for_paint(
+        &mut self,
+        id: DocumentId,
+        cx: &mut Context<Self>,
+    ) -> Option<(crate::app::ReadyDocument, DocumentWorkspaceState)> {
+        let current = self
+            .document_session()
+            .is_some_and(|doc| doc.read(cx).id() == id);
+        let (mut document, workspace, soft_wrap, preview) = if current {
+            (
+                self.state.ready()?.clone(),
+                self.document_workspace,
+                self.soft_wrap,
+                self.derived.latest.clone(),
+            )
+        } else {
+            let parked = self
+                .buffers
+                .parked
+                .iter()
+                .find(|entry| entry.document.session.read(cx).id() == id)?;
+            (
+                parked.document.clone(),
+                parked.workspace,
+                parked.soft_wrap,
+                parked.preview.clone(),
+            )
+        };
+        let preview = if workspace.needs_reading() {
+            let doc = document.session.read(cx);
+            Some(preview.filter(|preview| {
+                preview.document_id == id
+                    && preview.revision == doc.revision()
+                    && preview.path == doc.syntax_path()
+            })?)
+        } else {
+            None
+        };
+        for pane in [crate::app::PaneSide::Left, crate::app::PaneSide::Right] {
+            if !workspace.pane_is_visible(pane) {
+                continue;
+            }
+            match workspace.surface(pane) {
+                crate::app::PaneSurface::Editor if document.editors.get(pane).is_none() => {
+                    *document.editors.get_mut(pane) =
+                        Some(self.make_editor_for(&document, pane, soft_wrap, cx));
+                }
+                crate::app::PaneSurface::Reading => {
+                    let preview = preview.as_ref()?.clone();
+                    if let Some(panel) = document.readers.get(pane) {
+                        let style = *crate::preview::preview_style(self.reading_style);
+                        panel.update(cx, |panel, cx| {
+                            panel.replace_document_with_style(preview, style, cx)
+                        });
+                    } else {
+                        let font_size = *self.content_font_sizes.get(pane);
+                        let overdraw = self.list_overdraw;
+                        *document.readers.get_mut(pane) = Some(cx.new(move |_| {
+                            let mut panel =
+                                crate::preview::ReadingPreviewPanel::new(preview, overdraw);
+                            panel.set_content_font_size(font_size);
+                            panel
+                        }));
+                    }
+                }
+                _ => {}
+            }
+        }
+        if current {
+            *self.state.ready_mut()? = document.clone();
+        } else {
+            let parked = self
+                .buffers
+                .parked
+                .iter_mut()
+                .find(|entry| entry.document.session.read(cx).id() == id)?;
+            parked.document = document.clone();
+        }
+        Some((document, workspace))
+    }
+
+    /// Preparing a reading projection never activates a buffer.
+    pub(crate) fn overview_preview_request(
+        &self,
+        id: DocumentId,
+        cx: &gpui::App,
+    ) -> Option<(PathBuf, crate::document::DocumentSnapshot)> {
+        let parked = self
+            .buffers
+            .parked
+            .iter()
+            .find(|entry| entry.document.session.read(cx).id() == id)?;
+        if !parked.workspace.needs_reading() {
+            return None;
+        }
+        let doc = parked.document.session.read(cx);
+        let snapshot = doc.snapshot();
+        let path = doc.syntax_path().to_path_buf();
+        if parked.preview.as_ref().is_some_and(|preview| {
+            preview.document_id == id && preview.revision == doc.revision() && preview.path == path
+        }) {
+            return None;
+        }
+        Some((path, snapshot))
+    }
+
+    pub(crate) fn install_overview_preview(
+        &mut self,
+        id: DocumentId,
+        preview: Arc<crate::preview::PreviewSnapshot>,
+        cx: &gpui::App,
+    ) -> bool {
+        let Some(parked) = self
+            .buffers
+            .parked
+            .iter_mut()
+            .find(|entry| entry.document.session.read(cx).id() == id)
+        else {
+            return false;
+        };
+        let doc = parked.document.session.read(cx);
+        if doc.revision() != preview.revision || doc.syntax_path() != preview.path {
+            return false;
+        }
+        parked.preview = Some(preview);
+        true
+    }
+
     pub(crate) fn park_document(&mut self, document: ReadyDocument) {
         self.buffers.parked.insert(
             0,

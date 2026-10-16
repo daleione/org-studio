@@ -1,6 +1,7 @@
 use std::{ops::Range, sync::Arc};
 
-use gpui::{FontWeight, HighlightStyle, SharedString, StyledText, div, prelude::*, px, rgb};
+use crate::document_preview::RecordedText as StyledText;
+use gpui::{FontWeight, HighlightStyle, SharedString, div, prelude::*, px, rgb};
 
 use crate::preview::{
     CodeHighlightSpan, CodeRowRole, PreviewStyle,

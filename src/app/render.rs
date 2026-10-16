@@ -133,7 +133,7 @@ fn document_titlebar(
     let agenda_icon_color = theme.foreground;
     // Equal margins keep the title centered in the window, clear of both button groups.
     let title_inset =
-        (titlebar_inset + 64.0).max(crate::app::TITLEBAR_TRAILING_INSET + 96.0) + 12.0;
+        (titlebar_inset + 64.0).max(crate::app::TITLEBAR_TRAILING_INSET + 128.0) + 12.0;
     div()
         .debug_selector(|| "document-titlebar".to_owned())
         .absolute()
@@ -233,6 +233,7 @@ fn document_titlebar(
                     }
                 }),
         )
+        .child(super::file_overview::toolbar_button(workspace.clone()))
         .child(theme_toggle_button(workspace, theme_mode))
         .child(
             div()
@@ -264,6 +265,7 @@ impl Render for WorkspaceWindow {
         self.install_close_guard(window, cx);
         self.ensure_document_subscription(cx);
         self.ensure_agenda_runtime(cx);
+        self.file_overview_tick(window, cx);
         // Fullscreen hides the traffic lights, so the titlebar buttons slide
         // to the left edge; windowed mode reserves their slot again.
         let titlebar_inset = if window.is_fullscreen() {
@@ -301,7 +303,7 @@ impl Render for WorkspaceWindow {
                 handle
             })
             .clone();
-        if self.keyboard.pending_keys().is_none() {
+        if self.keyboard.pending_keys().is_none() && !self.file_overview_is_open() {
             self.restore_key_focus_after_command(window, cx);
         }
         if self.focus_workspace_on_render {
@@ -309,7 +311,8 @@ impl Render for WorkspaceWindow {
             window.focus(&focus_handle, cx);
         }
         if self.focus_lost_subscription.is_none() {
-            self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
+            self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, window, cx| {
+                this.file_overview_focus_lost(window, cx);
                 if this.cancel_minimap_interaction(cx)
                     || this.cancel_sidebar_resize()
                     || this.cancel_split_resize()
@@ -318,10 +321,12 @@ impl Render for WorkspaceWindow {
                 }
             }));
         }
-        self.buffer_tick(window, cx);
-        self.command_line_tick(window, cx);
+        if !self.file_overview_is_open() {
+            self.buffer_tick(window, cx);
+            self.command_line_tick(window, cx);
+            self.search_render_tick(window, cx);
+        }
         self.status_shell_tick(window, cx);
-        self.search_render_tick(window, cx);
         window.set_window_title(&self.window_title(cx));
         self.schedule_file_manager_presentation(window, cx);
         if self.scroll_benchmark.is_some() && !self.minimap_visible {
@@ -436,6 +441,9 @@ impl Render for WorkspaceWindow {
             .text_color(rgb(current_theme().foreground))
             .font(ui_font("Menlo"))
             .text_size(ui_px(14.0))
+            .capture_pinch(cx.listener(|this, event, window, cx| {
+                this.file_overview_pinch(event, window, cx);
+            }))
             .when(content_font_size_actions_enabled, |view| {
                 view.key_context(DOCUMENT_WORKSPACE_KEY_CONTEXT)
             })
@@ -451,6 +459,10 @@ impl Render for WorkspaceWindow {
                 this.open_search(false, false, false, cx)
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.file_overview_is_open() {
+                    this.file_overview_capture_key(event, window, cx);
+                    return;
+                }
                 if this.content_route == crate::app::ContentRoute::Image {
                     let key = event.keystroke.key.as_str();
                     let modifiers = event.keystroke.modifiers;
@@ -534,6 +546,7 @@ impl Render for WorkspaceWindow {
                 if !this.search_is_open()
                     && !this.command_line_is_open()
                     && this.buffers.panel.is_none()
+                    && !this.file_overview_is_open()
                 {
                     this.key_down(event, window, cx);
                 }
@@ -552,6 +565,11 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &ShowHome, window, cx| {
                 this.dispatch_command(SHOW_HOME_COMMAND, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::FileOverview, window, cx| {
+                    this.open_file_overview(window, cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &ReloadDocument, window, cx| {
                 this.dispatch_command(RELOAD_DOCUMENT_COMMAND, window, cx)
             }))
@@ -647,7 +665,11 @@ impl Render for WorkspaceWindow {
                     self.export.is_open(),
                     titlebar_inset,
                     self.theme_mode(),
-                    self.window_title(cx),
+                    if self.file_overview_is_open() {
+                        "Org Studio".to_owned()
+                    } else {
+                        self.window_title(cx)
+                    },
                 ))
             })
             .child(
@@ -771,6 +793,9 @@ impl Render for WorkspaceWindow {
                     self.language,
                 ))
             })
+            .child(self.overview_presented_marker(cx))
+            .children(self.render_overview_preparation(entity.clone(), window, cx))
+            .children(self.render_file_overview(window, cx))
     }
 }
 
@@ -800,6 +825,7 @@ impl WorkspaceWindow {
                         }
                         crate::document::DocumentEvent::ResourceChanged { path, .. } => {
                             gpui::ImageSource::from(path.clone()).remove_asset(cx);
+                            this.invalidate_file_overview_frames();
                             this.schedule_derived_resource_update(cx);
                         }
                         crate::document::DocumentEvent::Saved { .. } => {

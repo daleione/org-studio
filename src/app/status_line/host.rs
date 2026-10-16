@@ -41,14 +41,21 @@ impl WorkspaceWindow {
             | WorkspaceLoadState::Loading { .. }
             | WorkspaceLoadState::Failed { previous: None, .. } => return None,
         };
+        self.document_status_snapshot_for(document, self.document_workspace, pane, cx)
+    }
+
+    pub(crate) fn document_status_snapshot_for(
+        &self,
+        document: &crate::app::ReadyDocument,
+        workspace: crate::app::DocumentWorkspaceState,
+        pane: crate::app::PaneSide,
+        cx: &gpui::App,
+    ) -> Option<StatusLineSnapshot> {
         let status_pane = match pane {
             crate::app::PaneSide::Left => super::model::DOCUMENT_PANE_ID,
             crate::app::PaneSide::Right => super::model::RIGHT_DOCUMENT_PANE_ID,
         };
-        if matches!(
-            self.document_workspace.surface(pane),
-            crate::app::PaneSurface::Editor
-        ) {
+        if matches!(workspace.surface(pane), crate::app::PaneSurface::Editor) {
             self.source_status_snapshot(status_pane, pane, document, cx)
         } else {
             let panel = document.readers.get(pane).as_ref();
@@ -58,7 +65,11 @@ impl WorkspaceWindow {
                     let session = document.session.read(cx);
                     preview_matches_session(preview, session)
                 })
-                .map(|panel| self.preview_status_snapshot(status_pane, pane, panel, cx))
+                .map(|panel| {
+                    let mut snapshot = self.preview_status_snapshot(status_pane, pane, panel, cx);
+                    snapshot.dirty = document.session.read(cx).is_dirty();
+                    snapshot
+                })
                 .or_else(|| {
                     self.source_status_snapshot(status_pane, pane, document, cx)
                         .map(|mut snapshot| {

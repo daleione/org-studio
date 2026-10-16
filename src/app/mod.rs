@@ -35,6 +35,10 @@ mod component;
 mod derived;
 mod echo_area;
 pub(crate) mod export_ui;
+pub(crate) mod file_overview;
+pub use file_overview::FileOverview;
+#[cfg(feature = "visual-check")]
+pub use file_overview::benchmark::run_visual_check;
 mod file_manager;
 mod home;
 mod image_viewer;
@@ -282,6 +286,7 @@ impl WorkspaceLoadState {
 }
 
 pub struct WorkspaceWindow {
+    pub(crate) file_overview: file_overview::OverviewHost,
     pub(crate) buffers: buffers::BufferHost,
     pub(crate) search: search::SearchHost,
     pub(crate) command_line: command_line::CommandLineHost,

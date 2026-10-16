@@ -38,6 +38,7 @@ impl WorkspaceWindow {
         if window.root::<Self>().flatten().is_some_and(|workspace| {
             let workspace = workspace.read(cx);
             workspace.search_is_open()
+                || workspace.file_overview_is_open()
                 || workspace.command_line_is_open()
                 || workspace
                     .editor(workspace.document_workspace.active_pane)
@@ -271,6 +272,9 @@ impl WorkspaceWindow {
             }
             CommandImplementation::Builtin(BuiltinCommand::SwitchBuffer) => {
                 self.open_buffer_picker(crate::app::buffers::PickerIntent::Switch, cx)
+            }
+            CommandImplementation::Builtin(BuiltinCommand::FileOverview) => {
+                self.open_file_overview(window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::NavigateBack) => {
                 self.navigate_history(false, cx)

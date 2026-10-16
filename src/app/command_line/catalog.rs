@@ -96,6 +96,13 @@ pub(super) fn entries(
             None,
         ),
         (
+            "org-studio.workspace.file-overview",
+            "file-overview",
+            "文件总览",
+            "Open Files overview",
+            None,
+        ),
+        (
             "org-studio.workspace.navigate-back",
             "navigate-back",
             "返回上个位置",

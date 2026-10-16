@@ -160,6 +160,11 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             BuiltinCommand::SwitchBuffer,
         ),
         (
+            "org-studio.workspace.file-overview",
+            "Open Files overview",
+            BuiltinCommand::FileOverview,
+        ),
+        (
             "org-studio.workspace.close-buffer",
             "Close document",
             BuiltinCommand::CloseBuffer,
@@ -204,6 +209,7 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             .register_builtin(BuiltinCommandSpec {
                 name: name.into(),
                 aliases: match command {
+                    BuiltinCommand::FileOverview => &["file-overview", "overview"],
                     BuiltinCommand::SwitchBuffer => {
                         &["switch-to-buffer", "list-buffers", "quick-open"]
                     }

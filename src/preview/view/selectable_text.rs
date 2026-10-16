@@ -3,8 +3,7 @@ use std::{cell::Cell, ops::Range, rc::Rc};
 use gpui::{
     AnyElement, App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId,
     Hitbox, HitboxBehavior, InspectorElementId, IntoElement, LayoutId, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Pixels, Style, StyledText, Window, fill, point, px, relative,
-    rgba,
+    MouseMoveEvent, MouseUpEvent, Pixels, Style, Window, fill, point, px, relative, rgba,
 };
 
 use super::inline_text::{ReadingText, ReadingTextLayout};
@@ -120,7 +119,7 @@ pub(in crate::preview) struct SelectableReadingText {
 impl SelectableReadingText {
     pub(in crate::preview) fn new(
         id: impl Into<ElementId>,
-        text: StyledText,
+        text: crate::document_preview::RecordedText,
         panel: gpui::Entity<ReadingPreviewPanel>,
         row: usize,
         selection: Option<(Range<usize>, bool)>,
@@ -447,10 +446,13 @@ fn paint_selection(
             .position_for_index(range.start)
             .unwrap_or(bounds.origin);
         let height = layout.line_height().min(bounds.size.height).max(px(1.0));
-        window.paint_quad(fill(
-            Bounds::from_corners(position, point(position.x + px(8.0), position.y + height)),
-            rgba((crate::theme::current_theme().accent << 8) | 0x4a),
-        ));
+        crate::document_preview::quad(
+            window,
+            fill(
+                Bounds::from_corners(position, point(position.x + px(8.0), position.y + height)),
+                rgba((crate::theme::current_theme().accent << 8) | 0x4a),
+            ),
+        );
         return;
     }
     let Some(start) = layout.position_for_index(range.start) else {
@@ -484,10 +486,13 @@ fn paint_selection(
             continue;
         }
         let top = bounds.top() + px(line as f32 * line_height);
-        window.paint_quad(fill(
-            Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
-            rgba((crate::theme::current_theme().accent << 8) | 0x4a),
-        ));
+        crate::document_preview::quad(
+            window,
+            fill(
+                Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
+                rgba((crate::theme::current_theme().accent << 8) | 0x4a),
+            ),
+        );
     }
 }
 
@@ -510,14 +515,17 @@ fn paint_search(
             .position_for_index(range.start)
             .unwrap_or(bounds.origin);
         let height = layout.line_height().min(bounds.size.height).max(px(1.0));
-        window.paint_quad(fill(
-            Bounds::from_corners(position, point(position.x + px(8.0), position.y + height)),
-            rgba(if current {
-                crate::theme::current_theme().search_current
-            } else {
-                crate::theme::current_theme().search_match
-            }),
-        ));
+        crate::document_preview::quad(
+            window,
+            fill(
+                Bounds::from_corners(position, point(position.x + px(8.0), position.y + height)),
+                rgba(if current {
+                    crate::theme::current_theme().search_current
+                } else {
+                    crate::theme::current_theme().search_match
+                }),
+            ),
+        );
         return;
     }
     let Some(start) = layout.position_for_index(range.start) else {
@@ -551,14 +559,17 @@ fn paint_search(
             continue;
         }
         let top = bounds.top() + px(line as f32 * line_height);
-        window.paint_quad(fill(
-            Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
-            rgba(if current {
-                crate::theme::current_theme().search_current
-            } else {
-                crate::theme::current_theme().search_match
-            }),
-        ));
+        crate::document_preview::quad(
+            window,
+            fill(
+                Bounds::from_corners(point(left, top), point(right, top + px(line_height))),
+                rgba(if current {
+                    crate::theme::current_theme().search_current
+                } else {
+                    crate::theme::current_theme().search_match
+                }),
+            ),
+        );
     }
 }
 
@@ -587,7 +598,7 @@ mod tests {
             move |_, _| {
                 SelectableReadingText::new(
                     ("selection-test", 0usize),
-                    gpui::StyledText::new("hello world"),
+                    crate::document_preview::RecordedText::new("hello world"),
                     render_panel.clone(),
                     0,
                     None,
@@ -634,7 +645,7 @@ mod tests {
                         div().w(px(100.0)).child(
                             SelectableReadingText::new(
                                 ("selection-whitespace-test", 0usize),
-                                gpui::StyledText::new("hello world"),
+                                crate::document_preview::RecordedText::new("hello world"),
                                 render_panel.clone(),
                                 0,
                                 None,
@@ -684,7 +695,7 @@ mod tests {
                         div().w(px(100.0)).child(
                             SelectableReadingText::new(
                                 ("selection-left-whitespace-test", 0usize),
-                                gpui::StyledText::new("hello world"),
+                                crate::document_preview::RecordedText::new("hello world"),
                                 render_panel.clone(),
                                 0,
                                 None,
@@ -734,7 +745,7 @@ mod tests {
                         div().w(px(100.0)).child(
                             SelectableReadingText::new(
                                 ("selection-indented-whitespace-test", 0usize),
-                                gpui::StyledText::new("hello world"),
+                                crate::document_preview::RecordedText::new("hello world"),
                                 render_panel.clone(),
                                 0,
                                 None,
@@ -783,7 +794,7 @@ mod tests {
                     div().w_full().pl(px(50.0)).child(
                         SelectableReadingText::new(
                             ("selection-list-prefix-test", 0usize),
-                            gpui::StyledText::new("hello world"),
+                            crate::document_preview::RecordedText::new("hello world"),
                             render_panel.clone(),
                             0,
                             None,
@@ -838,7 +849,7 @@ mod tests {
                     .child(
                         SelectableReadingText::new(
                             ("selection-blank-start-test", 0usize),
-                            gpui::StyledText::new("first"),
+                            crate::document_preview::RecordedText::new("first"),
                             render_panel.clone(),
                             0,
                             None,
@@ -847,7 +858,7 @@ mod tests {
                     )
                     .child(SelectableReadingText::new(
                         ("selection-blank-start-test", 1usize),
-                        gpui::StyledText::new(""),
+                        crate::document_preview::RecordedText::new(""),
                         render_panel.clone(),
                         1,
                         None,
@@ -855,7 +866,7 @@ mod tests {
                     .child(
                         SelectableReadingText::new(
                             ("selection-blank-start-test", 2usize),
-                            gpui::StyledText::new("third"),
+                            crate::document_preview::RecordedText::new("third"),
                             render_panel.clone(),
                             2,
                             None,
@@ -907,7 +918,7 @@ mod tests {
                     .child(
                         SelectableReadingText::new(
                             ("selection-blank-end-test", 0usize),
-                            gpui::StyledText::new("first"),
+                            crate::document_preview::RecordedText::new("first"),
                             render_panel.clone(),
                             0,
                             None,
@@ -917,7 +928,7 @@ mod tests {
                     .child(
                         SelectableReadingText::new(
                             ("selection-blank-end-test", 1usize),
-                            gpui::StyledText::new(""),
+                            crate::document_preview::RecordedText::new(""),
                             render_panel.clone(),
                             1,
                             None,
@@ -971,7 +982,7 @@ mod tests {
                     .line_height(px(20.0))
                     .child(SelectableReadingText::new(
                         ("selection-test", 0usize),
-                        gpui::StyledText::new("first"),
+                        crate::document_preview::RecordedText::new("first"),
                         render_panel.clone(),
                         0,
                         None,
@@ -979,7 +990,7 @@ mod tests {
                     .child(
                         SelectableReadingText::new(
                             ("selection-test", 1usize),
-                            gpui::StyledText::new("second"),
+                            crate::document_preview::RecordedText::new("second"),
                             render_panel.clone(),
                             1,
                             None,

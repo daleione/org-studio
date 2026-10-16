@@ -7,6 +7,8 @@ pub struct Theme {
     // callers can swap themes without per-surface conditionals.
     pub window_background: u32,
     pub editor_background: u32,
+    // Canvas behind the unchanged document surfaces in Open Files.
+    pub overview_background: u32,
     pub surface: u32,
     pub elevated: u32,
     pub floating_background: u32,
@@ -79,6 +81,7 @@ pub static ORG_STUDIO_LIGHT: Theme = Theme {
     search_match: 0xe6cc0044,
     window_background: 0xffffff,
     editor_background: 0xffffff,
+    overview_background: 0xe5e7eb,
     surface: 0xf7f7f8,
     elevated: 0xf0f0f2,
     floating_background: 0xf7f9fbf5,
@@ -152,6 +155,7 @@ pub static ORG_STUDIO_DARK: Theme = Theme {
     search_match: 0x4da3ff33,
     window_background: 0x0f1823,
     editor_background: 0x121d28,
+    overview_background: 0x32404d,
     surface: 0x18232f,
     elevated: 0x1e2b39,
     floating_background: 0x1e2b39f5,

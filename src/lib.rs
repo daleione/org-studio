@@ -4,6 +4,7 @@ mod babel;
 pub mod command;
 pub(crate) mod components;
 pub mod document;
+pub(crate) mod document_preview;
 pub mod editor;
 pub mod export;
 pub mod file_manager;

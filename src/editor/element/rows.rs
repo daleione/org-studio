@@ -690,6 +690,7 @@ impl RowShaping<'_> {
             );
         }
         self.rows.push(PaintRow {
+            preview_runs: runs,
             hit,
             gutter_layout,
             source_line_number_layout,

@@ -285,13 +285,12 @@ impl WorkspaceWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .text_color(rgb(theme.foreground_dim))
+                    .text_color(rgb(theme.foreground_dim).opacity(if enabled { 1. } else { 0.3 }))
                     .text_size(ui_px(16.))
-                    .opacity(if enabled { 1. } else { 0.3 })
                     .when(enabled, |button| {
                         button.cursor_pointer().hover(|s| s.bg(rgb(theme.hover)))
                     })
-                    .child(if forward { "→" } else { "←" })
+                    .child_text(if forward { "→" } else { "←" })
                     .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                         cx.stop_propagation();
                         if enabled {

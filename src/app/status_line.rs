@@ -1,4 +1,5 @@
 use crate::components::UiTextExt;
+use crate::document_preview::{record_box, svg};
 use crate::typography::{ui_family, ui_font, ui_px, ui_size};
 use std::f32::consts::PI;
 use std::sync::Arc;
@@ -664,11 +665,13 @@ fn breadcrumb(path: &str, compact: bool) -> gpui::Div {
     for (index, title) in parts.iter().enumerate() {
         if index > 0 {
             row = row.child(
-                gpui::svg()
-                    .data(include_bytes!("assets/status-chevron-right.svg"))
-                    .size(px(14.0))
-                    .flex_none()
-                    .text_color(rgb(status_colors().foreground)),
+                svg(
+                    "status-chevron-right",
+                    include_bytes!("assets/status-chevron-right.svg"),
+                )
+                .size(px(14.0))
+                .flex_none()
+                .text_color(rgb(status_colors().foreground)),
             );
         }
         row = row.child(
@@ -783,11 +786,13 @@ pub(crate) fn render_buffer_status_trigger(
                 })
                 .tooltip(move |_, cx| cx.new(|_| popover::OutlineTooltip(title.clone())).into())
                 .child(
-                    gpui::svg()
-                        .data(include_bytes!("assets/status-documents.svg"))
-                        .text_color(rgb(status_colors().foreground))
-                        .size(px(16.0))
-                        .flex_none(),
+                    svg(
+                        "status-documents",
+                        include_bytes!("assets/status-documents.svg"),
+                    )
+                    .text_color(rgb(status_colors().foreground))
+                    .size(px(16.0))
+                    .flex_none(),
                 )
                 .child(
                     div()
@@ -844,7 +849,7 @@ pub(crate) fn render_status_line_content(
                 .relative()
                 .size(px(9.0))
                 .flex_none()
-                .child(
+                .child(record_box(
                     div()
                         .absolute()
                         .top(px(-3.5))
@@ -852,14 +857,14 @@ pub(crate) fn render_status_line_content(
                         .size(px(16.0))
                         .rounded_full()
                         .bg(gpui::rgba((mode_colors.background << 8) | 0x14)),
-                )
-                .child(
+                ))
+                .child(record_box(
                     div()
                         .relative()
                         .size_full()
                         .rounded_full()
                         .bg(rgb(mode_colors.background)),
-                ),
+                )),
         )
         .when(layout.mode == Variant::Full, |button| {
             button.child_text(snapshot.mode_label())
@@ -870,7 +875,7 @@ pub(crate) fn render_status_line_content(
         .flex()
         .items_center()
         .flex_none()
-        .child(mode)
+        .child(record_box(mode))
         .when_some(snapshot.reading_style, |left, style_id| {
             left.child(
                 status_button(entity.clone(), pane_id, StatusSegment::ReadingStyle)
@@ -889,7 +894,8 @@ pub(crate) fn render_status_line_content(
                             .text_size(ui_px(8.0))
                             .text_color(rgb(theme.foreground_dim))
                             .child_text("▾"),
-                    ),
+                    )
+                    .map(record_box),
             )
         })
         .when(
@@ -922,7 +928,8 @@ pub(crate) fn render_status_line_content(
                         )
                         .overflow_hidden()
                         .child(status_icon(StatusIcon::Outline))
-                        .child(breadcrumb(outline, layout.outline == Variant::Compact)),
+                        .child(breadcrumb(outline, layout.outline == Variant::Compact))
+                        .map(record_box),
                 )
             },
         );
@@ -948,7 +955,7 @@ pub(crate) fn render_status_line_content(
         .when_some(snapshot.transient.as_ref(), |center, message| {
             center
                 .gap(px(7.0))
-                .child(match message.tone {
+                .child_text(match message.tone {
                     StatusTone::Success => "✓",
                     StatusTone::Working => "◌",
                     StatusTone::Error => "!",
@@ -964,7 +971,7 @@ pub(crate) fn render_status_line_content(
             .w(px(statistics_slot_width(snapshot, layout.statistics)))
             .overflow_hidden()
             .gap(px(0.0));
-        right = right.child(
+        right = right.child(record_box(
             if layout.statistics == Variant::Full
                 && let Some(stats) = snapshot.document_statistics
             {
@@ -992,7 +999,7 @@ pub(crate) fn render_status_line_content(
             } else {
                 button.child(status_value(statistics.to_owned(), None))
             },
-        );
+        ));
     }
 
     if layout.position != Variant::Hidden
@@ -1023,9 +1030,10 @@ pub(crate) fn render_status_line_content(
                                 .whitespace_nowrap()
                                 .text_ellipsis()
                                 .font_family(ui_family("Menlo"))
-                                .child(position_text(position, compact, snapshot.language)),
+                                .child_text(position_text(position, compact, snapshot.language)),
                         ),
-                ),
+                )
+                .map(record_box),
         );
     }
     if layout.progress != Variant::Hidden
@@ -1045,7 +1053,8 @@ pub(crate) fn render_status_line_content(
                 .when(layout.progress == Variant::Full, |button| {
                     button.child(progress_ring(progress))
                 })
-                .child(status_value(format!("{progress}%"), None).font_family(ui_family("Menlo"))),
+                .child(status_value(format!("{progress}%"), None).font_family(ui_family("Menlo")))
+                .map(record_box),
         );
     }
     if layout.format != Variant::Hidden
@@ -1055,7 +1064,8 @@ pub(crate) fn render_status_line_content(
             status_button(entity.clone(), pane_id, StatusSegment::Format)
                 .w(px(FORMAT_WIDTH))
                 .child(status_icon(StatusIcon::Format))
-                .child(format_label(format)),
+                .child_text(format_label(format))
+                .map(record_box),
         );
     }
     if let Some(count) = buffer_count {
@@ -1084,7 +1094,7 @@ pub(crate) fn render_status_line_content(
                 .text_color(rgb(status_colors().foreground))
                 .cursor_pointer()
                 .hover(|style| style.bg(rgb(status_colors().hover_background)))
-                .child(":")
+                .child_text(":")
                 .tooltip(move |_, cx| {
                     cx.new(|_| popover::OutlineTooltip(Arc::from("M-x / ⌘⇧P")))
                         .into()
@@ -1109,14 +1119,16 @@ pub(crate) fn render_status_line_content(
             .rounded_full()
             .border_1()
             .child(
-                gpui::svg()
-                    .data(include_bytes!("assets/status-settings.svg"))
-                    .text_color(rgb(status_colors().foreground))
-                    .size(px(16.0))
-                    .flex_none(),
+                svg(
+                    "status-settings",
+                    include_bytes!("assets/status-settings.svg"),
+                )
+                .text_color(rgb(status_colors().foreground))
+                .size(px(16.0))
+                .flex_none(),
             )
             .when(!layout.overflow.is_empty(), |button| {
-                button.child(
+                button.child(record_box(
                     div()
                         .absolute()
                         .top(px(-3.0))
@@ -1132,7 +1144,7 @@ pub(crate) fn render_status_line_content(
                         .text_color(rgb(status_colors().badge_foreground))
                         .text_size(ui_px(8.0))
                         .child_text(layout.overflow.len().to_string()),
-                )
+                ))
             })
             .on_click(move |_, _, cx| {
                 cx.stop_propagation();
@@ -1145,43 +1157,46 @@ pub(crate) fn render_status_line_content(
                         cx,
                     )
                 });
-            }),
+            })
+            .map(record_box),
     );
 
     let customize_entity = entity;
-    div()
-        .id(format!("pane-{pane_id}-status-line"))
-        .h(px(if floating {
-            ui_size(FLOATING_STATUS_HEIGHT) - 2.0
-        } else {
-            ui_size(STATUS_LINE_HEIGHT)
-        }))
-        .w_full()
-        .flex_none()
-        .flex()
-        .items_center()
-        .overflow_hidden()
-        .when(!floating, |bar| {
-            bar.border_t_1().bg(rgb(status_colors().background))
-        })
-        .border_color(rgb(status_colors().border))
-        .text_color(rgb(status_colors().foreground))
-        .font_family(ui_family(".SystemUIFont"))
-        .text_size(ui_px(11.0))
-        .on_mouse_down(MouseButton::Right, move |_, _, cx| {
-            cx.stop_propagation();
-            customize_entity.update(cx, |this, cx| {
-                this.status.popover = Some(StatusPopover {
-                    pane: PaneId(pane_id),
-                    content: StatusPopoverContent::Customize,
+    record_box(
+        div()
+            .id(format!("pane-{pane_id}-status-line"))
+            .h(px(if floating {
+                ui_size(FLOATING_STATUS_HEIGHT) - 2.0
+            } else {
+                ui_size(STATUS_LINE_HEIGHT)
+            }))
+            .w_full()
+            .flex_none()
+            .flex()
+            .items_center()
+            .overflow_hidden()
+            .when(!floating, |bar| {
+                bar.border_t_1().bg(rgb(status_colors().background))
+            })
+            .border_color(rgb(status_colors().border))
+            .text_color(rgb(status_colors().foreground))
+            .font_family(ui_family(".SystemUIFont"))
+            .text_size(ui_px(11.0))
+            .on_mouse_down(MouseButton::Right, move |_, _, cx| {
+                cx.stop_propagation();
+                customize_entity.update(cx, |this, cx| {
+                    this.status.popover = Some(StatusPopover {
+                        pane: PaneId(pane_id),
+                        content: StatusPopoverContent::Customize,
+                    });
+                    cx.notify();
                 });
-                cx.notify();
-            });
-        })
-        .child(left)
-        .child(echo.unwrap_or_else(|| center.into_any_element()))
-        .child(right)
-        .into_any_element()
+            })
+            .child(left)
+            .child(echo.unwrap_or_else(|| center.into_any_element()))
+            .child(right),
+    )
+    .into_any_element()
 }
 
 fn status_button(
@@ -1252,7 +1267,7 @@ fn progress_ring(progress: u8) -> impl gpui::IntoElement {
             );
             track.close();
             if let Ok(path) = track.build() {
-                window.paint_path(path, background);
+                crate::document_preview::path(window, path, background);
             }
 
             let fraction = f32::from(progress) / 100.0;
@@ -1288,7 +1303,7 @@ fn progress_ring(progress: u8) -> impl gpui::IntoElement {
                 arc.arc_to(point(radius, radius), px(0.0), fraction > 0.5, true, end);
             }
             if let Ok(path) = arc.build() {
-                window.paint_path(path, foreground);
+                crate::document_preview::path(window, path, foreground);
             }
         },
     )
@@ -1480,11 +1495,13 @@ fn format_character_count(characters: u64, language: Language) -> String {
 }
 
 fn status_separator() -> impl IntoElement {
-    div()
-        .w(px(1.0))
-        .h(px(14.0))
-        .mx(px(5.0))
-        .bg(rgb(status_colors().border))
+    record_box(
+        div()
+            .w(px(1.0))
+            .h(px(14.0))
+            .mx(px(5.0))
+            .bg(rgb(status_colors().border)),
+    )
 }
 
 fn format_byte_count(bytes: u64) -> String {

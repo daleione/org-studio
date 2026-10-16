@@ -76,7 +76,7 @@ pub(in crate::preview) struct ReadingText {
 }
 
 impl ReadingText {
-    pub(in crate::preview) fn uniform(text: gpui::StyledText) -> Self {
+    pub(in crate::preview) fn uniform(text: crate::document_preview::RecordedText) -> Self {
         let layout = ReadingTextLayout::Uniform(text.layout().clone());
         Self {
             element: text.into_any_element(),
@@ -85,7 +85,7 @@ impl ReadingText {
     }
 
     pub(in crate::preview) fn inline(
-        text: gpui::StyledText,
+        text: crate::document_preview::RecordedText,
         runs: &DisplayRuns,
         style: PreviewStyle,
         zoom: f32,

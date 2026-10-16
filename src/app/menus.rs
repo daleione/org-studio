@@ -54,6 +54,8 @@ pub fn application_menus(language: crate::i18n::Language) -> Vec<Menu> {
             MenuItem::action(t("查找…", "Find…"), crate::app::FindDocument),
         ]),
         Menu::new(t("视图", "View")).items([
+            MenuItem::action(t("文件总览", "Open Files"), crate::app::FileOverview),
+            MenuItem::separator(),
             MenuItem::action(t("返回上个位置", "Go back"), crate::app::NavigateBack),
             MenuItem::action(t("前往下个位置", "Go forward"), crate::app::NavigateForward),
             MenuItem::separator(),

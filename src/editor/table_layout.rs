@@ -124,6 +124,7 @@ impl TableColumnMetrics {
 }
 
 pub(super) struct TableVisualFragment {
+    pub(super) preview_runs: Vec<TextRun>,
     pub(super) display_range: Range<usize>,
     pub(super) content_range: Range<usize>,
     pub(super) x: Pixels,
@@ -342,6 +343,7 @@ impl TableVisualLayout {
         if delimiters[0] > 0 {
             let range = 0..delimiters[0];
             fragments.push(TableVisualFragment {
+                preview_runs: slice_text_runs(runs, range.clone()),
                 display_range: range.clone(),
                 content_range: range.clone(),
                 x: Pixels::ZERO,
@@ -359,6 +361,7 @@ impl TableVisualLayout {
         for (column, start) in delimiters.iter().copied().enumerate() {
             let range = start..start + 1;
             fragments.push(TableVisualFragment {
+                preview_runs: slice_text_runs(runs, range.clone()),
                 display_range: range.clone(),
                 content_range: range.clone(),
                 x,
@@ -414,6 +417,13 @@ impl TableVisualLayout {
                     Pixels::ZERO
                 };
                 fragments.push(TableVisualFragment {
+                    preview_runs: if scaled_source {
+                        let mut run = runs.first().cloned().unwrap_or_default();
+                        run.len = layout.text.len();
+                        vec![run]
+                    } else {
+                        slice_text_runs(runs, content_range.clone())
+                    },
                     display_range: range,
                     content_range,
                     x: x + pipe + padding + alignment_offset,

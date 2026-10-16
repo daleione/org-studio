@@ -1,7 +1,8 @@
 //! Script-specific fonts shared by text measurement and rendering.
 use std::ops::Range;
 
-use gpui::{FontFallbacks, HighlightStyle, SharedString, StyledText, TextRun};
+use crate::document_preview::RecordedText as StyledText;
+use gpui::{FontFallbacks, HighlightStyle, SharedString, TextRun};
 use unicode_script::{Script, UnicodeScript};
 use unicode_segmentation::UnicodeSegmentation;
 

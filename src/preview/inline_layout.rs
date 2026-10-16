@@ -281,6 +281,15 @@ impl InlineLayout {
                     self.row_offsets[fragment.row] + fragment.x,
                     self.line_height * fragment.row as f32 + baseline - own_baseline,
                 );
+            crate::document_preview::shaped(
+                &fragment.line,
+                origin,
+                self.line_height,
+                TextAlign::Left,
+                None,
+                true,
+                window,
+            );
             let _ = fragment.line.paint_background(
                 origin,
                 self.line_height,
@@ -288,6 +297,15 @@ impl InlineLayout {
                 None,
                 window,
                 cx,
+            );
+            crate::document_preview::shaped(
+                &fragment.line,
+                origin,
+                self.line_height,
+                TextAlign::Left,
+                None,
+                false,
+                window,
             );
             let _ =
                 fragment

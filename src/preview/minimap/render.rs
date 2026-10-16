@@ -624,7 +624,8 @@ pub fn render(
                     point(bounds.origin.x, bounds.origin.y + px(tile.y)),
                     gpui::size(px(tile.width), px(tile.height)),
                 );
-                let _ = window.paint_image(
+                let _ = crate::document_preview::image(
+                    window,
                     image_bounds,
                     image_bounds,
                     Corners::default(),
@@ -649,7 +650,8 @@ pub fn render(
                 // Keep rounding or a decoder-specific image size from painting
                 // across the media row boundary and covering following text.
                 window.with_content_mask(Some(ContentMask { bounds: row_bounds }), |window| {
-                    let _ = window.paint_image(
+                    let _ = crate::document_preview::image(
+                        window,
                         image_bounds,
                         image_bounds,
                         Corners::default(),
@@ -682,11 +684,11 @@ pub fn render(
                 hovered,
                 thumb_visibility == crate::settings::MinimapThumbVisibility::Hover,
             );
-            window.paint_quad(fill(
+            crate::document_preview::quad(window, fill(
                 thumb_bounds,
                 rgba((palette.foreground << 8) | fill_alpha),
             ));
-            window.paint_quad(outline(
+            crate::document_preview::quad(window, outline(
                 thumb_bounds,
                 rgba((palette.foreground << 8) | border_alpha),
                 BorderStyle::default(),
@@ -817,7 +819,7 @@ pub fn render(
     let handle_resize = resize_session;
     let handle_width_change = on_width_change;
     let hover_state = hovered;
-    div()
+    let minimap = div()
         .id("document-minimap")
         .h_full()
         .w(px(minimap_width))
@@ -971,5 +973,6 @@ pub fn render(
                     window.set_window_cursor_style(CursorStyle::ResizeLeftRight);
                     window.refresh();
                 }),
-        )
+        );
+    crate::document_preview::record_box(minimap)
 }

@@ -364,7 +364,7 @@ pub(super) fn paint_minimap_layer(
     cx: &mut App,
 ) {
     if let Some(background) = &state.minimap.background {
-        window.paint_quad(background.clone());
+        crate::document_preview::quad(window, background.clone());
     }
     if let Some((image, image_bounds)) = &state.minimap.image {
         #[cfg(feature = "benchmarks")]
@@ -372,7 +372,8 @@ pub(super) fn paint_minimap_layer(
             .minimap
             .telemetry
             .note_image_paint(*image_bounds, state.minimap.bounds);
-        let _ = window.paint_image(
+        let _ = crate::document_preview::image(
+            window,
             *image_bounds,
             *image_bounds,
             Corners::default(),
@@ -411,7 +412,8 @@ pub(super) fn paint_minimap_layer(
         {
             continue;
         }
-        let _ = window.paint_image(
+        let _ = crate::document_preview::image(
+            window,
             image_bounds,
             image_bounds,
             Corners::default(),
@@ -421,6 +423,6 @@ pub(super) fn paint_minimap_layer(
         );
     }
     for quad in &state.minimap.overlays {
-        window.paint_quad(quad.clone());
+        crate::document_preview::quad(window, quad.clone());
     }
 }

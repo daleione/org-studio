@@ -55,14 +55,15 @@ pub(super) fn paint_frame(
         .collect::<Vec<_>>();
     let gutter = state.gutter.clone();
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
-        window.paint_quad(gutter);
+        crate::document_preview::quad(window, gutter);
         paint_minimap_layer(host, state, window, cx);
         let text_left = state.gutter.bounds.right() + px(1.0);
         for (index, row) in state.rows.iter().enumerate() {
             let number_x = text_left - px(GUTTER_PADDING) - row.gutter_layout.width();
             let active_gutter = row.active && editor_focused;
             let mut paint = |window: &mut Window| {
-                let _ = row.gutter_layout.paint(
+                let _ = crate::document_preview::paint_shaped(
+                    &row.gutter_layout,
                     point(number_x, row.hit.origin_y),
                     row.hit.line_height,
                     TextAlign::Left,
@@ -121,10 +122,10 @@ pub(super) fn paint_frame(
             }),
             |window| {
                 for background in &state.block_backgrounds {
-                    window.paint_quad(background.clone());
+                    crate::document_preview::quad(window, background.clone());
                 }
                 for background in state.rows.iter().filter_map(|row| row.background.clone()) {
-                    window.paint_quad(background);
+                    crate::document_preview::quad(window, background);
                 }
                 if let (Some((line, column, header)), Some((snapshot, format))) =
                     (table_hover, table_source.as_ref())
@@ -138,46 +139,50 @@ pub(super) fn paint_frame(
                         header,
                         crate::theme::current_theme().accent,
                     ) {
-                        window.paint_quad(quad);
+                        crate::document_preview::quad(window, quad);
                     }
                 }
                 for pill in state.tag_pills.drain(..) {
-                    window.paint_quad(pill);
+                    crate::document_preview::quad(window, pill);
                 }
                 for swatch in state.swatches.drain(..) {
-                    window.paint_quad(swatch);
+                    crate::document_preview::quad(window, swatch);
                 }
                 for pill in state.hover_quads.drain(..) {
-                    window.paint_quad(pill);
+                    crate::document_preview::quad(window, pill);
                 }
                 for selection in state.selection.drain(..) {
-                    window.paint_quad(selection);
+                    crate::document_preview::quad(window, selection);
                 }
                 for button in &state.source_run_buttons {
                     let hovered = button.hitbox.is_hovered(window);
                     if hovered {
                         window.set_cursor_style(CursorStyle::PointingHand, &button.hitbox);
                         let radius = px(5.0);
-                        window.paint_quad(quad(
-                            button.bounds,
-                            Corners {
-                                top_left: radius,
-                                top_right: radius,
-                                bottom_right: radius,
-                                bottom_left: radius,
-                            },
-                            rgba((button.accent << 8) | 0x1f),
-                            Edges::default(),
-                            rgba(0),
-                            BorderStyle::default(),
-                        ));
+                        crate::document_preview::quad(
+                            window,
+                            quad(
+                                button.bounds,
+                                Corners {
+                                    top_left: radius,
+                                    top_right: radius,
+                                    bottom_right: radius,
+                                    bottom_left: radius,
+                                },
+                                rgba((button.accent << 8) | 0x1f),
+                                Edges::default(),
+                                rgba(0),
+                                BorderStyle::default(),
+                            ),
+                        );
                     }
                     let icon_x = button.bounds.left()
                         + px(
                             ((SOURCE_RUN_BUTTON_SIZE - f32::from(button.icon.width())) / 2.0)
                                 .max(0.0),
                         );
-                    let _ = button.icon.paint(
+                    let _ = crate::document_preview::paint_shaped(
+                        &button.icon,
                         point(icon_x, button.bounds.top()),
                         button.bounds.size.height,
                         TextAlign::Left,
@@ -195,7 +200,8 @@ pub(super) fn paint_frame(
                                     .max(0.0),
                             );
                         let mut paint_number = |window: &mut Window| {
-                            let _ = number_layout.paint(
+                            let _ = crate::document_preview::paint_shaped(
+                                number_layout,
                                 point(number_x, row.hit.origin_y),
                                 row.hit.line_height,
                                 TextAlign::Left,
@@ -223,7 +229,8 @@ pub(super) fn paint_frame(
                     let mut paint = |window: &mut Window| {
                         if let Some(preview) = &row.inline_image {
                             let radius = px(4.0);
-                            let _ = window.paint_image(
+                            let _ = crate::document_preview::image(
+                                window,
                                 preview.bounds,
                                 preview.bounds,
                                 Corners {
@@ -244,7 +251,9 @@ pub(super) fn paint_frame(
                                     1
                                 };
                                 for visual_row in 0..repeats {
-                                    let _ = fragment.layout.paint(
+                                    let _ = crate::document_preview::paint_wrapped(
+                                        &fragment.layout,
+                                        &fragment.preview_runs,
                                         point(
                                             row.hit.text_origin_x + fragment.x,
                                             row.hit.origin_y + row.hit.line_height * visual_row,
@@ -258,7 +267,9 @@ pub(super) fn paint_frame(
                                 }
                             }
                         } else {
-                            let _ = row.hit.layout.paint(
+                            let _ = crate::document_preview::paint_wrapped(
+                                &row.hit.layout,
+                                &row.preview_runs,
                                 point(row.hit.text_origin_x, row.hit.origin_y),
                                 row.hit.line_height,
                                 TextAlign::Left,
@@ -302,7 +313,8 @@ pub(super) fn paint_frame(
                         continue;
                     }
                     if let Some(icon) = grip_icon.as_ref() {
-                        let _ = window.paint_image(
+                        let _ = crate::document_preview::image(
+                            window,
                             handle.bounds,
                             handle.bounds,
                             Corners::default(),
@@ -319,7 +331,7 @@ pub(super) fn paint_frame(
                     && let Some(mut caret) = state.caret.take()
                 {
                     caret.background = caret.background.opacity(caret_opacity);
-                    window.paint_quad(caret);
+                    crate::document_preview::quad(window, caret);
                 }
             },
         );
@@ -390,7 +402,7 @@ fn paint_continuation_markers(
         } else {
             (theme.line_number, 0x99)
         };
-        window.paint_path(path, rgba((color << 8) | alpha));
+        crate::document_preview::path(window, path, rgba((color << 8) | alpha));
     }
 }
 
@@ -428,7 +440,8 @@ fn paint_tall_image_marker(
     let color = rgba((color << 8) | alpha);
     for (start, end) in [(top, number_top - gap), (number_bottom + gap, bottom)] {
         if end > start {
-            window.paint_quad(
+            crate::document_preview::quad(
+                window,
                 fill(
                     Bounds::new(point(x - stroke / 2.0, start), size(stroke, end - start)),
                     color,

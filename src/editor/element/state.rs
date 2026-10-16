@@ -32,6 +32,7 @@ pub(super) struct InlineImageResizeHandlePaint {
 }
 
 pub(super) struct PaintRow {
+    pub(super) preview_runs: Vec<gpui::TextRun>,
     pub(super) hit: HitRow,
     pub(super) gutter_layout: ShapedLine,
     pub(super) source_line_number_layout: Option<ShapedLine>,

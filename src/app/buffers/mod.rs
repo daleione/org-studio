@@ -14,6 +14,7 @@ use std::{
 
 mod navigation;
 mod picker;
+pub(crate) use picker::match_score;
 mod pool;
 mod quick_view;
 mod review;

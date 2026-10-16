@@ -1562,9 +1562,12 @@ impl SemanticEditor {
         self.inline_image_cache.borrow_mut().fail(path)
     }
 
-    #[cfg(test)]
     pub(crate) fn has_active_composition(&self) -> bool {
         self.composition.is_some()
+    }
+
+    pub(crate) fn has_active_pointer_interaction(&self) -> bool {
+        self.image_resize.is_some() || self.minimap.drag.is_some() || self.drag_position.is_some()
     }
 
     #[cfg(test)]

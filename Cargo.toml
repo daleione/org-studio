@@ -8,6 +8,12 @@ license = "GPL-3.0-or-later"
 
 [features]
 benchmarks = []
+visual-check = ["benchmarks", "gpui/test-support", "gpui_platform/test-support", "gpui/profiler"]
+
+[[bin]]
+name = "file-overview-check"
+path = "src/bin/file-overview-check.rs"
+required-features = ["visual-check"]
 
 [dependencies]
 # GPUI and the macOS platform backend (zed repo, pinned rev)

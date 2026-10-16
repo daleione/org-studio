@@ -140,6 +140,13 @@ impl WorkspaceWindow {
             .is_some_and(|s| !s.returning)
     }
 
+    pub(crate) fn command_line_holds_focus(&self, window: &Window, cx: &gpui::App) -> bool {
+        self.command_line
+            .session
+            .as_ref()
+            .is_some_and(|session| session.input.read(cx).focus.is_focused(window))
+    }
+
     pub(crate) fn open_command_line(&mut self, cx: &mut Context<Self>) {
         if self.content_route != ContentRoute::Document || self.buffer_busy() {
             return;

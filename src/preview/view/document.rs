@@ -431,30 +431,28 @@ fn render_reading_row(
                 .px(px(style.spacing.horizontal_padding * 0.5))
                 .pt(px(row_layout.margin_top))
                 .pb(px(row_layout.margin_bottom))
-                .child(
-                    div()
-                        .w_full()
-                        .child(if document.format == DocumentFormat::Markdown {
-                            render_markdown_block(
-                                document,
-                                actual_index,
-                                &document.markdown_blocks[row.block_id as usize],
-                                is_folded,
-                                context,
-                                interaction,
-                            )
-                        } else {
-                            render_block(
-                                document,
-                                actual_index,
-                                row,
-                                &document.blocks.nodes()[row.block_id as usize],
-                                is_folded,
-                                context,
-                                interaction,
-                            )
-                        }),
-                ),
+                .child(div().w_full().child(crate::document_preview::record_box(
+                    if document.format == DocumentFormat::Markdown {
+                        render_markdown_block(
+                            document,
+                            actual_index,
+                            &document.markdown_blocks[row.block_id as usize],
+                            is_folded,
+                            context,
+                            interaction,
+                        )
+                    } else {
+                        render_block(
+                            document,
+                            actual_index,
+                            row,
+                            &document.blocks.nodes()[row.block_id as usize],
+                            is_folded,
+                            context,
+                            interaction,
+                        )
+                    },
+                ))),
         );
     match row_bounds {
         Some(row_bounds) => div()
@@ -940,14 +938,14 @@ pub(crate) fn render_list_item(
         .text_size(px(font_size))
         .line_height(px(line_height))
         .text_color(rgb(palette.foreground))
-        .child(reading_list_marker(
+        .child(crate::document_preview::record_box(reading_list_marker(
             document,
             display_row,
             marker,
             style,
             scale,
             interaction,
-        ))
+        )))
         .child(div().flex_1().min_w_0().child(content))
 }
 
@@ -1006,7 +1004,7 @@ fn reading_list_marker(
             .text_size(px((11.0 * scale).max(5.0)))
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(rgb(foreground))
-            .child(label)
+            .child(crate::document_preview::RecordedText::new(label))
             .when_some(action.zip(interaction), |element, (action, interaction)| {
                 element.cursor_pointer().on_click(move |_, window, cx| {
                     (interaction.dispatch)(action.clone(), interaction.panel.clone(), window, cx);
@@ -1279,7 +1277,7 @@ pub(super) fn selectable_blank_row(
     div().w_full().h(px(height)).child(
         super::SelectableReadingText::new(
             ("reading-blank", display_row),
-            gpui::StyledText::new(""),
+            crate::document_preview::RecordedText::new(""),
             interaction.panel.clone(),
             display_row,
             selection,

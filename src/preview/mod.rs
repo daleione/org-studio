@@ -1,8 +1,8 @@
 use std::{sync::Arc, time::Duration};
 
-use gpui::{
-    FontStyle, FontWeight, HighlightStyle, ListAlignment, StyledText, actions, div, img, px, rgb,
-};
+use crate::document_preview::RecordedText as StyledText;
+use crate::document_preview::img;
+use gpui::{FontStyle, FontWeight, HighlightStyle, ListAlignment, actions, div, px, rgb};
 mod action;
 mod display_map;
 mod document;
