@@ -98,6 +98,99 @@ fn fixture<'a>(
     (editor, view)
 }
 
+fn mixed_width_fixture<'a>(
+    cx: &'a mut TestAppContext,
+    extension: &str,
+) -> (Entity<SemanticEditor>, &'a mut VisualTestContext) {
+    let rule = if extension == "org" {
+        "|---+---|"
+    } else {
+        "|---|---|"
+    };
+    let source =
+        format!("| Labels | Value |\n{rule}\n| 中文示例 | sample text |\n| item | demo |\n");
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8(format!("mixed.{extension}").into(), source.into_bytes())
+            .unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    editor.update(view, |editor, cx| editor.set_minimap(false, None, cx));
+    view.simulate_resize(gpui::size(px(900.), px(500.)));
+    view.run_until_parked();
+    view.simulate_keystrokes("tab");
+    view.run_until_parked();
+    (editor, view)
+}
+
+#[gpui::test]
+fn tab_fits_mixed_width_columns_to_visible_content(cx: &mut TestAppContext) {
+    cx.update(init);
+    for extension in ["org", "md"] {
+        let (editor, view) = mixed_width_fixture(cx, extension);
+        for size in [15, 14] {
+            editor.update(view, |editor, cx| {
+                editor.set_content_font_size(crate::typography::ContentFontSize::new(size), cx);
+            });
+            view.simulate_keystrokes("tab");
+            view.run_until_parked();
+            view.read(|cx| {
+                let editor = editor.read(cx);
+                let mut longest = [px(0.); 2];
+                for row in editor.hit_rows.iter().filter(|row| row.line.0 != 1) {
+                    let Some(layout) = &row.table_layout else {
+                        continue;
+                    };
+                    assert_eq!(layout.visual_rows, 1, "{extension}, font size {size}");
+                    for (width, fragment) in longest.iter_mut().zip(
+                        layout
+                            .fragments
+                            .iter()
+                            .filter(|fragment| !fragment.delimiter),
+                    ) {
+                        *width = (*width).max(fragment.layout.width());
+                    }
+                }
+                let layout = editor.hit_rows[0].table_layout.as_ref().unwrap();
+                for (width, longest) in layout.column_widths.iter().zip(longest) {
+                    assert!(
+                        (f32::from(*width - longest - layout.metrics.space_width * 2.)).abs() < 0.1
+                    );
+                }
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn measured_columns_preserve_authored_right_alignment(cx: &mut TestAppContext) {
+    cx.update(init);
+    let source = "| 名     | v        |\n|--------+----------|\n|      x |    value |\n";
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("aligned.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.run_until_parked();
+    view.read(|cx| {
+        let editor = editor.read(cx);
+        let row = editor.hit_rows.iter().find(|row| row.line.0 == 2).unwrap();
+        let table = row.table_layout.as_ref().unwrap();
+        for cell in table
+            .fragments
+            .windows(2)
+            .filter(|pair| !pair[0].delimiter && pair[1].delimiter)
+        {
+            assert!(
+                (f32::from(
+                    cell[1].x - cell[0].x - cell[0].layout.width() - table.metrics.space_width
+                ))
+                .abs()
+                    < 0.1
+            );
+        }
+    });
+    assert_eq!(text(&editor, view), source);
+}
+
 #[gpui::test]
 fn drag_writes_source_and_wraps_then_format_repairs_narrow_columns(cx: &mut TestAppContext) {
     cx.update(init);
@@ -465,8 +558,8 @@ fn resized_widths_survive_save_and_reopen_with_normal_dirty_and_undo_state(
     cx.update(init);
     let directory = tempfile::tempdir().unwrap();
     for extension in ["org", "md"] {
-        for (column, delta) in [(0, -80.), (2, 60.)] {
-            let (editor, view) = fixture(cx, extension);
+        for (column, delta) in [(0, -18.), (1, 36.)] {
+            let (editor, view) = mixed_width_fixture(cx, extension);
             let path = directory.path().join(format!("table-{column}.{extension}"));
             let session = view.read(|cx| editor.read(cx).session.clone());
             let request = session.update(view, |session, _| {
@@ -494,6 +587,9 @@ fn resized_widths_survive_save_and_reopen_with_normal_dirty_and_undo_state(
             view.run_until_parked();
             let resized = text(&editor, view);
             let (widths, rows) = sample(&editor, view, 2);
+            if column == 0 {
+                assert!(rows > 1);
+            }
             view.read(|cx| assert!(session.read(cx).is_dirty()));
             assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
             view.simulate_keystrokes("cmd-z");

@@ -11,15 +11,14 @@ const DRAG_THRESHOLD: f32 = 3.;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct ResizeTarget {
     anchor: u64,
-    end: u64,
     column: usize,
 }
 
 struct ResizeHit {
     target: ResizeTarget,
     widths: Vec<f32>,
-    font_size: f32,
-    space_width: f32,
+    metrics: Arc<TableColumnMetrics>,
+    source_widths: Vec<usize>,
     min_width: f32,
     max_width: f32,
 }
@@ -40,14 +39,15 @@ impl ResizeDrag {
         let column = self.start.target.column;
         let width =
             (self.start.widths[column] + delta).clamp(self.start.min_width, self.start.max_width);
-        let width_em = width / self.start.font_size;
+        let width_em = width / f32::from(self.start.metrics.font_size);
         if (width_em - self.widths_em[column]).abs() < 0.01 {
             return false;
         }
         self.widths_em[column] = width_em;
         if let Some(right) = self.start.widths.get(column + 1) {
             let pair_width = self.start.widths[column] + right;
-            self.widths_em[column + 1] = (pair_width - width) / self.start.font_size;
+            self.widths_em[column + 1] =
+                (pair_width - width) / f32::from(self.start.metrics.font_size);
         }
         self.moved = true;
         true
@@ -59,15 +59,6 @@ pub(super) struct TableResize {
     hover: Option<ResizeTarget>,
     drag: Option<ResizeDrag>,
     pub(super) revision: u64,
-}
-
-impl TableResize {
-    fn target(&self) -> Option<ResizeTarget> {
-        self.drag
-            .as_ref()
-            .map(|drag| drag.start.target)
-            .or(self.hover)
-    }
 }
 
 impl SemanticEditor {
@@ -84,7 +75,7 @@ impl SemanticEditor {
     }
 
     pub(super) fn table_resize_is_hovered(&self) -> bool {
-        self.table_resize.target().is_some()
+        self.table_resize.hover.is_some() || self.table_resize_is_dragging()
     }
 
     fn table_resize_hit(&self, position: Point<Pixels>, cx: &App) -> Option<ResizeHit> {
@@ -131,62 +122,46 @@ impl SemanticEditor {
         })? - 1;
         let columns = self.table_columns(&snapshot, row.line, format)?;
         let anchor = columns.source_range.start.0;
-        let end = columns.source_range.end.0;
-        let (widths, font_size): (Vec<f32>, f32) = row.table_layout.as_ref().map_or_else(
+        let text_system = gpui::WindowTextSystem::new(cx.text_system().clone());
+        let metrics = row.table_layout.as_ref().map_or_else(
             || {
-                (
-                    positions
-                        .windows(2)
-                        .map(|pair| f32::from(pair[1].0 - pair[0].0 - pair[0].1))
-                        .collect(),
-                    self.font_size_px(),
+                self.table_column_metrics(
+                    &snapshot,
+                    &columns,
+                    crate::typography::editor_font(),
+                    px(self.font_size_px()),
+                    &text_system,
                 )
             },
+            |layout| layout.metrics.clone(),
+        );
+        let widths = row.table_layout.as_ref().map_or_else(
+            || {
+                positions
+                    .windows(2)
+                    .map(|pair| f32::from(pair[1].0 - pair[0].0 - pair[0].1))
+                    .collect::<Vec<_>>()
+            },
             |layout| {
-                (
-                    layout
-                        .column_widths
-                        .iter()
-                        .copied()
-                        .map(f32::from)
-                        .collect(),
-                    f32::from(layout.font_size),
-                )
+                layout
+                    .column_widths
+                    .iter()
+                    .copied()
+                    .map(f32::from)
+                    .collect()
             },
         );
         if widths.len() != columns.widths.len() {
             return None;
         }
-        let space_width = row.table_layout.as_ref().map_or_else(
-            || {
-                f32::from(
-                    gpui::WindowTextSystem::new(cx.text_system().clone())
-                        .shape_line(
-                            " ".into(),
-                            px(font_size),
-                            &[gpui::TextRun {
-                                len: 1,
-                                font: crate::typography::editor_font(),
-                                ..Default::default()
-                            }],
-                            None,
-                        )
-                        .width(),
-                )
-            },
-            |layout| f32::from(layout.space_width),
-        );
         let minimum = |index: usize| {
-            row.table_layout
-                .as_ref()
-                .filter(|_| !self.display_map.soft_wrap())
-                .map_or(
-                    space_width
-                        * (columns.minimum_widths[index]
-                            .max(columns.widths[index].min(org_commands::MIN_RESIZED_COLUMN_WIDTH))
-                            + 2) as f32,
-                    |layout| f32::from(layout.natural_column_widths[index]),
-                )
+            if self.display_map.soft_wrap() {
+                let requested = columns.minimum_widths[index]
+                    .max(columns.widths[index].min(org_commands::MIN_RESIZED_COLUMN_WIDTH));
+                f32::from(metrics.column_width(index, requested, columns.widths[index]))
+            } else {
+                f32::from(metrics.natural_widths[index])
+            }
         };
         // Only the selected boundary's limits are needed during the gesture.
         let (min_width, max_width) = if column + 1 == widths.len() {
@@ -207,14 +182,10 @@ impl SemanticEditor {
             (minimum, (pair_width - right_minimum * scale).max(minimum))
         };
         Some(ResizeHit {
-            target: ResizeTarget {
-                anchor,
-                end,
-                column,
-            },
+            target: ResizeTarget { anchor, column },
             widths,
-            font_size,
-            space_width,
+            metrics,
+            source_widths: columns.widths.clone(),
             min_width,
             max_width,
         })
@@ -242,7 +213,7 @@ impl SemanticEditor {
                 widths_em: hit
                     .widths
                     .iter()
-                    .map(|width| width / hit.font_size)
+                    .map(|width| width / f32::from(hit.metrics.font_size))
                     .collect(),
                 moved: false,
                 start: hit,
@@ -291,10 +262,14 @@ impl SemanticEditor {
             let widths = drag
                 .widths_em
                 .iter()
-                .map(|width| {
-                    (width * drag.start.font_size / drag.start.space_width).round() as usize
+                .enumerate()
+                .map(|(index, width)| {
+                    drag.start.metrics.source_width(
+                        index,
+                        drag.start.metrics.font_size * *width,
+                        drag.start.source_widths[index],
+                    )
                 })
-                .map(|width| width.saturating_sub(2))
                 .collect::<Vec<_>>();
             self.commit_table_widths(drag.start.target.anchor, Some(&widths), cx);
             self.table_column_layout_changed(cx);
@@ -376,32 +351,6 @@ impl SemanticEditor {
         self.sync_selection_utf16(&snapshot);
         self.hit_rows = Arc::from([]);
         cx.notify();
-    }
-
-    pub(super) fn paint_table_resize(&self, rows: &[HitRow], window: &mut Window, cx: &App) {
-        let Some(target) = self.table_resize.target() else {
-            return;
-        };
-        let snapshot = self.snapshot(cx);
-        let format = DocumentFormat::from_path(self.session.read(cx).syntax_path());
-        for row in rows {
-            if row.range.start.0 < target.anchor || row.range.start.0 > target.end {
-                continue;
-            }
-            let positions = delimiter_positions(row, &snapshot, format);
-            if let Some(&(x, width)) = positions.get(target.column + 1) {
-                window.paint_quad(gpui::fill(
-                    Bounds::from_corners(
-                        gpui::point(row.text_origin_x + x + width / 2. - px(1.), row.visible_top),
-                        gpui::point(
-                            row.text_origin_x + x + width / 2. + px(1.),
-                            row.visible_bottom,
-                        ),
-                    ),
-                    gpui::rgba((current_theme().accent << 8) | 0x99),
-                ));
-            }
-        }
     }
 
     /// Capture the active gesture even outside the editor or over an overlay.

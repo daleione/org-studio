@@ -260,13 +260,14 @@ impl HitRow {
     }
 }
 
-use table_layout::TableVisualLayout;
+use table_layout::{TableColumnMetrics, TableVisualLayout};
 
 #[derive(Default)]
 struct TableGeometryCache {
     revision: Option<Revision>,
     columns:
         HashMap<(u64, crate::document::DocumentFormat), Option<Arc<org_commands::TableColumns>>>,
+    metrics: HashMap<(u64, crate::document::DocumentFormat), Arc<TableColumnMetrics>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1215,12 +1216,42 @@ impl SemanticEditor {
         if cache.revision != Some(revision) {
             cache.revision = Some(revision);
             cache.columns.clear();
+            cache.metrics.clear();
         }
         cache
             .columns
             .entry((start, format))
             .or_insert_with(|| org_commands::table_columns(snapshot, start, format).map(Arc::new))
             .clone()
+    }
+
+    fn table_column_metrics(
+        &self,
+        snapshot: &DocumentSnapshot,
+        columns: &org_commands::TableColumns,
+        font: gpui::Font,
+        font_size: Pixels,
+        text_system: &gpui::WindowTextSystem,
+    ) -> Arc<TableColumnMetrics> {
+        let mut cache = self.table_geometry_cache.borrow_mut();
+        let entry = cache
+            .metrics
+            .entry((columns.source_range.start.0, columns.format));
+        if let std::collections::hash_map::Entry::Occupied(entry) = &entry {
+            let metrics = entry.get();
+            if metrics.font == font && metrics.font_size == font_size {
+                return metrics.clone();
+            }
+        }
+        let metrics = Arc::new(TableColumnMetrics::measure(
+            snapshot,
+            columns,
+            font,
+            font_size,
+            text_system,
+        ));
+        entry.insert_entry(metrics.clone());
+        metrics
     }
 
     pub(crate) fn set_content_font_size(

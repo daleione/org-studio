@@ -14,7 +14,7 @@ use super::rows::visible_source_lines;
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
 use super::text::folded_display_text;
 use crate::editor::inline_image::{INLINE_IMAGE_VERTICAL_PADDING, image_sizing};
-use crate::editor::table_layout::TableVisualLayout;
+use crate::editor::table_layout::{TableColumnMetrics, TableVisualLayout};
 
 use super::{BLOCK_RIGHT_INSET, BLOCK_TEXT_RIGHT_PADDING};
 
@@ -253,23 +253,31 @@ pub(super) fn schedule_minimap_layout_preparation(
                             tables
                                 .entry(start)
                                 .or_insert_with(|| {
-                                    crate::editor::org_commands::table_columns(
+                                    let columns = crate::editor::org_commands::table_columns(
                                         &request.snapshot,
                                         start,
                                         format,
-                                    )
+                                    )?;
+                                    let metrics = Arc::new(TableColumnMetrics::measure(
+                                        &request.snapshot,
+                                        &columns,
+                                        request.font.clone(),
+                                        shaped_font_size,
+                                        &text_system,
+                                    ));
+                                    Some((columns, metrics))
                                 })
                                 .as_ref()
                         })
                     } else {
                         None
                     };
-                    let table = columns.and_then(|columns| {
+                    let table = columns.and_then(|(columns, metrics)| {
                         TableVisualLayout::shape(
                             &text,
                             &runs,
-                            shaped_font_size,
                             columns,
+                            metrics,
                             effective_wrap_width,
                             None,
                             &text_system,

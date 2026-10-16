@@ -254,11 +254,18 @@ impl RowShaping<'_> {
         let runs = crate::typography::cjk_runs(&text, runs, crate::typography::FontRole::Editor);
         let shaped_font_size = px(f32::from(self.font_size) * metrics.font_scale);
         let table_layout = table_columns.as_ref().and_then(|columns| {
+            let metrics = self.editor.table_column_metrics(
+                self.snapshot,
+                columns,
+                self.style.font(),
+                shaped_font_size,
+                self.window.text_system(),
+            );
             TableVisualLayout::shape(
                 &text,
                 &runs,
-                shaped_font_size,
                 columns,
+                &metrics,
                 effective_wrap_width,
                 self.editor
                     .preferred_table_widths(columns.source_range.start.0),

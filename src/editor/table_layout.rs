@@ -1,9 +1,127 @@
 //! Source table shaping and geometry shared by the editor and minimap.
 use std::{ops::Range, sync::Arc};
 
-use gpui::{Bounds, Pixels, Point, TextRun, WrappedLine, point, px};
+use gpui::{Bounds, Font, Pixels, Point, TextRun, WrappedLine, point, px};
 
-use super::org_commands::TableColumns;
+use super::{org_commands::TableColumns, syntax};
+use crate::document::{DocumentFormat, DocumentSnapshot, LineIndex, TextSnapshot, table};
+
+/// Font-dependent geometry, shared by every row of a table.
+pub(super) struct TableColumnMetrics {
+    pub(super) font: Font,
+    pub(super) font_size: Pixels,
+    pub(super) space_width: Pixels,
+    pub(super) pipe_width: Pixels,
+    pub(super) natural_widths: Vec<Pixels>,
+}
+
+impl TableColumnMetrics {
+    pub(super) fn measure(
+        snapshot: &DocumentSnapshot,
+        columns: &TableColumns,
+        font: Font,
+        font_size: Pixels,
+        text_system: &gpui::WindowTextSystem,
+    ) -> Self {
+        let measure = |text: &str| {
+            text_system
+                .shape_line(
+                    text.to_owned().into(),
+                    font_size,
+                    &[TextRun {
+                        len: text.len(),
+                        font: font.clone(),
+                        ..Default::default()
+                    }],
+                    None,
+                )
+                .width()
+        };
+        let space_width = measure(" ");
+        let pipe_width = measure("|");
+        let mut natural_widths = columns
+            .minimum_widths
+            .iter()
+            .map(|width| space_width * *width)
+            .collect::<Vec<_>>();
+        let first = snapshot
+            .line_index_at(columns.source_range.start)
+            .expect("table starts on a line");
+        let last = snapshot
+            .line_index_at(columns.source_range.end)
+            .expect("table ends on a line");
+        let path = std::path::Path::new(match columns.format {
+            DocumentFormat::Org => "table.org",
+            DocumentFormat::Markdown => "table.md",
+        });
+        for line in first.0..=last.0 {
+            let range = snapshot
+                .line_content_range(LineIndex(line))
+                .expect("table line exists");
+            let text = snapshot.copy_range(range).replace('\t', "    ");
+            let row = table::parse_line(&text, columns.format);
+            if row.separator {
+                continue;
+            }
+            let mut style = syntax::EditorLineStyle::pending_fallback(range);
+            style.id = syntax::EditorStyleId::Table;
+            let runs = syntax::runs_from_spans(
+                &syntax::semantic_spans(path, &text, &style),
+                TextRun {
+                    len: text.len(),
+                    font: font.clone(),
+                    ..Default::default()
+                },
+                &style,
+                None,
+                crate::theme::current_theme(),
+            );
+            let runs =
+                crate::typography::cjk_runs(&text, runs, crate::typography::FontRole::Editor);
+            for (width, cell) in natural_widths.iter_mut().zip(row.cells) {
+                let content = &text[cell.text_range.clone()];
+                let runs = slice_text_runs(&runs, cell.text_range);
+                let measured = text_system
+                    .shape_line(content.to_owned().into(), font_size, &runs, None)
+                    .width();
+                *width = (*width).max(measured);
+            }
+        }
+        for width in &mut natural_widths {
+            *width += space_width * 2.;
+        }
+        Self {
+            font,
+            font_size,
+            space_width,
+            pipe_width,
+            natural_widths,
+        }
+    }
+
+    /// Source padding beyond the longest cell remains real extra space. Narrow
+    /// columns scale below the measured content width, keeping the mapping invertible.
+    pub(super) fn column_width(&self, column: usize, requested: usize, natural: usize) -> Pixels {
+        let content = self.natural_widths[column] - self.space_width * 2.;
+        let width = if requested < natural {
+            content * (requested as f32 / natural as f32)
+        } else {
+            content + self.space_width * (requested - natural)
+        };
+        width + self.space_width * 2.
+    }
+
+    pub(super) fn source_width(&self, column: usize, width: Pixels, natural: usize) -> usize {
+        let content = (width - self.space_width * 2.).max(Pixels::ZERO);
+        let natural_content = self.natural_widths[column] - self.space_width * 2.;
+        let width = if content < natural_content {
+            content / natural_content * natural as f32
+        } else {
+            natural as f32 + (content - natural_content) / self.space_width
+        };
+        width.round() as usize
+    }
+}
 
 pub(super) struct TableVisualFragment {
     pub(super) display_range: Range<usize>,
@@ -62,9 +180,7 @@ pub(crate) struct TableVisualLayout {
     pub(super) len: usize,
     pub(super) visual_rows: usize,
     pub(super) column_widths: Vec<Pixels>,
-    pub(super) natural_column_widths: Vec<Pixels>,
-    pub(super) font_size: Pixels,
-    pub(super) space_width: Pixels,
+    pub(super) metrics: Arc<TableColumnMetrics>,
 }
 
 impl TableVisualLayout {
@@ -138,8 +254,8 @@ impl TableVisualLayout {
     pub(super) fn shape(
         text: &gpui::SharedString,
         runs: &[TextRun],
-        font_size: Pixels,
         columns: &TableColumns,
+        metrics: &Arc<TableColumnMetrics>,
         wrap_width: Option<Pixels>,
         preferred_widths_em: Option<&[f32]>,
         text_system: &gpui::WindowTextSystem,
@@ -151,10 +267,9 @@ impl TableVisualLayout {
             return None;
         }
         let mut base = runs.first()?.clone();
-        if crate::typography::FontRole::Editor.cjk_family().is_some() {
-            base.font.family = crate::typography::fonts().editor_family.clone().into();
-        }
+        base.font = metrics.font.clone();
         base.len = 1;
+        let font_size = metrics.font_size;
         let advance = |glyph: &str| {
             text_system
                 .shape_line(
@@ -165,8 +280,8 @@ impl TableVisualLayout {
                 )
                 .width()
         };
-        let space = advance(" ");
-        let pipe = advance("|");
+        let space = metrics.space_width;
+        let pipe = metrics.pipe_width;
         let indent = text_system
             .shape_line(
                 text[..delimiters[0]].to_owned().into(),
@@ -179,34 +294,35 @@ impl TableVisualLayout {
             widths.len() == columns.widths.len()
                 && widths.iter().all(|width| width.is_finite() && *width > 0.)
         });
-        let natural_column_widths = columns
-            .widths
-            .iter()
-            .map(|width| space * (width + 2))
-            .collect::<Vec<_>>();
         let source_widths = columns.source_widths.as_ref();
         let mut widths = preferred.map_or_else(
             || {
                 source_widths.map_or_else(
-                    || natural_column_widths.clone(),
-                    |widths| widths.iter().map(|width| space * (width + 2)).collect(),
+                    || metrics.natural_widths.clone(),
+                    |widths| {
+                        widths
+                            .iter()
+                            .zip(&columns.widths)
+                            .enumerate()
+                            .map(|(index, (width, natural))| {
+                                metrics.column_width(index, *width, *natural)
+                            })
+                            .collect()
+                    },
                 )
             },
             |widths| widths.iter().map(|width| font_size * *width).collect(),
         );
         // With wrapping disabled, keep enough space for each column's text.
         if wrap_width.is_none() {
-            for (width, minimum) in widths.iter_mut().zip(&natural_column_widths) {
+            for (width, minimum) in widths.iter_mut().zip(&metrics.natural_widths) {
                 *width = (*width).max(*minimum);
             }
         }
         let natural_width =
             indent + pipe * (columns.widths.len() + 1) + widths.iter().copied().sum::<Pixels>();
         let constrained = wrap_width.is_some_and(|width| natural_width > width);
-        let fit_cells =
-            constrained || preferred.is_some() || source_widths.is_some() && !columns.aligned;
-        let wrap_cells = wrap_width.is_some() && fit_cells;
-        if source_widths.is_none() && !fit_cells {
+        if !columns.aligned && source_widths.is_none() && !constrained && preferred.is_none() {
             return None;
         }
         if let Some(width) = wrap_width.filter(|_| constrained) {
@@ -260,24 +376,12 @@ impl TableVisualLayout {
             let width = widths.get(column).copied().unwrap_or_default();
             if !range.is_empty() {
                 let raw = &text[range.clone()];
-                let padding = if fit_cells {
-                    space.min(width / 4.)
-                } else {
-                    Pixels::ZERO
-                };
-                let content_width = if fit_cells {
-                    (width - padding * 2.).max(gpui::px(1.))
-                } else {
-                    width
-                };
-                let content_range = if fit_cells {
-                    let trimmed = raw.trim();
-                    let start = range.start + raw.len() - raw.trim_start().len();
-                    start..start + trimmed.len()
-                } else {
-                    range.clone()
-                };
-                let (layout, scaled_source) = if fit_cells && separator {
+                let padding = space.min(width / 4.);
+                let content_width = (width - padding * 2.).max(gpui::px(1.));
+                let trimmed = raw.trim();
+                let start = range.start + raw.len() - raw.trim_start().len();
+                let content_range = start..start + trimmed.len();
+                let (layout, scaled_source) = if separator {
                     let count = (f32::from(content_width) / f32::from(advance("-")))
                         .floor()
                         .max(1.) as usize;
@@ -296,20 +400,24 @@ impl TableVisualLayout {
                         shape(
                             text[content_range.clone()].to_owned().into(),
                             &slice_text_runs(runs, content_range.clone()),
-                            wrap_cells.then_some(content_width),
+                            // Padding subtraction can round down an exact fit.
+                            wrap_width.map(|_| content_width + px(0.01)),
                         ),
                         false,
                     )
                 };
+                let right_aligned = !separator
+                    && raw.len() - raw.trim_start().len() > raw.len() - raw.trim_end().len();
+                let alignment_offset = if right_aligned && layout.wrap_boundaries().is_empty() {
+                    (content_width - layout.width()).max(Pixels::ZERO)
+                } else {
+                    Pixels::ZERO
+                };
                 fragments.push(TableVisualFragment {
                     display_range: range,
                     content_range,
-                    x: x + pipe + padding,
-                    width: if fit_cells {
-                        content_width
-                    } else {
-                        layout.width()
-                    },
+                    x: x + pipe + padding + alignment_offset,
+                    width: content_width - alignment_offset,
                     layout,
                     delimiter: false,
                     scaled_source,
@@ -335,9 +443,7 @@ impl TableVisualLayout {
             len: text.len(),
             visual_rows,
             column_widths: widths,
-            natural_column_widths,
-            font_size,
-            space_width: space,
+            metrics: metrics.clone(),
         }))
     }
 }

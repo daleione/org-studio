@@ -312,7 +312,6 @@ pub(super) fn paint_frame(
                         );
                     }
                 }
-                host.read(cx).paint_table_resize(&_hits, window, cx);
                 for button in &state.source_copy_buttons {
                     button.paint(window, cx);
                 }
