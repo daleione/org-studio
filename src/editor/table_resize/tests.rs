@@ -211,9 +211,8 @@ fn drag_writes_source_and_wraps_then_format_repairs_narrow_columns(cx: &mut Test
         drag(view, start, -80.);
         let (after, rows) = sample(&editor, view, 2);
         assert!((after[0] - (before[0] - 80.)).abs() < 6.);
-        assert!((after[1] - (before[1] + 80.)).abs() < 6.);
-        assert!((after[2] - before[2]).abs() < 0.1);
-        assert!((after.iter().sum::<f32>() - before.iter().sum::<f32>()).abs() < 6.);
+        assert_eq!(&after[1..], &before[1..]);
+        assert!((after.iter().sum::<f32>() - before.iter().sum::<f32>() + 80.).abs() < 6.);
         assert!(rows > 1);
         for line in [0, 1] {
             assert_eq!(sample(&editor, view, line).0, after);
@@ -321,7 +320,7 @@ fn drag_clamps_minimum_width_and_plain_click_does_not_save(cx: &mut TestAppConte
     drag(view, start, -10_000.);
     let after = sample(&editor, view, 2).0;
     view.read(|cx| assert!((after[0] - editor.read(cx).font_size_px() * 3.).abs() < 6.));
-    assert!((before.iter().sum::<f32>() - after.iter().sum::<f32>()).abs() < 6.);
+    assert_eq!(&after[1..], &before[1..]);
 }
 
 #[gpui::test]
@@ -435,90 +434,105 @@ fn raw_table_can_resize_but_pipes_in_code_cannot(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn right_edge_writes_width_and_format_preserves_an_aligned_table(cx: &mut TestAppContext) {
+fn drag_writes_width_and_format_preserves_an_aligned_table(cx: &mut TestAppContext) {
     cx.update(init);
     for extension in ["org", "md"] {
-        let (editor, view) = fixture(cx, extension);
-        let original = text(&editor, view);
-        let before = sample(&editor, view, 2).0;
-        let start = boundary(&editor, view, 2, 2);
-        view.simulate_mouse_move(start, None, Modifiers::default());
-        view.run_until_parked();
-        view.read(|cx| {
-            assert_eq!(editor.read(cx).table_resize.hover.unwrap().column, 2);
-            assert!(editor.read(cx).hovered_table_cell().is_none());
-        });
-        drag(view, start, 60.);
-        let expanded = sample(&editor, view, 2).0;
-        for column in 0..2 {
-            assert!((expanded[column] - before[column]).abs() < 0.1);
+        for column in 0..3 {
+            let (editor, view) = fixture(cx, extension);
+            let original = text(&editor, view);
+            let before = sample(&editor, view, 2).0;
+            let right_edge = boundary(&editor, view, 2, 2).x;
+            let start = boundary(&editor, view, 2, column);
+            view.simulate_mouse_move(start, None, Modifiers::default());
+            view.run_until_parked();
+            view.read(|cx| {
+                assert_eq!(editor.read(cx).table_resize.hover.unwrap().column, column);
+                assert!(editor.read(cx).hovered_table_cell().is_none());
+            });
+            drag(view, start, 60.);
+            let expanded = sample(&editor, view, 2).0;
+            for index in 0..3 {
+                if index == column {
+                    assert!((expanded[index] - before[index] - 60.).abs() < 6.);
+                } else {
+                    assert_eq!(expanded[index], before[index]);
+                }
+            }
+            assert!((f32::from(boundary(&editor, view, 2, 2).x - right_edge) - 60.).abs() < 6.);
+            for line in [0, 1] {
+                assert_eq!(sample(&editor, view, line).0, expanded);
+            }
+            let start = boundary(&editor, view, 2, column);
+            drag(view, start, -30.);
+            let narrowed = sample(&editor, view, 2).0;
+            assert!((narrowed[column] - expanded[column] + 30.).abs() < 6.);
+            for index in (0..3).filter(|index| *index != column) {
+                assert_eq!(narrowed[index], before[index]);
+            }
+            let resized = text(&editor, view);
+            assert_ne!(resized, original);
+            let revision = view.read(|cx| editor.read(cx).snapshot(cx).revision());
+            view.simulate_keystrokes("ctrl-shift-a");
+            view.run_until_parked();
+            assert_eq!(text(&editor, view), resized);
+            view.simulate_keystrokes("tab");
+            view.run_until_parked();
+            assert_eq!(text(&editor, view), resized);
+            view.read(|cx| assert_eq!(editor.read(cx).snapshot(cx).revision(), revision));
         }
-        assert!((expanded[2] - before[2] - 60.).abs() < 6.);
-        for line in [0, 1] {
-            assert_eq!(sample(&editor, view, line).0, expanded);
-        }
-        let start = boundary(&editor, view, 2, 2);
-        drag(view, start, -30.);
-        let narrowed = sample(&editor, view, 2).0;
-        assert!((narrowed[2] - expanded[2] + 30.).abs() < 6.);
-        assert_eq!(&narrowed[..2], &expanded[..2]);
-        let resized = text(&editor, view);
-        assert_ne!(resized, original);
-        let revision = view.read(|cx| editor.read(cx).snapshot(cx).revision());
-        view.simulate_keystrokes("ctrl-shift-a");
-        view.run_until_parked();
-        assert_eq!(text(&editor, view), resized);
-        view.simulate_keystrokes("tab");
-        view.run_until_parked();
-        assert_eq!(text(&editor, view), resized);
-        view.read(|cx| assert_eq!(editor.read(cx).snapshot(cx).revision(), revision));
     }
 }
 
 #[gpui::test]
-fn right_edge_clamps_to_viewport_and_supports_cancel_and_reset(cx: &mut TestAppContext) {
+fn drag_clamps_to_viewport_and_supports_cancel_and_reset(cx: &mut TestAppContext) {
     cx.update(init);
-    let (editor, view) = fixture(cx, "org");
-    let before = sample(&editor, view, 2).0;
-    let start = boundary(&editor, view, 2, 2);
-    start_drag(view, start, 40.);
-    view.simulate_keystrokes("escape");
-    view.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
-    view.run_until_parked();
-    assert_eq!(sample(&editor, view, 2).0, before);
+    for column in 0..3 {
+        let (editor, view) = fixture(cx, "org");
+        view.simulate_resize(gpui::size(px(904.), px(500.)));
+        view.run_until_parked();
+        let before = sample(&editor, view, 2).0;
+        let start = boundary(&editor, view, 2, column);
+        start_drag(view, start, 40.);
+        view.simulate_keystrokes("escape");
+        view.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+        view.run_until_parked();
+        assert_eq!(sample(&editor, view, 2).0, before);
 
-    let start = boundary(&editor, view, 2, 2);
-    drag(view, start, -10_000.);
-    let minimum = sample(&editor, view, 2).0;
-    view.read(|cx| assert!((minimum[2] - editor.read(cx).font_size_px() * 3.).abs() < 6.));
+        let start = boundary(&editor, view, 2, column);
+        drag(view, start, -10_000.);
+        let minimum = sample(&editor, view, 2).0;
+        view.read(|cx| assert!((minimum[column] - editor.read(cx).font_size_px() * 3.).abs() < 6.));
 
-    let start = boundary(&editor, view, 2, 2);
-    drag(view, start, 10_000.);
-    let maximum = sample(&editor, view, 2).0;
-    for column in 0..2 {
-        assert!((maximum[column] - before[column]).abs() < 0.1);
+        let start = boundary(&editor, view, 2, column);
+        drag(view, start, 10_000.);
+        let maximum = sample(&editor, view, 2).0;
+        for index in (0..3).filter(|index| *index != column) {
+            assert_eq!(maximum[index], before[index]);
+        }
+        view.read(|cx| {
+            let editor = editor.read(cx);
+            let layout = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 2)
+                .unwrap()
+                .table_layout
+                .as_ref()
+                .unwrap();
+            let remaining = px(editor.display_map.wrap_width() - 2.) - layout.width;
+            assert!(remaining >= Pixels::ZERO);
+            assert!(remaining < layout.metrics.space_width + px(0.01));
+        });
+        let start = boundary(&editor, view, 2, column);
+        view.simulate_event(MouseDownEvent {
+            position: start,
+            button: MouseButton::Left,
+            click_count: 2,
+            ..Default::default()
+        });
+        view.run_until_parked();
+        assert_eq!(sample(&editor, view, 2).0, before);
     }
-    view.read(|cx| {
-        let editor = editor.read(cx);
-        let layout = editor
-            .hit_rows
-            .iter()
-            .find(|row| row.line.0 == 2)
-            .unwrap()
-            .table_layout
-            .as_ref()
-            .unwrap();
-        assert!((f32::from(layout.width) - (editor.display_map.wrap_width() - 2.)).abs() < 6.);
-    });
-    let start = boundary(&editor, view, 2, 2);
-    view.simulate_event(MouseDownEvent {
-        position: start,
-        button: MouseButton::Left,
-        click_count: 2,
-        ..Default::default()
-    });
-    view.run_until_parked();
-    assert_eq!(sample(&editor, view, 2).0, before);
 }
 
 #[gpui::test]

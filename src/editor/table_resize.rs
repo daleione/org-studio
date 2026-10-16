@@ -44,11 +44,6 @@ impl ResizeDrag {
             return false;
         }
         self.widths_em[column] = width_em;
-        if let Some(right) = self.start.widths.get(column + 1) {
-            let pair_width = self.start.widths[column] + right;
-            self.widths_em[column + 1] =
-                (pair_width - width) / f32::from(self.start.metrics.font_size);
-        }
         self.moved = true;
         true
     }
@@ -154,32 +149,29 @@ impl SemanticEditor {
         if widths.len() != columns.widths.len() {
             return None;
         }
-        let minimum = |index: usize| {
-            if self.display_map.soft_wrap() {
-                let requested = columns.minimum_widths[index]
-                    .max(columns.widths[index].min(org_commands::MIN_RESIZED_COLUMN_WIDTH));
-                f32::from(metrics.column_width(index, requested, columns.widths[index]))
-            } else {
-                f32::from(metrics.natural_widths[index])
-            }
-        };
-        // Only the selected boundary's limits are needed during the gesture.
-        let (min_width, max_width) = if column + 1 == widths.len() {
-            let max_width = if self.display_map.soft_wrap() {
-                let &(x, pipe_width) = positions.last()?;
-                (widths[column] + self.display_map.wrap_width() - f32::from(x + pipe_width) - 2.)
-                    .max(widths[column])
-            } else {
-                f32::MAX
-            };
-            (minimum(column).min(widths[column]), max_width)
+        let min_width = if self.display_map.soft_wrap() {
+            let requested = columns.minimum_widths[column]
+                .max(columns.widths[column].min(org_commands::MIN_RESIZED_COLUMN_WIDTH));
+            f32::from(metrics.column_width(column, requested, columns.widths[column]))
         } else {
-            let pair_width = widths[column] + widths[column + 1];
-            let left_minimum = minimum(column);
-            let right_minimum = minimum(column + 1);
-            let scale = (pair_width / (left_minimum + right_minimum)).min(1.);
-            let minimum = left_minimum * scale;
-            (minimum, (pair_width - right_minimum * scale).max(minimum))
+            f32::from(metrics.natural_widths[column])
+        };
+        let min_width = min_width.min(widths[column]);
+        // Later columns retain their widths and move with this boundary.
+        let max_width = if self.display_map.soft_wrap() {
+            let &(x, pipe_width) = positions.last()?;
+            let limit =
+                (widths[column] + self.display_map.wrap_width() - f32::from(x + pipe_width) - 2.)
+                    .max(widths[column]);
+            let natural = columns.widths[column];
+            let mut requested = metrics.source_width(column, px(limit), natural);
+            // Source padding uses whole spaces; rounding up would squeeze other columns.
+            if metrics.column_width(column, requested, natural) > px(limit) {
+                requested = requested.saturating_sub(1);
+            }
+            f32::from(metrics.column_width(column, requested, natural)).max(widths[column])
+        } else {
+            f32::MAX
         };
         Some(ResizeHit {
             target: ResizeTarget { anchor, column },
