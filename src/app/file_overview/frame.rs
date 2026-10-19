@@ -43,20 +43,16 @@ pub(super) struct FrameCache {
 
 impl FrameCache {
     pub fn get(&self, id: DocumentId, revision: Revision) -> Option<&DocumentFrame> {
+        // Static cards retain their old paint until the replacement is ready.
+        // Opening a document always prepares a fresh frame before animating.
         self.frames
             .get(&id)
-            .filter(|frame| {
-                frame.revision == revision
-                    && frame.palette == crate::theme::current_theme().background
-            })
+            .filter(|frame| frame.revision == revision)
             .map(Arc::as_ref)
     }
 
     pub fn insert(&mut self, id: DocumentId, frame: Arc<DocumentFrame>) {
-        if let Some(old) = self.frames.remove(&id) {
-            self.bytes = self.bytes.saturating_sub(old.bytes);
-        }
-        self.lru.retain(|entry| *entry != id);
+        self.remove(id);
         self.bytes += frame.bytes;
         self.frames.insert(id, frame);
         self.lru.push_back(id);
@@ -68,6 +64,23 @@ impl FrameCache {
                 self.bytes -= frame.bytes;
             }
         }
+    }
+
+    pub fn stale_bounds(&self, id: DocumentId, revision: Revision) -> Option<Bounds<Pixels>> {
+        self.frames
+            .get(&id)
+            .filter(|frame| {
+                frame.revision == revision
+                    && frame.palette != crate::theme::current_theme().background
+            })
+            .map(|frame| frame.source.bounds)
+    }
+
+    pub fn remove(&mut self, id: DocumentId) {
+        if let Some(old) = self.frames.remove(&id) {
+            self.bytes = self.bytes.saturating_sub(old.bytes);
+        }
+        self.lru.retain(|entry| *entry != id);
     }
 
     pub fn retain(&mut self, ids: &[DocumentId]) {

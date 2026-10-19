@@ -1,5 +1,6 @@
 //! Window-local open-file overview. The document pool remains the sole owner
 //! of text, undo history, save state and each document's real view entities.
+mod background;
 #[cfg(feature = "visual-check")]
 pub mod benchmark;
 mod frame;
@@ -122,7 +123,7 @@ pub(crate) struct PreparingDocument {
 
 impl Session {
     fn is_preparing(&self) -> bool {
-        self.preparation.is_some()
+        self.phase == Phase::Opening && self.preparation.is_some()
     }
 
     fn gesture_scale(&self) -> f32 {
@@ -278,8 +279,12 @@ impl WorkspaceWindow {
                         .map_or_else(Instant::now, |p| p.started),
                     step: PreparationStep::Painting(drawing),
                 });
-                state.progress = 0.;
-            } else {
+                if state.phase == Phase::Opening {
+                    state.progress = 0.;
+                }
+            } else if state.phase == Phase::Visible {
+                self.file_overview.cache.remove(id);
+            } else if state.phase == Phase::Opening {
                 state.notice =
                     Some("无法准备文档，请重新选择 / Could not prepare document; retry".into());
                 state.settle(Phase::Rebounding, 0., Instant::now());
@@ -296,10 +301,16 @@ impl WorkspaceWindow {
         let id = doc.id();
         if doc.revision() != drawing.revision || doc.syntax_path() != drawing.path {
             if let Some(state) = self.file_overview.session.as_mut() {
-                state.notice =
-                    Some("文件已变化，请重新选择 / File changed; select it again".into());
-                state.settle(Phase::Rebounding, 0., Instant::now());
+                if state.phase == Phase::Visible {
+                    state.preparation = None;
+                    self.file_overview.cache.remove(id);
+                } else {
+                    state.notice =
+                        Some("文件已变化，请重新选择 / File changed; select it again".into());
+                    state.settle(Phase::Rebounding, 0., Instant::now());
+                }
             }
+            cx.notify();
             return;
         }
         if drawing.frame.paint_count() < 2 {
@@ -314,6 +325,16 @@ impl WorkspaceWindow {
             .frame_sizes
             .insert(id, frame.source.bounds.size);
         self.file_overview.cache.insert(id, frame.clone());
+        if let Some(state) = self.file_overview.session.as_mut() {
+            if state.phase == Phase::Visible {
+                if state.origin == Some(id) {
+                    state.origin_frame = Some(frame);
+                }
+                state.preparation = None;
+                cx.notify();
+                return;
+            }
+        }
         let items = self.overview_items(cx);
         let Some(index) = items.iter().position(|item| item.id == id) else {
             if let Some(state) = self.file_overview.session.as_mut() {
@@ -1066,6 +1087,35 @@ impl WorkspaceWindow {
 
     pub(crate) fn file_overview_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let now = Instant::now();
+        let palette = crate::theme::current_theme().background;
+        if self
+            .file_overview
+            .session
+            .as_ref()
+            .is_some_and(|state| state.palette != palette)
+        {
+            if self.file_overview.session.as_ref().unwrap().phase == Phase::Handoff {
+                self.close_file_overview_now(window, cx);
+                return;
+            }
+            // Keep the grid's query, selection and scroll position. Old paint
+            // commands contain baked colors, so discard any active transition
+            // and repaint visible cached documents with the existing stage.
+            self.file_overview.serial = self.file_overview.serial.wrapping_add(1);
+            self.file_overview.presented = None;
+            let state = self.file_overview.session.as_mut().unwrap();
+            state.palette = palette;
+            state.phase = Phase::Visible;
+            state.progress = 1.;
+            state.motion = None;
+            state.gesture = None;
+            state.follow = None;
+            state.outward_probe = None;
+            state.origin_frame = None;
+            state.target = None;
+            state.target_frame = None;
+            state.preparation = None;
+        }
         self.finish_overview_document_frame(window, cx);
         if let Some((key, modifiers)) = self
             .file_overview
@@ -1117,6 +1167,26 @@ impl WorkspaceWindow {
             .frame_sizes
             .retain(|id, _| all_ids.contains(id));
         let grid = self.overview_grid(window, &items);
+        if let Some(state) = self
+            .file_overview
+            .session
+            .as_ref()
+            .filter(|state| state.phase == Phase::Visible && state.preparation.is_none())
+        {
+            let stale = grid
+                .visible_range(items.len(), state.scroll.offset().y)
+                .filter_map(|index| {
+                    let item = &items[index];
+                    self.file_overview
+                        .cache
+                        .stale_bounds(item.id, item.revision)
+                        .map(|bounds| (item.id, bounds))
+                })
+                .find(|(id, _)| self.overview_preview_request(*id, cx).is_none());
+            if let Some((id, bounds)) = stale {
+                self.prepare_overview_document_frame(id, bounds, cx);
+            }
+        }
         if let Some(state) = self.file_overview.session.as_mut() {
             let reduced = cx.reduce_motion();
             if reduced && !state.reduced_motion {
@@ -1155,10 +1225,7 @@ impl WorkspaceWindow {
             state
                 .scroll
                 .set_offset(point(px(0.), grid.clamp_scroll(offset.y)));
-            if state.viewport != window.viewport_size()
-                || state.scale != window.scale_factor()
-                || state.palette != crate::theme::current_theme().background
-            {
+            if state.viewport != window.viewport_size() || state.scale != window.scale_factor() {
                 self.close_file_overview_now(window, cx);
                 self.file_overview.cache.clear();
                 return;
@@ -1183,8 +1250,20 @@ impl WorkspaceWindow {
                 .as_ref()
                 .is_some_and(|p| p.started.elapsed() > Duration::from_secs(1))
             {
-                state.notice = Some("准备超时，请重试 / Preparation timed out; retry".into());
-                state.settle(Phase::Rebounding, 0., now);
+                if state.phase == Phase::Visible {
+                    if let Some(Preparation {
+                        step: PreparationStep::Painting(drawing),
+                        ..
+                    }) = state.preparation.take()
+                    {
+                        self.file_overview
+                            .cache
+                            .remove(drawing.document.session.read(cx).id());
+                    }
+                } else {
+                    state.notice = Some("准备超时，请重试 / Preparation timed out; retry".into());
+                    state.settle(Phase::Rebounding, 0., now);
+                }
             }
             if state.phase == Phase::Handoff && state.motion.is_none() {
                 if state.handoff_frames >= 2 || state.reduced_motion {
@@ -1194,8 +1273,10 @@ impl WorkspaceWindow {
                     return;
                 }
             }
-            if state.is_preparing() {
-                state.progress = 0.;
+            if state.preparation.is_some() {
+                if state.is_preparing() {
+                    state.progress = 0.;
+                }
                 cx.on_next_frame(window, |_, _, cx| cx.notify());
                 return;
             }

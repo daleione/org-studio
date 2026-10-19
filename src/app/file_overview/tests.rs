@@ -726,6 +726,136 @@ fn titlebar_and_card_clicks_work_and_emacs_picker_stays_available(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn theme_toggle_keeps_the_overview_and_repaints_visible_documents(cx: &mut gpui::TestAppContext) {
+    let _guard = crate::theme::THEME_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let previous = crate::theme::theme_mode();
+    crate::theme::set_theme_mode(crate::theme::ThemeMode::Light);
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, _| w.theme_mode = crate::theme::ThemeMode::Light);
+    for index in 0..8 {
+        draft(&w, &format!("File-{index}.org"), "* Theme preview", cx);
+        cx.run_until_parked();
+    }
+    open(&w, cx);
+    cx.simulate_input("File");
+    cx.run_until_parked();
+    let grid = cx.debug_bounds("file-overview-grid").unwrap();
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: grid.center(),
+        delta: gpui::ScrollDelta::Pixels(point(px(0.), px(-100.))),
+        modifiers: Modifiers::default(),
+        touch_phase: TouchPhase::Moved,
+    });
+    cx.run_until_parked();
+    let (query, selected, offset, frames) = cx.update(|window, app| {
+        w.read_with(app, |w, cx| {
+            let state = w.file_overview.session.as_ref().unwrap();
+            let items = w.overview_items(cx);
+            let grid = w.overview_grid(window, &items);
+            let frames = grid
+                .visible_range(items.len(), state.scroll.offset().y)
+                .map(|index| {
+                    let item = &items[index];
+                    let frame = w.file_overview.cache.get(item.id, item.revision).unwrap();
+                    (item.id, item.revision, frame.source.clone())
+                })
+                .collect::<Vec<_>>();
+            (
+                state.query.clone(),
+                state.selected,
+                state.scroll.offset(),
+                frames,
+            )
+        })
+    });
+    assert!(offset.y < px(0.));
+    assert!(frames.len() > 1);
+    let button = cx.debug_bounds("document-titlebar-theme-toggle").unwrap();
+    cx.simulate_click(button.center(), Modifiers::default());
+    cx.run_until_parked();
+    for _ in 0..frames.len() * 3 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
+    w.read_with(cx, |w, cx| {
+        assert_eq!(w.theme_mode, crate::theme::ThemeMode::Dark);
+        let state = w
+            .file_overview
+            .session
+            .as_ref()
+            .expect("theme switching must keep the grid open");
+        assert_eq!(state.phase, Phase::Visible);
+        assert_eq!(state.progress, 1.);
+        assert_eq!(state.query, query);
+        assert_eq!(query.read(cx).text, "File");
+        assert_eq!(state.selected, selected);
+        assert_eq!(state.scroll.offset(), offset);
+        for (id, revision, old) in &frames {
+            let frame = w
+                .file_overview
+                .cache
+                .get(*id, *revision)
+                .expect("visible preview repainted");
+            assert_eq!(frame.palette, crate::theme::ORG_STUDIO_DARK.background);
+            assert_eq!(frame.source.bounds, old.bounds);
+            assert!(!Arc::ptr_eq(&frame.source, old));
+        }
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!w.read_with(cx, |w, _| w.file_overview_is_open()));
+    crate::theme::set_theme_mode(previous);
+}
+
+#[gpui::test]
+fn selected_overview_cards_keep_square_neutral_borders(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let other = draft(&w, "Other.org", "* Other file", cx);
+    draft(&w, "Current.org", "* Current file", cx);
+    open(&w, cx);
+    cx.simulate_keystrokes("right");
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.file_overview.session.as_ref().unwrap().selected,
+            Some(other.read(cx).id())
+        );
+    });
+    for selector in ["file-overview-preview-0", "file-overview-preview-1"] {
+        let preview = cx.debug_bounds(selector).unwrap();
+        let (borders, width) = cx.update(|window, _| {
+            let bounds = preview.scale(window.scale_factor());
+            let borders = window
+                .painted_quads()
+                .into_iter()
+                .filter(|quad| {
+                    quad.bounds == bounds && quad.border_widths.top > gpui::ScaledPixels(0.)
+                })
+                .collect::<Vec<_>>();
+            (borders, px(1.).scale(window.scale_factor()))
+        });
+        assert!(
+            !borders.is_empty(),
+            "the card's visible border must be painted"
+        );
+        for border in borders {
+            assert_eq!(border.corner_radii, gpui::Corners::default());
+            assert_eq!(border.border_widths, gpui::Edges::all(width));
+            assert_eq!(
+                border.border_color,
+                gpui::rgb(crate::theme::current_theme().border).into()
+            );
+        }
+    }
+}
+
+#[gpui::test]
 fn command_palette_entry_and_cancel_restore_document_input(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     cx.update(|cx| cx.set_reduce_motion(true));

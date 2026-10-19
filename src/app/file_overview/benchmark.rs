@@ -78,6 +78,20 @@ impl GestureTrace {
 
 pub fn run_visual_check(output: PathBuf) {
     std::fs::create_dir_all(&output).expect("create diagnostic output directory");
+    // Export the production backdrop even if the desktop session cannot open
+    // a diagnostic window. These are texture previews, not window captures.
+    for (name, theme) in [
+        ("light", &crate::theme::ORG_STUDIO_LIGHT),
+        ("dark", &crate::theme::ORG_STUDIO_DARK),
+    ] {
+        let mut pixels = background::raster(theme);
+        for pixel in pixels.pixels_mut() {
+            pixel.0.swap(0, 2);
+        }
+        pixels
+            .save(output.join(format!("00-backdrop-{name}.png")))
+            .expect("save backdrop preview");
+    }
     gpui_platform::application().run(move |cx| {
         crate::editor::init(cx);
         crate::typography::init(crate::typography::FontSettings::default(), cx.text_system());

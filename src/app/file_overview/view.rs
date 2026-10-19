@@ -177,7 +177,6 @@ impl WorkspaceWindow {
                 (
                     frame,
                     layout::document_transition(state.origin_bounds, target, p),
-                    12. * p,
                 )
             })
         } else if opening {
@@ -186,14 +185,13 @@ impl WorkspaceWindow {
                 (
                     frame,
                     layout::document_transition(state.target_from, state.target_to, progress),
-                    12. * (1. - progress),
                 )
             })
         } else {
             None
         };
         let transition = if !state.reduced_motion && !handoff {
-            active_frame.as_ref().map(|(_, bounds, _)| {
+            active_frame.as_ref().map(|(_, bounds)| {
                 (
                     if entry {
                         origin_card
@@ -510,8 +508,14 @@ impl WorkspaceWindow {
                     .top(bounds.top())
                     .w(bounds.size.width)
                     .h(bounds.size.height)
-                    .bg(rgb(theme.overview_background))
                     .opacity(opacity)
+                    .child(
+                        canvas(
+                            |_, _, _| (),
+                            |bounds, _, window, _| background::paint(bounds, window),
+                        )
+                        .size_full(),
+                    )
             }))
             .child(grid_view)
             .child(
@@ -574,11 +578,11 @@ impl WorkspaceWindow {
                 && !state.reduced_motion
                 && !items.iter().any(|item| Some(item.id) == state.origin))
         {
-            if let Some((frame, bounds, radius)) = active_frame {
+            if let Some((frame, bounds)) = active_frame {
                 // Keep the frame opaque until the ready live view takes over.
                 // Per-primitive fading would make overlapping text lighter.
                 overlay = overlay.child(
-                    render_frame(frame, radius)
+                    render_frame(frame)
                         .absolute()
                         .left(bounds.left())
                         .top(bounds.top() - px(super::super::TITLEBAR_HEIGHT))
@@ -608,7 +612,7 @@ impl WorkspaceWindow {
         }
         #[cfg(feature = "visual-check")]
         if self.file_overview.trace.enabled() {
-            let bounds = active_frame.map_or(origin_card, |(_, bounds, _)| bounds);
+            let bounds = active_frame.map_or(origin_card, |(_, bounds)| bounds);
             let phase = format!("{:?}", state.phase);
             let target = state.gesture.as_ref().map_or(f32::NAN, Gesture::progress);
             let velocity = state
@@ -648,7 +652,6 @@ impl WorkspaceWindow {
         let theme = current_theme();
         let selected = state.selected == Some(item.id);
         let chrome_opacity = smoothstep(0.62, 0.94, appearance);
-        let radius = 12. * appearance;
         let id = item.id;
         let selector = format!("file-overview-card-{index}");
         let name = item.name.clone();
@@ -695,7 +698,7 @@ impl WorkspaceWindow {
         })
         .or_else(|| self.file_overview.cache.get(id, item.revision));
         let preview = match frame {
-            Some(frame) => render_frame(frame, radius).size_full().into_any_element(),
+            Some(frame) => render_frame(frame).size_full().into_any_element(),
             None => summary_preview(&item.session.read(cx).snapshot())
                 .size_full()
                 .into_any_element(),
@@ -740,7 +743,6 @@ impl WorkspaceWindow {
                     .relative()
                     .w_full()
                     .h(bounds.size.height)
-                    .rounded(px(radius))
                     .bg(rgb(theme.editor_background))
                     .shadow(vec![
                         gpui::BoxShadow::new(
@@ -756,18 +758,10 @@ impl WorkspaceWindow {
                         div()
                             .absolute()
                             .inset_0()
-                            .rounded(px(radius))
                             .opacity(chrome_opacity)
                             .border_1()
-                            .when(selected && !item.current, |view| view.border_2())
-                            .border_color(rgb(if selected && !item.current {
-                                theme.accent
-                            } else {
-                                theme.border
-                            }))
-                            .when(!selected, |view| {
-                                view.hover(|style| style.border_color(rgb(theme.border_hover)))
-                            }),
+                            .border_color(rgb(theme.border))
+                            .hover(|style| style.border_color(rgb(theme.border_hover))),
                     ),
             )
             .child(
@@ -839,34 +833,13 @@ impl WorkspaceWindow {
     }
 }
 
-fn render_frame(frame: &DocumentFrame, radius: f32) -> gpui::Div {
+fn render_frame(frame: &DocumentFrame) -> gpui::Div {
     let content = frame.source.clone();
     div().child(
         canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
                 content.paint(bounds, window, cx);
-                if radius > 0. {
-                    // Rounded cutout against the overview's flat background.
-                    let radius = px(radius);
-                    let outer = gpui::Bounds::new(
-                        bounds.origin - gpui::point(radius, radius),
-                        gpui::size(
-                            bounds.size.width + radius * 2.,
-                            bounds.size.height + radius * 2.,
-                        ),
-                    );
-                    window.with_content_mask(Some(gpui::ContentMask { bounds }), |window| {
-                        window.paint_quad(gpui::quad(
-                            outer,
-                            gpui::Corners::all(radius * 2.),
-                            gpui::rgba(0),
-                            gpui::Edges::all(radius),
-                            gpui::rgb(current_theme().overview_background),
-                            gpui::BorderStyle::default(),
-                        ));
-                    });
-                }
             },
         )
         .size_full(),
