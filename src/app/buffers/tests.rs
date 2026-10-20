@@ -314,9 +314,22 @@ fn batch_open_keeps_every_success_and_focuses_the_first_file(cx: &mut gpui::Test
             &paths[0]
         ));
         let b = w.buffer_for_path(&paths[1], cx).unwrap();
+        let a = w.document_session().unwrap().read(cx).id();
         w.open(paths[1].clone(), cx);
         assert_eq!(w.document_session().unwrap(), &b);
         assert_eq!(w.buffer_sessions().count(), 2);
+        assert_eq!(
+            w.buffers.opened_ids().collect::<Vec<_>>(),
+            [a, b.read(cx).id()]
+        );
+        w.remove_buffer(a, cx);
+        w.open(paths[0].clone(), cx);
+    });
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        let b = w.buffer_for_path(&paths[1], cx).unwrap().read(cx).id();
+        let reopened = w.document_session().unwrap().read(cx).id();
+        assert_eq!(w.buffers.opened_ids().collect::<Vec<_>>(), [b, reopened]);
     });
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -561,6 +574,9 @@ fn latest_foreground_open_wins_without_losing_previous_requests(cx: &mut gpui::T
             &b
         ));
         assert!(w.buffer_for_path(&a, cx).is_some());
+        let first = w.buffer_for_path(&a, cx).unwrap().read(cx).id();
+        let second = w.document_session().unwrap().read(cx).id();
+        assert_eq!(w.buffers.opened_ids().collect::<Vec<_>>(), [first, second]);
     });
     std::fs::remove_dir_all(root).unwrap();
 }

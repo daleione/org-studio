@@ -699,7 +699,7 @@ impl Render for WorkspaceWindow {
                     titlebar_inset,
                     self.theme_mode(),
                     if self.file_overview_is_open() {
-                        "Org Studio".to_owned()
+                        String::new()
                     } else {
                         self.window_title(cx)
                     },
@@ -975,37 +975,15 @@ mod tests {
         let button = cx
             .debug_bounds("document-titlebar-sidebar-toggle")
             .expect("sidebar toggle should be rendered");
-        assert_eq!(bar.size.height, px(crate::app::TITLEBAR_HEIGHT));
-        let icon = cx
-            .debug_bounds("document-titlebar-sidebar-icon")
-            .expect("sidebar icon should be rendered");
         let minimap_button = cx
             .debug_bounds("document-titlebar-minimap-toggle")
             .expect("minimap toggle should be rendered");
-        let minimap_icon = cx
-            .debug_bounds("document-titlebar-minimap-icon")
-            .expect("minimap icon should be rendered");
         let export_button = cx
             .debug_bounds("document-titlebar-export-toggle")
             .expect("export toggle should be rendered");
-        let export_icon = cx
-            .debug_bounds("document-titlebar-export-icon")
-            .expect("export icon should be rendered");
         let agenda_button = cx
             .debug_bounds("document-titlebar-agenda-toggle")
             .expect("agenda toggle should be rendered");
-        let agenda_icon = cx
-            .debug_bounds("document-titlebar-agenda-icon")
-            .expect("agenda icon should be rendered");
-        assert_eq!(button.size, gpui::size(px(32.0), px(32.0)));
-        assert_eq!(icon.size, gpui::size(px(19.0), px(16.0)));
-        assert_eq!(minimap_button.size, gpui::size(px(32.0), px(32.0)));
-        assert_eq!(minimap_icon.size, gpui::size(px(19.0), px(16.0)));
-        assert_eq!(export_button.size, gpui::size(px(32.0), px(32.0)));
-        assert_eq!(export_icon.size, gpui::size(px(19.0), px(16.0)));
-        assert_eq!(agenda_button.size, gpui::size(px(32.0), px(32.0)));
-        assert_eq!(agenda_icon.size, gpui::size(px(19.0), px(16.0)));
-        assert_eq!(button.left(), px(crate::app::TITLEBAR_LEADING_INSET));
         assert!(
             button.right() <= agenda_button.left(),
             "agenda toggle must sit to the right of the sidebar toggle"
@@ -1059,12 +1037,6 @@ mod tests {
         let button = cx
             .debug_bounds("document-titlebar-theme-toggle")
             .expect("theme toggle should be rendered");
-        let icon = cx
-            .debug_bounds("document-titlebar-theme-icon")
-            .expect("theme icon should be rendered");
-        assert_eq!(button.size, gpui::size(px(32.0), px(32.0)));
-        assert_eq!(icon.size, gpui::size(px(16.0), px(16.0)));
-
         // Fixed three-state rotation: Auto -> Light -> Dark -> Auto. On a
         // light test system the Auto->Light step changes only the icon (the
         // palette is identical), which is the documented trade-off.

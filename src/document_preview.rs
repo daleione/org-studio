@@ -379,14 +379,6 @@ impl PreviewFrame {
             )
         };
         window.with_content_mask(Some(ContentMask { bounds: target }), |window| {
-            let has_background = self.commands.iter().any(|command| {
-                matches!(&command.paint, Paint::Quad(quad)
-                    if quad.bounds.intersect(&source) == source
-                        && quad.background.as_solid().is_some_and(|color| color.is_opaque()))
-            });
-            if !has_background {
-                window.paint_quad(fill(target, rgb(crate::theme::current_theme().background)));
-            }
             for command in &self.commands {
                 let mask = rect(command.mask.intersect(&source)).intersect(&target);
                 if mask.is_empty() {
@@ -619,6 +611,12 @@ impl Element for DocumentStage {
         let scope = RecordingScope(Some(
             RECORDING.with(|state| state.replace(Some(Vec::new()))),
         ));
+        // The base color belongs to this immutable frame, just like its text.
+        // Replaying must not mix the recorded palette with the current theme.
+        quad(
+            window,
+            fill(bounds, rgb(crate::theme::current_theme().background)),
+        );
         self.content.paint(window, cx);
         let commands = scope.finish();
         self.slot.publish(PreviewFrame { bounds, commands });

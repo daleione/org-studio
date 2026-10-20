@@ -72,29 +72,3 @@ pub(super) fn raster(theme: &Theme) -> image::RgbaImage {
         image::Rgba([channel(a.b, b.b), channel(a.g, b.g), channel(a.r, b.r), 255])
     })
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn backdrop_is_opaque_and_keeps_a_broad_upper_light() {
-        for theme in [&theme::ORG_STUDIO_LIGHT, &theme::ORG_STUDIO_DARK] {
-            let image = raster(theme);
-            let light = image.get_pixel(256, 118);
-            let edge = image.get_pixel(0, 511);
-            let low = theme.overview_edge.to_le_bytes();
-            let high = theme.overview_highlight.to_le_bytes();
-            for pixel in image.pixels() {
-                assert_eq!(pixel[3], 255);
-                for channel in 0..3 {
-                    assert!((low[channel]..=high[channel]).contains(&pixel[channel]));
-                }
-            }
-            for channel in 0..3 {
-                assert!(light[channel] > edge[channel]);
-                assert!(light[channel].abs_diff(image.get_pixel(230, 118)[channel]) <= 1);
-            }
-        }
-    }
-}

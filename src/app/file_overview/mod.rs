@@ -88,7 +88,6 @@ struct Session {
     target_to: Bounds<Pixels>,
     target_frame: Option<Arc<DocumentFrame>>,
     new_document: Option<super::ReadyDocument>,
-    order: Vec<DocumentId>,
     selected: Option<DocumentId>,
     query: Entity<NativeInput>,
     _subscription: Subscription,
@@ -428,20 +427,33 @@ impl WorkspaceWindow {
 
     fn overview_items(&self, cx: &App) -> Vec<Item> {
         let active = self.document_session().map(|s| s.read(cx).id());
-        let mut items = self
+        let mut sessions: HashMap<_, _> = self
             .buffer_sessions()
-            .filter_map(|session| {
+            .map(|session| (session.read(cx).id(), session))
+            .collect();
+        let query = self
+            .file_overview
+            .session
+            .as_ref()
+            .map_or("", |state| state.query.read(cx).text.as_str());
+        self.buffers
+            .opened_ids()
+            .filter_map(|id| {
+                let session = sessions.remove(&id)?;
                 let doc = session.read(cx);
                 if doc.is_generated() {
                     return None;
                 }
+                let name = doc.display_name();
+                let path = doc
+                    .file_path()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                super::buffers::match_score(&name, &path, query)?;
                 Some(Item {
-                    id: doc.id(),
-                    name: doc.display_name(),
-                    path: doc
-                        .file_path()
-                        .map(|p| p.to_string_lossy().into_owned())
-                        .unwrap_or_default(),
+                    id,
+                    name,
+                    path,
                     revision: doc.revision(),
                     current: active == Some(doc.id()),
                     dirty: doc.is_dirty(),
@@ -455,27 +467,7 @@ impl WorkspaceWindow {
                     session,
                 })
             })
-            .collect::<Vec<_>>();
-        if let Some(state) = &self.file_overview.session {
-            let query = &state.query.read(cx).text;
-            let positions: HashMap<_, _> = state
-                .order
-                .iter()
-                .enumerate()
-                .map(|(i, id)| (*id, i))
-                .collect();
-            items.retain(|item| {
-                super::buffers::match_score(&item.name, &item.path, query).is_some()
-            });
-            items.sort_by_cached_key(|item| {
-                let score = super::buffers::match_score(&item.name, &item.path, query).unwrap_or(0);
-                (
-                    std::cmp::Reverse(score),
-                    positions.get(&item.id).copied().unwrap_or(usize::MAX),
-                )
-            });
-        }
-        items
+            .collect()
     }
 
     fn overview_item_size(&self, item: &Item, window: &Window) -> Size<Pixels> {
@@ -650,10 +642,15 @@ impl WorkspaceWindow {
         self.status.dismiss_popover();
         let viewport = window.viewport_size();
         let grid = self.overview_grid(window, &items);
+        let origin_index = items
+            .iter()
+            .position(|item| Some(item.id) == origin)
+            .unwrap_or(0);
+        let scroll = ScrollHandle::default();
+        let offset = grid.clamp_scroll(grid.reveal(origin_index, px(0.)));
+        scroll.set_offset(point(px(0.), offset));
         let reduced_motion = cx.reduce_motion();
-        let selected = origin
-            .filter(|id| items.iter().any(|item| item.id == *id))
-            .or_else(|| items.first().map(|item| item.id));
+        let selected = items.get(origin_index).map(|item| item.id);
         window.focus(&grid_focus, cx);
         self.file_overview.serial = self.file_overview.serial.wrapping_add(1);
         self.file_overview.session = Some(Session {
@@ -669,14 +666,13 @@ impl WorkspaceWindow {
             origin_route: self.content_route,
             origin_focus,
             origin_bounds,
-            origin_card: grid.document_preview(0, px(0.), origin_bounds.size),
+            origin_card: grid.document_preview(origin_index, offset, origin_bounds.size),
             origin_frame,
             target: None,
             target_from: origin_bounds,
             target_to: origin_bounds,
             target_frame: None,
             new_document: None,
-            order: items.iter().map(|item| item.id).collect(),
             selected,
             query: input,
             _subscription: subscription,
@@ -686,7 +682,7 @@ impl WorkspaceWindow {
             query_bounds: Bounds::default(),
             focus_query_pending: false,
             pending_command: None,
-            scroll: ScrollHandle::default(),
+            scroll,
             viewport,
             scale: window.scale_factor(),
             palette: crate::theme::current_theme().background,
@@ -1397,12 +1393,6 @@ impl WorkspaceWindow {
             {
                 self.close_file_overview_now(window, cx);
                 return;
-            }
-            state.order.retain(|id| all_ids.contains(id));
-            for id in &all_ids {
-                if !state.order.contains(id) {
-                    state.order.push(*id);
-                }
             }
             if !items.iter().any(|item| Some(item.id) == state.selected) {
                 state.selected = items.first().map(|item| item.id);

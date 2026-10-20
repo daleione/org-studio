@@ -49,6 +49,7 @@ pub(crate) struct ParkedDocument {
 pub(crate) struct BufferHost {
     navigation: navigation::NavigationHistory,
     parked: Vec<ParkedDocument>,
+    open_order: Vec<OpenEntry>,
     pub(crate) panel: Option<Panel>,
     pub(crate) returning: bool,
     pub(crate) focus_pending: bool,
@@ -64,6 +65,11 @@ pub(crate) struct BufferHost {
     file_task: Option<Task<()>>,
     file_request: u64,
     cycle: Vec<DocumentId>,
+}
+
+enum OpenEntry {
+    Pending(PathBuf),
+    Open(DocumentId),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -90,6 +96,49 @@ pub(crate) enum Panel {
 }
 
 impl BufferHost {
+    /// Reserve a position before loading so completion timing cannot reorder files.
+    pub(crate) fn reserve_open(&mut self, path: &Path) {
+        if !self
+            .open_order
+            .iter()
+            .any(|entry| matches!(entry, OpenEntry::Pending(pending) if same_file(pending, path)))
+        {
+            self.open_order.push(OpenEntry::Pending(path.to_path_buf()));
+        }
+    }
+
+    pub(crate) fn register_opened(&mut self, document: &DocumentSession) {
+        let id = document.id();
+        if let Some(entry) = self.open_order.iter_mut().find(|entry| match entry {
+            OpenEntry::Open(opened) => *opened == id,
+            OpenEntry::Pending(path) => document
+                .file_path()
+                .is_some_and(|opened| same_file(path, opened)),
+        }) {
+            *entry = OpenEntry::Open(id);
+        } else {
+            self.open_order.push(OpenEntry::Open(id));
+        }
+    }
+
+    pub(crate) fn cancel_open(&mut self, path: &Path) {
+        self.open_order.retain(
+            |entry| !matches!(entry, OpenEntry::Pending(pending) if same_file(pending, path)),
+        );
+    }
+
+    pub(crate) fn forget_opened(&mut self, id: DocumentId) {
+        self.open_order
+            .retain(|entry| !matches!(entry, OpenEntry::Open(opened) if *opened == id));
+    }
+
+    pub(crate) fn opened_ids(&self) -> impl Iterator<Item = DocumentId> + '_ {
+        self.open_order.iter().filter_map(|entry| match entry {
+            OpenEntry::Open(id) => Some(*id),
+            OpenEntry::Pending(_) => None,
+        })
+    }
+
     pub(crate) fn inline_close_target(&self) -> Option<DocumentId> {
         match self.review()? {
             SaveReview {

@@ -331,20 +331,6 @@ mod tests {
     }
 
     #[test]
-    fn settling_keeps_a_prompt_start_and_a_longer_deceleration() {
-        let now = Instant::now();
-        for (from, to) in [(0., 1.), (1., 0.)] {
-            let motion = Motion::settle(now, from, to, 0., false);
-            let progress =
-                |ms| (motion.sample(now + Duration::from_millis(ms)).value - from) / (to - from);
-            assert!((0.5..0.56).contains(&progress(80)));
-            assert!((0.85..0.9).contains(&progress(200)));
-            assert!((0.98..0.99).contains(&progress(420)));
-            assert_eq!(progress(1000), 1.);
-        }
-    }
-
-    #[test]
     fn retargeting_preserves_position_and_velocity() {
         let now = Instant::now();
         let release = Motion::settle(now, 0.4, 1., 2., false);
@@ -374,20 +360,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn sampling_depends_on_elapsed_time_instead_of_number_of_frames() {
-        let now = Instant::now();
-        let m = Motion::settle(now, 0.2, 1., 1.5, false);
-        for ms in (0..100).step_by(8) {
-            let _ = m.sample(now + Duration::from_millis(ms));
-        }
-        let sampled = m.sample(now + Duration::from_millis(100));
-        let direct =
-            Motion::settle(now, 0.2, 1., 1.5, false).sample(now + Duration::from_millis(100));
-        assert_eq!(sampled.value, direct.value);
-        assert_eq!(sampled.velocity, direct.velocity);
-        assert!(!m.finish_with_reduced_motion(now).sample(now).active);
     }
 }

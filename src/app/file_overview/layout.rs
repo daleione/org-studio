@@ -262,20 +262,11 @@ mod tests {
     }
 
     #[test]
-    fn containing_and_interpolation_preserve_aspect_and_endpoints() {
-        let source = size(px(1200.), px(900.));
-        let target = Bounds::new(point(px(30.), px(50.)), size(px(400.), px(250.)));
-        let fitted = contain(source, target);
-        assert!((f32::from(fitted.size.width / fitted.size.height) - 4.0 / 3.0).abs() < 0.001);
-        assert_eq!(fitted.center(), target.center());
-        assert_eq!(document_transition(target, fitted, 0.0), target);
-        assert_eq!(document_transition(target, fitted, 1.0), fitted);
-    }
-
-    #[test]
     fn document_shrinks_before_gathering_and_expands_along_the_same_path() {
         let source = Bounds::new(point(px(240.), px(38.)), size(px(600.), px(1000.)));
         let card = Bounds::new(point(px(40.), px(150.)), size(px(180.), px(300.)));
+        assert_eq!(document_transition(source, card, 0.), source);
+        assert_eq!(document_transition(source, card, 1.), card);
         for step in 0..=100 {
             let p = step as f32 / 100.;
             let inward = document_transition(source, card, p);

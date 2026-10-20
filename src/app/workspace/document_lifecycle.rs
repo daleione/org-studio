@@ -28,6 +28,9 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn show_home_now(&mut self, cx: &mut Context<Self>) {
+        if let WorkspaceLoadState::Loading { path, .. } = &self.state {
+            self.buffers.cancel_open(path);
+        }
         self.end_prefix(cx);
         self.close_command_line(cx);
         self.close_search(false, cx);
@@ -83,6 +86,7 @@ impl WorkspaceWindow {
         self.first_frame_scheduled = None;
         let generation = self.generation;
         let previous = preserve_previous.then(|| self.state.take_ready()).flatten();
+        self.buffers.reserve_open(&path);
         self.state = WorkspaceLoadState::Loading {
             path: path.clone(),
             previous,
@@ -188,6 +192,9 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn open_discarding_current(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        if let Some(id) = self.document_session().map(|session| session.read(cx).id()) {
+            self.buffers.forget_opened(id);
+        }
         self.open_with_previous(path, false, cx);
     }
 
@@ -584,6 +591,7 @@ impl WorkspaceWindow {
                         (session, Some(preview))
                     }
                 };
+                self.buffers.register_opened(&session);
                 if crate::preview::is_editor_only_document(session.syntax_path()) {
                     for pane in [crate::app::PaneSide::Left, crate::app::PaneSide::Right] {
                         self.document_workspace
@@ -719,6 +727,7 @@ impl WorkspaceWindow {
                 }
             }
             Err((path, message)) => {
+                self.buffers.cancel_open(&path);
                 if previous.is_none() {
                     self.derived.latest = None;
                 }

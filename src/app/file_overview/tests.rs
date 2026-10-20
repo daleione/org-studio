@@ -79,6 +79,42 @@ pub(super) fn finish_opening(w: &Entity<WorkspaceWindow>, cx: &mut VisualTestCon
 }
 
 #[gpui::test]
+fn overview_keeps_open_order_after_switching_renaming_and_filtering(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let a = draft(&w, "older-needle.org", "keep this", cx);
+    let b = draft(&w, "middle.org", "keep middle", cx);
+    let c = draft(&w, "needle.org", "keep this too", cx);
+    let ids = [&a, &b, &c].map(|session| session.read_with(cx, |doc, _| doc.id()));
+    w.update(cx, |w, cx| w.activate_buffer(ids[0], cx));
+    a.update(cx, |doc, cx| {
+        doc.rename_draft("renamed-needle.org", cx).unwrap()
+    });
+    open(&w, cx);
+    w.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.overview_items(cx)
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            ids,
+        );
+    });
+    cx.simulate_input("needle.org");
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        assert_eq!(
+            w.overview_items(cx)
+                .iter()
+                .map(|item| item.id)
+                .collect::<Vec<_>>(),
+            [ids[0], ids[2]],
+        );
+    });
+}
+
+#[gpui::test]
 fn cached_target_uses_current_layout_and_invalidates_safely(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
@@ -399,7 +435,7 @@ fn selecting_commits_once_and_restores_the_same_editor_entity(cx: &mut gpui::Tes
     let editor = w.read_with(cx, |w, _| w.editor(super::super::PaneSide::Left).unwrap());
     let _b = draft(&w, "B.org", "* B", cx);
     open(&w, cx);
-    cx.simulate_keystrokes("right enter");
+    cx.simulate_keystrokes("left enter");
     cx.run_until_parked();
     w.update(cx, |w, cx| {
         assert!(!w.file_overview_is_open());
@@ -676,6 +712,10 @@ fn visible_grid_is_virtualized_and_responsive(cx: &mut gpui::TestAppContext) {
     for index in 0..50 {
         draft(&w, &format!("file-{index}.org"), "* text", cx);
     }
+    w.update(cx, |w, cx| {
+        let first = w.buffers.opened_ids().next().unwrap();
+        w.activate_buffer(first, cx);
+    });
     open(&w, cx);
     assert!(cx.debug_bounds("file-overview-card-0").is_some());
     assert!(cx.debug_bounds("file-overview-card-49").is_none());
@@ -722,7 +762,7 @@ fn titlebar_and_card_clicks_work_and_emacs_picker_stays_available(cx: &mut gpui:
     cx.simulate_click(button.center(), Modifiers::default());
     cx.run_until_parked();
     assert!(w.read_with(cx, |w, _| w.file_overview_is_open()));
-    let card = cx.debug_bounds("file-overview-card-1").unwrap();
+    let card = cx.debug_bounds("file-overview-card-0").unwrap();
     cx.simulate_click(card.center(), Modifiers::default());
     cx.run_until_parked();
     assert_eq!(
@@ -916,6 +956,10 @@ fn new_file_card_creates_a_draft_without_changing_existing_documents(
         assert_eq!(w.document_session().unwrap(), &prepared.session);
         assert_eq!(w.editor(PaneSide::Left), prepared.editors.left);
         assert_eq!(w.buffer_sessions().count(), 3);
+        assert_eq!(
+            w.buffers.opened_ids().collect::<Vec<_>>(),
+            [original.read(cx).id(), current.read(cx).id(), doc.id()],
+        );
         assert!(original.read(cx).is_dirty());
         assert!(w.buffers.panel.is_none());
         assert!(!w.document_workspace.is_split());
@@ -1002,9 +1046,7 @@ fn overview_new_file_shortcuts_work_with_scrolling_and_search(cx: &mut gpui::Tes
             })
         });
         cx.run_until_parked();
-        if query.is_empty() {
-            assert!(cx.debug_bounds("file-overview-new-file").is_none());
-        } else {
+        if !query.is_empty() {
             cx.simulate_input(query);
             cx.run_until_parked();
         }
@@ -1375,7 +1417,7 @@ fn outward_pinch_ignores_header_and_noise_and_can_be_cancelled(cx: &mut gpui::Te
             let items = w.overview_items(cx);
             let grid = w.overview_grid(window, &items);
             let position = grid
-                .document_preview(1, px(0.), w.overview_item_size(&items[1], window))
+                .document_preview(0, px(0.), w.overview_item_size(&items[0], window))
                 .center();
             w.file_overview_pinch(&event(position, 0.01, TouchPhase::Moved), window, cx);
             assert_eq!(
@@ -1416,8 +1458,8 @@ fn document_frames_and_opening_use_the_original_aspect_ratio(cx: &mut gpui::Test
             .insert(a.read(cx).id(), size(px(300.), px(900.)));
     });
     open(&w, cx);
-    let preview = cx.debug_bounds("file-overview-preview-1").unwrap();
-    let card = cx.debug_bounds("file-overview-card-1").unwrap();
+    let preview = cx.debug_bounds("file-overview-preview-0").unwrap();
+    let card = cx.debug_bounds("file-overview-card-0").unwrap();
     assert!((f32::from(preview.size.width / preview.size.height) - 1. / 3.).abs() < 0.0001);
     assert_eq!(card.size.width, preview.size.width);
     assert_eq!(card.size.height, preview.size.height + px(layout::CAPTION));

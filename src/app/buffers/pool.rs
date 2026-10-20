@@ -48,6 +48,7 @@ impl WorkspaceWindow {
         cx: &mut Context<Self>,
     ) {
         let id = document.session.read(cx).id();
+        self.buffers.register_opened(document.session.read(cx));
         self.buffers.parked.push(ParkedDocument {
             document,
             workspace: DocumentWorkspaceState::default(),
@@ -302,6 +303,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn remove_buffer(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        self.buffers.forget_opened(id);
         if self
             .document_session()
             .is_some_and(|s| s.read(cx).id() == id)
@@ -392,6 +394,7 @@ impl WorkspaceWindow {
         {
             return;
         }
+        self.buffers.reserve_open(&path);
         let request_path = path.clone();
         let load = cx
             .background_executor()
@@ -404,8 +407,10 @@ impl WorkspaceWindow {
                 match result {
                     Ok(crate::preview::WorkspaceLoadedDocument::Source(session)) => {
                         if this.buffer_for_path(&task_path, cx).is_some() {
+                            this.buffers.cancel_open(&task_path);
                             return;
                         }
+                        this.buffers.register_opened(&session);
                         crate::recent_documents::record_success(
                             &mut this.recent_documents,
                             task_path,
@@ -431,6 +436,7 @@ impl WorkspaceWindow {
                     }
                     Ok(_) => unreachable!("source-only load"),
                     Err((path, error)) => {
+                        this.buffers.cancel_open(&path);
                         this.home_error = Some(format!("{}: {error}", path.display()).into());
                         this.save.error = Some(format!("{}: {error}", path.display()).into());
                     }

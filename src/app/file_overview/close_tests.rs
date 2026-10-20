@@ -419,14 +419,14 @@ fn confirmation_only_covers_its_card_and_other_close_buttons_still_work(
     open_grid(&w, cx);
     click(&w, current.read_with(cx, |doc, _| doc.id()), cx);
     let mask = cx.debug_bounds("file-overview-close-confirmation").unwrap();
-    assert_eq!(mask, cx.debug_bounds("file-overview-preview-0").unwrap());
+    assert_eq!(mask, cx.debug_bounds("file-overview-preview-1").unwrap());
     assert!(cx.debug_bounds("buffer-review-modal").is_none());
-    assert!(cx.debug_bounds("file-overview-close-0").is_none());
-    assert!(cx.debug_bounds("file-overview-close-1").is_some());
+    assert!(cx.debug_bounds("file-overview-close-1").is_none());
+    assert!(cx.debug_bounds("file-overview-close-0").is_some());
     click(&w, background.read_with(cx, |doc, _| doc.id()), cx);
     assert_eq!(
         cx.debug_bounds("file-overview-close-confirmation").unwrap(),
-        cx.debug_bounds("file-overview-preview-1").unwrap()
+        cx.debug_bounds("file-overview-preview-0").unwrap()
     );
     w.read_with(cx, |w, cx| {
         assert_eq!(
@@ -454,7 +454,7 @@ fn pending_close_yields_to_opening_another_card_and_creating_a_draft(
     let current = draft(&w, "Current.org", "current content", cx);
     open_grid(&w, cx);
     click(&w, target.read_with(cx, |doc, _| doc.id()), cx);
-    let card = cx.debug_bounds("file-overview-preview-0").unwrap();
+    let card = cx.debug_bounds("file-overview-preview-1").unwrap();
     cx.simulate_click(card.center(), Modifiers::default());
     finish_opening(&w, cx);
     w.read_with(cx, |w, cx| {
@@ -568,20 +568,27 @@ fn scrolling_a_pending_close_out_of_view_cancels_it_without_losing_the_document(
     cx: &mut gpui::TestAppContext,
 ) {
     let (w, cx) = window(cx);
+    cx.simulate_resize(size(px(390.), px(600.)));
     for i in 0..8 {
         draft(&w, &format!("Background {i}.org"), "keep", cx);
     }
     let target = draft(&w, "Current.org", "keep this too", cx);
     let id = target.read_with(cx, |doc, _| doc.id());
     open_grid(&w, cx);
-    click(&w, id, cx);
+    let close = cx.debug_bounds("file-overview-close-8").unwrap();
+    cx.simulate_click(close.center(), Modifiers::default());
+    cx.run_until_parked();
+    assert_eq!(
+        w.read_with(cx, |w, _| w.buffers.inline_close_target()),
+        Some(id)
+    );
     w.update(cx, |w, cx| {
         w.file_overview
             .session
             .as_ref()
             .unwrap()
             .scroll
-            .set_offset(point(px(0.), px(-10000.)));
+            .set_offset(point(px(0.), px(0.)));
         cx.notify();
     });
     cx.run_until_parked();
