@@ -47,6 +47,7 @@ mod menus;
 pub(crate) use crate::components::native_input;
 pub use menus::application_menus;
 mod overlays;
+pub use overlays::LocateCursor;
 mod prefix_hint;
 mod render;
 mod save;
@@ -296,6 +297,7 @@ pub struct WorkspaceWindow {
     pub(crate) focus_handle: Option<FocusHandle>,
     pub(crate) focus_workspace_on_render: bool,
     pub(crate) focus_lost_subscription: Option<Subscription>,
+    cursor_spotlight: Option<gpui::Entity<overlays::CursorSpotlight>>,
     /// Focus to restore when a pending key prefix (e.g. `C-x`) completes or is
     /// cancelled. While the prefix is capturing, the window is focused on the
     /// workspace root instead of the editor, so the editor's GPUI bindings

@@ -212,6 +212,11 @@ fn main() {
         org_studio::editor::init(cx);
         cx.bind_keys([
             KeyBinding::new("cmd-n", org_studio::app::NewDraft, None),
+            KeyBinding::new(
+                "cmd-/",
+                org_studio::app::LocateCursor,
+                Some("SemanticEditor"),
+            ),
             KeyBinding::new("cmd-p", org_studio::app::SwitchBuffer, None),
             KeyBinding::new("cmd-[", org_studio::app::NavigateBack, None),
             KeyBinding::new("cmd-]", org_studio::app::NavigateForward, None),

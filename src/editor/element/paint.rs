@@ -116,6 +116,18 @@ pub(super) fn paint_frame(
             point(text_left, bounds.top()),
             point(text_right, bounds.bottom()),
         );
+        host.update(cx, |editor, _| {
+            editor.painted_caret =
+                state
+                    .caret
+                    .clone()
+                    .filter(|_| editor_focused)
+                    .and_then(|mut caret| {
+                        caret.bounds = caret.bounds.intersect(&text_bounds);
+                        (caret.bounds.size.width > px(0.) && caret.bounds.size.height > px(0.))
+                            .then_some(caret)
+                    });
+        });
         window.with_content_mask(
             Some(ContentMask {
                 bounds: text_bounds,

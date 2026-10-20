@@ -119,6 +119,7 @@ impl WorkspaceWindow {
             focus_handle: None,
             focus_workspace_on_render: false,
             focus_lost_subscription: None,
+            cursor_spotlight: None,
             key_focus_restore: None,
             commands,
             keyboard,

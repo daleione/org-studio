@@ -593,6 +593,7 @@ pub struct SemanticEditor {
     vertical_goal_x: Option<f32>,
     emacs_mark_active: bool,
     viewport: Option<Bounds<Pixels>>,
+    painted_caret: Option<gpui::PaintQuad>,
     hit_rows: Arc<[HitRow]>,
     link_hits: Arc<[LinkHit]>,
     /// Identity of the link under the pointer (`(line, display range)`), so
@@ -1116,6 +1117,7 @@ impl SemanticEditor {
             vertical_goal_x: None,
             emacs_mark_active: false,
             viewport: None,
+            painted_caret: None,
             hit_rows: Arc::from([]),
             link_hits: Arc::from([]),
             hovered_link: None,
@@ -1158,6 +1160,18 @@ impl SemanticEditor {
 
     pub fn selection(&self) -> Selection {
         self.selection
+    }
+
+    pub(crate) fn painted_caret(&self) -> Option<gpui::PaintQuad> {
+        self.painted_caret.clone()
+    }
+
+    pub(crate) fn reveal_cursor(&mut self, cx: &mut Context<Self>) {
+        let snapshot = self.snapshot(cx);
+        self.reveal_caret(&snapshot);
+        self.pending_reveal_caret = true;
+        self.caret_blink = None;
+        cx.notify();
     }
 
     /// Applies a user-driven vertical scroll and records whether the user chose

@@ -296,6 +296,7 @@ impl Render for WorkspaceWindow {
         self.ensure_agenda_runtime(cx);
         self.file_overview_tick(window, cx);
         self.document_name_tick(cx);
+        self.cursor_spotlight_tick(window, cx);
         // Fullscreen hides the traffic lights, so the titlebar buttons slide
         // to the left edge; windowed mode reserves their slot again.
         let titlebar_inset = if window.is_fullscreen() {
@@ -342,6 +343,7 @@ impl Render for WorkspaceWindow {
         }
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, window, cx| {
+                this.dismiss_cursor_spotlight(cx);
                 this.file_overview_focus_lost(window, cx);
                 if this.cancel_minimap_interaction(cx)
                     || this.cancel_sidebar_resize()
@@ -479,6 +481,9 @@ impl Render for WorkspaceWindow {
             .when(content_font_size_actions_enabled, |view| {
                 view.key_context(DOCUMENT_WORKSPACE_KEY_CONTEXT)
             })
+            .capture_any_mouse_down(cx.listener(|this, _, _, cx| {
+                this.dismiss_cursor_spotlight(cx);
+            }))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -489,6 +494,9 @@ impl Render for WorkspaceWindow {
             )
             .on_action(cx.listener(|this, _: &crate::app::FindDocument, _, cx| {
                 this.open_search(false, false, false, cx)
+            }))
+            .on_action(cx.listener(|this, _: &super::LocateCursor, window, cx| {
+                this.locate_cursor(window, cx);
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
                 if this.document_name_capture_key(event, window, cx) {
@@ -720,14 +728,24 @@ impl Render for WorkspaceWindow {
                                     && self.content_route != crate::app::ContentRoute::Image,
                                 |body| body.pt(px(crate::app::TITLEBAR_HEIGHT)),
                             )
-                            .child(self.workspace_body(
-                                entity.clone(),
-                                command_window_width,
-                                minimap_reveal,
-                                window,
-                                cx,
-                                titlebar_inset,
-                            )),
+                            .child(if let Some(spotlight) = &self.cursor_spotlight {
+                                spotlight
+                                    .read(cx)
+                                    .document
+                                    .clone()
+                                    .cached(gpui::StyleRefinement::default().size_full())
+                                    .into_any_element()
+                            } else {
+                                self.workspace_body(
+                                    entity.clone(),
+                                    command_window_width,
+                                    minimap_reveal,
+                                    window,
+                                    cx,
+                                    titlebar_inset,
+                                )
+                                .into_any_element()
+                            }),
                     )
                     .when(show_echo_area, |workspace| {
                         workspace.child(crate::app::echo_area::render_echo_area(
@@ -832,6 +850,7 @@ impl Render for WorkspaceWindow {
             .children(self.render_file_overview(window, cx))
             .children(self.render_document_name(window, cx))
             .children(self.buffer_review_modal(window, cx))
+            .children(self.cursor_spotlight.clone())
     }
 }
 
