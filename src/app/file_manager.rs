@@ -139,6 +139,10 @@ impl FileManagerHost {
         self.status.as_ref()
     }
 
+    pub(super) fn operation_busy(&self) -> bool {
+        self.operation_busy
+    }
+
     pub(crate) fn dismiss_context_menu(&mut self) -> bool {
         self.context_menu.take().is_some()
     }

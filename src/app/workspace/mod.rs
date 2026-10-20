@@ -113,6 +113,7 @@ impl WorkspaceWindow {
             .flatten()
             .and_then(|style| crate::preview::PreviewStyleId::parse(&style));
         let mut workspace = Self {
+            document_name: Default::default(),
             file_overview: super::file_overview::OverviewHost::default(),
             language: preview_settings.language,
             focus_handle: None,
@@ -904,7 +905,13 @@ impl WorkspaceWindow {
         };
         let status_width =
             (render.width - 2.0 * crate::app::status_line::FLOATING_STATUS_INSET).max(1.0);
-        let buffer_count = self.buffer_sessions().count();
+        let buffer_count = self.buffer_sessions().count()
+            + usize::from(
+                render.preparing
+                    && self
+                        .buffer_session(ready.session.read(render.cx).id(), render.cx)
+                        .is_none(),
+            );
         let navigation_width = self.navigation_status_width(pane, render.cx);
         let layout = self.status_layout(
             &snapshot,
@@ -1248,7 +1255,12 @@ impl WorkspaceWindow {
             _ if session.is_dirty() => " •",
             _ => "",
         };
-        format!("{title}{marker}")
+        let draft = if session.is_draft() {
+            self.buffer_text(" · 草稿", " · Draft")
+        } else {
+            ""
+        };
+        format!("{title}{draft}{marker}")
     }
 }
 

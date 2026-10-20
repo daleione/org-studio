@@ -68,6 +68,187 @@ fn review_button(
 }
 
 impl WorkspaceWindow {
+    pub(crate) fn close_review_buttons(
+        &self,
+        vertical: bool,
+        cx: &gpui::Context<Self>,
+    ) -> Option<gpui::Div> {
+        let review = self.buffers.review()?;
+        let theme = crate::theme::current_theme();
+        let dark = crate::theme::effective_theme_is_dark();
+        let background = rgb(if dark {
+            theme.overview_highlight
+        } else {
+            theme.background
+        });
+        let hover = background.blend(rgb(theme.foreground).opacity(0.08));
+        let border = rgb(theme.foreground).opacity(if dark { 0.28 } else { 0.2 });
+        let busy = review.running
+            || !matches!(
+                self.save.interaction,
+                crate::app::save::SaveInteraction::Idle
+            );
+        let focuses = review.close_focus.as_ref()?;
+        let buttons = CloseAction::ALL
+            .into_iter()
+            .zip(focuses)
+            .map(|(action, focus)| {
+                let (id, label) = match action {
+                    CloseAction::Cancel => {
+                        ("buffer-review-cancel", self.buffer_text("取消", "Cancel"))
+                    }
+                    CloseAction::Discard => (
+                        "buffer-review-discard-all",
+                        self.buffer_text("不保存", "Don't Save"),
+                    ),
+                    CloseAction::Save => (
+                        "buffer-review-submit",
+                        if busy {
+                            self.buffer_text("保存中", "Saving")
+                        } else {
+                            self.buffer_text("保存", "Save")
+                        },
+                    ),
+                };
+                let accessible_entity = cx.entity();
+                button_base(id, label)
+                    .bg(background)
+                    .text_color(rgb(theme.foreground).opacity(if busy { 0.7 } else { 1. }))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .when(busy, |style| style.cursor_default())
+                    .hover(move |style| style.bg(if busy { background } else { hover }))
+                    .debug_selector(move || id.to_owned())
+                    .role(gpui::Role::Button)
+                    .aria_label(label)
+                    .track_focus(focus)
+                    .tab_index(0)
+                    .border_1()
+                    .border_color(border)
+                    .focus(|style| style.border_color(rgb(theme.foreground)))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.close_review_action(action, window, cx);
+                    }))
+                    .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
+                        cx.stop_propagation();
+                        accessible_entity
+                            .update(cx, |this, cx| this.close_review_action(action, window, cx));
+                    })
+            });
+        Some(
+            div()
+                .flex()
+                .gap(px(8.))
+                .when(vertical, |row| row.flex_col())
+                .when(!vertical, |row| row.items_center())
+                .children(buttons),
+        )
+    }
+
+    pub(crate) fn buffer_review_modal(
+        &self,
+        window: &gpui::Window,
+        cx: &gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        let review = self.buffers.review()?;
+        let ReviewKind::Close(id) = review.kind else {
+            return None;
+        };
+        if review.inline {
+            return None;
+        }
+        let session = self.buffer_session(id, cx)?;
+        let document = session.read(cx);
+        let title = if document.is_draft() {
+            self.buffer_text("保存文档？", "Save document?")
+        } else {
+            self.buffer_text("保存更改？", "Save changes?")
+        };
+        let message = format!(
+            "“{}”{}",
+            document.display_name(),
+            if document.is_draft() {
+                self.buffer_text("尚未保存。", " hasn't been saved.")
+            } else {
+                self.buffer_text("有未保存的修改。", " has unsaved changes.")
+            }
+        );
+        let theme = crate::theme::current_theme();
+        let viewport = window.viewport_size();
+        Some(
+            div()
+                .id("buffer-review-modal")
+                .debug_selector(|| "buffer-review-modal".into())
+                .absolute()
+                .inset_0()
+                .occlude()
+                .bg(gpui::black().opacity(0.1))
+                .flex()
+                .items_center()
+                .justify_center()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
+                .child(
+                    div()
+                        .id("buffer-review-dialog")
+                        .debug_selector(|| "buffer-review-dialog".into())
+                        .role(gpui::Role::Dialog)
+                        .aria_label(title)
+                        .w((viewport.width - px(32.)).max(px(1.)).min(px(420.)))
+                        .max_h((viewport.height - px(32.)).max(px(1.)))
+                        .p(px(22.))
+                        .flex()
+                        .flex_col()
+                        .gap(px(14.))
+                        .bg(if crate::theme::effective_theme_is_dark() {
+                            rgb(theme.overview_background)
+                                .blend(rgb(theme.overview_highlight).opacity(0.2))
+                        } else {
+                            rgb(theme.elevated)
+                        })
+                        .border_1()
+                        .border_color(rgb(theme.border))
+                        .rounded(px(10.))
+                        .shadow_lg()
+                        .overflow_y_scroll()
+                        .font_family(ui_family(".SystemUIFont"))
+                        .child(
+                            div()
+                                .text_size(ui_px(15.))
+                                .font_weight(gpui::FontWeight::SEMIBOLD)
+                                .text_color(rgb(theme.foreground))
+                                .truncate()
+                                .child_text(title),
+                        )
+                        .child(
+                            div()
+                                .text_size(ui_px(12.))
+                                .text_color(rgb(theme.foreground))
+                                .truncate()
+                                .child_text(message),
+                        )
+                        .when_some(review.error.clone(), |dialog, error| {
+                            dialog.child(
+                                div()
+                                    .debug_selector(|| "buffer-review-error".into())
+                                    .text_size(ui_px(12.))
+                                    .text_color(rgb(theme.error))
+                                    .child_text(error),
+                            )
+                        })
+                        .child(
+                            div()
+                                .mt(px(6.))
+                                .flex()
+                                .justify_end()
+                                .children(self.close_review_buttons(false, cx)),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
     pub(crate) fn buffer_panel(
         &self,
         pane: crate::app::PaneSide,
@@ -76,6 +257,13 @@ impl WorkspaceWindow {
         status: Option<AnyElement>,
         cx: &App,
     ) -> Option<AnyElement> {
+        if self
+            .buffers
+            .review()
+            .is_some_and(|r| matches!(r.kind, ReviewKind::Close(_)))
+        {
+            return None;
+        }
         if !self
             .status
             .shell_owns(crate::app::status_line::shell::ShellKind::Buffers, pane)
@@ -429,9 +617,6 @@ impl WorkspaceWindow {
         let theme = crate::theme::current_theme();
         let title = match r.kind {
             ReviewKind::Save => self.buffer_text("保存未完成的工作", "Save your work"),
-            ReviewKind::Close(_) => {
-                self.buffer_text("关闭前，处理这份修改", "Save before closing?")
-            }
             _ => self.buffer_text("退出前保存更改？", "Save changes before quitting?"),
         };
         let cancel_entity = entity.clone();
@@ -552,8 +737,6 @@ impl WorkspaceWindow {
             match r.kind {
                 ReviewKind::Save if has_save => self.buffer_text("保存所选", "Save selected"),
                 ReviewKind::Save => self.buffer_text("完成", "Done"),
-                ReviewKind::Close(_) if has_save => self.buffer_text("保存并关闭", "Save & close"),
-                ReviewKind::Close(_) => self.buffer_text("不保存关闭", "Close without saving"),
                 _ if has_save && has_discard => {
                     self.buffer_text("确认选择并退出", "Apply choices & quit")
                 }
@@ -627,9 +810,7 @@ impl WorkspaceWindow {
                     .border_t_1()
                     .border_color(rgb(theme.border))
                     .when(r.kind != ReviewKind::Save && has_save, |footer| footer.child(
-                        review_button("buffer-review-discard-all", if matches!(r.kind, ReviewKind::Close(_)) {
-                            self.buffer_text("不保存关闭", "Close without saving")
-                        } else { self.buffer_text("不保存退出", "Quit without saving") }, false, r.running)
+                        review_button("buffer-review-discard-all", self.buffer_text("不保存退出", "Quit without saving"), false, r.running)
                             .debug_selector(|| "buffer-review-discard-all".into())
                             .on_mouse_down(MouseButton::Left, move |_, window, cx| {
                                 cx.stop_propagation();

@@ -1,12 +1,23 @@
 use crate::{
-    app::{WorkspaceWindow, buffers::ReviewKind, save::SaveInteraction},
-    document::{DocumentSession, SaveError, SaveStartError, write_atomic},
+    app::{
+        WorkspaceWindow,
+        buffers::ReviewKind,
+        save::{AfterRename, SaveInteraction},
+    },
+    document::{
+        DocumentSession, SaveError, SaveRequest, SaveStartError, TargetExpectation, write_atomic,
+    },
 };
-use gpui::{Context, Entity, PromptButton, PromptLevel, Window};
-use std::path::PathBuf;
+use gpui::{AppContext, Context, Entity, PromptButton, PromptLevel, Window};
+use std::{future::Future, path::PathBuf, pin::Pin};
 
 impl WorkspaceWindow {
     pub(crate) fn save_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document_name.is_open()
+            && !self.confirm_document_name(AfterRename::Save, window, cx)
+        {
+            return;
+        }
         if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
             == crate::editor::CommandDisposition::Disabled
         {
@@ -17,6 +28,11 @@ impl WorkspaceWindow {
         }
     }
     pub(crate) fn save_document_as(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.document_name.is_open()
+            && !self.confirm_document_name(AfterRename::SaveAs, window, cx)
+        {
+            return;
+        }
         if self.generated_command_disposition(crate::editor::GeneratedCommand::Save)
             == crate::editor::CommandDisposition::Disabled
         {
@@ -37,7 +53,7 @@ impl WorkspaceWindow {
             return;
         }
         if save_as || session.read(cx).file_path().is_none() {
-            self.prompt_buffer_path(session, window, cx);
+            self.prompt_buffer_path(session, save_as, window, cx);
             return;
         }
         match self.start_buffer_save(session.clone(), None, false, window, cx) {
@@ -52,9 +68,100 @@ impl WorkspaceWindow {
             ),
         }
     }
+
+    /// Rename only the file identity. Unsaved text remains in the same session;
+    /// a Save/Save As request continues after the rename has completed.
+    pub(crate) fn rename_document(
+        &mut self,
+        document: Entity<DocumentSession>,
+        target: PathBuf,
+        after: AfterRename,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !matches!(self.save.interaction, SaveInteraction::Idle) {
+            return;
+        }
+        if self
+            .buffer_for_path(&target, cx)
+            .is_some_and(|other| other != document)
+        {
+            self.document_name_failed(
+                self.buffer_text(
+                    "目标文件已经打开，请使用其他名称",
+                    "Target file is already open; choose another name",
+                )
+                .to_owned(),
+                cx,
+            );
+            return;
+        }
+        let source = document.read(cx).path().to_path_buf();
+        self.save.interaction = SaveInteraction::Renaming {
+            document: document.read(cx).id(),
+            target: target.clone(),
+        };
+        let operation = cx.background_spawn({
+            let source = source.clone();
+            let target = target.clone();
+            async move { crate::file_manager::rename_exclusive(&source, &target) }
+        });
+        self.save.task = Some(cx.spawn_in(window, async move |this, cx| {
+            let result = operation.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.save.task = None;
+                this.save.interaction = SaveInteraction::Idle;
+                let result = result.and_then(|()| {
+                    document.update(cx, |doc, cx| {
+                        doc.finish_file_rename(&source, target.clone(), cx)
+                    })
+                });
+                match result {
+                    Ok(()) => {
+                        this.recent_documents.retain(|d| d.path != source);
+                        crate::recent_documents::record_success(&mut this.recent_documents, target);
+                        this.invalidate_file_overview_frames();
+                        if this.document_session() == Some(&document) {
+                            this.sync_document_watch(cx);
+                        }
+                        if this.document_name.is_for(&document) {
+                            this.cancel_document_name(cx);
+                        }
+                        match after {
+                            AfterRename::Nothing => {}
+                            AfterRename::Save => this.save_buffer(document, false, window, cx),
+                            AfterRename::SaveAs => this.save_buffer(document, true, window, cx),
+                        }
+                    }
+                    Err(error) => {
+                        let message = if error.kind() == std::io::ErrorKind::AlreadyExists {
+                            this.buffer_text(
+                                "已有同名文件，请使用其他名称",
+                                "A file with this name already exists; choose another name",
+                            )
+                            .to_owned()
+                        } else {
+                            format!(
+                                "{}: {error}",
+                                this.buffer_text("无法重命名", "Could not rename")
+                            )
+                        };
+                        if this.document_name.is_for(&document) {
+                            this.document_name_failed(message, cx);
+                        } else {
+                            this.save_failed(message, cx);
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
     fn prompt_buffer_path(
         &mut self,
         session: Entity<DocumentSession>,
+        save_as: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -68,11 +175,49 @@ impl WorkspaceWindow {
             .unwrap_or_else(|| PathBuf::from("."));
         let name = session.read(cx).display_name();
         let suggested = if std::path::Path::new(&name).extension().is_none() {
-            format!("{name}.org")
+            let extension = session
+                .read(cx)
+                .syntax_path()
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("org");
+            format!("{name}.{extension}")
         } else {
             name
         };
-        let picker = cx.prompt_for_new_path(&directory, Some(&suggested));
+        let directory_only = !save_as && session.read(cx).is_named_draft();
+        let picker: Pin<Box<dyn Future<Output = Option<PathBuf>>>> = if directory_only {
+            let picker = cx.prompt_for_paths(gpui::PathPromptOptions {
+                files: false,
+                directories: true,
+                multiple: false,
+                prompt: Some(
+                    format!(
+                        "{}“{suggested}”{}",
+                        self.buffer_text("选择", "Choose a folder for "),
+                        self.buffer_text("的保存位置", "")
+                    )
+                    .into(),
+                ),
+            });
+            Box::pin(async move {
+                let Ok(Ok(Some(paths))) = picker.await else {
+                    return None;
+                };
+                paths
+                    .into_iter()
+                    .next()
+                    .map(|folder| folder.join(suggested))
+            })
+        } else {
+            let picker = cx.prompt_for_new_path(&directory, Some(&suggested));
+            Box::pin(async move {
+                let Ok(Ok(path)) = picker.await else {
+                    return None;
+                };
+                path
+            })
+        };
         let from_review = self.buffer_busy();
         self.save.interaction = SaveInteraction::Prompt;
         self.save.dialog_task = Some(cx.spawn_in(window, async move |this, cx| {
@@ -86,9 +231,10 @@ impl WorkspaceWindow {
                     cx.notify();
                     return;
                 }
-                let Ok(Ok(Some(path))) = result else {
+                let Some(path) = result else {
                     if let Some(r) = this.buffers.review_mut() {
                         r.running = false;
+                        this.buffers.focus_pending = true;
                     }
                     cx.notify();
                     return;
@@ -107,14 +253,23 @@ impl WorkspaceWindow {
                     );
                     return;
                 }
-                if let Err(error) = this.start_buffer_save(session, Some(path), false, window, cx) {
-                    this.save_failed(
+                let request = session.update(cx, |doc, _| doc.begin_save(Some(path)));
+                match request {
+                    Ok(mut request) => {
+                        // A folder choice does not grant permission to replace a
+                        // same-named file. Check this again in the background write.
+                        if directory_only {
+                            request.expected_target = TargetExpectation::Exact(None);
+                        }
+                        this.write_buffer_save(session, request, window, cx);
+                    }
+                    Err(error) => this.save_failed(
                         format!(
                             "{}: {error:?}",
                             this.buffer_text("无法保存", "Could not save")
                         ),
                         cx,
-                    );
+                    ),
                 }
             });
         }));
@@ -163,7 +318,7 @@ impl WorkspaceWindow {
                             );
                         }
                     }
-                    Some(1) => this.prompt_buffer_path(session, window, cx),
+                    Some(1) => this.prompt_buffer_path(session, true, window, cx),
                     _ => {
                         if let Some(r) = this.buffers.review_mut() {
                             r.running = false;
@@ -189,6 +344,17 @@ impl WorkspaceWindow {
                 s.begin_save(target)
             }
         })?;
+        self.write_buffer_save(session, request, window, cx);
+        Ok(())
+    }
+
+    fn write_buffer_save(
+        &mut self,
+        session: Entity<DocumentSession>,
+        request: SaveRequest,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let revision = request.revision();
         let from_review = self.buffer_busy();
         self.save.error = None;
@@ -261,17 +427,24 @@ impl WorkspaceWindow {
                                 s.observe_disk(external.clone());
                             }
                         });
-                        this.save_failed(
-                            format!("{}: {error}", this.buffer_text("保存失败", "Save failed")),
-                            cx,
-                        );
+                        let message = if session.read(cx).is_draft()
+                            && matches!(error, SaveError::Conflict { .. })
+                        {
+                            this.buffer_text(
+                                "已有同名文件，请选择其他保存位置",
+                                "A file with this name already exists; choose another folder",
+                            )
+                            .to_owned()
+                        } else {
+                            format!("{}: {error}", this.buffer_text("保存失败", "Save failed"))
+                        };
+                        this.save_failed(message, cx);
                     }
                 }
                 cx.notify();
             });
         }));
         cx.notify();
-        Ok(())
     }
     fn save_failed(&mut self, message: String, cx: &mut Context<Self>) {
         self.save.error = Some(message.clone().into());

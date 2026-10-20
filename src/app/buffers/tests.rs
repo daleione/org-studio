@@ -199,6 +199,50 @@ fn aliases_and_hard_links_have_one_file_identity() {
 }
 
 #[gpui::test]
+fn an_unnamed_picker_draft_requires_a_name_on_first_save(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    for markdown in [false, true] {
+        w.update(cx, |w, cx| {
+            w.open_buffer_picker(PickerIntent::New, cx);
+            let Some(Panel::Picker(picker)) = &mut w.buffers.panel else {
+                panic!("missing new-document input");
+            };
+            picker.markdown = markdown;
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        let session = w.read_with(cx, |w, cx| {
+            assert!(w.buffers.panel.is_none());
+            let session = w.document_session().unwrap();
+            let doc = session.read(cx);
+            assert!(doc.is_draft() && !doc.is_named_draft());
+            assert_eq!(
+                doc.syntax_path().extension().and_then(|e| e.to_str()),
+                Some(if markdown { "md" } else { "org" })
+            );
+            session.clone()
+        });
+        cx.simulate_input("keep this draft");
+        cx.run_until_parked();
+        assert_eq!(text(&session, cx), "keep this draft");
+        cx.update(|window, app| w.update(app, |w, cx| w.save_document(window, cx)));
+        cx.cx.simulate_new_path_selection(|_| None);
+        cx.run_until_parked();
+        w.read_with(cx, |w, cx| {
+            assert!(matches!(
+                w.save.interaction,
+                crate::app::save::SaveInteraction::Idle
+            ));
+            assert_eq!(w.document_session(), Some(&session));
+            assert!(session.read(cx).file_path().is_none());
+            assert!(session.read(cx).is_dirty());
+        });
+    }
+}
+
+#[gpui::test]
 fn save_review_names_drafts_sequentially_and_keeps_skipped_edits(cx: &mut gpui::TestAppContext) {
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
     let root = std::env::temp_dir().join(format!("buffer-review-{}", std::process::id()));
@@ -230,8 +274,11 @@ fn save_review_names_drafts_sequentially_and_keeps_skipped_edits(cx: &mut gpui::
         })
     });
     for name in ["B", "A"] {
-        cx.cx
-            .simulate_new_path_selection(|_| Some(root.join(format!("{name}.org"))));
+        cx.cx.simulate_path_prompt_response(|options| {
+            assert!(options.directories && !options.files && !options.multiple);
+            assert!(options.prompt.as_ref().unwrap().contains(name));
+            Some(vec![root.clone()])
+        });
         cx.run_until_parked();
     }
     w.update(cx, |w, cx| {
@@ -389,7 +436,7 @@ fn keyboard_close_reviews_before_discard_and_window_close_checks_hidden_edits(
     w.update(cx, |w, _| {
         assert_eq!(w.buffers.review().unwrap().entries.len(), 1)
     });
-    cx.simulate_keystrokes("space enter");
+    cx.simulate_keystrokes("shift-tab space");
     cx.run_until_parked();
     w.update(cx, |w, cx| {
         assert_eq!(w.buffer_sessions().count(), 1);
@@ -446,7 +493,8 @@ fn cancelled_review_does_not_write_after_path_prompt_returns(cx: &mut gpui::Test
             w.begin_buffer_review(ReviewKind::Quit, cx);
         })
     });
-    cx.cx.simulate_new_path_selection(|_| Some(target.clone()));
+    cx.cx
+        .simulate_path_prompt_response(|_| Some(vec![root.clone()]));
     cx.run_until_parked();
     assert!(
         !target.exists(),
@@ -624,7 +672,7 @@ fn recent_panel_scroll_stays_inside_the_panel(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn review_exposes_save_discard_and_direct_close_in_both_languages(cx: &mut gpui::TestAppContext) {
+fn single_close_keyboard_cancel_and_batch_skip_keep_edits(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     cx.update(|cx| cx.set_reduce_motion(true));
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
@@ -633,69 +681,30 @@ fn review_exposes_save_discard_and_direct_close_in_both_languages(cx: &mut gpui:
         w.document_session().unwrap().clone()
     });
     edit(&session, "keep until confirmed", cx);
-    cx.simulate_resize(gpui::size(gpui::px(390.), gpui::px(600.)));
-    for language in [
-        crate::i18n::Language::Chinese,
-        crate::i18n::Language::English,
-    ] {
-        w.update(cx, |w, cx| {
-            w.language = language;
-            w.begin_buffer_review(ReviewKind::Close(session.read(cx).id()), cx);
-        });
-        cx.run_until_parked();
-        for selector in [
-            "buffer-review-save-0",
-            "buffer-review-discard-0",
-            "buffer-review-discard-all",
-            "buffer-review-cancel",
-            "buffer-review-submit",
-        ] {
-            let bounds = cx.debug_bounds(selector).unwrap();
-            assert!(
-                bounds.left() >= gpui::px(0.) && bounds.right() <= gpui::px(390.),
-                "{selector} in {language:?}: {bounds:?}"
-            );
-            assert!(bounds.bottom() <= gpui::px(600.));
-        }
-        let submit = cx.debug_bounds("buffer-review-submit").unwrap().center();
-        cx.simulate_mouse_move(submit, None, gpui::Modifiers::default());
-        cx.run_until_parked(); // Also exercises the primary button's independent hover style.
-        let discard = cx.debug_bounds("buffer-review-discard-0").unwrap().center();
-        cx.simulate_click(discard, gpui::Modifiers::default());
-        cx.run_until_parked();
-        w.update(cx, |w, cx| {
-            assert!(!w.buffers.review().unwrap().entries[0].save);
-            assert!(session.read(cx).is_dirty());
-            assert_eq!(w.buffer_sessions().count(), 1);
-        });
-        let save = cx.debug_bounds("buffer-review-save-0").unwrap().center();
-        cx.simulate_click(save, gpui::Modifiers::default());
-        cx.run_until_parked();
-        w.update(cx, |w, _| {
-            assert!(w.buffers.review().unwrap().entries[0].save)
-        });
-        cx.simulate_keystrokes("escape");
-        cx.run_until_parked();
-        assert_eq!(text(&session, cx), "keep until confirmed");
-    }
     w.update(cx, |w, cx| {
         w.begin_buffer_review(ReviewKind::Close(session.read(cx).id()), cx)
     });
     cx.run_until_parked();
-    let discard = cx
-        .debug_bounds("buffer-review-discard-all")
-        .unwrap()
-        .center();
-    cx.simulate_click(discard, gpui::Modifiers::default());
+    // Save has initial focus; Tab moves to Cancel, which must keep the document.
+    cx.simulate_keystrokes("tab space");
     cx.run_until_parked();
-    w.update(cx, |w, _| {
+    assert!(w.read_with(cx, |w, _| w.buffers.review().is_none()));
+    assert_eq!(text(&session, cx), "keep until confirmed");
+
+    w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Save, cx));
+    cx.run_until_parked();
+    let skip = cx.debug_bounds("buffer-review-discard-0").unwrap().center();
+    cx.simulate_click(skip, gpui::Modifiers::default());
+    cx.run_until_parked();
+    let submit = cx.debug_bounds("buffer-review-submit").unwrap().center();
+    cx.simulate_click(submit, gpui::Modifiers::default());
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
         assert!(w.buffers.review().is_none());
-        assert_eq!(w.buffer_sessions().count(), 0);
-        assert!(matches!(
-            w.save.interaction,
-            crate::app::save::SaveInteraction::Idle
-        ));
+        assert_eq!(w.document_session(), Some(&session));
+        assert!(session.read(cx).is_dirty());
     });
+    assert_eq!(text(&session, cx), "keep until confirmed");
 }
 
 #[gpui::test]

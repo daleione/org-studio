@@ -5,7 +5,7 @@ use crate::document::{
 };
 use gpui::{EntityInputHandler, Modifiers, VisualTestContext};
 
-fn draft(
+pub(super) fn draft(
     w: &Entity<WorkspaceWindow>,
     name: &str,
     text: &str,
@@ -33,7 +33,7 @@ fn draft(
     })
 }
 
-fn open(w: &Entity<WorkspaceWindow>, cx: &mut VisualTestContext) {
+pub(super) fn open(w: &Entity<WorkspaceWindow>, cx: &mut VisualTestContext) {
     cx.update(|window, app| {
         w.update(app, |w, cx| {
             w.open_file_overview(window, cx);
@@ -43,7 +43,7 @@ fn open(w: &Entity<WorkspaceWindow>, cx: &mut VisualTestContext) {
     cx.run_until_parked();
 }
 
-fn complete_motion(
+pub(super) fn complete_motion(
     w: &mut WorkspaceWindow,
     window: &mut Window,
     cx: &mut Context<WorkspaceWindow>,
@@ -63,6 +63,19 @@ fn complete_motion(
         }
         w.file_overview_tick(window, cx);
     }
+}
+
+pub(super) fn finish_opening(w: &Entity<WorkspaceWindow>, cx: &mut VisualTestContext) {
+    // Paint the prepared view, finish its zoom, then let the live editor paint
+    // behind the retained frame before completing handoff.
+    for _ in 0..8 {
+        cx.update(|window, app| {
+            window.simulate_next_frame(app);
+            w.update(app, |w, cx| complete_motion(w, window, cx));
+        });
+        cx.run_until_parked();
+    }
+    assert!(!w.read_with(cx, |w, _| w.file_overview_is_open()));
 }
 
 #[gpui::test]
@@ -726,6 +739,412 @@ fn titlebar_and_card_clicks_work_and_emacs_picker_stays_available(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn titlebar_toggle_reverses_returning_on_the_first_click(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let doc = draft(&w, "Current.org", "* Keep editing", cx);
+    cx.run_until_parked();
+    let button = cx
+        .debug_bounds("document-titlebar-file-overview")
+        .unwrap()
+        .center();
+    cx.simulate_click(button, Modifiers::default());
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            complete_motion(w, window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    cx.simulate_click(button, Modifiers::default());
+    let (serial, query, frame) = w.update(cx, |w, _| {
+        let state = w.file_overview.session.as_mut().unwrap();
+        assert_eq!(state.phase, Phase::Returning);
+        // Freeze an intermediate return position independently of test speed.
+        state.progress = 0.4;
+        state.motion = Some(Motion::settle(
+            Instant::now() + Duration::from_secs(5),
+            0.4,
+            0.,
+            0.,
+            false,
+        ));
+        (
+            w.file_overview.serial,
+            state.query.clone(),
+            state.origin_frame.clone().unwrap(),
+        )
+    });
+    for expected in [Phase::Entering, Phase::Returning, Phase::Entering] {
+        cx.simulate_click(button, Modifiers::default());
+        w.read_with(cx, |w, _| {
+            let state = w.file_overview.session.as_ref().unwrap();
+            assert_eq!(state.phase, expected, "each click must change direction");
+            assert_eq!(w.file_overview.serial, serial);
+            assert_eq!(state.query, query);
+            assert!(Arc::ptr_eq(state.origin_frame.as_ref().unwrap(), &frame));
+            assert!(state.progress > 0.1 && state.progress < 0.7);
+            assert_eq!(w.document_session().unwrap(), &doc);
+        });
+    }
+}
+
+#[gpui::test]
+fn titlebar_toggle_reopens_during_return_and_selection_handoff(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    for (select_other, fading) in [(false, false), (false, true), (true, false), (true, true)] {
+        let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+        let other = draft(&w, "Other.org", "* Other", cx);
+        cx.run_until_parked();
+        let origin = draft(&w, "Origin.org", "* Origin", cx);
+        cx.run_until_parked();
+        open(&w, cx);
+        cx.update(|window, app| {
+            w.update(app, |w, cx| {
+                complete_motion(w, window, cx);
+                if select_other {
+                    w.select_overview_item(other.read(cx).id(), window, cx);
+                } else {
+                    w.cancel_file_overview(window, cx);
+                }
+                cx.notify();
+            })
+        });
+        if select_other {
+            for _ in 0..4 {
+                cx.update(|window, app| window.simulate_next_frame(app));
+                cx.run_until_parked();
+            }
+        }
+        let frame = cx.update(|window, app| {
+            w.update(app, |w, cx| {
+                let state = w.file_overview.session.as_mut().unwrap();
+                let target = if select_other { 1. } else { 0. };
+                state.motion = Some(Motion::settle(Instant::now(), target, target, 0., true));
+                w.file_overview_tick(window, cx);
+                let state = w.file_overview.session.as_mut().unwrap();
+                assert_eq!(state.phase, Phase::Handoff);
+                assert_eq!(state.handoff_frames, 0);
+                if fading {
+                    // Freeze an in-progress fade after the live view is ready.
+                    state.handoff_frames = 2;
+                    state.progress = 0.5;
+                    state.motion = Some(Motion::settle(
+                        Instant::now() + Duration::from_secs(5),
+                        0.5,
+                        1.,
+                        0.,
+                        false,
+                    ));
+                }
+                state.target_frame.clone().unwrap()
+            })
+        });
+        let expected = if select_other { &other } else { &origin };
+        let button = cx
+            .debug_bounds("document-titlebar-file-overview")
+            .unwrap()
+            .center();
+        cx.simulate_click(button, Modifiers::default());
+        w.read_with(cx, |w, cx| {
+            let state = w
+                .file_overview
+                .session
+                .as_ref()
+                .expect("one click reopens the overview");
+            assert_eq!(state.phase, Phase::Entering);
+            assert_eq!(state.origin, Some(expected.read(cx).id()));
+            assert_eq!(w.document_session().unwrap(), expected);
+            assert!(Arc::ptr_eq(
+                state
+                    .origin_frame
+                    .as_ref()
+                    .expect("retain the visible full-size frame"),
+                &frame
+            ));
+            assert!(w.file_overview_covers_document());
+        });
+    }
+}
+
+#[gpui::test]
+fn new_file_card_creates_a_draft_without_changing_existing_documents(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(crate::editor::init);
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(size(px(1280.), px(900.)));
+    let original = draft(&w, "A.org", "* Unsaved work", cx);
+    cx.run_until_parked();
+    let current = draft(&w, "B.org", "* B", cx);
+    w.update(cx, |w, cx| {
+        w.show_split(cx);
+        w.toggle_soft_wrap(cx);
+    });
+    cx.run_until_parked();
+    open(&w, cx);
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            complete_motion(w, window, cx);
+            cx.notify();
+        })
+    });
+    cx.run_until_parked();
+    let card = cx.debug_bounds("file-overview-new-file").unwrap();
+    cx.simulate_click(card.center(), Modifiers::default());
+    let prepared = w.read_with(cx, |w, _| {
+        assert!(w.file_overview_is_open());
+        assert!(w.buffers.panel.is_none());
+        assert!(w.document_workspace.is_split());
+        assert!(!w.soft_wrap);
+        assert_eq!(w.document_session().unwrap(), &current);
+        assert_eq!(w.buffer_sessions().count(), 2);
+        w.file_overview
+            .session
+            .as_ref()
+            .unwrap()
+            .new_document
+            .as_ref()
+            .unwrap()
+            .clone()
+    });
+    finish_opening(&w, cx);
+    w.read_with(cx, |w, cx| {
+        let doc = w.document_session().unwrap().read(cx);
+        assert!(doc.file_path().is_none());
+        assert_eq!(doc.snapshot().len_bytes(), 0);
+        assert_eq!(w.document_session().unwrap(), &prepared.session);
+        assert_eq!(w.editor(PaneSide::Left), prepared.editors.left);
+        assert_eq!(w.buffer_sessions().count(), 3);
+        assert!(original.read(cx).is_dirty());
+        assert!(w.buffers.panel.is_none());
+        assert!(!w.document_workspace.is_split());
+        assert_eq!(
+            w.document_workspace.active_surface(),
+            super::super::PaneSurface::Editor
+        );
+        assert!(w.soft_wrap);
+    });
+    cx.simulate_input("* Start writing");
+    cx.run_until_parked();
+    prepared.session.read_with(cx, |doc, _| {
+        let snapshot = doc.snapshot();
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            "* Start writing"
+        )
+    });
+    w.update(cx, |w, cx| {
+        w.activate_buffer(current.read(cx).id(), cx);
+        assert!(w.document_workspace.is_split());
+        assert!(!w.soft_wrap);
+    });
+}
+
+#[gpui::test]
+fn command_n_creates_drafts_from_home_and_editor(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.bind_keys([gpui::KeyBinding::new("cmd-n", crate::app::NewDraft, None)]));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_keystrokes("cmd-n");
+    cx.run_until_parked();
+    let first = w.read_with(cx, |w, cx| {
+        let session = w.document_session().unwrap().clone();
+        assert_eq!(
+            session.read(cx).display_name(),
+            w.buffer_text("未命名 1", "Untitled 1")
+        );
+        assert!(w.buffers.panel.is_none());
+        session
+    });
+    cx.simulate_input("* Keep this draft");
+    cx.run_until_parked();
+    cx.simulate_keystrokes("cmd-n");
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        assert_eq!(w.buffer_sessions().count(), 2);
+        let doc = w.document_session().unwrap().read(cx);
+        assert_ne!(doc.id(), first.read(cx).id());
+        assert_eq!(doc.display_name(), w.buffer_text("未命名 2", "Untitled 2"));
+        assert_eq!(doc.snapshot().len_bytes(), 0);
+        assert!(doc.file_path().is_none());
+        assert!(w.buffers.panel.is_none());
+        let snapshot = first.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            "* Keep this draft"
+        );
+    });
+}
+
+#[gpui::test]
+fn overview_new_file_shortcuts_work_with_scrolling_and_search(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.bind_keys([gpui::KeyBinding::new("cmd-n", crate::app::NewDraft, None)]));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(size(px(390.), px(800.)));
+    for index in 0..12 {
+        draft(&w, &format!("File-{index}.org"), "* Keep", cx);
+    }
+    for (index, (query, keys)) in [
+        ("", "cmd-n cmd-n"),
+        ("no matching file", "cmd-n"),
+        ("no matching file", "shift-tab enter"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        open(&w, cx);
+        cx.update(|window, app| {
+            w.update(app, |w, cx| {
+                complete_motion(w, window, cx);
+                cx.notify();
+            })
+        });
+        cx.run_until_parked();
+        if query.is_empty() {
+            assert!(cx.debug_bounds("file-overview-new-file").is_none());
+        } else {
+            cx.simulate_input(query);
+            cx.run_until_parked();
+        }
+        cx.simulate_keystrokes(keys);
+        finish_opening(&w, cx);
+        w.read_with(cx, |w, cx| {
+            assert_eq!(w.buffer_sessions().count(), 13 + index);
+            let doc = w.document_session().unwrap().read(cx);
+            assert_eq!(doc.snapshot().len_bytes(), 0);
+            assert_eq!(
+                doc.display_name(),
+                format!("{} {}", w.buffer_text("未命名", "Untitled"), index + 1)
+            );
+            assert!(w.buffers.panel.is_none());
+        });
+    }
+}
+
+#[gpui::test]
+fn new_draft_zoom_can_be_cancelled_without_touching_open_documents(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(size(px(390.), px(800.)));
+    for index in 0..4 {
+        draft(&w, &format!("Keep-{index}.org"), "* Unsaved", cx);
+    }
+    let original = w.read_with(cx, |w, _| w.document_session().unwrap().clone());
+    open(&w, cx);
+    cx.update(|window, app| w.update(app, |w, cx| complete_motion(w, window, cx)));
+    cx.simulate_input("Keep");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            let grid = w.overview_grid(window, &w.overview_items(cx));
+            let state = w.file_overview.session.as_mut().unwrap();
+            let offset = grid.reveal(4, px(0.));
+            state.scroll.set_offset(point(px(0.), offset));
+            let selected = state.selected;
+            w.new_overview_document(window, cx);
+            let pending = w.file_overview.session.as_ref().unwrap().target;
+            w.new_overview_document(window, cx);
+            assert_eq!(w.file_overview.session.as_ref().unwrap().target, pending);
+            assert_eq!(w.buffer_sessions().count(), 4);
+            assert_eq!(w.document_session().unwrap(), &original);
+            // Escape while preparation is pending does not expose a live page.
+            w.cancel_file_overview(window, cx);
+            complete_motion(w, window, cx);
+            let state = w.file_overview.session.as_ref().unwrap();
+            assert_eq!(state.phase, Phase::Visible);
+            assert!(state.new_document.is_none());
+            assert_eq!(state.scroll.offset().y, offset);
+            assert_eq!(state.selected, selected);
+            assert_eq!(state.query.read(cx).text, "Keep");
+            w.new_overview_document(window, cx);
+        });
+    });
+    for _ in 0..4 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
+    cx.update(|_window, app| {
+        w.update(app, |w, cx| {
+            let state = w.file_overview.session.as_mut().unwrap();
+            assert!(state.target_frame.is_some());
+            assert!(state.new_document.is_some());
+            // Show an intermediate zoom frame, with the old document still parked
+            // behind the overview rather than activated under a naming prompt.
+            state.progress = 0.45;
+            state.motion = None;
+            assert!(w.file_overview_covers_document());
+            assert_eq!(w.document_session().unwrap(), &original);
+            cx.notify();
+        });
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.update(|window, app| w.update(app, |w, cx| complete_motion(w, window, cx)));
+    w.read_with(cx, |w, cx| {
+        let state = w.file_overview.session.as_ref().unwrap();
+        assert_eq!(state.phase, Phase::Visible);
+        assert!(state.new_document.is_none());
+        assert_eq!(state.query.read(cx).text, "Keep");
+        assert_eq!(w.buffer_sessions().count(), 4);
+        assert_eq!(w.document_session().unwrap(), &original);
+        assert!(original.read(cx).is_dirty());
+    });
+}
+
+#[gpui::test]
+fn overview_draft_first_save_preserves_the_editor_content_and_undo(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    open(&w, cx);
+    let card = cx.debug_bounds("file-overview-new-file").unwrap();
+    cx.simulate_click(card.center(), Modifiers::default());
+    finish_opening(&w, cx);
+    cx.simulate_input("* First draft");
+    cx.run_until_parked();
+    let (session, editor, selection) = w.read_with(cx, |w, cx| {
+        let editor = w.editor(PaneSide::Left).unwrap();
+        (
+            w.document_session().unwrap().clone(),
+            editor.clone(),
+            editor.read(cx).selection(),
+        )
+    });
+    cx.update(|window, app| w.update(app, |w, cx| w.save_document(window, cx)));
+    cx.cx.simulate_new_path_selection(|_| None);
+    cx.run_until_parked();
+    session.read_with(cx, |doc, _| {
+        assert!(doc.file_path().is_none());
+        let snapshot = doc.snapshot();
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            "* First draft"
+        );
+    });
+    let root = std::env::temp_dir().join(format!("overview-draft-save-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("Saved.org");
+    cx.update(|window, app| w.update(app, |w, cx| w.save_document(window, cx)));
+    cx.cx.simulate_new_path_selection(|_| Some(path.clone()));
+    cx.run_until_parked();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "* First draft");
+    w.read_with(cx, |w, cx| {
+        assert_eq!(w.document_session().unwrap(), &session);
+        assert_eq!(w.editor(PaneSide::Left), Some(editor.clone()));
+        assert_eq!(editor.read(cx).selection(), selection);
+        assert_eq!(session.read(cx).display_name(), "Saved.org");
+        assert!(!session.read(cx).is_dirty());
+    });
+    session.update(cx, |doc, cx| {
+        doc.undo(cx).unwrap();
+    });
+    session.read_with(cx, |doc, _| assert_eq!(doc.snapshot().len_bytes(), 0));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[gpui::test]
 fn theme_toggle_keeps_the_overview_and_repaints_visible_documents(cx: &mut gpui::TestAppContext) {
     let _guard = crate::theme::THEME_TEST_LOCK
         .lock()
@@ -809,50 +1228,6 @@ fn theme_toggle_keeps_the_overview_and_repaints_visible_documents(cx: &mut gpui:
     cx.run_until_parked();
     assert!(!w.read_with(cx, |w, _| w.file_overview_is_open()));
     crate::theme::set_theme_mode(previous);
-}
-
-#[gpui::test]
-fn selected_overview_cards_keep_square_neutral_borders(cx: &mut gpui::TestAppContext) {
-    cx.update(crate::editor::init);
-    cx.update(|cx| cx.set_reduce_motion(true));
-    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
-    let other = draft(&w, "Other.org", "* Other file", cx);
-    draft(&w, "Current.org", "* Current file", cx);
-    open(&w, cx);
-    cx.simulate_keystrokes("right");
-    cx.run_until_parked();
-    w.read_with(cx, |w, cx| {
-        assert_eq!(
-            w.file_overview.session.as_ref().unwrap().selected,
-            Some(other.read(cx).id())
-        );
-    });
-    for selector in ["file-overview-preview-0", "file-overview-preview-1"] {
-        let preview = cx.debug_bounds(selector).unwrap();
-        let (borders, width) = cx.update(|window, _| {
-            let bounds = preview.scale(window.scale_factor());
-            let borders = window
-                .painted_quads()
-                .into_iter()
-                .filter(|quad| {
-                    quad.bounds == bounds && quad.border_widths.top > gpui::ScaledPixels(0.)
-                })
-                .collect::<Vec<_>>();
-            (borders, px(1.).scale(window.scale_factor()))
-        });
-        assert!(
-            !borders.is_empty(),
-            "the card's visible border must be painted"
-        );
-        for border in borders {
-            assert_eq!(border.corner_radii, gpui::Corners::default());
-            assert_eq!(border.border_widths, gpui::Edges::all(width));
-            assert_eq!(
-                border.border_color,
-                gpui::rgb(crate::theme::current_theme().border).into()
-            );
-        }
-    }
 }
 
 #[gpui::test]

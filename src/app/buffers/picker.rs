@@ -311,14 +311,6 @@ impl WorkspaceWindow {
             return;
         }
         let mut value = p.input.read(cx).text.trim().to_owned();
-        if value.is_empty() && intent == PickerIntent::New {
-            self.buffers.draft_serial += 1;
-            value = format!(
-                "{} {}",
-                self.buffer_text("未命名", "Untitled"),
-                self.buffers.draft_serial
-            );
-        }
         if intent != PickerIntent::New
             && let Some(c) = candidates.get(p.selected)
         {
@@ -351,7 +343,9 @@ impl WorkspaceWindow {
             }
             return;
         }
-        if value.is_empty() || matches!(intent, PickerIntent::Close | PickerIntent::Switch) {
+        if (value.is_empty() && intent != PickerIntent::New)
+            || matches!(intent, PickerIntent::Close | PickerIntent::Switch)
+        {
             return;
         }
         if intent == PickerIntent::File {
@@ -378,7 +372,13 @@ impl WorkspaceWindow {
             cx.notify();
             return;
         }
-        if intent == PickerIntent::New && p.markdown && Path::new(&value).extension().is_none() {
+        let markdown = p.markdown;
+        if value.is_empty() && intent == PickerIntent::New {
+            let document = self.prepare_draft(markdown, cx);
+            self.activate_prepared_draft(document, cx);
+            return;
+        }
+        if intent == PickerIntent::New && markdown && Path::new(&value).extension().is_none() {
             value.push_str(".md");
         }
         self.create_buffer(
@@ -389,6 +389,11 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn dismiss_buffer_panel(&mut self, cx: &mut Context<Self>) {
+        // A committed card save keeps its owner until completion, including
+        // when navigation parks the document or leaves the overview.
+        if self.buffers.review().is_some_and(|r| r.inline && r.running) {
+            return;
+        }
         self.buffers.file_task = None;
         self.buffers.file_request = self.buffers.file_request.wrapping_add(1);
         self.buffers.file_candidates.clear();
@@ -404,6 +409,8 @@ impl WorkspaceWindow {
         self.dismiss_buffer_panel(cx);
         if search {
             self.focus_search_input(cx);
+        } else if self.file_overview_is_open() {
+            self.focus_file_overview(cx);
         } else {
             self.request_document_focus(cx);
         }
@@ -437,6 +444,14 @@ impl WorkspaceWindow {
             self.buffers.focus_pending = false;
             if let Some(Panel::Picker(p)) = &self.buffers.panel {
                 p.input.read(cx).focus.clone().focus(window, cx);
+            } else if let Some(review) = self.buffers.review() {
+                if let Some(focuses) = &review.close_focus {
+                    if !review.inline || self.file_overview_is_open() {
+                        focuses.last().unwrap().focus(window, cx);
+                    }
+                } else if let Some(focus) = &self.focus_handle {
+                    focus.focus(window, cx);
+                }
             } else if let Some(focus) = &self.focus_handle {
                 focus.focus(window, cx);
             }
@@ -447,6 +462,13 @@ impl WorkspaceWindow {
         &mut self,
         window: &Window,
     ) -> Option<crate::app::status_line::shell::ShellRequest> {
+        if self
+            .buffers
+            .review()
+            .is_some_and(|r| matches!(r.kind, ReviewKind::Close(_)))
+        {
+            return None;
+        }
         if self.buffers.panel.is_none() && !self.buffers.returning {
             return None;
         }

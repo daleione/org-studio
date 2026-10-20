@@ -316,7 +316,12 @@ impl WorkspaceWindow {
     }
 
     fn dired_operation_available(&mut self, cx: &mut Context<Self>) -> bool {
-        if self.file_manager.operation_busy {
+        if self.file_manager.operation_busy
+            || matches!(
+                self.save.interaction,
+                crate::app::save::SaveInteraction::Renaming { .. }
+            )
+        {
             self.show_dired_operation_error("A file operation is already in progress", cx);
             false
         } else if self.document_session().is_some_and(|session| {

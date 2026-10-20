@@ -1,14 +1,17 @@
 //! Window-local open-file overview. The document pool remains the sole owner
-//! of text, undo history, save state and each document's real view entities.
+//! of open documents. A new draft stays provisional until its zoom commits.
 mod background;
 #[cfg(feature = "visual-check")]
 pub mod benchmark;
+mod close;
 mod frame;
 mod gesture;
 mod layout;
 mod motion;
 mod view;
 pub(super) use view::toolbar_button;
+#[cfg(test)]
+mod close_tests;
 #[cfg(test)]
 mod tests;
 
@@ -84,11 +87,13 @@ struct Session {
     target_from: Bounds<Pixels>,
     target_to: Bounds<Pixels>,
     target_frame: Option<Arc<DocumentFrame>>,
+    new_document: Option<super::ReadyDocument>,
     order: Vec<DocumentId>,
     selected: Option<DocumentId>,
     query: Entity<NativeInput>,
     _subscription: Subscription,
     grid_focus: FocusHandle,
+    new_focus: FocusHandle,
     done_focus: FocusHandle,
     query_bounds: Bounds<Pixels>,
     focus_query_pending: bool,
@@ -257,8 +262,15 @@ impl WorkspaceWindow {
         bounds: Bounds<Pixels>,
         cx: &mut Context<Self>,
     ) {
-        let drawing = self
-            .overview_document_for_paint(id, cx)
+        let pending = self
+            .file_overview
+            .session
+            .as_ref()
+            .and_then(|state| state.new_document.as_ref())
+            .filter(|document| document.session.read(cx).id() == id)
+            .map(|document| (document.clone(), super::DocumentWorkspaceState::default()));
+        let drawing = pending
+            .or_else(|| self.overview_document_for_paint(id, cx))
             .map(|(document, workspace)| {
                 let doc = document.session.read(cx);
                 PreparingDocument {
@@ -321,10 +333,17 @@ impl WorkspaceWindow {
         else {
             return;
         };
-        self.file_overview
-            .frame_sizes
-            .insert(id, frame.source.bounds.size);
-        self.file_overview.cache.insert(id, frame.clone());
+        let new_document = self
+            .file_overview
+            .session
+            .as_ref()
+            .is_some_and(|state| state.new_document.is_some());
+        if !new_document {
+            self.file_overview
+                .frame_sizes
+                .insert(id, frame.source.bounds.size);
+            self.file_overview.cache.insert(id, frame.clone());
+        }
         if let Some(state) = self.file_overview.session.as_mut() {
             if state.phase == Phase::Visible {
                 if state.origin == Some(id) {
@@ -336,21 +355,24 @@ impl WorkspaceWindow {
             }
         }
         let items = self.overview_items(cx);
-        let Some(index) = items.iter().position(|item| item.id == id) else {
+        let index = items.iter().position(|item| item.id == id);
+        if index.is_none() && !new_document {
             if let Some(state) = self.file_overview.session.as_mut() {
                 state.notice =
                     Some("目标已不可选，请重新选择 / Target unavailable; select it again".into());
                 state.settle(Phase::Rebounding, 0., Instant::now());
             }
             return;
-        };
+        }
         let grid = self.overview_grid(window, &items);
         let stage = self.overview_stage_bounds(window);
         let Some(state) = self.file_overview.session.as_mut() else {
             return;
         };
-        state.target_from =
-            grid.document_preview(index, state.scroll.offset().y, frame.source.bounds.size);
+        if let Some(index) = index {
+            state.target_from =
+                grid.document_preview(index, state.scroll.offset().y, frame.source.bounds.size);
+        }
         state.target_to = layout::contain(frame.source.bounds.size, stage);
         let scale = state.gesture_scale();
         if let Some(gesture) = &mut state.gesture {
@@ -471,19 +493,44 @@ impl WorkspaceWindow {
     }
 
     fn overview_grid(&self, window: &Window, items: &[Item]) -> GridLayout {
-        let sources = items
+        let mut sources = items
             .iter()
             .map(|item| self.overview_item_size(item, window))
             .collect::<Vec<_>>();
+        sources.push(
+            sources
+                .last()
+                .copied()
+                .unwrap_or_else(|| self.overview_stage_bounds(window).size),
+        );
         GridLayout::with_sources(window.viewport_size(), &sources)
     }
 
     pub(crate) fn open_file_overview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.file_overview_is_open() {
-            self.cancel_file_overview(window, cx);
-            return;
-        }
-        if self.buffers.review().is_some()
+        self.cancel_document_name(cx);
+        let handoff_frame = match self.file_overview.session.as_mut() {
+            Some(state) if state.phase == Phase::Returning => {
+                // The button reverses the current motion, including its tail.
+                state.settle(Phase::Entering, 1., Instant::now());
+                cx.notify();
+                return;
+            }
+            Some(state) if state.phase == Phase::Handoff => {
+                // The document is already full-size. This click starts a new
+                // overview rather than only dismissing the invisible handoff.
+                let frame = state.target.zip(state.target_frame.clone()).filter(|_| {
+                    state.scale == window.scale_factor() && state.viewport == window.viewport_size()
+                });
+                self.close_file_overview_now(window, cx);
+                frame
+            }
+            Some(_) => {
+                self.cancel_file_overview(window, cx);
+                return;
+            }
+            None => None,
+        };
+        if self.buffers.review().is_some() && self.buffers.inline_close_target().is_none()
             || self.export.is_open()
             || self.split_resize.is_some()
             || self.file_manager.is_resizing_sidebar()
@@ -511,13 +558,28 @@ impl WorkspaceWindow {
         let origin_frame = if self.content_route == ContentRoute::Document {
             // The session may have changed since the last paint. Tag the
             // actual painted revision, never newer text that has not painted.
-            presented.and_then(|last| {
-                DocumentFrame::from_painted(
-                    &self.file_overview.drawn_frame,
-                    origin_bounds,
-                    last.revision,
-                )
-            })
+            presented
+                .and_then(|last| {
+                    DocumentFrame::from_painted(
+                        &self.file_overview.drawn_frame,
+                        origin_bounds,
+                        last.revision,
+                    )
+                })
+                .or_else(|| {
+                    // Handoff may precede the first live paint. Reuse the frame
+                    // actually on screen, without tagging old paint as new content.
+                    handoff_frame
+                        .filter(|(id, frame)| {
+                            Some(*id) == origin
+                                && frame.source.bounds == origin_bounds
+                                && frame.palette == crate::theme::current_theme().background
+                                && self.document_session().is_some_and(|session| {
+                                    session.read(cx).revision() == frame.revision
+                                })
+                        })
+                        .map(|(_, frame)| frame)
+                })
         } else {
             None
         };
@@ -547,6 +609,7 @@ impl WorkspaceWindow {
             }
             match event {
                 InputEvent::Changed(_) => {
+                    this.cancel_overview_close(cx);
                     let items = this.overview_items(cx);
                     if let Some(state) = &mut this.file_overview.session {
                         if !items.iter().any(|item| Some(item.id) == state.selected) {
@@ -612,11 +675,13 @@ impl WorkspaceWindow {
             target_from: origin_bounds,
             target_to: origin_bounds,
             target_frame: None,
+            new_document: None,
             order: items.iter().map(|item| item.id).collect(),
             selected,
             query: input,
             _subscription: subscription,
             grid_focus,
+            new_focus: cx.focus_handle(),
             done_focus,
             query_bounds: Bounds::default(),
             focus_query_pending: false,
@@ -633,6 +698,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn close_file_overview_now(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_overview_close(cx);
         self.file_overview.serial = self.file_overview.serial.wrapping_add(1);
         self.file_overview.probe = None;
         let Some(state) = self.file_overview.session.take() else {
@@ -656,6 +722,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn cancel_file_overview(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_overview_close(cx);
         let Some(state) = self.file_overview.session.as_mut() else {
             return;
         };
@@ -674,6 +741,56 @@ impl WorkspaceWindow {
             }
         }
         cx.notify();
+    }
+
+    pub(super) fn new_overview_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_overview_close(cx);
+        if self.buffers.panel.is_some() && self.buffers.inline_close_target().is_none()
+            || !self.file_overview.session.as_ref().is_some_and(|state| {
+                state.phase == Phase::Visible && !state.query.read(cx).is_composing()
+            })
+        {
+            return;
+        }
+        let items = self.overview_items(cx);
+        let grid = self.overview_grid(window, &items);
+        let stage = self.overview_stage_bounds(window);
+        let state = self.file_overview.session.as_mut().unwrap();
+        let offset = state.scroll.offset().y;
+        let revealed = grid.reveal(items.len(), offset);
+        if revealed != offset {
+            state.scroll.set_offset(point(px(0.), revealed));
+            let serial = self.file_overview.serial;
+            cx.on_next_frame(window, move |this, window, cx| {
+                if this.file_overview.serial == serial {
+                    this.new_overview_document(window, cx);
+                }
+            });
+            cx.notify();
+            return;
+        }
+        let source = items
+            .last()
+            .map_or(stage.size, |item| self.overview_item_size(item, window));
+        let from = grid.document_preview(items.len(), offset, source);
+        let document = self.prepare_draft(false, cx);
+        let id = document.session.read(cx).id();
+        let state = self.file_overview.session.as_mut().unwrap();
+        state.target = Some(id);
+        state.target_from = layout::contain(stage.size, from);
+        state.target_to = stage;
+        state.target_frame = None;
+        state.new_document = Some(document);
+        state.phase = Phase::Opening;
+        state.progress = 0.;
+        state.motion = None;
+        state.preparation = None;
+        state.outward_probe = None;
+        state.focus_query_pending = false;
+        state.notice = None;
+        // Even without motion, prepare the blank surface before switching away
+        // from the overview. The old document must never show through.
+        self.prepare_overview_document_frame(id, stage, cx);
     }
 
     pub(crate) fn file_overview_focus_lost(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -697,6 +814,13 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.buffer_busy() && self.buffers.inline_close_target() == Some(id) {
+            return;
+        }
+        self.cancel_overview_close(cx);
+        if self.buffers.panel.is_some() && self.buffers.inline_close_target().is_none() {
+            return;
+        }
         let items = self.overview_items(cx);
         let Some(index) = items.iter().position(|item| item.id == id) else {
             return;
@@ -734,6 +858,7 @@ impl WorkspaceWindow {
         state.target = Some(id);
         state.selected = Some(id);
         state.phase = Phase::Opening;
+        state.focus_query_pending = false;
         state.progress = 0.;
         state.notice = None;
         state.motion = Some(Motion::settle(
@@ -839,7 +964,9 @@ impl WorkspaceWindow {
         let query_focused = state.query.read(cx).focus.is_focused(window);
         match key {
             "enter" => {
-                if state.done_focus.is_focused(window) {
+                if state.new_focus.is_focused(window) {
+                    self.new_overview_document(window, cx);
+                } else if state.done_focus.is_focused(window) {
                     self.cancel_file_overview(window, cx);
                 } else if let Some(id) = state.selected {
                     self.select_overview_item(id, window, cx);
@@ -854,13 +981,17 @@ impl WorkspaceWindow {
             "tab" => {
                 let focus = if modifiers.shift {
                     if query_focused {
-                        &state.done_focus
+                        &state.new_focus
                     } else if state.done_focus.is_focused(window) {
+                        &state.query.read(cx).focus
+                    } else if state.new_focus.is_focused(window) {
                         &state.grid_focus
                     } else {
-                        &state.query.read(cx).focus
+                        &state.done_focus
                     }
                 } else if state.grid_focus.is_focused(window) {
+                    &state.new_focus
+                } else if state.new_focus.is_focused(window) {
                     &state.query.read(cx).focus
                 } else if query_focused {
                     &state.done_focus
@@ -868,6 +999,14 @@ impl WorkspaceWindow {
                     &state.grid_focus
                 };
                 let focus = focus.clone();
+                if focus == state.new_focus {
+                    let items = self.overview_items(cx);
+                    let grid = self.overview_grid(window, &items);
+                    state.scroll.set_offset(point(
+                        px(0.),
+                        grid.reveal(items.len(), state.scroll.offset().y),
+                    ));
+                }
                 window.focus(&focus, cx);
             }
             _ => {}
@@ -888,6 +1027,11 @@ impl WorkspaceWindow {
         }
         let key = event.keystroke.key.as_str();
         let m = event.keystroke.modifiers;
+        if m.platform && !m.control && !m.alt && !m.shift && key.eq_ignore_ascii_case("n") {
+            self.new_draft(window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if m.control && key == "x" {
             self.close_file_overview_now(window, cx);
             self.key_down(event, window, cx);
@@ -928,6 +1072,11 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_overview_close(cx);
+        if self.buffers.review().is_some() && self.buffers.inline_close_target().is_none() {
+            cx.stop_propagation();
+            return;
+        }
         let now = Instant::now();
         #[cfg(feature = "visual-check")]
         self.file_overview.trace.input(event);
@@ -1114,6 +1263,7 @@ impl WorkspaceWindow {
             state.origin_frame = None;
             state.target = None;
             state.target_frame = None;
+            state.new_document = None;
             state.preparation = None;
         }
         self.finish_overview_document_frame(window, cx);
@@ -1167,6 +1317,31 @@ impl WorkspaceWindow {
             .frame_sizes
             .retain(|id, _| all_ids.contains(id));
         let grid = self.overview_grid(window, &items);
+        if let Some(id) = self.buffers.inline_close_target()
+            && !self.buffer_busy()
+        {
+            let state = self.file_overview.session.as_ref().unwrap();
+            let viewport = Bounds::new(
+                point(px(0.), px(super::TITLEBAR_HEIGHT + grid.header)),
+                size(window.viewport_size().width, px(grid.height)),
+            );
+            let visible = items
+                .iter()
+                .position(|item| item.id == id)
+                .is_some_and(|index| {
+                    let bounds = grid
+                        .document_preview(
+                            index,
+                            state.scroll.offset().y,
+                            self.overview_item_size(&items[index], window),
+                        )
+                        .intersect(&viewport);
+                    bounds.size.width > px(0.) && bounds.size.height > px(0.)
+                });
+            if state.phase != Phase::Visible || !visible {
+                self.cancel_overview_close(cx);
+            }
+        }
         if let Some(state) = self
             .file_overview
             .session
@@ -1199,12 +1374,26 @@ impl WorkspaceWindow {
             if state.gesture.is_some() && reduced {
                 state.update_gesture_target(now);
             }
+            if state.phase == Phase::Visible
+                && state.origin.is_some_and(|id| !all_ids.contains(&id))
+            {
+                // Closing the current card keeps the grid open. Its old paint
+                // must never be used to return to the next active document.
+                state.origin = current;
+                state.origin_route = self.content_route;
+                state.origin_focus = None;
+                state.origin_frame = None;
+                state.focus_query_pending = true;
+            }
             if (state.phase == Phase::Handoff
                 && (current != state.target || self.content_route != ContentRoute::Document))
                 || (state.phase != Phase::Handoff
                     && (current != state.origin
                         || self.content_route != state.origin_route
-                        || self.buffers.panel.is_some()))
+                        || self.buffers.panel.as_ref().is_some_and(|panel| {
+                            !matches!(panel, super::buffers::Panel::Review(review)
+                                if matches!(review.kind, super::buffers::ReviewKind::Close(_)))
+                        })))
             {
                 self.close_file_overview_now(window, cx);
                 return;
@@ -1230,7 +1419,8 @@ impl WorkspaceWindow {
                 self.file_overview.cache.clear();
                 return;
             }
-            if state.target.is_some_and(|id| !all_ids.contains(&id)) {
+            if state.new_document.is_none() && state.target.is_some_and(|id| !all_ids.contains(&id))
+            {
                 state.phase = Phase::Visible;
                 state.progress = 1.;
                 state.motion = None;
@@ -1303,6 +1493,7 @@ impl WorkspaceWindow {
                     state.phase = Phase::Visible;
                     state.progress = 1.;
                     state.target_frame = None;
+                    state.new_document = None;
                 }
                 Phase::Returning => {
                     if !state.reduced_motion
@@ -1335,8 +1526,13 @@ impl WorkspaceWindow {
                 Phase::Opening => {
                     let target = state.target;
                     let origin = state.origin;
-                    if let Some(target) = target.filter(|id| all_ids.contains(id)) {
-                        if origin != Some(target) {
+                    let new_document = state.new_document.take();
+                    if let Some(target) =
+                        target.filter(|id| new_document.is_some() || all_ids.contains(id))
+                    {
+                        if let Some(document) = new_document {
+                            self.activate_prepared_draft(document, cx);
+                        } else if origin != Some(target) {
                             self.activate_buffer(target, cx);
                         } else {
                             self.content_route = ContentRoute::Document;

@@ -335,7 +335,7 @@ fn create_directory_exclusive(path: &Path) -> io::Result<()> {
     fs::create_dir(path)
 }
 
-fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
+pub(crate) fn rename_exclusive(source: &Path, destination: &Path) -> io::Result<()> {
     validate_transfer(source, destination)?;
     rename_no_replace(source, destination)
 }

@@ -27,6 +27,7 @@ gpui::actions!(
     buffers,
     [
         NewDocument,
+        NewDraft,
         SwitchBuffer,
         CloseBuffer,
         SaveBuffers,
@@ -89,6 +90,17 @@ pub(crate) enum Panel {
 }
 
 impl BufferHost {
+    pub(crate) fn inline_close_target(&self) -> Option<DocumentId> {
+        match self.review()? {
+            SaveReview {
+                kind: ReviewKind::Close(id),
+                inline: true,
+                ..
+            } => Some(*id),
+            _ => None,
+        }
+    }
+
     pub(crate) fn input_composing(&self, cx: &App) -> bool {
         matches!(&self.panel, Some(Panel::Picker(picker)) if picker.input.read(cx).is_composing())
     }
@@ -122,7 +134,22 @@ pub(crate) struct SaveReview {
     pub(crate) running: bool,
     pub(crate) error: Option<String>,
     pub(crate) selected: usize,
+    pub(crate) inline: bool,
+    close_focus: Option<[gpui::FocusHandle; CloseAction::ALL.len()]>,
 }
+
+#[derive(Clone, Copy)]
+enum CloseAction {
+    Cancel,
+    Discard,
+    Save,
+}
+
+impl CloseAction {
+    // Shared by rendering and keyboard activation; the last action is the default.
+    const ALL: [Self; 3] = [Self::Cancel, Self::Discard, Self::Save];
+}
+
 pub(crate) struct ReviewEntry {
     pub(crate) id: DocumentId,
     pub(crate) revision: crate::document::Revision,
@@ -149,6 +176,11 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn buffer_for_path(&self, path: &Path, cx: &App) -> Option<Entity<DocumentSession>> {
+        if let super::save::SaveInteraction::Renaming { document, target } = &self.save.interaction
+            && same_file(target, path)
+        {
+            return self.buffer_session(*document, cx);
+        }
         self.buffer_sessions().find(|s| {
             let s = s.read(cx);
             s.file_path().is_some_and(|p| same_file(p, path))
@@ -165,6 +197,12 @@ impl WorkspaceWindow {
 
     pub(crate) fn buffer_busy(&self) -> bool {
         self.buffers.review().is_some_and(|r| r.running)
+    }
+
+    pub(crate) fn buffer_navigation_blocked(&self) -> bool {
+        self.buffers
+            .review()
+            .is_some_and(|r| r.running && !r.inline)
     }
 }
 

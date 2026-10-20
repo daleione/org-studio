@@ -40,6 +40,9 @@ impl DocumentCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentEvent {
+    NameChanged {
+        document_id: DocumentId,
+    },
     Edited {
         document_id: DocumentId,
         delta: RevisionDelta,
@@ -216,6 +219,7 @@ pub struct DocumentSession {
 enum SessionBackend {
     Draft {
         name: Arc<str>,
+        user_named: bool,
         syntax_hint: PathBuf,
         state: Box<SessionFileState>,
     },
@@ -226,6 +230,14 @@ enum SessionBackend {
     Generated {
         source: GeneratedSource,
     },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DocumentNameError {
+    NotDraft,
+    Empty,
+    Invalid,
+    DifferentFormat,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -259,6 +271,7 @@ impl DocumentSession {
             history: UndoHistory::default(),
             backend: SessionBackend::Draft {
                 name,
+                user_named: false,
                 syntax_hint,
                 state: Box::new(SessionFileState {
                     metadata: FileMetadata::from_loaded(Path::new(""), b""),
@@ -281,6 +294,146 @@ impl DocumentSession {
                 .to_string_lossy()
                 .into_owned(),
         }
+    }
+
+    pub(crate) fn is_draft(&self) -> bool {
+        matches!(self.backend, SessionBackend::Draft { .. })
+    }
+
+    pub(crate) fn named_draft(name: impl Into<Arc<str>>) -> Self {
+        let mut draft = Self::draft(name);
+        if let SessionBackend::Draft { user_named, .. } = &mut draft.backend {
+            *user_named = true;
+        }
+        draft
+    }
+
+    pub(crate) fn is_named_draft(&self) -> bool {
+        matches!(
+            self.backend,
+            SessionBackend::Draft {
+                user_named: true,
+                ..
+            }
+        )
+    }
+
+    /// Changes display metadata only. Keep the syntax/resource hint and text
+    /// revision stable so naming never resets reading layout, folds or undo.
+    pub(crate) fn rename_draft(
+        &mut self,
+        value: &str,
+        cx: &mut Context<Self>,
+    ) -> Result<(), DocumentNameError> {
+        if !self.is_draft() {
+            return Err(DocumentNameError::NotDraft);
+        }
+        let renamed = self.rename_candidate(value)?;
+        let SessionBackend::Draft {
+            name, user_named, ..
+        } = &mut self.backend
+        else {
+            unreachable!()
+        };
+        *user_named = true;
+        if name.as_ref() != renamed {
+            *name = renamed.into();
+            cx.emit(DocumentEvent::NameChanged {
+                document_id: self.id(),
+            });
+            cx.notify();
+        }
+        Ok(())
+    }
+
+    pub(crate) fn rename_candidate(&self, value: &str) -> Result<String, DocumentNameError> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(DocumentNameError::Empty);
+        }
+        if matches!(value, "." | "..")
+            || value
+                .chars()
+                .any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
+        {
+            return Err(DocumentNameError::Invalid);
+        }
+        if value == self.display_name() {
+            return Ok(value.to_owned());
+        }
+        let extension = self
+            .syntax_path()
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let entered = Path::new(value).extension().and_then(|e| e.to_str());
+        if extension.is_empty() && entered.is_some() {
+            return Err(DocumentNameError::DifferentFormat);
+        }
+        let stem = if entered.is_some_and(|e| e.eq_ignore_ascii_case(extension)) {
+            Path::new(value)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(value)
+                .trim()
+        } else {
+            if entered.is_some_and(|e| {
+                ["org", "md", "markdown"]
+                    .iter()
+                    .any(|known| e.eq_ignore_ascii_case(known))
+            }) {
+                return Err(DocumentNameError::DifferentFormat);
+            }
+            value
+        };
+        if stem.is_empty() {
+            return Err(DocumentNameError::Empty);
+        }
+        Ok(if extension.is_empty() {
+            stem.to_owned()
+        } else {
+            format!("{stem}.{extension}")
+        })
+    }
+
+    /// A rename within the same directory and format changes identity metadata,
+    /// not text or resources. Preserve the saved baseline, conflicts and undo.
+    pub(crate) fn finish_file_rename(
+        &mut self,
+        source: &Path,
+        destination: PathBuf,
+        cx: &mut Context<Self>,
+    ) -> std::io::Result<()> {
+        if self.file_path() != Some(source) || !matches!(self.save_state(), SaveState::Idle) {
+            return Err(std::io::Error::other(
+                "the document path changed during rename",
+            ));
+        }
+        let SessionBackend::File { path, state } = &mut self.backend else {
+            unreachable!()
+        };
+        if path.parent() != destination.parent() || path.extension() != destination.extension() {
+            return Err(std::io::Error::other(
+                "rename must keep the directory and format",
+            ));
+        }
+        *path = destination;
+        // The old-path watcher may have seen our rename as a removal. Keep its
+        // baseline: any external content changes must still be checked on save.
+        if let SyncState::Missing { base } = &state.sync_state {
+            state.sync_state = if self.current_state != self.saved_state {
+                SyncState::Dirty { base: base.clone() }
+            } else {
+                SyncState::InSync {
+                    stamp: base.clone(),
+                }
+            };
+        }
+        cx.emit(DocumentEvent::NameChanged {
+            document_id: self.id(),
+        });
+        cx.notify();
+        Ok(())
     }
 
     pub(crate) fn resource_changed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -1013,6 +1166,25 @@ mod tests {
     fn contents(session: &DocumentSession) -> String {
         let snapshot = session.snapshot();
         snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+    }
+
+    #[gpui::test]
+    fn naming_a_draft_records_user_intent_without_editing_the_document(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let session = cx.new(|_| DocumentSession::draft("Untitled 3.org"));
+        session.update(cx, |doc, cx| {
+            assert!(!doc.is_named_draft());
+            let revision = doc.revision();
+            assert!(doc.rename_draft("bad/name", cx).is_err());
+            assert!(!doc.is_named_draft());
+            doc.rename_draft("Untitled 3.org", cx).unwrap();
+            assert!(doc.is_named_draft());
+            assert_eq!(doc.revision(), revision);
+            assert!(!doc.is_dirty());
+            assert!(doc.file_path().is_none());
+        });
+        assert!(DocumentSession::named_draft("未命名 3").is_named_draft());
     }
 
     #[gpui::test]

@@ -6,8 +6,8 @@ use crate::{
     typography::{ui_font, ui_px},
 };
 use gpui::{
-    AnyElement, App, ElementInputHandler, IntoElement, MouseButton, Role, SharedString, Window,
-    canvas, div, prelude::*, px, rgb,
+    AnyElement, ElementInputHandler, IntoElement, MouseButton, Role, SharedString, Window, canvas,
+    div, prelude::*, px, rgb,
 };
 
 pub(crate) fn toolbar_button(entity: Entity<WorkspaceWindow>) -> gpui::Stateful<gpui::Div> {
@@ -41,7 +41,7 @@ pub(crate) fn toolbar_button(entity: Entity<WorkspaceWindow>) -> gpui::Stateful<
         })
 }
 
-struct Hint(SharedString);
+pub(super) struct Hint(pub(super) SharedString);
 impl gpui::Render for Hint {
     fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
         let theme = current_theme();
@@ -206,7 +206,10 @@ impl WorkspaceWindow {
         };
         let grid_top = grid.header * if transition.is_some() { appearance } else { 1. };
         let grid_bottom = layout::FOOTER * if transition.is_some() { appearance } else { 1. };
-        let root_opacity = if state.reduced_motion {
+        let new_document = state.new_document.is_some();
+        let root_opacity = if new_document {
+            1.
+        } else if state.reduced_motion {
             if entry {
                 p
             } else if opening {
@@ -342,13 +345,16 @@ impl WorkspaceWindow {
             );
             let mut visible = layout::place_in_transition(viewport, document, anchor);
             visible.origin.y -= state.scroll.offset().y;
-            grid.visible_range_in(items.len(), visible)
+            grid.visible_range_in(items.len() + 1, visible)
         } else {
-            grid.visible_range(items.len(), state.scroll.offset().y)
+            grid.visible_range(items.len() + 1, state.scroll.offset().y)
         };
         let cards = range
             .map(|index| {
-                let item = &items[index];
+                let source = items.get(index).or_else(|| items.last()).map_or_else(
+                    || self.overview_stage_bounds(window).size,
+                    |item| self.overview_item_size(item, window),
+                );
                 let mut bounds = grid.document_preview(
                     index,
                     if transition.is_some() {
@@ -356,17 +362,32 @@ impl WorkspaceWindow {
                     } else {
                         px(0.)
                     },
-                    self.overview_item_size(item, window),
+                    source,
                 );
                 if let Some((anchor, document)) = transition {
                     bounds = layout::place_in_transition(bounds, anchor, document);
                 }
                 bounds.origin.y -= px(super::super::TITLEBAR_HEIGHT + grid_top);
-                self.overview_card(item, index, &items, bounds, appearance, entity.clone(), cx)
+                match items.get(index) {
+                    Some(item) => self.overview_card(
+                        item,
+                        index,
+                        &items,
+                        bounds,
+                        appearance,
+                        entity.clone(),
+                        cx,
+                    ),
+                    None => self.overview_new_card(
+                        bounds,
+                        appearance,
+                        items.is_empty(),
+                        total == 0,
+                        entity.clone(),
+                    ),
+                }
             })
             .collect::<Vec<_>>();
-        let empty = items.is_empty();
-        let open_entity = entity.clone();
         let grid_view = div()
             .id("file-overview-grid")
             .debug_selector(|| "file-overview-grid".into())
@@ -401,51 +422,7 @@ impl WorkspaceWindow {
                         px(grid.total_height)
                     })
                     .children(cards),
-            )
-            .when(empty, |view| {
-                view.child(
-                    div()
-                        .absolute()
-                        .inset_0()
-                        .flex()
-                        .flex_col()
-                        .items_center()
-                        .justify_center()
-                        .gap(px(14.))
-                        .child(
-                            div()
-                                .text_size(ui_px(16.))
-                                .text_color(rgb(theme.foreground).opacity(0.75))
-                                .child_text(if total == 0 {
-                                    self.buffer_text("还没有打开的文件", "No open files")
-                                } else {
-                                    self.buffer_text(
-                                        "没有匹配的已打开文件",
-                                        "No matching open files",
-                                    )
-                                }),
-                        )
-                        .when(total == 0, |view| {
-                            view.child(
-                                div()
-                                    .id("file-overview-open-file")
-                                    .role(Role::Button)
-                                    .px(px(16.))
-                                    .py(px(8.))
-                                    .rounded(px(7.))
-                                    .bg(rgb(theme.accent_bg))
-                                    .cursor_pointer()
-                                    .child_text(self.buffer_text("打开文件…", "Open file…"))
-                                    .on_click(move |_, window, cx| {
-                                        open_entity.update(cx, |this, cx| {
-                                            this.close_file_overview_now(window, cx);
-                                            this.choose_file(window, cx);
-                                        });
-                                    }),
-                            )
-                        }),
-                )
-            });
+            );
         let proxy_input = state.query.clone();
         let proxy_focus = state.grid_focus.clone();
         let proxy_bounds = state.query_bounds;
@@ -574,6 +551,7 @@ impl WorkspaceWindow {
                 .size(px(1.)),
             );
         if handoff
+            || new_document && opening
             || (entry
                 && !state.reduced_motion
                 && !items.iter().any(|item| Some(item.id) == state.origin))
@@ -583,11 +561,19 @@ impl WorkspaceWindow {
                 // Per-primitive fading would make overlapping text lighter.
                 overlay = overlay.child(
                     render_frame(frame)
+                        .debug_selector(|| "file-overview-opening-frame".into())
                         .absolute()
                         .left(bounds.left())
                         .top(bounds.top() - px(super::super::TITLEBAR_HEIGHT))
                         .w(bounds.size.width)
-                        .h(bounds.size.height),
+                        .h(bounds.size.height)
+                        // Only the new blank page fades in over the gray plus.
+                        // At full size and throughout handoff it stays opaque.
+                        .opacity(if new_document && !state.reduced_motion {
+                            smoothstep(0., 0.16, p)
+                        } else {
+                            1.
+                        }),
                 );
             }
         }
@@ -638,6 +624,124 @@ impl WorkspaceWindow {
         Some(overlay.into_any_element())
     }
 
+    fn overview_new_card(
+        &self,
+        bounds: Bounds<Pixels>,
+        appearance: f32,
+        empty: bool,
+        no_open_files: bool,
+        entity: Entity<Self>,
+    ) -> AnyElement {
+        let theme = current_theme();
+        let ink = rgb(if crate::theme::effective_theme_is_dark() {
+            0xffffff
+        } else {
+            0x000000
+        });
+        let accessible_entity = entity.clone();
+        let click_entity = entity.clone();
+        let caption_entity = entity.clone();
+        let focus = self
+            .file_overview
+            .session
+            .as_ref()
+            .unwrap()
+            .new_focus
+            .clone();
+        let label = self.buffer_text("新建文件", "New file");
+        div()
+            .absolute()
+            .left(bounds.left())
+            .top(bounds.top())
+            .w(bounds.size.width)
+            .h(bounds.size.height + px(layout::CAPTION))
+            .opacity(smoothstep(0.62, 0.94, appearance))
+            .child(
+                div()
+                    .id("file-overview-new-file")
+                    .debug_selector(|| "file-overview-new-file".into())
+                    .role(Role::Button)
+                    .aria_label(label)
+                    .track_focus(&focus)
+                    .tab_index(0)
+                    .w_full()
+                    .h(bounds.size.height)
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .bg(ink.opacity(0.1))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(ink.opacity(0.14)))
+                    .focus(move |style| style.bg(ink.opacity(0.14)))
+                    .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
+                        accessible_entity
+                            .update(cx, |this, cx| this.new_overview_document(window, cx));
+                    })
+                    .on_click(move |_, window, cx| {
+                        click_entity.update(cx, |this, cx| this.new_overview_document(window, cx));
+                    })
+                    .child(
+                        gpui::svg()
+                            .debug_selector(|| "file-overview-new-file-plus".into())
+                            .data(include_bytes!("../assets/new-file.svg"))
+                            .size(ui_px(64.))
+                            .text_color(ink.opacity(0.5)),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(layout::CAPTION))
+                    .pt(px(8.))
+                    .px(px(3.))
+                    .text_size(ui_px(14.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .child(
+                        div()
+                            .id("file-overview-new-file-label")
+                            .cursor_pointer()
+                            .child_text(label)
+                            .on_click(move |_, window, cx| {
+                                caption_entity.update(cx, |this, cx| {
+                                    this.new_overview_document(window, cx);
+                                });
+                            }),
+                    )
+                    .when(empty && !no_open_files, |view| {
+                        view.child(
+                            div()
+                                .mt(px(3.))
+                                .text_size(ui_px(11.))
+                                .text_color(rgb(theme.foreground).opacity(0.75))
+                                .child_text(
+                                    self.buffer_text(
+                                        "没有匹配的已打开文件",
+                                        "No matching open files",
+                                    ),
+                                ),
+                        )
+                    })
+                    .when(no_open_files, |view| {
+                        view.child(
+                            div()
+                                .id("file-overview-open-file")
+                                .role(Role::Button)
+                                .mt(px(3.))
+                                .text_size(ui_px(11.))
+                                .text_color(rgb(theme.foreground).opacity(0.75))
+                                .cursor_pointer()
+                                .child_text(self.buffer_text("打开文件…", "Open file…"))
+                                .on_click(move |_, window, cx| {
+                                    entity.update(cx, |this, cx| {
+                                        this.close_file_overview_now(window, cx);
+                                        this.choose_file(window, cx);
+                                    });
+                                }),
+                        )
+                    }),
+            )
+            .into_any_element()
+    }
+
     fn overview_card(
         &self,
         item: &Item,
@@ -646,7 +750,7 @@ impl WorkspaceWindow {
         bounds: Bounds<Pixels>,
         appearance: f32,
         entity: Entity<Self>,
-        cx: &App,
+        cx: &Context<Self>,
     ) -> AnyElement {
         let state = self.file_overview.session.as_ref().unwrap();
         let theme = current_theme();
@@ -719,14 +823,19 @@ impl WorkspaceWindow {
             }
         );
         let accessible_entity = entity.clone();
+        let close_entity = entity.clone();
+        let accessible_close_entity = entity.clone();
         div()
             .id(SharedString::from(format!("overview-{id:?}")))
+            .group("file-overview-card")
             .debug_selector(move || selector.clone())
             .role(Role::ListBoxOption)
             .aria_label(a11y)
             .aria_selected(selected)
             .when(selected, |view| view.aria_active_descendant())
-            .tooltip(move |_, cx| cx.new(|_| Hint(tooltip.clone())).into())
+            .when(self.buffers.inline_close_target() != Some(id), |card| {
+                card.tooltip(move |_, cx| cx.new(|_| Hint(tooltip.clone())).into())
+            })
             .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
                 accessible_entity.update(cx, |this, cx| this.select_overview_item(id, window, cx));
             })
@@ -762,7 +871,8 @@ impl WorkspaceWindow {
                             .border_1()
                             .border_color(rgb(theme.border))
                             .hover(|style| style.border_color(rgb(theme.border_hover))),
-                    ),
+                    )
+                    .children(self.overview_close_overlay(id, bounds.size, cx)),
             )
             .child(
                 div()
@@ -825,6 +935,74 @@ impl WorkspaceWindow {
                                 )
                             }),
                     ),
+            )
+            .when(
+                state.phase == Phase::Visible
+                    && self.buffers.inline_close_target() != Some(id)
+                    && matches!(
+                        self.save.interaction,
+                        super::super::save::SaveInteraction::Idle
+                    ),
+                |card| {
+                    // Keep the badge outside the clipped document preview, with a
+                    // larger transparent hit area centred on the card's corner.
+                    card.child(
+                        div()
+                            .id(("file-overview-close", index))
+                            .debug_selector(move || format!("file-overview-close-{index}"))
+                            .role(Role::Button)
+                            .aria_label(format!(
+                                "{} {}",
+                                self.buffer_text("关闭", "Close"),
+                                item.name
+                            ))
+                            .absolute()
+                            .top(px(-14.))
+                            .left(px(-14.))
+                            .size(px(28.))
+                            .opacity(0.)
+                            .group_hover("file-overview-card", |style| style.opacity(1.))
+                            .hover(|style| style.opacity(1.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .on_click(move |_, _, cx| {
+                                cx.stop_propagation();
+                                close_entity
+                                    .update(cx, |this, cx| this.close_overview_file(id, cx));
+                            })
+                            .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                                cx.stop_propagation();
+                                accessible_close_entity
+                                    .update(cx, |this, cx| this.close_overview_file(id, cx));
+                            })
+                            .child(
+                                div()
+                                    .debug_selector(move || {
+                                        format!("file-overview-close-badge-{index}")
+                                    })
+                                    .size(px(20.))
+                                    .rounded_full()
+                                    .bg(rgb(theme.surface))
+                                    .border_1()
+                                    .border_color(rgb(theme.border).opacity(0.5))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .child(
+                                        gpui::svg()
+                                            .debug_selector(move || {
+                                                format!("file-overview-close-icon-{index}")
+                                            })
+                                            .data(include_bytes!("../assets/close.svg"))
+                                            .size(px(12.))
+                                            .text_color(rgb(theme.foreground_dim)),
+                                    ),
+                            ),
+                    )
+                },
             )
             .on_click(move |_, window, cx| {
                 entity.update(cx, |this, cx| this.select_overview_item(id, window, cx));

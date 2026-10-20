@@ -27,12 +27,13 @@ use workspace::ScrollBenchmark;
 mod agenda;
 pub(crate) mod buffers;
 pub use buffers::{
-    CloseBuffer, NavigateBack, NavigateForward, NewDocument, SaveBuffers, SwitchBuffer,
+    CloseBuffer, NavigateBack, NavigateForward, NewDocument, NewDraft, SaveBuffers, SwitchBuffer,
 };
 mod command_line;
 mod command_window;
 mod component;
 mod derived;
+mod document_name;
 mod echo_area;
 pub(crate) mod export_ui;
 pub(crate) mod file_overview;
@@ -286,6 +287,7 @@ impl WorkspaceLoadState {
 }
 
 pub struct WorkspaceWindow {
+    document_name: document_name::NameHost,
     pub(crate) file_overview: file_overview::OverviewHost,
     pub(crate) buffers: buffers::BufferHost,
     pub(crate) search: search::SearchHost,

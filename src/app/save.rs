@@ -2,12 +2,23 @@ use std::sync::Arc;
 
 use gpui::Task;
 
+#[derive(Clone, Copy)]
+pub(crate) enum AfterRename {
+    Nothing,
+    Save,
+    SaveAs,
+}
+
 #[derive(Clone, Debug, Default)]
 pub(crate) enum SaveInteraction {
     #[default]
     Idle,
     Prompt,
     Saving,
+    Renaming {
+        document: crate::document::DocumentId,
+        target: std::path::PathBuf,
+    },
     AllowCloseOnce,
 }
 

@@ -3,6 +3,8 @@ mod operation;
 mod scan;
 mod session;
 
+pub(crate) use operation::rename_exclusive;
+
 pub use entry::{EntryId, EntryKind, EntryMetadata, FileEntry, FileResourceId, Mark};
 pub use operation::{
     ConflictPolicy, OperationFailure, OperationPlan, OperationReport, execute_operation,

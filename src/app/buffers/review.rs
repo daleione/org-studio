@@ -1,8 +1,48 @@
 use super::*;
+use crate::document::TextSnapshot;
 use gpui::Window;
 
 impl WorkspaceWindow {
-    pub(crate) fn buffer_review_key(
+    pub(crate) fn buffer_review_capture_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(review) = self.buffers.review() else {
+            return false;
+        };
+        let key = event.keystroke.key.as_str();
+        let modifiers = event.keystroke.modifiers;
+        if review.inline {
+            if !self.file_overview_is_open()
+                || !review
+                    .close_focus
+                    .as_ref()
+                    .is_some_and(|focuses| focuses.iter().any(|focus| focus.is_focused(window)))
+            {
+                return false;
+            }
+            // Navigation withdraws only an unsubmitted card confirmation.
+            if modifiers.platform && key.eq_ignore_ascii_case("n")
+                || modifiers.control && key == "x"
+            {
+                if !review.running {
+                    self.cancel_buffer_panel(cx);
+                }
+                return false;
+            }
+        }
+        if !review.running {
+            self.buffer_review_key(event, window, cx);
+        } else if !matches!(review.kind, ReviewKind::Close(_)) && modifiers.control && key == "g" {
+            self.cancel_buffer_panel(cx);
+        }
+        cx.stop_propagation();
+        true
+    }
+
+    fn buffer_review_key(
         &mut self,
         event: &gpui::KeyDownEvent,
         window: &mut Window,
@@ -10,6 +50,21 @@ impl WorkspaceWindow {
     ) {
         let key = event.keystroke.key.as_str();
         let m = event.keystroke.modifiers;
+        if let Some(focuses) = self.buffers.review().and_then(|r| r.close_focus.as_ref()) {
+            let index = focuses
+                .iter()
+                .position(|f| f.is_focused(window))
+                .unwrap_or(focuses.len() - 1);
+            if key == "escape" || m.control && key == "g" {
+                self.close_review_action(CloseAction::Cancel, window, cx);
+            } else if key == "tab" {
+                let step = if m.shift { focuses.len() - 1 } else { 1 };
+                window.focus(&focuses[(index + step) % focuses.len()], cx);
+            } else if matches!(key, "enter" | "space") {
+                self.close_review_action(CloseAction::ALL[index], window, cx);
+            }
+            return;
+        }
         if key == "escape" || m.control && key == "g" {
             self.cancel_buffer_panel(cx);
         } else if key == "enter" {
@@ -24,7 +79,7 @@ impl WorkspaceWindow {
                 "down" | "tab" => r.selected = (r.selected + 1) % len,
                 "p" if m.control => r.selected = (r.selected + len - 1) % len,
                 "n" if m.control => r.selected = (r.selected + 1) % len,
-                "space" if !r.running && !r.entries[r.selected].done => {
+                "space" if !r.entries[r.selected].done => {
                     r.entries[r.selected].save = !r.entries[r.selected].save
                 }
                 _ => {}
@@ -41,11 +96,10 @@ impl WorkspaceWindow {
         let Some(session) = self.buffer_session(id, cx) else {
             return;
         };
-        if session.read(cx).is_dirty()
-            || !matches!(
-                session.read(cx).save_state(),
-                crate::document::SaveState::Idle
-            )
+        let document = session.read(cx);
+        let empty_draft = document.is_draft() && document.snapshot().len_bytes() == 0;
+        if document.is_dirty() && !empty_draft
+            || !matches!(document.save_state(), crate::document::SaveState::Idle)
         {
             self.begin_buffer_review(ReviewKind::Close(id), cx);
         } else {
@@ -58,12 +112,14 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn begin_buffer_review(&mut self, kind: ReviewKind, cx: &mut Context<Self>) {
+        self.cancel_overview_close(cx);
         if self.buffers.review().is_some() {
             return;
         }
         self.end_prefix(cx);
         self.close_search(false, cx);
         self.dismiss_buffer_panel(cx);
+        self.cancel_pending_document_focus(cx);
         let entries = self
             .buffer_sessions()
             .filter_map(|s| {
@@ -87,11 +143,44 @@ impl WorkspaceWindow {
             running: false,
             error: None,
             selected: 0,
+            inline: matches!(kind, ReviewKind::Close(_)) && self.file_overview_is_open(),
+            close_focus: matches!(kind, ReviewKind::Close(_))
+                .then(|| std::array::from_fn(|_| cx.focus_handle())),
         }));
         self.buffers.pane = self.document_workspace.active_pane;
         self.buffers.returning = false;
         self.buffers.focus_pending = true;
         cx.notify();
+    }
+
+    pub(super) fn close_review_action(
+        &mut self,
+        action: CloseAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(review) = self.buffers.review() else {
+            return;
+        };
+        let ReviewKind::Close(id) = review.kind else {
+            return;
+        };
+        if review.running
+            || !matches!(
+                self.save.interaction,
+                crate::app::save::SaveInteraction::Idle
+            )
+        {
+            return;
+        }
+        match action {
+            CloseAction::Discard => self.discard_buffer_review(window, cx),
+            CloseAction::Cancel => self.cancel_buffer_panel(cx),
+            CloseAction::Save => {
+                self.set_buffer_review_choice(id, true, cx);
+                self.process_buffer_review(window, cx);
+            }
+        }
     }
 
     pub(crate) fn set_buffer_review_choice(
@@ -199,10 +288,14 @@ impl WorkspaceWindow {
             return;
         }
         let kind = review.kind;
+        self.buffers.review_mut().unwrap().running = false;
         self.dismiss_buffer_panel(cx);
         match kind {
             ReviewKind::Save => self.request_document_focus(cx),
-            ReviewKind::Close(id) => self.remove_buffer(id, cx),
+            ReviewKind::Close(id) => {
+                self.remove_buffer(id, cx);
+                self.focus_file_overview(cx);
+            }
             ReviewKind::Quit => {
                 self.save.interaction = crate::app::save::SaveInteraction::AllowCloseOnce;
                 cx.quit();
@@ -218,6 +311,7 @@ impl WorkspaceWindow {
         if let Some(review) = self.buffers.review_mut() {
             review.running = false;
             review.error = Some(error);
+            self.buffers.focus_pending = true;
         }
         cx.notify();
     }

@@ -3,6 +3,60 @@ use crate::app::{ContentRoute, WorkspaceLoadState};
 use gpui::AppContext;
 
 impl WorkspaceWindow {
+    pub(crate) fn new_draft(&mut self, window: &mut gpui::Window, cx: &mut Context<Self>) {
+        if self.file_overview_is_open() {
+            self.new_overview_document(window, cx);
+        } else if !self.buffer_navigation_blocked() {
+            let document = self.prepare_draft(false, cx);
+            self.activate_prepared_draft(document, cx);
+        }
+    }
+
+    pub(crate) fn prepare_draft(
+        &mut self,
+        markdown: bool,
+        cx: &mut Context<Self>,
+    ) -> ReadyDocument {
+        self.buffers.draft_serial += 1;
+        let name = format!(
+            "{} {}{}",
+            self.buffer_text("未命名", "Untitled"),
+            self.buffers.draft_serial,
+            if markdown { ".md" } else { "" },
+        );
+        let mut document = ReadyDocument {
+            session: cx.new(|_| DocumentSession::draft(name)),
+            editor_syntax: Arc::new(crate::editor::EditorSyntaxService::default()),
+            editors: crate::app::PanePair {
+                left: None,
+                right: None,
+            },
+            readers: crate::app::PanePair {
+                left: None,
+                right: None,
+            },
+        };
+        document.editors.left =
+            Some(self.make_editor_for(&document, crate::app::PaneSide::Left, true, cx));
+        document
+    }
+
+    /// Retain the same editor that was prepared for the overview transition.
+    pub(crate) fn activate_prepared_draft(
+        &mut self,
+        document: ReadyDocument,
+        cx: &mut Context<Self>,
+    ) {
+        let id = document.session.read(cx).id();
+        self.buffers.parked.push(ParkedDocument {
+            document,
+            workspace: DocumentWorkspaceState::default(),
+            soft_wrap: true,
+            preview: None,
+        });
+        self.activate_buffer(id, cx);
+    }
+
     /// Prepare retained view entities without changing the active document,
     /// navigation history, subscriptions, focus, or undo state.
     pub(crate) fn overview_document_for_paint(
@@ -146,7 +200,7 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn activate_buffer(&mut self, id: DocumentId, cx: &mut Context<Self>) {
-        if self.buffer_busy() {
+        if self.buffer_navigation_blocked() {
             return;
         }
         if self.buffer_session(id, cx).is_none() {
@@ -215,7 +269,7 @@ impl WorkspaceWindow {
         target: Option<PathBuf>,
         cx: &mut Context<Self>,
     ) {
-        if self.buffer_busy() {
+        if self.buffer_navigation_blocked() {
             return;
         }
         self.background_pending_open(cx);
@@ -224,7 +278,7 @@ impl WorkspaceWindow {
             session.observe_disk(None);
             session
         } else {
-            DocumentSession::draft(name)
+            DocumentSession::named_draft(name)
         };
         self.close_command_line(cx);
         self.close_search(false, cx);

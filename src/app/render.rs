@@ -110,6 +110,7 @@ fn document_titlebar(
     titlebar_inset: f32,
     theme_mode: ThemeMode,
     title: String,
+    rename_available: bool,
 ) -> gpui::Div {
     let theme = current_theme();
     let sidebar_workspace = workspace.clone();
@@ -234,7 +235,7 @@ fn document_titlebar(
                 }),
         )
         .child(super::file_overview::toolbar_button(workspace.clone()))
-        .child(theme_toggle_button(workspace, theme_mode))
+        .child(theme_toggle_button(workspace.clone(), theme_mode))
         .child(
             div()
                 .absolute()
@@ -249,12 +250,40 @@ fn document_titlebar(
                 .justify_center()
                 .child(
                     div()
+                        .id("document-titlebar-filename")
                         .debug_selector(|| "document-titlebar-filename".to_owned())
                         .min_w_0()
                         .truncate()
                         .text_size(ui_px(13.0))
                         .text_color(rgb(theme.foreground))
-                        .child_text(title),
+                        .child_text(title)
+                        .when(rename_available, |title| {
+                            let anchor_workspace = workspace.clone();
+                            title
+                                .role(gpui::Role::Button)
+                                .aria_label("命名或重命名文档 / Name or rename document")
+                                .cursor_pointer()
+                                .px(px(5.))
+                                .py(px(3.))
+                                .rounded(px(4.))
+                                .hover(|style| style.bg(rgb(theme.background_alt)))
+                                .child(
+                                    gpui::canvas(
+                                        |_, _, _| (),
+                                        move |bounds, _, _, cx| {
+                                            anchor_workspace.update(cx, |this, _| {
+                                                this.document_name.anchor = bounds
+                                            });
+                                        },
+                                    )
+                                    .absolute()
+                                    .inset_0(),
+                                )
+                                .on_click(move |_, window, cx| {
+                                    workspace
+                                        .update(cx, |this, cx| this.open_document_name(window, cx));
+                                })
+                        }),
                 ),
         )
 }
@@ -266,6 +295,7 @@ impl Render for WorkspaceWindow {
         self.ensure_document_subscription(cx);
         self.ensure_agenda_runtime(cx);
         self.file_overview_tick(window, cx);
+        self.document_name_tick(cx);
         // Fullscreen hides the traffic lights, so the titlebar buttons slide
         // to the left edge; windowed mode reserves their slot again.
         let titlebar_inset = if window.is_fullscreen() {
@@ -321,8 +351,10 @@ impl Render for WorkspaceWindow {
                 }
             }));
         }
-        if !self.file_overview_is_open() {
+        if !self.file_overview_is_open() || self.buffers.review().is_some() {
             self.buffer_tick(window, cx);
+        }
+        if !self.file_overview_is_open() {
             self.command_line_tick(window, cx);
             self.search_render_tick(window, cx);
         }
@@ -459,6 +491,12 @@ impl Render for WorkspaceWindow {
                 this.open_search(false, false, false, cx)
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.document_name_capture_key(event, window, cx) {
+                    return;
+                }
+                if this.buffer_review_capture_key(event, window, cx) {
+                    return;
+                }
                 if this.file_overview_is_open() {
                     this.file_overview_capture_key(event, window, cx);
                     return;
@@ -523,22 +561,7 @@ impl Render for WorkspaceWindow {
                     this.key_down(event, window, cx);
                     return;
                 }
-                if this.buffers.panel.is_some() {
-                    if this.buffer_busy() {
-                        if event.keystroke.modifiers.control && event.keystroke.key == "g" {
-                            this.cancel_buffer_panel(cx);
-                        }
-                        cx.stop_propagation();
-                        return;
-                    }
-                    if matches!(
-                        this.buffers.panel,
-                        Some(crate::app::buffers::Panel::Review(_))
-                    ) {
-                        this.buffer_review_key(event, window, cx);
-                        cx.stop_propagation();
-                    }
-                } else {
+                if this.buffers.panel.is_none() {
                     this.search_capture(event, window, cx);
                 }
             }))
@@ -547,6 +570,7 @@ impl Render for WorkspaceWindow {
                     && !this.command_line_is_open()
                     && this.buffers.panel.is_none()
                     && !this.file_overview_is_open()
+                    && !this.document_name.is_open()
                 {
                     this.key_down(event, window, cx);
                 }
@@ -579,6 +603,15 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &SaveDocumentAs, window, cx| {
                 this.dispatch_command(SAVE_DOCUMENT_AS_COMMAND, window, cx)
             }))
+            .on_action(
+                cx.listener(|this, _: &crate::app::buffers::NewDraft, window, cx| {
+                    if this.content_route == crate::app::ContentRoute::Agenda {
+                        this.dispatch_agenda_intent(crate::app::agenda::UiIntent::OpenCapture, cx);
+                    } else {
+                        this.new_draft(window, cx);
+                    }
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &crate::app::buffers::NewDocument, _, cx| {
                     this.open_buffer_picker(crate::app::buffers::PickerIntent::New, cx)
@@ -670,6 +703,7 @@ impl Render for WorkspaceWindow {
                     } else {
                         self.window_title(cx)
                     },
+                    self.document_name_available(cx),
                 ))
             })
             .child(
@@ -796,6 +830,8 @@ impl Render for WorkspaceWindow {
             .child(self.overview_presented_marker(cx))
             .children(self.render_overview_preparation(entity.clone(), window, cx))
             .children(self.render_file_overview(window, cx))
+            .children(self.render_document_name(window, cx))
+            .children(self.buffer_review_modal(window, cx))
     }
 }
 
@@ -830,6 +866,14 @@ impl WorkspaceWindow {
                         }
                         crate::document::DocumentEvent::Saved { .. } => {
                             this.flush_agenda_clock(cx);
+                        }
+                        crate::document::DocumentEvent::NameChanged { .. } => {
+                            if this
+                                .document_session()
+                                .is_some_and(|s| s.read(cx).file_path().is_some())
+                            {
+                                this.schedule_derived_update(cx);
+                            }
                         }
                         crate::document::DocumentEvent::DiskChanged { .. } => {}
                     }
@@ -894,6 +938,7 @@ mod tests {
                 crate::app::TITLEBAR_LEADING_INSET,
                 theme_mode,
                 self.0.read(cx).window_title(cx),
+                self.0.read(cx).document_name_available(cx),
             )
         }
     }
@@ -992,6 +1037,11 @@ mod tests {
             let left = cx.debug_bounds("document-titlebar-agenda-toggle").unwrap();
             let right = cx.debug_bounds("document-titlebar-export-toggle").unwrap();
             assert!((f32::from(title.center().x - bar.center().x)).abs() < 1.);
+            assert!((f32::from(title.center().y - bar.center().y)).abs() < 1.);
+            assert!(
+                title.size.height <= bar.size.height,
+                "the draft title must fit on one titlebar row"
+            );
             assert!(title.left() >= left.right() && title.right() <= right.left());
         }
     }

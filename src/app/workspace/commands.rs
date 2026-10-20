@@ -38,6 +38,7 @@ impl WorkspaceWindow {
         if window.root::<Self>().flatten().is_some_and(|workspace| {
             let workspace = workspace.read(cx);
             workspace.search_is_open()
+                || workspace.document_name.is_open()
                 || workspace.file_overview_is_open()
                 || workspace.command_line_is_open()
                 || workspace
