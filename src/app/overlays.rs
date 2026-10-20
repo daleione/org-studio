@@ -7,7 +7,7 @@ use super::command_window;
 gpui::actions!(workspace, [LocateCursor]);
 
 const CURSOR_CONTRACT: f32 = 0.2;
-const CURSOR_HOLD: f32 = 0.5;
+const CURSOR_HOLD: f32 = 1.0;
 const CURSOR_FADE: f32 = 0.2;
 const CURSOR_DURATION: f32 = CURSOR_CONTRACT + CURSOR_HOLD + CURSOR_FADE;
 

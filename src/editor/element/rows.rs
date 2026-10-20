@@ -316,7 +316,13 @@ impl RowShaping<'_> {
             layout.wrap_boundaries().len() + 1
         };
         let number: gpui::SharedString = (line_number + 1).to_string().into();
-        let active_gutter = anchor.is_some() && self.editor_focused;
+        let selected = self.selection.range();
+        let selected_start = selected.start.0.max(full_range.start.0);
+        let selected_end = selected.end.0.min(full_range.end.0);
+        let selected_gutter = selected_start < selected_end;
+        let active_gutter = anchor.is_some()
+            && self.editor_focused
+            && (self.selection.is_empty() || selected_gutter);
         let mut gutter_font = self.style.font();
         if active_gutter {
             gutter_font.weight = FontWeight::SEMIBOLD;
@@ -324,7 +330,7 @@ impl RowShaping<'_> {
         let gutter_run = TextRun {
             len: number.len(),
             font: gutter_font,
-            color: gpui::rgb(if active_gutter {
+            color: gpui::rgb(if active_gutter || selected_gutter {
                 self.theme.link
             } else {
                 self.theme.foreground_dim
@@ -615,9 +621,6 @@ impl RowShaping<'_> {
                 );
             }
         }
-        let selected = self.selection.range();
-        let selected_start = selected.start.0.max(full_range.start.0);
-        let selected_end = selected.end.0.min(full_range.end.0);
         if inline_image.is_none() && selected_start < selected_end && line_animation_scale >= 0.999
         {
             let source_local_start = selected_start
@@ -699,6 +702,7 @@ impl RowShaping<'_> {
             metrics,
             block: line_style.block.clone(),
             active: anchor.is_some(),
+            selected: selected_gutter,
             folded,
             background: editor_row_background(
                 line_style.id,

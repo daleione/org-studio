@@ -41,6 +41,7 @@ pub(super) struct PaintRow {
     pub(super) metrics: syntax::BlockMetrics,
     pub(super) block: Option<syntax::EditorBlockDecoration>,
     pub(super) active: bool,
+    pub(super) selected: bool,
     pub(super) folded: bool,
     pub(super) background: Option<PaintQuad>,
     pub(super) animation_clip_y: Option<(Pixels, Pixels)>,

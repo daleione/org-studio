@@ -20,6 +20,7 @@ pub(super) fn paint_frame(
 ) {
     let focus_handle = host.read(cx).focus_handle.clone();
     let editor_focused = focus_handle.is_focused(window);
+    let has_selection = !host.read(cx).selection().is_empty();
     let caret_visible = editor_focused && state.caret.is_some();
     let caret_opacity = host.update(cx, |editor, cx| editor.caret_opacity(caret_visible, cx));
     let table_hover = host.read(cx).hovered_table_cell();
@@ -54,14 +55,36 @@ pub(super) fn paint_frame(
         .map(|row| (row.shape_key.clone(), row.hit.layout.clone()))
         .collect::<Vec<_>>();
     let gutter = state.gutter.clone();
+    let gutter_bounds = gutter.bounds;
+    let theme = current_theme();
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         crate::document_preview::quad(window, gutter);
         paint_minimap_layer(host, state, window, cx);
         let text_left = state.gutter.bounds.right() + px(1.0);
         for (index, row) in state.rows.iter().enumerate() {
             let number_x = text_left - px(GUTTER_PADDING) - row.gutter_layout.width();
-            let active_gutter = row.active && editor_focused;
+            let active_gutter = row.selected || (row.active && editor_focused && !has_selection);
             let mut paint = |window: &mut Window| {
+                if row.selected {
+                    let band = Bounds::from_corners(
+                        point(gutter_bounds.left(), row.hit.visible_top),
+                        point(gutter_bounds.right(), row.hit.visible_bottom),
+                    );
+                    crate::document_preview::quad(
+                        window,
+                        fill(band, rgba((theme.accent << 8) | 0x1c)),
+                    );
+                    crate::document_preview::quad(
+                        window,
+                        fill(
+                            Bounds::new(
+                                point(band.right() - px(2.), band.top()),
+                                size(px(2.), band.size.height),
+                            ),
+                            gpui::rgb(theme.accent),
+                        ),
+                    );
+                }
                 let _ = crate::document_preview::paint_shaped(
                     &row.gutter_layout,
                     point(number_x, row.hit.origin_y),
