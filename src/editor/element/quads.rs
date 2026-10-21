@@ -89,8 +89,8 @@ pub(super) fn push_link_hover_quad(
 }
 
 /// Highlights a data row, or the column selected from its table header.
-pub(super) fn table_hover_quads(
-    rows: &[crate::editor::HitRow],
+pub(super) fn table_hover_quads<'a>(
+    rows: impl IntoIterator<Item = &'a crate::editor::HitRow>,
     snapshot: &crate::document::DocumentSnapshot,
     format: crate::document::DocumentFormat,
     hovered_line: crate::document::LineIndex,
@@ -98,18 +98,18 @@ pub(super) fn table_hover_quads(
     header: bool,
     accent: u32,
 ) -> Vec<PaintQuad> {
-    let Some(index) = rows.iter().position(|row| row.line == hovered_line) else {
-        return Vec::new();
-    };
+    let mut rows = rows.into_iter().skip_while(|row| row.line != hovered_line);
     let color = rgba((accent << 8) | 0x1c);
     if !header {
-        return table_hover_bounds(&rows[index], snapshot, format, None)
+        return rows
+            .next()
+            .and_then(|row| table_hover_bounds(row, snapshot, format, None))
             .map(|bounds| fill(bounds, color))
             .into_iter()
             .collect();
     }
     let mut quads = Vec::new();
-    for (offset, row) in rows[index..].iter().enumerate() {
+    for (offset, row) in rows.enumerate() {
         if row.line.0 != hovered_line.0 + offset as u64 {
             break;
         }

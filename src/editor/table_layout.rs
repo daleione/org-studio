@@ -5,6 +5,7 @@ use gpui::{Bounds, Font, Pixels, Point, TextRun, WrappedLine, point, px};
 
 use super::{org_commands::TableColumns, syntax};
 use crate::document::{DocumentFormat, DocumentSnapshot, LineIndex, TextSnapshot, table};
+use crate::org_syntax::inline::EntityText;
 
 /// Font-dependent geometry, shared by every row of a table.
 pub(super) struct TableColumnMetrics {
@@ -13,6 +14,7 @@ pub(super) struct TableColumnMetrics {
     pub(super) space_width: Pixels,
     pub(super) pipe_width: Pixels,
     pub(super) natural_widths: Vec<Pixels>,
+    has_entities: bool,
 }
 
 impl TableColumnMetrics {
@@ -54,6 +56,7 @@ impl TableColumnMetrics {
             DocumentFormat::Org => "table.org",
             DocumentFormat::Markdown => "table.md",
         });
+        let mut has_entities = false;
         for line in first.0..=last.0 {
             let range = snapshot
                 .line_content_range(LineIndex(line))
@@ -81,6 +84,15 @@ impl TableColumnMetrics {
             for (width, cell) in natural_widths.iter_mut().zip(row.cells) {
                 let content = &text[cell.text_range.clone()];
                 let runs = slice_text_runs(&runs, cell.text_range);
+                let entities = cell_entities(content, columns.format, None);
+                has_entities |= entities.is_some();
+                let content = entities
+                    .as_ref()
+                    .map_or(content, |entities| entities.text.as_str());
+                let runs = match &entities {
+                    Some(entities) => entity_runs(&runs, entities),
+                    None => runs,
+                };
                 let measured = text_system
                     .shape_line(content.to_owned().into(), font_size, &runs, None)
                     .width();
@@ -96,6 +108,7 @@ impl TableColumnMetrics {
             space_width,
             pipe_width,
             natural_widths,
+            has_entities,
         }
     }
 
@@ -133,6 +146,7 @@ pub(super) struct TableVisualFragment {
     pub(super) delimiter: bool,
     // Separator glyphs are shortened to fit the column, while their source stays intact.
     pub(super) scaled_source: bool,
+    entities: Option<EntityText>,
 }
 
 impl TableVisualFragment {
@@ -144,6 +158,10 @@ impl TableVisualFragment {
         }
         let local = index.clamp(self.content_range.start, self.content_range.end)
             - self.content_range.start;
+        let local = self
+            .entities
+            .as_ref()
+            .map_or(local, |entities| entities.source_to_display(local));
         if let Some(row) = self.layout.wrap_boundaries().iter().position(|boundary| {
             self.layout.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index == local
         }) {
@@ -171,6 +189,10 @@ impl TableVisualFragment {
                 line_height,
             )
             .unwrap_or_else(|index| index);
+        let local = self
+            .entities
+            .as_ref()
+            .map_or(local, |entities| entities.display_to_source(local));
         self.content_range.start + local.min(self.content_range.len())
     }
 }
@@ -252,6 +274,7 @@ impl TableVisualLayout {
         bounds
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn shape(
         text: &gpui::SharedString,
         runs: &[TextRun],
@@ -259,6 +282,7 @@ impl TableVisualLayout {
         metrics: &Arc<TableColumnMetrics>,
         wrap_width: Option<Pixels>,
         preferred_widths_em: Option<&[f32]>,
+        caret: Option<usize>,
         text_system: &gpui::WindowTextSystem,
     ) -> Option<Arc<TableVisualLayout>> {
         // Leave room to paint the caret after the final column boundary.
@@ -323,7 +347,12 @@ impl TableVisualLayout {
         let natural_width =
             indent + pipe * (columns.widths.len() + 1) + widths.iter().copied().sum::<Pixels>();
         let constrained = wrap_width.is_some_and(|width| natural_width > width);
-        if !columns.aligned && source_widths.is_none() && !constrained && preferred.is_none() {
+        if !columns.aligned
+            && source_widths.is_none()
+            && !constrained
+            && preferred.is_none()
+            && !metrics.has_entities
+        {
             return None;
         }
         if let Some(width) = wrap_width.filter(|_| constrained) {
@@ -355,6 +384,7 @@ impl TableVisualLayout {
                 ),
                 delimiter: false,
                 scaled_source: false,
+                entities: None,
             });
         }
         let mut x = indent;
@@ -373,6 +403,7 @@ impl TableVisualLayout {
                 ),
                 delimiter: true,
                 scaled_source: false,
+                entities: None,
             });
             let end = delimiters.get(column + 1).copied().unwrap_or(text.len());
             let range = start + 1..end;
@@ -384,6 +415,22 @@ impl TableVisualLayout {
                 let trimmed = raw.trim();
                 let start = range.start + raw.len() - raw.trim_start().len();
                 let content_range = start..start + trimmed.len();
+                let entities = (!separator)
+                    .then(|| {
+                        cell_entities(
+                            trimmed,
+                            columns.format,
+                            caret
+                                .filter(|caret| content_range.contains(caret))
+                                .map(|caret| caret - content_range.start),
+                        )
+                    })
+                    .flatten();
+                let source_runs = slice_text_runs(runs, content_range.clone());
+                let mut preview_runs = match &entities {
+                    Some(entities) => entity_runs(&source_runs, entities),
+                    None => source_runs,
+                };
                 let (layout, scaled_source) = if separator {
                     let count = (f32::from(content_width) / f32::from(advance("-")))
                         .floor()
@@ -401,14 +448,25 @@ impl TableVisualLayout {
                 } else {
                     (
                         shape(
-                            text[content_range.clone()].to_owned().into(),
-                            &slice_text_runs(runs, content_range.clone()),
+                            entities
+                                .as_ref()
+                                .map_or_else(
+                                    || trimmed.to_owned(),
+                                    |entities| entities.text.clone(),
+                                )
+                                .into(),
+                            &preview_runs,
                             // Padding subtraction can round down an exact fit.
                             wrap_width.map(|_| content_width + px(0.01)),
                         ),
                         false,
                     )
                 };
+                if scaled_source {
+                    let mut run = runs.first().cloned().unwrap_or_default();
+                    run.len = layout.text.len();
+                    preview_runs = vec![run];
+                }
                 let right_aligned = !separator
                     && raw.len() - raw.trim_start().len() > raw.len() - raw.trim_end().len();
                 let alignment_offset = if right_aligned && layout.wrap_boundaries().is_empty() {
@@ -417,13 +475,7 @@ impl TableVisualLayout {
                     Pixels::ZERO
                 };
                 fragments.push(TableVisualFragment {
-                    preview_runs: if scaled_source {
-                        let mut run = runs.first().cloned().unwrap_or_default();
-                        run.len = layout.text.len();
-                        vec![run]
-                    } else {
-                        slice_text_runs(runs, content_range.clone())
-                    },
+                    preview_runs,
                     display_range: range,
                     content_range,
                     x: x + pipe + padding + alignment_offset,
@@ -431,6 +483,7 @@ impl TableVisualLayout {
                     layout,
                     delimiter: false,
                     scaled_source,
+                    entities,
                 });
             }
             if delimiters.get(column + 1).is_some() {
@@ -456,6 +509,28 @@ impl TableVisualLayout {
             metrics: metrics.clone(),
         }))
     }
+}
+
+fn cell_entities(source: &str, format: DocumentFormat, caret: Option<usize>) -> Option<EntityText> {
+    (format == DocumentFormat::Org && source.contains('\\'))
+        .then(|| EntityText::new(source, caret))
+        .filter(EntityText::has_replacements)
+}
+
+fn entity_runs(runs: &[TextRun], entities: &EntityText) -> Vec<TextRun> {
+    let mut offset = 0;
+    runs.iter()
+        .filter_map(|run| {
+            let start = entities.source_to_display(offset);
+            offset += run.len;
+            let end = entities.source_to_display(offset);
+            (start < end).then(|| {
+                let mut run = run.clone();
+                run.len = end - start;
+                run
+            })
+        })
+        .collect()
 }
 
 fn slice_text_runs(runs: &[TextRun], range: Range<usize>) -> Vec<TextRun> {

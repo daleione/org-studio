@@ -41,10 +41,7 @@ pub(super) fn publish_frame(
     let source_run_button_hits = state
         .source_run_buttons
         .iter()
-        .map(|button| crate::editor::SourceRunButtonHit {
-            bounds: button.interaction_bounds,
-            source_offset: button.source_offset,
-        })
+        .map(|button| button.hit)
         .collect::<std::sync::Arc<[_]>>();
     let image_resize_handles = state
         .image_resize_handles

@@ -5,6 +5,134 @@ fn snapshot(source: &str) -> DocumentSnapshot {
     DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap()
 }
 
+fn mysql_request(source: &str) -> Result<BabelExecutionRequest, String> {
+    prepare_source_block_execution(
+        &snapshot(source),
+        Path::new("/tmp/mysql-notes.org"),
+        Selection::caret(ByteOffset(source.rfind("SELECT").unwrap_or(0) as u64)),
+    )
+}
+
+#[test]
+fn header_tokenization_preserves_quoted_values_and_trailing_backslashes() {
+    for (input, expected) in [
+        (":dbpassword \"\"", ""),
+        (":dbpassword \":secret\"", ":secret"),
+        (":dbpassword 'secret\\path'", "secret\\path"),
+        (":dbpassword secret\\", "secret\\"),
+        (":dbpassword secret\\ value", "secret value"),
+    ] {
+        let mut headers = crate::babel::headers::Headers::default();
+        headers.parse(input).unwrap();
+        assert_eq!(headers.get(":dbpassword"), Some(expected));
+        assert_eq!(
+            crate::babel::syntax::tokenize_header(input).unwrap(),
+            [":dbpassword", expected]
+        );
+    }
+    assert!(crate::babel::syntax::tokenize_header(":file \"unfinished").is_err());
+}
+
+#[test]
+fn mysql_inherits_file_subtree_and_affiliated_arguments() {
+    let source = "#+PROPERTY: header-args:sql :engine mysql :dbhost file-host :results table replace\n\
+* Reports\n:PROPERTIES:\n:header-args:sql:\t:database reports :dbuser reader :dbhost subtree-host\n:END:\n\
+#+name: report\n#+HEADER: :dbport 3307\n#+CAPTION: Query\n#+ATTR_ORG: :width 42\n#+begin_src sql :dbhost block-host :dbpassword \":quoted secret\"\nSELECT 1;\n#+end_src\n";
+    let request = mysql_request(source).unwrap();
+    let mysql = request.mysql.unwrap();
+    let target = mysql.target().unwrap();
+    assert_eq!(target.user, "reader");
+    assert_eq!(target.host, "block-host");
+    assert_eq!(target.port, 3307);
+    assert_eq!(target.database, "reports");
+    assert_eq!(mysql.headers.get(":dbpassword"), Some(":quoted secret"));
+    assert_eq!(mysql.source_name.as_deref(), Some("report"));
+
+    let separated = source.replace("#+begin_src", "\n#+begin_src");
+    let mysql = mysql_request(&separated).unwrap().mysql.unwrap();
+    assert!(mysql.source_name.is_none());
+    assert!(mysql.headers.get(":dbport").is_none());
+}
+
+#[test]
+fn mysql_respects_effective_eval_and_rejects_unsupported_headers() {
+    let denied = "#+PROPERTY: header-args:sql :eval never\n#+begin_src sql\nSELECT 1;\n#+end_src\n";
+    assert!(mysql_request(denied).err().unwrap().contains(":eval"));
+    let allowed = denied.replace("#+begin_src sql", "#+begin_src sql :eval yes");
+    mysql_request(&allowed).unwrap();
+    for args in [
+        ":engine postgresql",
+        ":var n=1",
+        ":results append",
+        ":results raw",
+        ":session shared",
+        ":cache yes",
+    ] {
+        let source = format!("#+begin_src sql {args}\nSELECT 1;\n#+end_src\n");
+        assert!(mysql_request(&source).is_err(), "{args}");
+    }
+}
+
+#[test]
+fn mysql_ignores_example_properties_and_sibling_subtrees() {
+    let source = "#+begin_example\n#+PROPERTY: header-args:sql :eval never\n#+end_example\n\
+* Previous\n:PROPERTIES:\n:header-args:sql: :eval never\n:END:\n\
+* Current\n#+begin_src sql :engine mysql\nSELECT 1;\n#+end_src\n";
+    mysql_request(source).unwrap();
+}
+
+#[test]
+fn mysql_result_replacement_consumes_entire_table_and_preserves_prose() {
+    let source = "#+name: report\n#+begin_src sql\nSELECT 1;\n#+end_src\n\n\
+Explanation.\n\n#+RESULTS[oldhash]: report\n#+CAPTION: My report\n| a | b |\n|---+---|\n| 1 | 2 |\n| 3 | 4 |\n\nFollowing paragraph.\n* Next\n";
+    let request = mysql_request(source).unwrap();
+    let RequestedResult::Table {
+        range, attributes, ..
+    } = request.result
+    else {
+        panic!("expected table")
+    };
+    assert_eq!(attributes, "#+CAPTION: My report\n");
+    let text = snapshot(source);
+    let old = text.copy_range(range);
+    assert!(old.starts_with("#+RESULTS[oldhash]: report"));
+    assert!(old.contains("| 3 | 4 |"));
+    assert!(!old.contains("Explanation"));
+    assert!(!old.contains("Following"));
+    assert!(
+        text.copy_range(ByteRange::new(range.end.0, text.len_bytes()))
+            .starts_with("\nFollowing")
+    );
+}
+
+#[test]
+fn mysql_rejects_ambiguous_names_and_results_before_connecting() {
+    for source in [
+        "#+name: report\n#+begin_src sql\nSELECT 1;\n#+end_src\n#+name: report\n#+begin_src sql\nSELECT 2;\n#+end_src\n",
+        "#+name: report\n#+begin_src sql\nSELECT 1;\n#+end_src\n#+RESULTS: report\n| 1 |\n\n#+RESULTS: report\n| 2 |\n",
+        "#+name: report\n#+begin_src sql\nSELECT 1;\n#+end_src\n#+RESULTS: other\n| 1 |\n",
+        "#+begin_src sql\nSELECT 1;\n#+end_src\n#+RESULTS:\n[[file:old.csv]]\n",
+    ] {
+        assert!(mysql_request(source).is_err());
+    }
+}
+
+#[test]
+fn mysql_connection_url_inherits_and_explicit_fields_override_it() {
+    let source = "#+PROPERTY: header-args:sql :dbconnection mysql://reader:p%40ss@db.example:3307/reports :eval query\n#+begin_src sql -n :results table replace :dbhost block.example :database metrics :exports both\nSELECT 1;\n#+end_src\n";
+    let request = mysql_request(source).unwrap();
+    let mysql = request.mysql.unwrap();
+    assert!(mysql.ready());
+    let target = mysql.target().unwrap();
+    assert_eq!(target.user, "reader");
+    assert_eq!(target.host, "block.example");
+    assert_eq!(target.port, 3307);
+    assert_eq!(target.database, "metrics");
+    assert!(mysql.ask_each_time);
+    assert!(!mysql.identity().contains("p%40ss"));
+    assert!(!mysql.identity().contains("p@ss"));
+}
+
 #[test]
 fn plantuml_requires_an_explicit_output_file() {
     let text = snapshot("#+begin_src plantuml\nA -> B\n#+end_src\n");

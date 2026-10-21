@@ -40,6 +40,85 @@ pub struct InlineText {
     pub spans: Vec<InlineSpan>,
 }
 
+/// Entity presentation keeps the source table structure and markup intact.
+/// Only entities recognized by the inline parser are substituted; rendered
+/// characters are never parsed again as links, emphasis, or table delimiters.
+#[derive(Clone, Debug)]
+pub(crate) struct EntityText {
+    pub(crate) text: String,
+    replacements: Vec<(Range<usize>, Range<usize>)>,
+}
+
+impl EntityText {
+    pub(crate) fn new(source: &str, caret: Option<usize>) -> Self {
+        let parsed = parse(source);
+        let mut text = String::with_capacity(source.len());
+        let mut replacements = Vec::new();
+        let mut cursor = 0;
+        for span in parsed
+            .spans
+            .iter()
+            .filter(|span| span.kind == InlineKind::Entity)
+        {
+            let value = &parsed.text[span.range.clone()];
+            if value == &source[span.source.clone()]
+                || caret.is_some_and(|caret| span.source.start < caret && caret < span.source.end)
+            {
+                continue;
+            }
+            text.push_str(&source[cursor..span.source.start]);
+            let start = text.len();
+            text.push_str(value);
+            replacements.push((span.source.clone(), start..text.len()));
+            cursor = span.source.end;
+        }
+        text.push_str(&source[cursor..]);
+        Self { text, replacements }
+    }
+
+    pub(crate) fn has_replacements(&self) -> bool {
+        !self.replacements.is_empty()
+    }
+
+    pub(crate) fn source_to_display(&self, source: usize) -> usize {
+        let (mut source_end, mut display_end) = (0, 0);
+        for (raw, display) in &self.replacements {
+            if source < raw.start {
+                break;
+            }
+            if source < raw.end {
+                return if source - raw.start <= raw.len() / 2 {
+                    display.start
+                } else {
+                    display.end
+                };
+            }
+            source_end = raw.end;
+            display_end = display.end;
+        }
+        display_end + source.saturating_sub(source_end)
+    }
+
+    pub(crate) fn display_to_source(&self, display: usize) -> usize {
+        let (mut source_end, mut display_end) = (0, 0);
+        for (raw, visible) in &self.replacements {
+            if display < visible.start {
+                break;
+            }
+            if display < visible.end {
+                return if display - visible.start <= visible.len() / 2 {
+                    raw.start
+                } else {
+                    raw.end
+                };
+            }
+            source_end = raw.end;
+            display_end = visible.end;
+        }
+        source_end + display.saturating_sub(display_end)
+    }
+}
+
 pub fn parse(source: &str) -> InlineText {
     let mut output = InlineText::default();
     let mut cursor = 0;
@@ -278,6 +357,18 @@ fn entity_display(entity: &str) -> Option<&'static str> {
         "\\ge" => Some("≥"),
         "\\neq" => Some("≠"),
         "\\nbsp" => Some(" "),
+        "\\zwnj" => Some("\u{200c}"),
+        "\\vert" => Some("|"),
+        "\\ast" => Some("*"),
+        "\\under" => Some("_"),
+        "\\slash" => Some("/"),
+        "\\equal" => Some("="),
+        "\\tilde" => Some("~"),
+        "\\plus" => Some("+"),
+        "\\lt" => Some("<"),
+        "\\gt" => Some(">"),
+        "\\asciicirc" => Some("^"),
+        "\\dollar" => Some("$"),
         _ => None,
     }
 }
@@ -357,7 +448,47 @@ fn timestamp_at(source: &str, start: usize) -> Option<(usize, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{InlineKind, parse};
+    use super::{EntityText, InlineKind, parse};
+
+    #[test]
+    fn table_entities_preserve_literal_markup_and_source_boundaries() {
+        let source = r"中文 a\vert{}b \nbsp{}padded\nbsp{} \ast{}粗体\ast{} \under{}下划线\under{} \equal{}原样\equal{} \tilde{}代码\tilde{} C:\\zwnj{}Users\\zwnj{}demo [\zwnj{}[file:demo][链接形态]] {\zwnj{}{{macro}}}";
+        let visible = EntityText::new(source, None);
+        assert_eq!(
+            visible.text.replace('\u{200c}', "").replace('\u{a0}', " "),
+            r"中文 a|b  padded  *粗体* _下划线_ =原样= ~代码~ C:\Users\demo [[file:demo][链接形态]] {{{macro}}}"
+        );
+        for offset in source
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .chain([source.len()])
+        {
+            if visible
+                .replacements
+                .iter()
+                .any(|(raw, _)| raw.start < offset && offset < raw.end)
+            {
+                continue;
+            }
+            let display = visible.source_to_display(offset);
+            assert!(visible.text.is_char_boundary(display));
+            assert_eq!(visible.display_to_source(display), offset);
+        }
+    }
+
+    #[test]
+    fn table_entities_respect_verbatim_unknown_names_and_editing_at_point() {
+        let source = r"=\alpha{}= \unknown{} a\vert{}b \nbsp{}end";
+        let caret = source.find("vert").unwrap() + 2;
+        let visible = EntityText::new(source, Some(caret));
+        assert_eq!(visible.text, "=\\alpha{}= \\unknown{} a\\vert{}b \u{a0}end");
+        assert_eq!(
+            visible.display_to_source(visible.source_to_display(caret)),
+            caret
+        );
+        let visible = EntityText::new(source, None);
+        assert_eq!(visible.text, "=\\alpha{}= \\unknown{} a|b \u{a0}end");
+    }
 
     #[test]
     fn removes_markup_and_preserves_unicode() {

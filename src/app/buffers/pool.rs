@@ -303,6 +303,9 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn remove_buffer(&mut self, id: DocumentId, cx: &mut Context<Self>) {
+        if let Some(run) = self.mysql.run.as_ref().filter(|run| run.document == id) {
+            run.cancel.cancel();
+        }
         self.buffers.forget_opened(id);
         if self
             .document_session()

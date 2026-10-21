@@ -57,7 +57,8 @@ use super::FrameBenchmarkAction;
 use super::{HitRow, SemanticEditor, highlight::RangeHighlight, syntax};
 
 use blocks::{
-    editor_block_accent, editor_block_text_inset, editor_row_background, is_source_block_kind,
+    editor_block_accent, editor_block_content_width, editor_block_left_inset,
+    editor_block_text_inset, editor_block_wrap_width, editor_row_background, is_source_block_kind,
 };
 use cookie::push_cookie_progress_quads;
 use minimap::{MinimapPaint, build_minimap};
@@ -81,11 +82,14 @@ const BLOCK_TEXT_INSET: f32 = 16.0;
 const BLOCK_TEXT_RIGHT_PADDING: f32 = 8.0;
 const SOURCE_GUTTER_INSET: f32 = 1.0;
 const SOURCE_GUTTER_WIDTH: f32 = 24.0;
-const SOURCE_TEXT_INSET: f32 = 42.0;
+const SOURCE_TEXT_PADDING: f32 = 4.0;
 const SOURCE_LINE_NUMBER_FONT_SCALE: f32 = 0.70;
 const SOURCE_RUN_BUTTON_SIZE: f32 = 20.0;
 const SOURCE_RUN_BUTTON_HIT_SLOP: f32 = 4.0;
 const SOURCE_RUN_ICON_FONT_SCALE: f32 = 0.82;
+const SOURCE_COPY_BUTTON_SIZE: f32 = 26.0;
+const SOURCE_COPY_BUTTON_RIGHT_INSET: f32 = 10.0;
+const SOURCE_COPY_BUTTON_SPACE: f32 = SOURCE_COPY_BUTTON_SIZE + SOURCE_COPY_BUTTON_RIGHT_INSET;
 const BLOCK_VERTICAL_INSET: f32 = 2.0;
 const BLOCK_RADIUS: f32 = 7.0;
 /// Bottom-right grip of an inline image, plus the slack around its hit area.

@@ -507,7 +507,20 @@ pub(super) fn rasterize_text_rows(
         let origin_x = (source.indent * scale_factor).round() as i32;
         if let Some(table) = &source.table {
             for (range, x_units) in table_fragments(&source.text, table) {
-                let spans = slice_text_spans(&source.spans, &range);
+                let mut spans = slice_text_spans(&source.spans, &range);
+                let text = &source.text[range];
+                let entities = (table.format == DocumentFormat::Org)
+                    .then(|| crate::org_syntax::inline::EntityText::new(text, None));
+                if let Some(entities) = &entities {
+                    for span in &mut spans {
+                        span.bytes = entities.source_to_display(span.bytes.start)
+                            ..entities.source_to_display(span.bytes.end);
+                    }
+                    spans.retain(|span| !span.bytes.is_empty());
+                }
+                let text = entities
+                    .as_ref()
+                    .map_or(text, |entities| entities.text.as_str());
                 draw_minimap_text(
                     &mut buffer,
                     font_system,
@@ -516,7 +529,7 @@ pub(super) fn rasterize_text_rows(
                     width,
                     height,
                     physical_line_height,
-                    &source.text[range],
+                    text,
                     &spans,
                     &base_attrs,
                     base,

@@ -414,7 +414,7 @@ impl Render for WorkspaceWindow {
             });
         }
         let entity = cx.entity();
-        let echo_message = self.displayed_echo_message();
+        let echo_message = self.displayed_echo_message(cx);
         let dired_help_visible = self.file_manager.help_visible();
         let command_window_width = f32::from(window.viewport_size().width);
         let resizing_sidebar = self.file_manager.is_resizing_sidebar();
@@ -476,7 +476,9 @@ impl Render for WorkspaceWindow {
             .font(ui_font("Menlo"))
             .text_size(ui_px(14.0))
             .capture_pinch(cx.listener(|this, event, window, cx| {
-                this.file_overview_pinch(event, window, cx);
+                if this.mysql.confirmation.is_none() {
+                    this.file_overview_pinch(event, window, cx);
+                }
             }))
             .when(content_font_size_actions_enabled, |view| {
                 view.key_context(DOCUMENT_WORKSPACE_KEY_CONTEXT)
@@ -499,6 +501,9 @@ impl Render for WorkspaceWindow {
                 this.locate_cursor(window, cx);
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.mysql_confirmation_capture_key(event, window, cx) {
+                    return;
+                }
                 if this.document_name_capture_key(event, window, cx) {
                     return;
                 }
@@ -851,6 +856,7 @@ impl Render for WorkspaceWindow {
             .children(self.render_document_name(window, cx))
             .children(self.buffer_review_modal(window, cx))
             .children(self.cursor_spotlight.clone())
+            .children(self.render_mysql_confirmation(window, cx))
     }
 }
 

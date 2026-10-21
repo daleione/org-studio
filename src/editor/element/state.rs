@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use gpui::{Bounds, Hitbox, PaintQuad, Pixels, RenderImage, ShapedLine};
 
-use crate::document::ByteOffset;
-use crate::editor::{HitRow, ShapeKey, syntax};
+use crate::document::{ByteOffset, LineIndex};
+use crate::editor::{HitRow, ShapeKey, SourceRunButtonHit, syntax};
 
 /// A resolved inline image preview: the render image plus the geometry the
 /// paint pass and the resize handle need.
@@ -54,9 +54,9 @@ pub(super) struct InlineImagePaint {
 }
 
 pub(super) struct SourceRunButtonPaint {
-    pub(super) source_offset: ByteOffset,
+    pub(super) hit: SourceRunButtonHit,
+    pub(super) line: LineIndex,
     pub(super) bounds: Bounds<Pixels>,
-    pub(super) interaction_bounds: Bounds<Pixels>,
     pub(super) hitbox: Hitbox,
     pub(super) accent: u32,
     pub(super) icon: ShapedLine,

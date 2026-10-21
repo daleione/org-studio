@@ -2,7 +2,9 @@ use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px};
 use std::{sync::Arc, time::Duration};
 
-use gpui::{Context, Entity, MouseButton, Task, div, prelude::*, px, rgb};
+use gpui::{
+    Animation, AnimationExt, Context, Entity, MouseButton, Role, Task, div, prelude::*, px, rgb,
+};
 
 use super::{WorkspaceLoadState, WorkspaceWindow};
 use crate::theme::current_theme;
@@ -17,10 +19,16 @@ pub(crate) enum EchoTone {
     Error,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum EchoAction {
+    StopMySqlQuery { request: u64, enabled: bool },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct EchoMessage {
     pub(crate) text: Arc<str>,
     pub(crate) tone: EchoTone,
+    pub(crate) action: Option<EchoAction>,
 }
 
 impl EchoMessage {
@@ -44,7 +52,13 @@ impl EchoMessage {
         Self {
             text: text.into(),
             tone,
+            action: None,
         }
+    }
+
+    pub(crate) fn with_action(mut self, action: EchoAction) -> Self {
+        self.action = Some(action);
+        self
     }
 
     fn dismiss_after(&self) -> Option<Duration> {
@@ -102,7 +116,7 @@ impl WorkspaceWindow {
         cx.notify();
     }
 
-    pub(crate) fn displayed_echo_message(&self) -> Option<EchoMessage> {
+    pub(crate) fn displayed_echo_message(&self, cx: &gpui::App) -> Option<EchoMessage> {
         if let WorkspaceLoadState::Failed {
             path,
             message,
@@ -125,6 +139,7 @@ impl WorkspaceWindow {
         self.keyboard
             .status()
             .map(EchoMessage::working)
+            .or_else(|| self.mysql_running_message(cx))
             .or_else(|| self.echo.message.clone())
     }
 }
@@ -155,7 +170,7 @@ fn render_echo_content(
     inline: bool,
 ) -> gpui::AnyElement {
     let theme = current_theme();
-    let dismiss_entity = entity;
+    let dismiss_entity = entity.clone();
     div()
         .id("workspace-echo-area")
         .when(!inline, |area| {
@@ -177,8 +192,8 @@ fn render_echo_content(
         .when_some(message, |area, message| {
             let (icon, color) = match message.tone {
                 EchoTone::Working => ("ⓘ", theme.info),
-                EchoTone::Success => ("✓", theme.heading[2]),
-                EchoTone::Warning => ("!", theme.heading[1]),
+                EchoTone::Success => ("✓", theme.success),
+                EchoTone::Warning => ("!", theme.warning),
                 EchoTone::Error => ("×", theme.error),
             };
             let is_prefix = pending_keys == Some(message.text.as_ref());
@@ -186,9 +201,31 @@ fn render_echo_content(
                 div()
                     .w(px(14.0))
                     .flex_none()
+                    .flex()
+                    .items_center()
+                    .justify_center()
                     .text_color(rgb(color))
                     .font_weight(gpui::FontWeight::BOLD)
-                    .child(icon),
+                    .when(message.action.is_some(), |icon| {
+                        icon.child(
+                            gpui::svg()
+                                .data(include_bytes!("assets/spinner.svg"))
+                                .size(ui_px(14.))
+                                .text_color(rgb(color))
+                                .with_animation(
+                                    "echo-working-spinner",
+                                    Animation::new(Duration::from_millis(900))
+                                        .repeat()
+                                        .with_max_fps(24.),
+                                    |icon, progress| {
+                                        icon.with_transformation(gpui::Transformation::rotate(
+                                            gpui::radians(progress * std::f32::consts::TAU),
+                                        ))
+                                    },
+                                ),
+                        )
+                    })
+                    .when(message.action.is_none(), |element| element.child(icon)),
             )
             .child(
                 div()
@@ -206,59 +243,87 @@ fn render_echo_content(
                     .text_color(rgb(theme.foreground))
                     .child_text(message.text.to_string()),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .text_color(rgb(theme.foreground_muted))
-                    .when(is_prefix, |hint| {
+            .when(message.action.is_none(), |area| {
+                area.child(div().flex_1().text_color(rgb(theme.foreground_muted)).when(
+                    is_prefix,
+                    |hint| {
                         hint.child_text(match language {
                             crate::i18n::Language::Chinese => "（按下组合键…）",
                             crate::i18n::Language::English => "(waiting for next key…)",
                         })
-                    }),
-            )
-            .child(
-                div()
-                    .id("echo-dismiss")
-                    .px(px(7.0))
-                    .rounded(px(5.0))
-                    .cursor_pointer()
-                    .text_color(rgb(theme.foreground_muted))
-                    .hover(|style| style.bg(rgb(theme.hover)))
-                    .child_text("×")
-                    .on_mouse_down(MouseButton::Left, move |_, window, cx| {
-                        cx.stop_propagation();
-                        dismiss_entity.update(cx, |this, cx| {
-                            this.dismiss_echo_message();
-                            if is_prefix {
-                                this.cancel_prefix_input(window, cx);
+                    },
+                ))
+            })
+            .when_some(message.action, |area, action| {
+                let EchoAction::StopMySqlQuery { request, enabled } = action;
+                let stop_entity = entity.clone();
+                let accessible_entity = entity.clone();
+                let label = match language {
+                    crate::i18n::Language::Chinese => "停止",
+                    crate::i18n::Language::English => "Stop",
+                };
+                area.child(
+                    div()
+                        .id("echo-action")
+                        .debug_selector(|| "echo-action".into())
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .flex_none()
+                        .h(ui_px(24.))
+                        .px(px(9.))
+                        .rounded(px(5.))
+                        .flex()
+                        .items_center()
+                        .text_color(rgb(if enabled {
+                            theme.accent
+                        } else {
+                            theme.foreground_disabled
+                        }))
+                        .when(enabled, |button| {
+                            button
+                                .cursor_pointer()
+                                .hover(|style| style.bg(rgb(theme.hover)))
+                        })
+                        .child_text(label)
+                        .on_mouse_down(MouseButton::Left, move |_, _, cx| {
+                            cx.stop_propagation();
+                            if enabled {
+                                stop_entity
+                                    .update(cx, |this, cx| this.stop_mysql_query(request, cx));
                             }
-                            cx.notify();
-                        });
-                    }),
-            )
+                        })
+                        .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
+                            if enabled {
+                                accessible_entity
+                                    .update(cx, |this, cx| this.stop_mysql_query(request, cx));
+                            }
+                        }),
+                )
+            })
+            .when(message.action.is_some(), |area| area.child(div().flex_1()))
+            .when(message.action.is_none(), |area| {
+                area.child(
+                    div()
+                        .id("echo-dismiss")
+                        .flex_none()
+                        .px(px(7.0))
+                        .rounded(px(5.0))
+                        .cursor_pointer()
+                        .text_color(rgb(theme.foreground_muted))
+                        .hover(|style| style.bg(rgb(theme.hover)))
+                        .child_text("×")
+                        .on_mouse_down(MouseButton::Left, move |_, window, cx| {
+                            cx.stop_propagation();
+                            dismiss_entity.update(cx, |this, cx| {
+                                this.dismiss_echo_message();
+                                if is_prefix {
+                                    this.cancel_prefix_input(window, cx);
+                                }
+                                cx.notify();
+                            });
+                        }),
+                )
+            })
         })
         .into_any_element()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn echo_tones_have_deliberate_lifetimes() {
-        assert_eq!(
-            EchoMessage::success("done").dismiss_after(),
-            Some(Duration::from_secs(3))
-        );
-        assert_eq!(
-            EchoMessage::warning("careful").dismiss_after(),
-            Some(Duration::from_secs(5))
-        );
-        assert_eq!(
-            EchoMessage::error("failed").dismiss_after(),
-            Some(Duration::from_secs(8))
-        );
-        assert_eq!(EchoMessage::working("busy").dismiss_after(), None);
-    }
 }

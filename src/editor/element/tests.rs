@@ -1,7 +1,4 @@
-use super::blocks::{
-    EditorBlockPaintRow, editor_block_horizontal_bounds, editor_block_segments,
-    editor_block_text_inset,
-};
+use super::blocks::{EditorBlockPaintRow, editor_block_horizontal_bounds, editor_block_segments};
 use super::cookie::{
     COOKIE_BAR_GAP_EM, COOKIE_BAR_MAX_HEIGHT, cookie_bar_bounds, cookie_bar_insets,
 };
@@ -60,6 +57,104 @@ fn table_cell_center(
 }
 
 #[gpui::test]
+fn editor_table_entities_display_data_and_preserve_columns_caret_and_undo(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::document::{ByteOffset, ByteRange, Selection};
+    cx.update(crate::editor::init);
+    let cases = [
+        (r"a\vert{}b", "a|b"),
+        (r"\nbsp{}padded\nbsp{}", " padded "),
+        (
+            r"\ast{}粗体\ast{} \under{}下划线\under{} \equal{}原样\equal{} \tilde{}代码\tilde{}",
+            "*粗体* _下划线_ =原样= ~代码~",
+        ),
+        (
+            r"[\zwnj{}[\zwnj{}file:demo]\zwnj{}[\zwnj{}链接形态]\zwnj{}]\zwnj{}",
+            "[[file:demo][链接形态]]",
+        ),
+    ];
+    let mut source = "| value | next |\n|-+-|\n".to_owned();
+    for (encoded, _) in cases {
+        source.push_str(&format!("| {encoded} | tail |\n"));
+    }
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("results.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(1500.), px(1000.)));
+    view.run_until_parked();
+    view.read(|cx| {
+        let editor = editor.read(cx);
+        for (index, (_, expected)) in cases.iter().enumerate() {
+            let row = editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == index as u64 + 2)
+                .unwrap();
+            let table = row
+                .table_layout
+                .as_ref()
+                .expect("entities must use source-aware table shaping");
+            let cells = table
+                .fragments
+                .iter()
+                .filter(|fragment| !fragment.delimiter)
+                .collect::<Vec<_>>();
+            assert_eq!(cells.len(), 2);
+            assert_eq!(
+                cells[0]
+                    .layout
+                    .text
+                    .replace('\u{200c}', "")
+                    .replace('\u{a0}', " "),
+                *expected
+            );
+            assert_eq!(cells[1].layout.text.as_ref(), "tail");
+        }
+        assert!(
+            editor.link_hits.is_empty(),
+            "entity display must not activate data-shaped links"
+        );
+        let row = editor.hit_rows.iter().find(|row| row.line.0 == 2).unwrap();
+        let local = row.display.text.find(r"\vert{}").unwrap() + r"\vert{}".len();
+        let table = row.table_layout.as_ref().unwrap();
+        let position = table.position_for_index(local, row.line_height);
+        assert_eq!(
+            table.closest_index_for_position(position, row.line_height),
+            local
+        );
+        let snapshot = editor.snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source
+        );
+    });
+    let offset = source.find(r"\vert{}").unwrap() + r"\vert{}".len();
+    editor.update(view, |editor, cx| {
+        editor.set_selection(Selection::caret(ByteOffset(offset as u64)), cx)
+    });
+    view.simulate_keystrokes("x");
+    view.run_until_parked();
+    view.read(|cx| {
+        let snapshot = editor.read(cx).snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source.replacen(r"a\vert{}b", r"a\vert{}xb", 1)
+        );
+    });
+    view.simulate_keystrokes("cmd-z");
+    view.run_until_parked();
+    view.read(|cx| {
+        let snapshot = editor.read(cx).snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source
+        );
+    });
+}
+
+#[gpui::test]
 fn editor_table_hover_uses_rows_for_data_and_columns_for_headers(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     for (path, separator) in [
@@ -84,7 +179,7 @@ fn editor_table_hover_uses_rows_for_data_and_columns_for_headers(cx: &mut gpui::
             let format =
                 crate::document::DocumentFormat::from_path(editor.session.read(cx).syntax_path());
             let quads = table_hover_quads(
-                &editor.hit_rows,
+                editor.hit_rows.iter(),
                 &snapshot,
                 format,
                 line,
@@ -106,7 +201,7 @@ fn editor_table_hover_uses_rows_for_data_and_columns_for_headers(cx: &mut gpui::
             let format =
                 crate::document::DocumentFormat::from_path(editor.session.read(cx).syntax_path());
             let quads = table_hover_quads(
-                &editor.hit_rows,
+                editor.hit_rows.iter(),
                 &snapshot,
                 format,
                 line,
@@ -863,7 +958,7 @@ fn minimap_opened_after_scroll_keeps_visible_svg_dimensions_stable(cx: &mut gpui
 }
 
 #[test]
-fn contiguous_block_rows_form_one_active_closed_container() {
+fn source_block_chrome_covers_only_the_body() {
     let segments = editor_block_segments([
         block_row(EditorBlockEdge::Open, 0.0),
         block_row(EditorBlockEdge::Body, 28.0),
@@ -874,25 +969,175 @@ fn contiguous_block_rows_form_one_active_closed_container() {
     assert!(segments[0].open);
     assert!(segments[0].close);
     assert!(segments[0].active);
-    assert_eq!(segments[0].top, 0.0);
-    assert_eq!(segments[0].bottom, 84.0);
+    assert_eq!(segments[0].top, 28.0);
+    assert_eq!(segments[0].bottom, 56.0);
 }
 
 #[test]
-fn every_decorated_block_adds_visual_text_inset() {
-    let decoration = |kind| EditorBlockDecoration {
-        kind,
-        edge: EditorBlockEdge::Body,
-        body_line: Some(1),
-    };
-    let source = decoration(EditorBlockKind::Source);
-    let markdown = decoration(EditorBlockKind::MarkdownFence);
-    let quote = decoration(EditorBlockKind::Quote);
+fn empty_and_folded_source_blocks_do_not_frame_their_declarations() {
+    assert!(
+        editor_block_segments([
+            block_row(EditorBlockEdge::Open, 0.0),
+            block_row(EditorBlockEdge::Close, 28.0),
+        ])
+        .is_empty()
+    );
+    let mut folded = block_row(EditorBlockEdge::Open, 0.0);
+    folded.folded = true;
+    assert!(editor_block_segments([folded]).is_empty());
 
-    assert_eq!(editor_block_text_inset(Some(&source)), 42.0);
-    assert_eq!(editor_block_text_inset(Some(&markdown)), 42.0);
-    assert_eq!(editor_block_text_inset(Some(&quote)), 16.0);
-    assert_eq!(editor_block_text_inset(None), 0.0);
+    let mut middle = block_row(EditorBlockEdge::Body, 0.0);
+    middle.block.as_mut().unwrap().body_line = Some(8);
+    let segments = editor_block_segments([middle, block_row(EditorBlockEdge::Close, 28.0)]);
+    assert!(
+        !segments[0].open,
+        "a scrolled continuation has no top border"
+    );
+    assert!(segments[0].close);
+    assert_eq!(segments[0].bottom, 28.0);
+}
+
+#[gpui::test]
+fn org_source_block_actions_follow_first_body_line_and_hover(cx: &mut gpui::TestAppContext) {
+    use crate::document::ByteOffset;
+    use crate::editor::SourceRunPhase;
+
+    cx.update(crate::editor::init);
+    let source = concat!(
+        "plain\n",
+        "#+name: mysql-empty\n",
+        "#+begin_src sql\n",
+        "SELECT id, code, name, region, email, phone, address, created_at, updated_at\n",
+        "FROM customers\n",
+        "WHERE id = 999999;\n",
+        "#+end_src\n",
+        "\n",
+        "#+begin_src rust\n",
+        "fn main() {}\n",
+        "#+end_src\n",
+        "after\n",
+    );
+    let offset = ByteOffset(source.find("#+begin_src sql").unwrap() as u64);
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("actions.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(420.0), px(800.0)));
+    view.run_until_parked();
+    let (run, body_point, declaration_point) = view.read(|cx| {
+        let editor = editor.read(cx);
+        let row = |line| {
+            editor
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == line)
+                .unwrap()
+        };
+        let document_left = row(0).text_origin_x;
+        for line in [1, 2, 6, 8, 10, 11] {
+            assert_eq!(row(line).text_origin_x, document_left);
+        }
+        assert!(row(3).text_origin_x > document_left);
+        assert!(!row(3).layout.wrap_boundaries().is_empty());
+        assert_eq!(editor.source_run_buttons.len(), 2);
+        assert_eq!(editor.source_copy.buttons.len(), 2);
+        assert!(
+            editor
+                .source_run_buttons
+                .iter()
+                .all(|button| !button.visible)
+        );
+        let run = editor.source_run_buttons[0];
+        let copy = editor.source_copy.buttons[0];
+        assert_eq!(run.source_offset, offset);
+        assert_eq!(copy.offset, offset);
+        for bounds in [run.bounds, copy.bounds] {
+            assert!(bounds.top() >= row(3).origin_y);
+            assert!(bounds.bottom() <= row(3).origin_y + row(3).line_height);
+        }
+        assert!(run.bounds.right() < row(3).text_origin_x);
+        assert!(copy.bounds.left() > row(3).text_origin_x + row(3).visual_width());
+        assert_eq!(run.body_bounds.left(), document_left);
+        assert!(run.body_bounds.top() >= row(3).visible_top);
+        assert!(run.body_bounds.bottom() <= row(6).visible_top);
+        (
+            run,
+            gpui::point(row(5).text_origin_x + px(30.0), row(5).origin_y + px(10.0)),
+            gpui::point(document_left + px(4.0), row(2).origin_y + px(10.0)),
+        )
+    });
+
+    // Entering a later code line reveals the first line's action, without
+    // revealing the neighboring block's action.
+    view.simulate_mouse_move(body_point, None, Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| {
+        let editor = editor.read(cx);
+        assert_eq!(
+            editor.source_run_hover,
+            Some(crate::editor::SourceRunHover::Body(offset))
+        );
+        assert!(editor.source_run_buttons[0].visible);
+        assert!(!editor.source_run_buttons[1].visible);
+    });
+    view.simulate_mouse_move(declaration_point, None, Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| {
+        let editor = editor.read(cx);
+        assert!(editor.source_run_hover.is_none());
+        assert!(
+            editor
+                .source_run_buttons
+                .iter()
+                .all(|button| !button.visible)
+        );
+    });
+
+    view.simulate_mouse_move(run.bounds.center(), None, Modifiers::default());
+    view.run_until_parked();
+    view.simulate_click(run.bounds.center(), Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| {
+        let feedback = editor.read(cx).source_run_feedback.unwrap();
+        assert_eq!(feedback.source_offset, offset);
+        assert_eq!(feedback.phase, SourceRunPhase::Running);
+    });
+    view.simulate_mouse_move(declaration_point, None, Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| assert!(editor.read(cx).source_run_buttons[0].visible));
+
+    for phase in [SourceRunPhase::Success, SourceRunPhase::Failure] {
+        editor.update(view, |editor, cx| {
+            editor.show_source_run_feedback(offset, phase, cx)
+        });
+        view.run_until_parked();
+        view.read(|cx| {
+            let editor = editor.read(cx);
+            assert!(editor.source_run_buttons[0].visible);
+            assert!(!editor.source_run_buttons[1].visible);
+            assert_eq!(editor.source_run_feedback.unwrap().phase, phase);
+        });
+    }
+    editor.update(view, |editor, cx| {
+        editor.clear_source_run_feedback();
+        cx.notify();
+    });
+    view.run_until_parked();
+    view.read(|cx| {
+        let editor = editor.read(cx);
+        assert!(
+            editor
+                .source_run_buttons
+                .iter()
+                .all(|button| !button.visible)
+        );
+        assert_eq!(
+            editor
+                .snapshot(cx)
+                .copy_range(crate::document::ByteRange::new(0, source.len() as u64)),
+            source
+        );
+    });
 }
 
 #[test]

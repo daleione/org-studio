@@ -36,24 +36,6 @@ pub(super) fn paint_frame(
         ElementInputHandler::new(bounds, host.clone()),
         cx,
     );
-    let _hits = state
-        .rows
-        .iter()
-        .map(|row| row.hit.clone())
-        .collect::<Arc<[HitRow]>>();
-    let _source_run_button_hits = state
-        .source_run_buttons
-        .iter()
-        .map(|button| crate::editor::SourceRunButtonHit {
-            bounds: button.interaction_bounds,
-            source_offset: button.source_offset,
-        })
-        .collect::<Arc<[_]>>();
-    let _shaped = state
-        .rows
-        .iter()
-        .map(|row| (row.shape_key.clone(), row.hit.layout.clone()))
-        .collect::<Vec<_>>();
     let gutter = state.gutter.clone();
     let gutter_bounds = gutter.bounds;
     let theme = current_theme();
@@ -156,17 +138,17 @@ pub(super) fn paint_frame(
                 bounds: text_bounds,
             }),
             |window| {
-                for background in &state.block_backgrounds {
-                    crate::document_preview::quad(window, background.clone());
-                }
                 for background in state.rows.iter().filter_map(|row| row.background.clone()) {
                     crate::document_preview::quad(window, background);
+                }
+                for background in &state.block_backgrounds {
+                    crate::document_preview::quad(window, background.clone());
                 }
                 if let (Some((line, column, header)), Some((snapshot, format))) =
                     (table_hover, table_source.as_ref())
                 {
                     for quad in table_hover_quads(
-                        &_hits,
+                        state.rows.iter().map(|row| &row.hit),
                         snapshot,
                         *format,
                         line,
@@ -189,7 +171,11 @@ pub(super) fn paint_frame(
                 for selection in state.selection.drain(..) {
                     crate::document_preview::quad(window, selection);
                 }
-                for button in &state.source_run_buttons {
+                for button in state
+                    .source_run_buttons
+                    .iter()
+                    .filter(|button| button.hit.visible)
+                {
                     let hovered = button.hitbox.is_hovered(window);
                     if hovered {
                         window.set_cursor_style(CursorStyle::PointingHand, &button.hitbox);
@@ -212,10 +198,10 @@ pub(super) fn paint_frame(
                         );
                     }
                     let icon_x = button.bounds.left()
-                        + px(
-                            ((SOURCE_RUN_BUTTON_SIZE - f32::from(button.icon.width())) / 2.0)
-                                .max(0.0),
-                        );
+                        + px(((f32::from(button.bounds.size.width)
+                            - f32::from(button.icon.width()))
+                            / 2.0)
+                            .max(0.0));
                     let _ = crate::document_preview::paint_shaped(
                         &button.icon,
                         point(icon_x, button.bounds.top()),
@@ -227,9 +213,17 @@ pub(super) fn paint_frame(
                     );
                 }
                 for row in &state.rows {
-                    if let Some(number_layout) = &row.source_line_number_layout {
+                    let run_button_visible = state
+                        .source_run_buttons
+                        .iter()
+                        .any(|button| button.line == row.hit.line && button.hit.visible);
+                    if let Some(number_layout) = &row.source_line_number_layout
+                        && !run_button_visible
+                    {
                         let number_x = state.content_left
-                            + px(BLOCK_LEFT_INSET + SOURCE_GUTTER_INSET)
+                            + px(row.block.as_ref().map_or(BLOCK_LEFT_INSET, |block| {
+                                editor_block_left_inset(&block.kind)
+                            }) + SOURCE_GUTTER_INSET)
                             + px(
                                 ((SOURCE_GUTTER_WIDTH - f32::from(number_layout.width())) / 2.0)
                                     .max(0.0),

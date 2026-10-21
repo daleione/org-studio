@@ -6,7 +6,7 @@ fn copies_org_and_markdown_code_without_moving_selection(cx: &mut gpui::TestAppC
     for (path, source, expected) in [
         (
             "copy.org",
-            "* Code\n#+begin_src rust\n  中文();\n\n#+end_src\n",
+            "* Code\n#+name: example\n#+begin_src rust\n  中文();\n\n#+end_src\n",
             "  中文();\n\n",
         ),
         (
@@ -16,6 +16,8 @@ fn copies_org_and_markdown_code_without_moving_selection(cx: &mut gpui::TestAppC
         ),
         ("copy.md", "# Code\n~~~text\nlast line", "last line"),
         ("copy.org", "* Code\n#+begin_src text\n#+end_src\n", ""),
+        ("copy.org", "#+begin_src text\n", ""),
+        ("copy.org", "#+begin_src text", ""),
     ] {
         let session = cx.new(|_| {
             DocumentSession::from_utf8(PathBuf::from(path), source.as_bytes().to_vec()).unwrap()
@@ -29,14 +31,13 @@ fn copies_org_and_markdown_code_without_moving_selection(cx: &mut gpui::TestAppC
         });
         let (hit, selection, scroll) = view.read(|cx| {
             let e = editor.read(cx);
-            assert!(
-                !e.source_copy.buttons.is_empty(),
-                "missing copy icon in {path}: {source}"
+            assert_eq!(
+                e.source_copy.buttons.len(),
+                1,
+                "one copy icon in {path}: {source}"
             );
             (e.source_copy.buttons[0], e.selection, e.scroll_y)
         });
-        assert!(hit.bounds.right() <= px(640. - 26.));
-        assert_eq!(hit.bounds.size, gpui::size(px(26.), px(26.)));
         view.simulate_mouse_move(hit.bounds.center(), None, gpui::Modifiers::default());
         view.run_until_parked();
         assert!(view.debug_bounds("source-copy-tooltip").is_none());

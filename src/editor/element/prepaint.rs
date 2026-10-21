@@ -215,20 +215,14 @@ pub(super) fn build_frame(
     let source_run_buttons = prepare_run_buttons(
         &rows,
         &chrome,
+        &snapshot,
         source_run_feedback,
         theme,
         &style,
-        font_size,
         window,
     );
-    let source_copy_buttons = prepare_copy_buttons(
-        &rows,
-        &chrome,
-        bounds,
-        snapshot.revision(),
-        copy_feedback,
-        window,
-    );
+    let source_copy_buttons =
+        prepare_copy_buttons(&rows, &chrome, &snapshot, copy_feedback, window);
     let block_backgrounds = chrome.backgrounds;
     let block_left = chrome.left;
     PrepaintState {

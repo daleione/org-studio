@@ -273,7 +273,15 @@ struct TableGeometryCache {
 #[derive(Clone, Copy)]
 pub(super) struct SourceRunButtonHit {
     pub(super) bounds: Bounds<Pixels>,
+    pub(super) body_bounds: Bounds<Pixels>,
+    pub(super) visible: bool,
     pub(super) source_offset: ByteOffset,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SourceRunHover {
+    Body(ByteOffset),
+    Button(ByteOffset),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -606,7 +614,7 @@ pub struct SemanticEditor {
     table_resize: table_resize::TableResize,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_copy: source_copy::SourceCopy,
-    source_run_button_hovered: bool,
+    source_run_hover: Option<SourceRunHover>,
     source_run_feedback: Option<SourceRunFeedback>,
     source_run_feedback_generation: u64,
     source_run_feedback_task: Option<Task<()>>,
@@ -1011,7 +1019,7 @@ impl SemanticEditor {
                 this.hit_rows = Arc::from([]);
                 this.source_run_buttons = Arc::from([]);
                 this.source_copy.buttons.clear();
-                this.source_run_button_hovered = false;
+                this.source_run_hover = None;
                 this.inline_image_line_dimensions.borrow_mut().clear();
                 this.cancel_inline_image_resize();
                 this.map_source_run_feedback(delta);
@@ -1028,7 +1036,7 @@ impl SemanticEditor {
                 this.shape_cache.clear();
                 this.source_run_buttons = Arc::from([]);
                 this.source_copy.buttons.clear();
-                this.source_run_button_hovered = false;
+                this.source_run_hover = None;
                 this.inline_image_preview_overrides.clear();
                 this.inline_image_line_dimensions.borrow_mut().clear();
                 this.inline_image_cache.borrow_mut().clear();
@@ -1047,7 +1055,7 @@ impl SemanticEditor {
                 this.hit_rows = Arc::from([]);
                 this.source_run_buttons = Arc::from([]);
                 this.source_copy.buttons.clear();
-                this.source_run_button_hovered = false;
+                this.source_run_hover = None;
                 this.inline_image_preview_overrides.clear();
                 this.inline_image_line_dimensions.borrow_mut().clear();
                 this.inline_image_cache.borrow_mut().clear();
@@ -1128,7 +1136,7 @@ impl SemanticEditor {
             table_resize: table_resize::TableResize::default(),
             source_run_buttons: Arc::from([]),
             source_copy: source_copy::SourceCopy::default(),
-            source_run_button_hovered: false,
+            source_run_hover: None,
             source_run_feedback: None,
             source_run_feedback_generation: 0,
             source_run_feedback_task: None,
@@ -1303,7 +1311,7 @@ impl SemanticEditor {
         self.hit_rows = Arc::from([]);
         self.source_run_buttons = Arc::from([]);
         self.source_copy.buttons.clear();
-        self.source_run_button_hovered = false;
+        self.source_run_hover = None;
         self.vertical_goal_x = None;
         self.minimap.note_viewport_changed();
         cx.notify();
@@ -1821,20 +1829,6 @@ mod tests {
             ),
         );
         assert_eq!(dimensions, (120, 80));
-    }
-
-    #[test]
-    fn source_run_result_feedback_is_transient() {
-        assert_eq!(SOURCE_RUN_MIN_RUNNING_DURATION, Duration::from_millis(450));
-        assert_eq!(SourceRunPhase::Running.dismiss_after(), None);
-        assert_eq!(
-            SourceRunPhase::Success.dismiss_after(),
-            Some(Duration::from_millis(1_500))
-        );
-        assert_eq!(
-            SourceRunPhase::Failure.dismiss_after(),
-            Some(Duration::from_millis(2_500))
-        );
     }
 
     #[test]

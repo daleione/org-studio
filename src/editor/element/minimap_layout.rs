@@ -9,14 +9,12 @@ use gpui::{App, Pixels, TextRun, point, px};
 use crate::document::{LineIndex, TextSnapshot};
 use crate::editor::{SemanticEditor, layout_map::EditorLayoutMap, syntax};
 
-use super::blocks::editor_block_text_inset;
+use super::blocks::editor_block_wrap_width;
 use super::rows::visible_source_lines;
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
 use super::text::folded_display_text;
 use crate::editor::inline_image::{INLINE_IMAGE_VERTICAL_PADDING, image_sizing};
 use crate::editor::table_layout::{TableColumnMetrics, TableVisualLayout};
-
-use super::{BLOCK_RIGHT_INSET, BLOCK_TEXT_RIGHT_PADDING};
 
 pub(super) struct MinimapLayoutPreparationRequest {
     pub(super) key: crate::editor::minimap::PreparedLayoutKey,
@@ -176,16 +174,8 @@ pub(super) fn schedule_minimap_layout_preparation(
                     fallback_style = syntax::EditorLineStyle::pending_fallback(source_range);
                     &fallback_style
                 };
-                let text_inset = editor_block_text_inset(line_style.block.as_ref());
-                let row_wrap_width = if text_inset > 0.0 {
-                    (layout.wrap_width()
-                        - text_inset
-                        - BLOCK_RIGHT_INSET
-                        - BLOCK_TEXT_RIGHT_PADDING)
-                        .max(1.0)
-                } else {
-                    layout.wrap_width()
-                };
+                let row_wrap_width =
+                    editor_block_wrap_width(layout.wrap_width(), line_style.block.as_ref());
                 let mut metrics = line_style.metrics.scaled(content_scale);
                 let image_enabled = overrides
                     .get(&source_range.start.0)
@@ -279,6 +269,7 @@ pub(super) fn schedule_minimap_layout_preparation(
                             columns,
                             metrics,
                             effective_wrap_width,
+                            None,
                             None,
                             &text_system,
                         )

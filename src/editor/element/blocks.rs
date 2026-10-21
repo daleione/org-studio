@@ -9,7 +9,8 @@ use crate::theme::Theme;
 use super::state::PaintRow;
 use super::{
     BLOCK_LEFT_INSET, BLOCK_RADIUS, BLOCK_RIGHT_INSET, BLOCK_TEXT_INSET, BLOCK_TEXT_RIGHT_PADDING,
-    BLOCK_VERTICAL_INSET, SOURCE_GUTTER_INSET, SOURCE_GUTTER_WIDTH, SOURCE_TEXT_INSET,
+    BLOCK_VERTICAL_INSET, SOURCE_COPY_BUTTON_SPACE, SOURCE_GUTTER_INSET, SOURCE_GUTTER_WIDTH,
+    SOURCE_TEXT_PADDING,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -23,12 +24,51 @@ pub(super) struct EditorBlockPaintRow {
 
 pub(super) fn editor_block_text_inset(block: Option<&syntax::EditorBlockDecoration>) -> f32 {
     block.map_or(0.0, |block| {
-        if is_source_block_kind(&block.kind) {
-            SOURCE_TEXT_INSET
+        if block.kind == syntax::EditorBlockKind::Source
+            && block.edge != syntax::EditorBlockEdge::Body
+        {
+            0.0
+        } else if is_source_block_kind(&block.kind) {
+            editor_block_left_inset(&block.kind)
+                + SOURCE_GUTTER_INSET
+                + SOURCE_GUTTER_WIDTH
+                + SOURCE_TEXT_PADDING
         } else {
             BLOCK_TEXT_INSET
         }
     })
+}
+
+pub(super) fn editor_block_left_inset(kind: &syntax::EditorBlockKind) -> f32 {
+    if *kind == syntax::EditorBlockKind::Source {
+        0.0
+    } else {
+        BLOCK_LEFT_INSET
+    }
+}
+
+pub(super) fn editor_block_content_width(
+    wrap_width: f32,
+    block: Option<&syntax::EditorBlockDecoration>,
+) -> f32 {
+    let text_inset = editor_block_text_inset(block);
+    if text_inset == 0.0 {
+        return wrap_width;
+    }
+    (wrap_width - text_inset - BLOCK_RIGHT_INSET - BLOCK_TEXT_RIGHT_PADDING).max(1.0)
+}
+
+pub(super) fn editor_block_wrap_width(
+    wrap_width: f32,
+    block: Option<&syntax::EditorBlockDecoration>,
+) -> f32 {
+    let copy_button_space =
+        if block.is_some_and(syntax::EditorBlockDecoration::is_first_source_body_line) {
+            SOURCE_COPY_BUTTON_SPACE
+        } else {
+            0.0
+        };
+    (editor_block_content_width(wrap_width, block) - copy_button_space).max(1.0)
 }
 
 pub(super) fn is_source_block_kind(kind: &syntax::EditorBlockKind) -> bool {
@@ -77,15 +117,32 @@ pub(super) fn editor_block_segments(
             }
             continue;
         };
+        // Org source declarations stay in the document flow. They delimit
+        // the body's chrome without contributing their own row to it.
+        if block.kind == syntax::EditorBlockKind::Source
+            && block.edge != syntax::EditorBlockEdge::Body
+        {
+            if let Some(mut segment) = current.take() {
+                if block.edge == syntax::EditorBlockEdge::Close
+                    && segment.kind == syntax::EditorBlockKind::Source
+                {
+                    segment.close = true;
+                }
+                segments.push(segment);
+            }
+            continue;
+        }
+        let first_source_line = block.is_first_source_body_line();
         let starts_new = current.as_ref().is_some_and(|segment| {
             block.edge == syntax::EditorBlockEdge::Open
+                || first_source_line
                 || block.kind != segment.kind
                 || (row.top - segment.bottom).abs() > 0.75
         });
         if starts_new && let Some(segment) = current.take() {
             segments.push(segment);
         }
-        let open = block.edge == syntax::EditorBlockEdge::Open;
+        let open = block.edge == syntax::EditorBlockEdge::Open || first_source_line;
         let close = block.edge == syntax::EditorBlockEdge::Close || row.folded;
         let segment = current.get_or_insert(EditorBlockPaintSegment {
             kind: block.kind.clone(),
@@ -118,131 +175,119 @@ pub(super) fn editor_block_horizontal_bounds(
     (viewport_left - offset, viewport_right - offset)
 }
 
-pub(super) fn editor_block_backgrounds(
-    rows: &[PaintRow],
+fn editor_block_backgrounds(
+    segments: &[EditorBlockPaintSegment],
     text_left: Pixels,
     text_right: Pixels,
     theme: &crate::theme::Theme,
 ) -> Vec<PaintQuad> {
-    let left = text_left + px(BLOCK_LEFT_INSET);
     let right = text_right - px(BLOCK_RIGHT_INSET);
-    if right <= left {
-        return Vec::new();
-    }
-    editor_block_segments(rows.iter().map(|row| EditorBlockPaintRow {
-        block: row.block.clone(),
-        top: f32::from(row.hit.visible_top),
-        bottom: f32::from(row.hit.visible_bottom),
-        active: row.active,
-        folded: row.folded,
-    }))
-    .into_iter()
-    .filter_map(|segment| {
-        let top = segment.top
-            + if segment.open {
-                BLOCK_VERTICAL_INSET
-            } else {
+    segments
+        .iter()
+        .filter_map(|segment| {
+            let left = text_left + px(editor_block_left_inset(&segment.kind));
+            if right <= left {
+                return None;
+            }
+            let vertical_inset = if segment.kind == syntax::EditorBlockKind::Source {
                 0.0
-            };
-        let bottom = segment.bottom
-            - if segment.close {
-                BLOCK_VERTICAL_INSET
             } else {
-                0.0
+                BLOCK_VERTICAL_INSET
             };
-        if bottom <= top {
-            return None;
-        }
-        let accent = editor_block_accent(&segment.kind, theme);
-        let radius = px(BLOCK_RADIUS);
-        let zero = px(0.0);
-        let border = px(1.0);
-        let corners = Corners {
-            top_left: if segment.open { radius } else { zero },
-            top_right: if segment.open { radius } else { zero },
-            bottom_right: if segment.close { radius } else { zero },
-            bottom_left: if segment.close { radius } else { zero },
-        };
-        let border_widths = Edges {
-            top: if segment.open { border } else { zero },
-            right: border,
-            bottom: if segment.close { border } else { zero },
-            left: border,
-        };
-        let fill_alpha = if segment.active { 0x11 } else { 0x0c };
-        let border_alpha = if segment.active { 0x57 } else { 0x2e };
-        Some(quad(
-            Bounds::from_corners(point(left, px(top)), point(right, px(bottom))),
-            corners,
-            rgba((accent << 8) | fill_alpha),
-            border_widths,
-            rgba((accent << 8) | border_alpha),
-            BorderStyle::default(),
-        ))
-    })
-    .collect()
+            let top = segment.top + if segment.open { vertical_inset } else { 0.0 };
+            let bottom = segment.bottom - if segment.close { vertical_inset } else { 0.0 };
+            if bottom <= top {
+                return None;
+            }
+            let accent = editor_block_accent(&segment.kind, theme);
+            let radius = px(BLOCK_RADIUS);
+            let zero = px(0.0);
+            let border = px(1.0);
+            let corners = Corners {
+                top_left: if segment.open { radius } else { zero },
+                top_right: if segment.open { radius } else { zero },
+                bottom_right: if segment.close { radius } else { zero },
+                bottom_left: if segment.close { radius } else { zero },
+            };
+            let border_widths = Edges {
+                top: if segment.open { border } else { zero },
+                right: border,
+                bottom: if segment.close { border } else { zero },
+                left: border,
+            };
+            let fill_alpha = if segment.active { 0x11 } else { 0x0c };
+            let border_alpha = if segment.active { 0x57 } else { 0x2e };
+            Some(quad(
+                Bounds::from_corners(point(left, px(top)), point(right, px(bottom))),
+                corners,
+                rgba((accent << 8) | fill_alpha),
+                border_widths,
+                rgba((accent << 8) | border_alpha),
+                BorderStyle::default(),
+            ))
+        })
+        .collect()
 }
 
-pub(super) fn editor_source_gutter_backgrounds(
-    rows: &[PaintRow],
+fn editor_source_gutter_backgrounds(
+    segments: &[EditorBlockPaintSegment],
     text_left: Pixels,
     text_right: Pixels,
     theme: &crate::theme::Theme,
 ) -> Vec<PaintQuad> {
-    let left = text_left + px(BLOCK_LEFT_INSET + SOURCE_GUTTER_INSET);
-    let right = left + px(SOURCE_GUTTER_WIDTH);
-    if right >= text_right - px(BLOCK_RIGHT_INSET) {
-        return Vec::new();
-    }
-    editor_block_segments(rows.iter().map(|row| EditorBlockPaintRow {
-        block: row.block.clone(),
-        top: f32::from(row.hit.visible_top),
-        bottom: f32::from(row.hit.visible_bottom),
-        active: row.active,
-        folded: row.folded,
-    }))
-    .into_iter()
-    .filter(|segment| is_source_block_kind(&segment.kind))
-    .filter_map(|segment| {
-        let top = segment.top
-            + if segment.open {
-                BLOCK_VERTICAL_INSET + SOURCE_GUTTER_INSET
-            } else {
+    segments
+        .iter()
+        .filter(|segment| is_source_block_kind(&segment.kind))
+        .filter_map(|segment| {
+            let left = text_left + px(editor_block_left_inset(&segment.kind) + SOURCE_GUTTER_INSET);
+            let right = left + px(SOURCE_GUTTER_WIDTH);
+            if right >= text_right - px(BLOCK_RIGHT_INSET) {
+                return None;
+            }
+            let vertical_inset = if segment.kind == syntax::EditorBlockKind::Source {
                 0.0
-            };
-        let bottom = segment.bottom
-            - if segment.close {
-                BLOCK_VERTICAL_INSET + SOURCE_GUTTER_INSET
             } else {
-                0.0
+                BLOCK_VERTICAL_INSET
             };
-        if bottom <= top {
-            return None;
-        }
-        let accent = editor_block_accent(&segment.kind, theme);
-        let radius = px((BLOCK_RADIUS - SOURCE_GUTTER_INSET).max(0.0));
-        let zero = px(0.0);
-        let corners = Corners {
-            top_left: if segment.open { radius } else { zero },
-            top_right: zero,
-            bottom_right: zero,
-            bottom_left: if segment.close { radius } else { zero },
-        };
-        Some(quad(
-            Bounds::from_corners(point(left, px(top)), point(right, px(bottom))),
-            corners,
-            rgba((accent << 8) | 0x06),
-            Edges {
-                top: zero,
-                right: px(1.0),
-                bottom: zero,
-                left: zero,
-            },
-            rgba((accent << 8) | 0x24),
-            BorderStyle::default(),
-        ))
-    })
-    .collect()
+            let top = segment.top
+                + if segment.open {
+                    vertical_inset + SOURCE_GUTTER_INSET
+                } else {
+                    0.0
+                };
+            let bottom = segment.bottom
+                - if segment.close {
+                    vertical_inset + SOURCE_GUTTER_INSET
+                } else {
+                    0.0
+                };
+            if bottom <= top {
+                return None;
+            }
+            let accent = editor_block_accent(&segment.kind, theme);
+            let radius = px((BLOCK_RADIUS - SOURCE_GUTTER_INSET).max(0.0));
+            let zero = px(0.0);
+            let corners = Corners {
+                top_left: if segment.open { radius } else { zero },
+                top_right: zero,
+                bottom_right: zero,
+                bottom_left: if segment.close { radius } else { zero },
+            };
+            Some(quad(
+                Bounds::from_corners(point(left, px(top)), point(right, px(bottom))),
+                corners,
+                rgba((accent << 8) | 0x06),
+                Edges {
+                    top: zero,
+                    right: px(1.0),
+                    bottom: zero,
+                    left: zero,
+                },
+                rgba((accent << 8) | 0x24),
+                BorderStyle::default(),
+            ))
+        })
+        .collect()
 }
 
 pub(super) fn editor_row_background(
@@ -267,8 +312,7 @@ pub(super) struct BlockChrome {
     pub(super) backgrounds: Vec<PaintQuad>,
     pub(super) left: Pixels,
     pub(super) content_right: Pixels,
-    pub(super) viewport_left: Pixels,
-    pub(super) viewport_right: Pixels,
+    pub(super) viewport: Bounds<Pixels>,
 }
 
 /// Collects the block and source-gutter backgrounds for the painted rows.
@@ -286,16 +330,29 @@ pub(super) fn prepare_block_chrome(
         editor_block_horizontal_bounds(viewport_text_left, viewport_text_right, horizontal_scroll);
     let block_content_right = rows
         .iter()
-        .filter(|row| row.block.is_some())
+        .filter(|row| {
+            row.block.as_ref().is_some_and(|block| {
+                block.kind != syntax::EditorBlockKind::Source
+                    || block.edge == syntax::EditorBlockEdge::Body
+            })
+        })
         .map(|row| {
             row.hit.text_origin_x
                 + row.hit.visual_width()
                 + px(BLOCK_TEXT_RIGHT_PADDING + BLOCK_RIGHT_INSET)
         })
         .fold(block_minimum_right, |right, candidate| right.max(candidate));
-    let mut backgrounds = editor_block_backgrounds(rows, block_left, block_content_right, theme);
+    let segments = editor_block_segments(rows.iter().map(|row| EditorBlockPaintRow {
+        block: row.block.clone(),
+        top: f32::from(row.hit.visible_top),
+        bottom: f32::from(row.hit.visible_bottom),
+        active: row.active,
+        folded: row.folded,
+    }));
+    let mut backgrounds =
+        editor_block_backgrounds(&segments, block_left, block_content_right, theme);
     backgrounds.extend(editor_source_gutter_backgrounds(
-        rows,
+        &segments,
         block_left,
         block_content_right,
         theme,
@@ -304,7 +361,9 @@ pub(super) fn prepare_block_chrome(
         backgrounds,
         left: block_left,
         content_right: block_content_right,
-        viewport_left: viewport_text_left,
-        viewport_right: viewport_text_right,
+        viewport: Bounds::from_corners(
+            point(viewport_text_left, bounds.top()),
+            point(viewport_text_right, bounds.bottom()),
+        ),
     }
 }

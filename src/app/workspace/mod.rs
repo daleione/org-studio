@@ -143,6 +143,7 @@ impl WorkspaceWindow {
             babel_editor: None,
             babel_request: 0,
             babel_trusted_documents: std::collections::HashSet::new(),
+            mysql: super::mysql_ui::MySqlHost::default(),
             derived: crate::app::DerivedHost::default(),
             file_watch_task: None,
             file_watch_request: 0,
@@ -914,11 +915,20 @@ impl WorkspaceWindow {
                         .is_none(),
             );
         let navigation_width = self.navigation_status_width(pane, render.cx);
+        let echo_message = (!render.preparing && pane == render.workspace.active_pane)
+            .then(|| self.displayed_echo_message(render.cx))
+            .flatten();
+        let echo_reserve = if echo_message.is_some() {
+            ui_size(240.)
+        } else {
+            0.
+        };
         let layout = self.status_layout(
             &snapshot,
             (status_width
                 - crate::app::status_line::buffer_status_width(buffer_count)
-                - navigation_width)
+                - navigation_width
+                - echo_reserve)
                 .max(1.),
             render.window,
         );
@@ -928,17 +938,14 @@ impl WorkspaceWindow {
         let status_popover = (!render.preparing)
             .then(|| self.status.popover_for(snapshot.pane))
             .flatten();
-        let mut echo = (!render.preparing && pane == render.workspace.active_pane)
-            .then(|| self.displayed_echo_message())
-            .flatten()
-            .map(|message| {
-                crate::app::echo_area::render_status_echo(
-                    message,
-                    entity.clone(),
-                    self.keyboard.pending_keys(),
-                    self.language,
-                )
-            });
+        let mut echo = echo_message.map(|message| {
+            crate::app::echo_area::render_status_echo(
+                message,
+                entity.clone(),
+                self.keyboard.pending_keys(),
+                self.language,
+            )
+        });
         let buffer_panel = !render.preparing
             && self
                 .status

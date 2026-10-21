@@ -26,9 +26,17 @@ pub(crate) struct BabelExecutionRequest {
     executor: BabelExecutor,
     document_root: PathBuf,
     result: RequestedResult,
+    pub(crate) mysql: Option<super::mysql::MySqlRequest>,
 }
 
 enum RequestedResult {
+    Table {
+        range: ByteRange,
+        existing: String,
+        newline: &'static str,
+        silent: bool,
+        attributes: String,
+    },
     File {
         target: PathBuf,
         link: String,
@@ -49,6 +57,7 @@ pub(crate) struct PreparedBabelOutput {
     pub(crate) source_block_start: ByteOffset,
     pub(crate) language_name: &'static str,
     pub(crate) result_edit: Option<TextEdit>,
+    pub(crate) table: Option<super::mysql::QueryTable>,
     kind: PreparedResult,
 }
 
@@ -71,6 +80,7 @@ pub(super) enum BabelExecutor {
     Python,
     Shell,
     Bash,
+    MySql,
 }
 
 impl BabelExecutor {
@@ -81,6 +91,7 @@ impl BabelExecutor {
             Self::Python => "Python",
             Self::Shell => "Shell",
             Self::Bash => "Bash",
+            Self::MySql => "MySQL",
         }
     }
 }
@@ -103,7 +114,7 @@ impl BabelExecutionRequest {
     fn file_target(&self) -> Option<&Path> {
         match &self.result {
             RequestedResult::File { target, .. } => Some(target),
-            RequestedResult::Text { .. } => None,
+            RequestedResult::Text { .. } | RequestedResult::Table { .. } => None,
         }
     }
 
@@ -111,12 +122,27 @@ impl BabelExecutionRequest {
     fn file_edit(&self) -> Option<&TextEdit> {
         match &self.result {
             RequestedResult::File { edit, .. } => edit.as_ref(),
-            RequestedResult::Text { .. } => None,
+            RequestedResult::Text { .. } | RequestedResult::Table { .. } => None,
         }
     }
 }
 
 impl PreparedBabelOutput {
+    pub(crate) fn offset_after_result_edit(&self, offset: ByteOffset) -> ByteOffset {
+        let Some(edit) = &self.result_edit else {
+            return offset;
+        };
+        if offset < edit.range.start {
+            offset
+        } else if offset >= edit.range.end {
+            ByteOffset(
+                offset.0 - (edit.range.end.0 - edit.range.start.0) + edit.replacement.len() as u64,
+            )
+        } else {
+            ByteOffset(edit.range.start.0 + edit.replacement.len() as u64)
+        }
+    }
+
     pub(crate) fn publish(mut self) -> Result<Self, String> {
         if let PreparedResult::File { artifact, .. } = &mut self.kind {
             artifact.publish()?;
@@ -158,6 +184,9 @@ pub(crate) fn prepare_source_block_execution(
         unreachable!("source block was selected above")
     };
     let language = language.as_deref().unwrap_or("");
+    if language.eq_ignore_ascii_case("sql") {
+        return prepare_mysql(snapshot, document_path, selection, &blocks, block_index);
+    }
     let diagram_language = crate::preview::DiagramLanguage::from_source_language(Some(language));
     let typst_source =
         language.eq_ignore_ascii_case("typst") || language.eq_ignore_ascii_case("typ");
@@ -319,12 +348,52 @@ pub(crate) fn prepare_source_block_execution(
         executor,
         document_root,
         result,
+        mysql: None,
     })
 }
 
 pub(crate) fn execute_source_block(
     request: BabelExecutionRequest,
 ) -> Result<PreparedBabelOutput, String> {
+    if let Some(mysql) = &request.mysql {
+        let table = super::mysql::execute(mysql, &request.source)?;
+        let RequestedResult::Table {
+            range,
+            existing,
+            newline,
+            silent,
+            attributes,
+        } = &request.result
+        else {
+            unreachable!("MySQL produces a table");
+        };
+        let payload = table.serialize(
+            !mysql
+                .headers
+                .get(":colnames")
+                .is_some_and(|v| v.eq_ignore_ascii_case("no")),
+            newline,
+            mysql.byte_limit(),
+        )?;
+        let marker = mysql
+            .source_name
+            .as_ref()
+            .map(|name| format!(" {name}"))
+            .unwrap_or_default();
+        let replacement = format!("{newline}#+RESULTS:{marker}{newline}{attributes}{payload}");
+        let result_edit =
+            (!silent && *existing != replacement).then(|| TextEdit::new(*range, replacement));
+        return Ok(PreparedBabelOutput {
+            document_id: request.document_id,
+            revision: request.revision,
+            selection: request.selection,
+            source_block_start: request.source_block_start,
+            language_name: "MySQL",
+            result_edit,
+            table: Some(table),
+            kind: PreparedResult::Text,
+        });
+    }
     if matches!(
         request.executor,
         BabelExecutor::Python | BabelExecutor::Shell | BabelExecutor::Bash
@@ -352,6 +421,7 @@ pub(crate) fn execute_source_block(
             source_block_start: request.source_block_start,
             language_name: request.executor.language_name(),
             result_edit,
+            table: None,
             kind: PreparedResult::Text,
         });
     }
@@ -408,7 +478,10 @@ pub(crate) fn execute_source_block(
                 warnings,
             )
         }
-        BabelExecutor::Python | BabelExecutor::Shell | BabelExecutor::Bash => {
+        BabelExecutor::Python
+        | BabelExecutor::Shell
+        | BabelExecutor::Bash
+        | BabelExecutor::MySql => {
             unreachable!("external languages handled above")
         }
     };
@@ -423,11 +496,129 @@ pub(crate) fn execute_source_block(
         source_block_start: request.source_block_start,
         language_name: request.executor.language_name(),
         result_edit: edit,
+        table: None,
         kind: PreparedResult::File {
             artifact,
             link,
             warnings,
         },
+    })
+}
+
+fn prepare_mysql(
+    snapshot: &DocumentSnapshot,
+    document_path: &Path,
+    selection: Selection,
+    blocks: &crate::org_syntax::BlockArena,
+    index: usize,
+) -> Result<BabelExecutionRequest, String> {
+    let headers = super::headers::effective_headers(snapshot, blocks, index)?;
+    let engine = headers.get(":engine").unwrap_or("mysql");
+    if !engine.eq_ignore_ascii_case("mysql") {
+        return Err(format!(
+            "SQL engine {engine} is not supported yet; choose :engine mysql"
+        ));
+    }
+    if headers
+        .get(":eval")
+        .is_some_and(|v| ["no", "never"].iter().any(|p| v.eq_ignore_ascii_case(p)))
+    {
+        return Err("This source block disables execution with :eval no/never".into());
+    }
+    for key in headers.keys() {
+        if ![
+            ":engine",
+            ":dbhost",
+            ":dbport",
+            ":database",
+            ":dbuser",
+            ":dbpassword",
+            ":dbconnection",
+            ":results",
+            ":colnames",
+            ":eval",
+            ":exports",
+            ":dir",
+            ":noweb",
+            ":tangle",
+            ":comments",
+            ":noweb-ref",
+            ":cache",
+            ":session",
+        ]
+        .contains(&key)
+        {
+            return Err(format!(
+                "MySQL does not support the {key} header argument yet"
+            ));
+        }
+    }
+    if headers
+        .get(":cache")
+        .is_some_and(|v| !v.eq_ignore_ascii_case("no"))
+        || headers
+            .get(":session")
+            .is_some_and(|v| !v.eq_ignore_ascii_case("none"))
+    {
+        return Err("MySQL :cache and persistent :session are not supported yet".into());
+    }
+    for value in headers.values(":results") {
+        if !["table", "vector", "value", "output", "replace", "silent"]
+            .contains(&value.to_ascii_lowercase().as_str())
+        {
+            return Err(format!("MySQL does not support :results {value}"));
+        }
+    }
+    if headers
+        .values(":results")
+        .iter()
+        .any(|v| v.eq_ignore_ascii_case("value"))
+        && headers
+            .values(":results")
+            .iter()
+            .any(|v| v.eq_ignore_ascii_case("output"))
+    {
+        return Err("Choose one result collection mode: value or output".into());
+    }
+    let block = &blocks.nodes()[index];
+    let source = if headers
+        .get(":noweb")
+        .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("eval"))
+    {
+        super::source::expanded_execution_source(snapshot, blocks, index)?
+    } else {
+        snapshot.copy_range(block.content)
+    };
+    super::mysql::validate_query(&source)?;
+    let opening = snapshot.copy_range(ByteRange::new(block.source.start.0, block.content.start.0));
+    let newline = if opening.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let (range, attributes, name) = super::syntax::mysql_result_range(snapshot, blocks, index)?;
+    let silent = headers
+        .values(":results")
+        .iter()
+        .any(|v| v.eq_ignore_ascii_case("silent"));
+    let mut mysql = super::mysql::MySqlRequest::from_headers(headers)?;
+    mysql.source_name = name;
+    Ok(BabelExecutionRequest {
+        document_id: snapshot.document_id(),
+        revision: snapshot.revision(),
+        selection,
+        source_block_start: block.source.start,
+        source,
+        executor: BabelExecutor::MySql,
+        document_root: document_path.parent().unwrap_or(Path::new(".")).to_owned(),
+        result: RequestedResult::Table {
+            range,
+            existing: snapshot.copy_range(range),
+            newline,
+            silent,
+            attributes,
+        },
+        mysql: Some(mysql),
     })
 }
 

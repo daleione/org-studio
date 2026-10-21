@@ -1449,7 +1449,7 @@ impl SemanticEditor {
         if let Some(source_offset) = self
             .source_run_buttons
             .iter()
-            .find(|button| button.bounds.contains(&event.position))
+            .find(|button| button.visible && button.bounds.contains(&event.position))
             .map(|button| button.source_offset)
         {
             self.show_source_run_feedback(source_offset, super::SourceRunPhase::Running, cx);
@@ -1545,12 +1545,17 @@ impl SemanticEditor {
         self.inline_hover(event.position, cx);
         self.todo_hover(event.position, cx);
         self.timestamp_hover(event.position, cx);
-        let source_run_button_hovered = self
-            .source_run_buttons
-            .iter()
-            .any(|button| button.bounds.contains(&event.position));
-        if source_run_button_hovered != self.source_run_button_hovered {
-            self.source_run_button_hovered = source_run_button_hovered;
+        let source_run_hover = self.source_run_buttons.iter().find_map(|button| {
+            button.body_bounds.contains(&event.position).then(|| {
+                if button.bounds.contains(&event.position) {
+                    super::SourceRunHover::Button(button.source_offset)
+                } else {
+                    super::SourceRunHover::Body(button.source_offset)
+                }
+            })
+        });
+        if source_run_hover != self.source_run_hover {
+            self.source_run_hover = source_run_hover;
             cx.notify();
         }
         let hovered_link = self
@@ -2203,6 +2208,9 @@ impl Render for SemanticEditor {
             }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !hovered {
+                    if this.source_run_hover.take().is_some() {
+                        cx.notify();
+                    }
                     if !this.table_resize_is_dragging() {
                         this.clear_table_resize_hover(cx);
                     }

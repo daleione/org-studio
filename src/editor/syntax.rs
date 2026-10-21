@@ -337,6 +337,14 @@ pub(super) struct EditorBlockDecoration {
     pub(super) body_line: Option<u64>,
 }
 
+impl EditorBlockDecoration {
+    pub(super) fn is_first_source_body_line(&self) -> bool {
+        self.kind == EditorBlockKind::Source
+            && self.edge == EditorBlockEdge::Body
+            && self.body_line == Some(1)
+    }
+}
+
 impl EditorStyleId {
     pub(super) const fn cache_key(self) -> u8 {
         match self {
@@ -1343,13 +1351,32 @@ pub(super) fn semantic_spans(
         } else {
             0
         };
-        opaque_inline_ranges =
-            collect_inline_semantics(document_language, &text[inline_start..], &mut spans);
-        for (range, _) in &mut spans {
-            *range = range.start + inline_start..range.end + inline_start;
-        }
-        for range in &mut opaque_inline_ranges {
-            *range = range.start + inline_start..range.end + inline_start;
+        let table_cells = if line_style.id == EditorStyleId::Table {
+            let format = match document_language {
+                Language::Org => crate::document::DocumentFormat::Org,
+                Language::Markdown => crate::document::DocumentFormat::Markdown,
+            };
+            Some(crate::document::table::parse_line(text, format).cells)
+        } else {
+            None
+        };
+        let inline_ranges = table_cells
+            .iter()
+            .flatten()
+            .map(|cell| cell.text_range.clone())
+            .chain(table_cells.is_none().then_some(inline_start..text.len()));
+        for range in inline_ranges {
+            let start = spans.len();
+            let opaque =
+                collect_inline_semantics(document_language, &text[range.clone()], &mut spans);
+            for (span, _) in &mut spans[start..] {
+                *span = span.start + range.start..span.end + range.start;
+            }
+            opaque_inline_ranges.extend(
+                opaque
+                    .into_iter()
+                    .map(|span| span.start + range.start..span.end + range.start),
+            );
         }
         if let Some(todo) = &line_style.todo {
             spans.push((
@@ -2337,6 +2364,29 @@ mod tests {
                 .underline
                 .is_some()
         );
+    }
+
+    #[test]
+    fn table_inline_syntax_cannot_cross_cell_boundaries() {
+        for (path, text) in [
+            ("result.org", "| /left | right/ | *left | right* |"),
+            ("result.md", "| *left | right* |"),
+        ] {
+            let mut style = line_style(text, &mut CodeContext::default());
+            style.id = EditorStyleId::Table;
+            let spans = semantic_spans(Path::new(path), text, &style);
+            assert!(spans.iter().all(|span| !span.italic && !span.underline));
+            assert!(
+                spans
+                    .iter()
+                    .all(|span| span.weight == EditorSemanticWeight::Normal)
+            );
+            assert!(
+                spans
+                    .iter()
+                    .all(|span| span.color != Some(EditorColorToken::Verbatim))
+            );
+        }
     }
 
     #[test]

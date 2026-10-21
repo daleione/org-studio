@@ -31,6 +31,10 @@ unicode-script = "0.5"
 unicode-width = "0.2"
 tempfile = "3"
 url = "2"
+percent-encoding = "2"
+sqlx = { version = "0.8.6", default-features = false, features = ["mysql", "runtime-tokio", "tls-rustls-ring-native-roots"] }
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "sync", "macros"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 # Syntax highlighting (engine + language grammars)
 tree-sitter-highlight = "0.26.7"

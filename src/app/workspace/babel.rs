@@ -1,3 +1,4 @@
+use futures_util::future::Either;
 use gpui::{Context, Focusable, Window};
 
 use crate::{
@@ -8,6 +9,13 @@ use crate::{
 
 impl WorkspaceWindow {
     pub(crate) fn tangle_document(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.mysql.run.is_some() {
+            self.show_echo_message(
+                EchoMessage::warning("Wait for or stop the MySQL query before tangling"),
+                cx,
+            );
+            return;
+        }
         let Some(session) = self.document_session().cloned() else {
             return;
         };
@@ -179,7 +187,6 @@ impl WorkspaceWindow {
             let session = session.read(cx);
             (session.snapshot(), session.path().to_path_buf())
         };
-        self.begin_babel_request(cx);
         let request =
             match crate::babel::prepare_source_block_execution(&snapshot, &path, selection) {
                 Ok(request) => request,
@@ -192,27 +199,86 @@ impl WorkspaceWindow {
                 }
             };
 
-        if let Some(program) = request.external_program() {
-            let trusted_path = std::fs::canonicalize(&path).unwrap_or(path);
-            if !self.babel_trusted_documents.contains(&trusted_path) {
-                let answer = window.prompt(
-                    gpui::PromptLevel::Warning,
-                    &format!("Run {} code from this document?", request.language_name()),
-                    Some(&format!(
-                        "This runs {program} in {} and may change files.",
-                        trusted_path.parent().unwrap_or(&trusted_path).display()
-                    )),
-                    &[
-                        gpui::PromptButton::ok("Run Code"),
-                        gpui::PromptButton::cancel("Cancel"),
-                    ],
+        if let Some(run) = &self.mysql.run {
+            if request.mysql.is_some()
+                && run.source == request.source_block_start
+                && run.document == snapshot.document_id()
+            {
+                self.stop_mysql_query(self.babel_request, cx);
+            } else {
+                self.show_echo_message(
+                    EchoMessage::warning("Wait for or stop the current MySQL query"),
                     cx,
                 );
+            }
+            return;
+        }
+        self.begin_babel_request(cx);
+        if request.mysql.as_ref().is_some_and(|mysql| !mysql.ready()) {
+            editor.update(cx, |editor, cx| {
+                editor.finish_source_run_feedback(SourceRunPhase::Failure, cx)
+            });
+            self.show_echo_message(EchoMessage::error(crate::babel::mysql::CONNECTION_HELP), cx);
+            return;
+        }
+        self.confirm_source_execution(request, session, editor, window, cx);
+    }
+
+    pub(crate) fn confirm_source_execution(
+        &mut self,
+        request: crate::babel::BabelExecutionRequest,
+        session: gpui::Entity<crate::document::DocumentSession>,
+        editor: gpui::Entity<crate::editor::SemanticEditor>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let path = session.read(cx).path().to_owned();
+        let sql_target = request.mysql.as_ref().map(|mysql| mysql.identity());
+        if request.external_program().is_some() || sql_target.is_some() {
+            let trusted_path = std::fs::canonicalize(&path).unwrap_or(path);
+            let trusted = if let Some(target) = &sql_target {
+                self.mysql
+                    .trusted
+                    .contains(&(trusted_path.clone(), target.clone()))
+                    && !request.mysql.as_ref().unwrap().ask_each_time
+            } else {
+                self.babel_trusted_documents.contains(&trusted_path)
+            };
+            if !trusted {
+                editor.update(cx, |editor, cx| {
+                    editor.clear_source_run_feedback();
+                    cx.notify();
+                });
+                let answer = if let Some(mysql) = &request.mysql {
+                    let answer = self.prompt_mysql_execution(mysql, &session, window, cx);
+                    Either::Left(async move { answer.recv().await.unwrap_or(false) })
+                } else {
+                    let detail = format!(
+                        "This runs {} in {} and may change files.",
+                        request.external_program().unwrap(),
+                        trusted_path.parent().unwrap_or(&trusted_path).display()
+                    );
+                    let answer = window.prompt(
+                        gpui::PromptLevel::Warning,
+                        &format!("Run {} code from this document?", request.language_name()),
+                        Some(&detail),
+                        &[
+                            gpui::PromptButton::ok("Run Code"),
+                            gpui::PromptButton::cancel("Cancel"),
+                        ],
+                        cx,
+                    );
+                    Either::Right(async move { matches!(answer.await, Ok(0)) })
+                };
                 let request_id = self.babel_request;
                 self.babel_task = Some(cx.spawn_in(window, async move |this, cx| {
-                    let Ok(0) = answer.await else { return };
+                    let approved = answer.await;
                     let _ = this.update_in(cx, |this, window, cx| {
-                        if this.babel_request != request_id
+                        if this.babel_request != request_id {
+                            return;
+                        }
+                        this.babel_task = None;
+                        if !approved
                             || !this.document_session().is_some_and(|current| {
                                 current == &session
                                     && current.read(cx).revision() == request.revision
@@ -220,7 +286,11 @@ impl WorkspaceWindow {
                         {
                             return;
                         }
-                        this.babel_trusted_documents.insert(trusted_path);
+                        if let Some(target) = sql_target {
+                            this.mysql.trusted.insert((trusted_path, target));
+                        } else {
+                            this.babel_trusted_documents.insert(trusted_path);
+                        }
                         this.launch_source_execution(request, session, editor, window, cx);
                     });
                 }));
@@ -239,15 +309,25 @@ impl WorkspaceWindow {
         cx: &mut Context<Self>,
     ) {
         let source_block_start = request.source_block_start;
+        if let Some(mysql) = &request.mysql {
+            self.start_mysql_run(
+                request.document_id,
+                source_block_start,
+                mysql.cancel.clone(),
+                cx,
+            );
+        }
         editor.update(cx, |editor, cx| {
             editor.show_source_run_feedback(source_block_start, SourceRunPhase::Running, cx)
         });
         self.babel_editor = Some(editor.clone());
         let request_id = self.babel_request;
         let language_name = request.language_name();
-        self.set_echo_message(Some(EchoMessage::working(format!(
-            "Executing {language_name} source block…"
-        ))));
+        if request.mysql.is_none() {
+            self.set_echo_message(Some(EchoMessage::working(format!(
+                "Executing {language_name} source block…"
+            ))));
+        }
         let background = cx
             .background_executor()
             .spawn(async move { crate::babel::execute_source_block(request) });
@@ -259,6 +339,7 @@ impl WorkspaceWindow {
                 }
                 this.babel_task = None;
                 this.babel_editor = None;
+                this.mysql.run = None;
                 this.apply_babel_result(session, editor, language_name, result, cx);
             });
         }));
@@ -267,6 +348,10 @@ impl WorkspaceWindow {
 
     fn begin_babel_request(&mut self, cx: &mut Context<Self>) -> u64 {
         self.babel_task = None;
+        if self.mysql.confirmation.take().is_some() {
+            self.request_document_focus(cx);
+        }
+        self.mysql.run = None;
         if let Some(previous_editor) = self.babel_editor.take() {
             previous_editor.update(cx, |editor, cx| {
                 editor.clear_source_run_feedback();
@@ -326,7 +411,12 @@ impl WorkspaceWindow {
             }
         };
         debug_assert_eq!(output.language_name, language_name);
-        let source_block_start = output.source_block_start;
+        let source_block_start = output.offset_after_result_edit(output.source_block_start);
+        let after_selection = crate::document::Selection::new(
+            output.offset_after_result_edit(output.selection.anchor()),
+            output.offset_after_result_edit(output.selection.head()),
+        );
+        let table = output.table.take();
         let file = output.file().map(|(target, link, warning)| {
             (
                 target.to_path_buf(),
@@ -347,7 +437,7 @@ impl WorkspaceWindow {
                     DocumentCommand::new(
                         EditTransaction::new(revision, vec![edit]),
                         selection,
-                        selection,
+                        after_selection,
                         EditOrigin::Other,
                     ),
                     cx,
@@ -368,14 +458,31 @@ impl WorkspaceWindow {
                 return;
             }
         }
-        let message = match file {
-            Some((target, link, None)) => {
-                EchoMessage::success(format!("Generated {link} ({})", target.display()))
+        let message = if let Some(table) = table {
+            EchoMessage::success(match self.language {
+                crate::i18n::Language::Chinese => format!(
+                    "查询完成 · {} 行 × {} 列 · {} ms",
+                    table.rows.len(),
+                    table.columns.len(),
+                    table.elapsed.as_millis()
+                ),
+                crate::i18n::Language::English => format!(
+                    "Query complete · {} rows × {} columns · {} ms",
+                    table.rows.len(),
+                    table.columns.len(),
+                    table.elapsed.as_millis()
+                ),
+            })
+        } else {
+            match file {
+                Some((target, link, None)) => {
+                    EchoMessage::success(format!("Generated {link} ({})", target.display()))
+                }
+                Some((_, link, Some(warning))) => {
+                    EchoMessage::warning(format!("Generated {link}; warning: {warning}"))
+                }
+                None => EchoMessage::success(format!("Executed {language_name} source block")),
             }
-            Some((_, link, Some(warning))) => {
-                EchoMessage::warning(format!("Generated {link}; warning: {warning}"))
-            }
-            None => EchoMessage::success(format!("Executed {language_name} source block")),
         };
         editor.update(cx, |editor, cx| {
             editor.finish_source_run_feedback_at(source_block_start, SourceRunPhase::Success, cx)

@@ -185,11 +185,9 @@ impl RowShaping<'_> {
             None
         };
         let text_inset = editor_block_text_inset(line_style.block.as_ref());
-        let row_wrap_width = if text_inset > 0.0 {
-            (self.wrap_width - text_inset - BLOCK_RIGHT_INSET - BLOCK_TEXT_RIGHT_PADDING).max(1.0)
-        } else {
-            self.wrap_width
-        };
+        let row_background_width =
+            editor_block_content_width(self.wrap_width, line_style.block.as_ref());
+        let row_wrap_width = editor_block_wrap_width(self.wrap_width, line_style.block.as_ref());
         let effective_wrap_width = self
             .editor
             .display_map
@@ -269,6 +267,11 @@ impl RowShaping<'_> {
                 effective_wrap_width,
                 self.editor
                     .preferred_table_widths(columns.source_range.start.0),
+                anchor
+                    .filter(|_| self.editor_focused && self.selection.is_empty())
+                    .map(|offset| {
+                        display.source_to_display((offset.0 - content_range.start.0) as usize)
+                    }),
                 self.window.text_system(),
             )
         });
@@ -347,7 +350,11 @@ impl RowShaping<'_> {
         let source_line_number_layout = line_style
             .block
             .as_ref()
-            .filter(|block| is_source_block_kind(&block.kind))
+            .filter(|block| {
+                is_source_block_kind(&block.kind)
+                    && (block.kind != syntax::EditorBlockKind::Source
+                        || block.edge == syntax::EditorBlockEdge::Body)
+            })
             .and_then(|block| {
                 block
                     .body_line
@@ -709,7 +716,7 @@ impl RowShaping<'_> {
                 anchor.is_some(),
                 Bounds::new(
                     point(row_text_origin_x, block_top),
-                    size(px(row_wrap_width), px(animated_height)),
+                    size(px(row_background_width), px(animated_height)),
                 ),
                 self.theme,
             ),
