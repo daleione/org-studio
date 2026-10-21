@@ -2,7 +2,7 @@ use super::*;
 use percent_encoding::percent_decode_str;
 use std::collections::BTreeMap;
 
-pub(crate) const CONNECTION_HELP: &str = "Set :dbconnection mysql://user:password@host:3306/database in the SQL block or inherited header arguments";
+pub(crate) const CONNECTION_HELP: &str = "Set :dbconnection to a mysql://user:password@host:3306/database URL or a connection name defined in Org properties";
 
 pub(super) struct Connection {
     pub(super) options: MySqlConnectOptions,
@@ -14,6 +14,13 @@ pub(super) fn from_headers(headers: &Headers) -> Result<Option<Connection>, Stri
     let mut password = String::new();
     let mut parameters = BTreeMap::new();
     let mut options = if let Some(connection) = headers.get(":dbconnection") {
+        let connection = if connection.contains("://") {
+            connection
+        } else {
+            headers.property(connection).ok_or(
+                "Unknown MySQL connection name; define it in this heading, a parent heading or file properties",
+            )?
+        };
         let mut url = url::Url::parse(connection).map_err(
             |_| "Invalid MySQL connection URL; use mysql://user:password@host:3306/database",
         )?;

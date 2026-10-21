@@ -6,7 +6,10 @@ use crate::{
 };
 
 #[derive(Default)]
-pub(super) struct Headers(BTreeMap<String, Vec<String>>);
+pub(super) struct Headers {
+    arguments: BTreeMap<String, Vec<String>>,
+    properties: BTreeMap<String, String>,
+}
 
 pub(super) struct HeaderToken {
     pub(super) text: String,
@@ -65,15 +68,29 @@ pub(super) fn tokenize(text: &str) -> Result<Vec<HeaderToken>, String> {
 
 impl Headers {
     pub(super) fn get(&self, name: &str) -> Option<&str> {
-        self.0.get(name)?.first().map(String::as_str)
+        self.arguments.get(name)?.first().map(String::as_str)
     }
 
     pub(super) fn values(&self, name: &str) -> &[String] {
-        self.0.get(name).map(Vec::as_slice).unwrap_or_default()
+        self.arguments
+            .get(name)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
     }
 
     pub(super) fn keys(&self) -> impl Iterator<Item = &str> {
-        self.0.keys().map(String::as_str)
+        self.arguments.keys().map(String::as_str)
+    }
+
+    pub(super) fn property(&self, name: &str) -> Option<&str> {
+        self.properties
+            .get(&name.to_lowercase())
+            .map(String::as_str)
+    }
+
+    fn extend(&mut self, other: Self) {
+        self.arguments.extend(other.arguments);
+        self.properties.extend(other.properties);
     }
 
     pub(super) fn parse(&mut self, text: &str) -> Result<(), String> {
@@ -87,10 +104,10 @@ impl Headers {
                     .all(|c| c.is_ascii_alphabetic() || c == '-')
             {
                 let name = word.to_ascii_lowercase();
-                self.0.insert(name.clone(), Vec::new());
+                self.arguments.insert(name.clone(), Vec::new());
                 key = Some(name);
             } else if let Some(key) = &key {
-                self.0.get_mut(key).unwrap().push(word);
+                self.arguments.get_mut(key).unwrap().push(word);
             }
         }
         Ok(())
@@ -115,10 +132,9 @@ pub(super) fn effective_headers(
         let Some((key, value)) = keyword(&text) else {
             continue;
         };
-        if key.eq_ignore_ascii_case("PROPERTY")
-            && let Some((name, args)) = value.split_once(char::is_whitespace)
-        {
-            property(&mut general, &mut specific, name, args)?;
+        if key.eq_ignore_ascii_case("PROPERTY") {
+            let (name, args) = value.split_once(char::is_whitespace).unwrap_or((value, ""));
+            apply_property(&mut general, &mut specific, name, args)?;
         }
     }
     let mut frames: Vec<(u16, Headers, Headers)> = Vec::new();
@@ -131,18 +147,21 @@ pub(super) fn effective_headers(
                 frames.push((*level, Headers::default(), Headers::default()));
             }
             BlockKind::Drawer { name } if name.eq_ignore_ascii_case("PROPERTIES") => {
-                if let Some((_, general, specific)) = frames.last_mut() {
-                    let content = snapshot.copy_range(node.content);
-                    for line in content.lines() {
-                        let line = line.trim();
-                        // Property names themselves can contain colons.
-                        if let Some(rest) = line.strip_prefix(':')
-                            && let Some((end, _)) = rest.match_indices(':').find(|(index, _)| {
-                                rest[index + 1..].starts_with(char::is_whitespace)
-                            })
-                        {
-                            property(general, specific, &rest[..end], &rest[end + 1..])?;
-                        }
+                let (general, specific) = frames
+                    .last_mut()
+                    .map(|(_, general, specific)| (general, specific))
+                    .unwrap_or((&mut general, &mut specific));
+                let content = snapshot.copy_range(node.content);
+                for line in content.lines() {
+                    let line = line.trim();
+                    // Property names themselves can contain colons.
+                    if let Some(rest) = line.strip_prefix(':')
+                        && let Some((end, _)) = rest.match_indices(':').find(|(index, _)| {
+                            let value = &rest[index + 1..];
+                            value.is_empty() || value.starts_with(char::is_whitespace)
+                        })
+                    {
+                        apply_property(general, specific, &rest[..end], &rest[end + 1..])?;
                     }
                 }
             }
@@ -150,10 +169,10 @@ pub(super) fn effective_headers(
         }
     }
     let mut headers = general;
-    headers.0.extend(specific.0);
+    headers.extend(specific);
     for (_, general, specific) in frames {
-        headers.0.extend(general.0);
-        headers.0.extend(specific.0);
+        headers.extend(general);
+        headers.extend(specific);
     }
     let affiliated = affiliated_keywords(snapshot, arena, source_index).collect::<Vec<_>>();
     for text in affiliated.into_iter().rev() {
@@ -171,7 +190,7 @@ pub(super) fn effective_headers(
     Ok(headers)
 }
 
-fn property(
+fn apply_property(
     general: &mut Headers,
     specific: &mut Headers,
     name: &str,
@@ -184,10 +203,17 @@ fn property(
     } else if name.eq_ignore_ascii_case("header-args:sql") {
         specific
     } else {
+        let value = general.properties.entry(name.to_lowercase()).or_default();
+        if append && !value.is_empty() {
+            value.push(' ');
+        } else {
+            value.clear();
+        }
+        value.push_str(args.trim());
         return Ok(());
     };
     if !append {
-        target.0.clear();
+        target.arguments.clear();
     }
     target.parse(args)
 }

@@ -108,23 +108,24 @@ fn rustls_query_preserves_exact_text_nulls_unicode_and_read_only_transaction() {
 }
 
 #[test]
-fn named_results_before_the_source_are_replaced_without_moving_the_caret_off_sql() {
+fn named_connection_replaces_results_above_the_source_without_moving_the_caret_off_sql() {
     use crate::document::{
         ByteOffset, ByteRange, DocumentBuffer, EditTransaction, Selection, TextSnapshot,
     };
     let fixture = Fixture::start();
-    let source = "#+RESULTS: report\n| old value |\n\nExplanation.\n\n#+name: report\n#+begin_src sql :engine mysql\nSELECT 'fixture';\n#+end_src\n";
+    let connection = fixture.request();
+    let source = format!(
+        "* Reports\n:PROPERTIES:\n:REPORTS: {}\n:END:\n\n#+RESULTS: report\n| old value |\n\nExplanation.\n\n#+name: report\n#+begin_src sql :engine mysql :dbconnection reports\nSELECT 'fixture';\n#+end_src\n",
+        connection.headers.get(":dbconnection").unwrap()
+    );
     let mut document = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
     let selection = Selection::caret(ByteOffset(source.find("SELECT").unwrap() as u64));
-    let mut request = crate::babel::prepare_source_block_execution(
+    let request = crate::babel::prepare_source_block_execution(
         &document.snapshot(),
         std::path::Path::new("/tmp/report.org"),
         selection,
     )
     .unwrap();
-    let connection = fixture.request();
-    let mysql = request.mysql.as_mut().unwrap();
-    mysql.connection = connection.connection;
     let output = crate::babel::execute_source_block(request).unwrap();
     let caret = output.offset_after_result_edit(output.selection.head());
     let block = output.offset_after_result_edit(output.source_block_start);

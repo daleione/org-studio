@@ -118,19 +118,108 @@ fn mysql_rejects_ambiguous_names_and_results_before_connecting() {
 }
 
 #[test]
-fn mysql_connection_url_inherits_and_explicit_fields_override_it() {
+fn mysql_named_connections_follow_heading_scope() {
+    let source = "\
+:PROPERTIES:
+:DB_DRAWER: mysql://reader@drawer.example/drawer_db
+:END:
+#+PROPERTY: DB_FILE mysql://reader@file.example/file_db
+#+PROPERTY: header-args:sql :dbconnection DB_A
+* Queries
+:PROPERTIES:
+:DB_A: mysql://reader@a.example/db_a
+:DB_B: mysql://reader@b.example/db_b
+:END:
+#+begin_src sql
+SELECT 'first';
+#+end_src
+#+begin_src sql :dbconnection db_b
+SELECT 'second';
+#+end_src
+** Local override
+:PROPERTIES:
+:db_a: mysql://reader@child.example/child_db
+:END:
+#+begin_src sql
+SELECT 'child';
+#+end_src
+** Sibling
+#+begin_src sql
+SELECT 'sibling';
+#+end_src
+* File defaults
+#+begin_src sql :dbconnection DB_FILE
+SELECT 'file';
+#+end_src
+#+begin_src sql :dbconnection DB_DRAWER
+SELECT 'drawer';
+#+end_src
+";
+    for (query, host, database) in [
+        ("SELECT 'first'", "a.example", "db_a"),
+        ("SELECT 'second'", "b.example", "db_b"),
+        ("SELECT 'child'", "child.example", "child_db"),
+        ("SELECT 'sibling'", "a.example", "db_a"),
+        ("SELECT 'file'", "file.example", "file_db"),
+        ("SELECT 'drawer'", "drawer.example", "drawer_db"),
+    ] {
+        let request = prepare_source_block_execution(
+            &snapshot(source),
+            Path::new("/tmp/mysql-notes.org"),
+            Selection::caret(ByteOffset(source.find(query).unwrap() as u64)),
+        )
+        .unwrap();
+        let target = request.mysql.unwrap().target().unwrap();
+        assert_eq!(
+            (target.host.as_str(), target.database.as_str()),
+            (host, database)
+        );
+    }
+}
+
+#[test]
+fn mysql_named_connections_reject_missing_or_invalid_properties() {
+    for properties in [
+        "",
+        "* Other\n:PROPERTIES:\n:DB_A: mysql://reader@other.example/db\n:END:\n* Current\n",
+        "#+begin_example\n#+PROPERTY: DB_A mysql://reader@example.test/db\n:PROPERTIES:\n:DB_A: mysql://reader@example.test/db\n:END:\n#+end_example\n",
+        "#+PROPERTY: DB_A mysql://reader@file.example/db\n* Current\n:PROPERTIES:\n:DB_A:\n:END:\n",
+        "#+PROPERTY: DB_A mysql://reader@file.example/db\n#+PROPERTY: DB_A\n",
+        "#+PROPERTY: DB_A mysql://reader:secret-password@db.example:bad/db\n",
+    ] {
+        let source =
+            format!("{properties}#+begin_src sql :dbconnection DB_A\nSELECT 1;\n#+end_src\n");
+        let error = mysql_request(&source)
+            .err()
+            .expect("connection must be rejected");
+        assert!(error.contains("connection"), "{error}");
+        assert!(!error.contains("secret-password"), "{error}");
+    }
+}
+
+#[test]
+fn mysql_connections_inherit_and_explicit_fields_override_them() {
     let source = "#+PROPERTY: header-args:sql :dbconnection mysql://reader:p%40ss@db.example:3307/reports :eval query\n#+begin_src sql -n :results table replace :dbhost block.example :database metrics :exports both\nSELECT 1;\n#+end_src\n";
-    let request = mysql_request(source).unwrap();
-    let mysql = request.mysql.unwrap();
-    assert!(mysql.ready());
-    let target = mysql.target().unwrap();
-    assert_eq!(target.user, "reader");
-    assert_eq!(target.host, "block.example");
-    assert_eq!(target.port, 3307);
-    assert_eq!(target.database, "metrics");
-    assert!(mysql.ask_each_time);
-    assert!(!mysql.identity().contains("p%40ss"));
-    assert!(!mysql.identity().contains("p@ss"));
+    let named = format!(
+        "#+PROPERTY: REPORTS mysql://reader:p%40ss@db.example:3307/reports\n{}",
+        source.replace("mysql://reader:p%40ss@db.example:3307/reports", "REPORTS")
+    );
+    let mut identities = Vec::new();
+    for source in [source, named.as_str()] {
+        let request = mysql_request(source).unwrap();
+        let mysql = request.mysql.unwrap();
+        assert!(mysql.ready());
+        let target = mysql.target().unwrap();
+        assert_eq!(target.user, "reader");
+        assert_eq!(target.host, "block.example");
+        assert_eq!(target.port, 3307);
+        assert_eq!(target.database, "metrics");
+        assert!(mysql.ask_each_time);
+        assert!(!mysql.identity().contains("p%40ss"));
+        assert!(!mysql.identity().contains("p@ss"));
+        identities.push(mysql.identity());
+    }
+    assert_eq!(identities[0], identities[1]);
 }
 
 #[test]
