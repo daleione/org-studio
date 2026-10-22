@@ -43,7 +43,6 @@ pub(crate) struct OverviewHost {
     pub(super) drawn_frame: crate::document_preview::FrameSlot,
     session: Option<Session>,
     cache: FrameCache,
-    frame_sizes: HashMap<DocumentId, Size<Pixels>>,
     presented: Option<Presented>,
     probe: Option<Gesture>,
     serial: u64,
@@ -338,9 +337,6 @@ impl WorkspaceWindow {
             .as_ref()
             .is_some_and(|state| state.new_document.is_some());
         if !new_document {
-            self.file_overview
-                .frame_sizes
-                .insert(id, frame.source.bounds.size);
             self.file_overview.cache.insert(id, frame.clone());
         }
         if let Some(state) = self.file_overview.session.as_mut() {
@@ -470,31 +466,15 @@ impl WorkspaceWindow {
             .collect()
     }
 
-    fn overview_item_size(&self, item: &Item, window: &Window) -> Size<Pixels> {
-        self.file_overview
-            .cache
-            .get(item.id, item.revision)
-            .map(|frame| frame.source.bounds.size)
-            .or_else(|| self.file_overview.frame_sizes.get(&item.id).copied())
-            .unwrap_or_else(|| {
-                self.file_overview.session.as_ref().map_or_else(
-                    || self.overview_stage_bounds(window).size,
-                    |state| state.origin_bounds.size,
-                )
-            })
+    fn overview_source_size(&self, window: &Window) -> Size<Pixels> {
+        self.file_overview.session.as_ref().map_or_else(
+            || self.overview_stage_bounds(window).size,
+            |state| state.origin_bounds.size,
+        )
     }
 
     fn overview_grid(&self, window: &Window, items: &[Item]) -> GridLayout {
-        let mut sources = items
-            .iter()
-            .map(|item| self.overview_item_size(item, window))
-            .collect::<Vec<_>>();
-        sources.push(
-            sources
-                .last()
-                .copied()
-                .unwrap_or_else(|| self.overview_stage_bounds(window).size),
-        );
+        let sources = vec![self.overview_source_size(window); items.len() + 1];
         GridLayout::with_sources(window.viewport_size(), &sources)
     }
 
@@ -765,9 +745,7 @@ impl WorkspaceWindow {
             cx.notify();
             return;
         }
-        let source = items
-            .last()
-            .map_or(stage.size, |item| self.overview_item_size(item, window));
+        let source = self.overview_source_size(window);
         let from = grid.document_preview(items.len(), offset, source);
         let document = self.prepare_draft(false, cx);
         let id = document.session.read(cx).id();
@@ -823,7 +801,7 @@ impl WorkspaceWindow {
         };
         let stage = self.overview_stage_bounds(window);
         let grid = self.overview_grid(window, &items);
-        let source_size = self.overview_item_size(&items[index], window);
+        let source_size = self.overview_source_size(window);
         let preparation_request = self.overview_preview_request(id, cx);
         let Some(state) = self.file_overview.session.as_mut() else {
             return;
@@ -1102,10 +1080,7 @@ impl WorkspaceWindow {
             {
                 let items = self.overview_items(cx);
                 let grid = self.overview_grid(window, &items);
-                let sources = items
-                    .iter()
-                    .map(|item| self.overview_item_size(item, window))
-                    .collect::<Vec<_>>();
+                let source = self.overview_source_size(window);
                 let state = self.file_overview.session.as_mut().unwrap();
                 if state.query.read(cx).is_composing() {
                     return;
@@ -1126,17 +1101,14 @@ impl WorkspaceWindow {
                     .iter()
                     .enumerate()
                     .find(|(i, _)| {
-                        layout::point_in(
-                            grid.document_preview(*i, offset, sources[*i]),
-                            event.position,
-                        )
+                        layout::point_in(grid.document_preview(*i, offset, source), event.position)
                     })
                     .map(|(_, item)| item.id);
                 let selected_visible = state.selected.filter(|id| {
                     items.iter().enumerate().any(|(index, item)| {
                         item.id == *id
                             && !grid
-                                .document_preview(index, offset, sources[index])
+                                .document_preview(index, offset, source)
                                 .intersect(&grid_bounds)
                                 .is_empty()
                     })
@@ -1309,9 +1281,6 @@ impl WorkspaceWindow {
             .collect::<Vec<_>>();
         let current = self.document_session().map(|session| session.read(cx).id());
         self.file_overview.cache.retain(&all_ids);
-        self.file_overview
-            .frame_sizes
-            .retain(|id, _| all_ids.contains(id));
         let grid = self.overview_grid(window, &items);
         if let Some(id) = self.buffers.inline_close_target()
             && !self.buffer_busy()
@@ -1329,7 +1298,7 @@ impl WorkspaceWindow {
                         .document_preview(
                             index,
                             state.scroll.offset().y,
-                            self.overview_item_size(&items[index], window),
+                            self.overview_source_size(window),
                         )
                         .intersect(&viewport);
                     bounds.size.width > px(0.) && bounds.size.height > px(0.)
@@ -1344,17 +1313,18 @@ impl WorkspaceWindow {
             .as_ref()
             .filter(|state| state.phase == Phase::Visible && state.preparation.is_none())
         {
+            let bounds = self.overview_stage_bounds(window);
             let stale = grid
                 .visible_range(items.len(), state.scroll.offset().y)
                 .filter_map(|index| {
                     let item = &items[index];
                     self.file_overview
                         .cache
-                        .stale_bounds(item.id, item.revision)
-                        .map(|bounds| (item.id, bounds))
+                        .needs_refresh(item.id, item.revision, bounds)
+                        .then_some(item.id)
                 })
-                .find(|(id, _)| self.overview_preview_request(*id, cx).is_none());
-            if let Some((id, bounds)) = stale {
+                .find(|id| self.overview_preview_request(*id, cx).is_none());
+            if let Some(id) = stale {
                 self.prepare_overview_document_frame(id, bounds, cx);
             }
         }
@@ -1484,6 +1454,7 @@ impl WorkspaceWindow {
                     state.progress = 1.;
                     state.target_frame = None;
                     state.new_document = None;
+                    cx.on_next_frame(window, |_, _, cx| cx.notify());
                 }
                 Phase::Returning => {
                     if !state.reduced_motion

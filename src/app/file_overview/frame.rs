@@ -66,14 +66,17 @@ impl FrameCache {
         }
     }
 
-    pub fn stale_bounds(&self, id: DocumentId, revision: Revision) -> Option<Bounds<Pixels>> {
-        self.frames
-            .get(&id)
-            .filter(|frame| {
-                frame.revision == revision
-                    && frame.palette != crate::theme::current_theme().background
-            })
-            .map(|frame| frame.source.bounds)
+    pub fn needs_refresh(
+        &self,
+        id: DocumentId,
+        revision: Revision,
+        bounds: Bounds<Pixels>,
+    ) -> bool {
+        self.frames.get(&id).is_some_and(|frame| {
+            frame.revision == revision
+                && (frame.palette != crate::theme::current_theme().background
+                    || frame.source.bounds != bounds)
+        })
     }
 
     pub fn remove(&mut self, id: DocumentId) {

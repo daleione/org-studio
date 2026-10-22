@@ -126,11 +126,6 @@ impl WorkspaceWindow {
                         scale: window.scale_factor(),
                         palette: current_theme().background,
                     });
-                    if let Some(presented) = this.file_overview.presented {
-                        this.file_overview
-                            .frame_sizes
-                            .insert(presented.id, bounds.size);
-                    }
                 });
             },
         )
@@ -349,12 +344,9 @@ impl WorkspaceWindow {
         } else {
             grid.visible_range(items.len() + 1, state.scroll.offset().y)
         };
+        let source = self.overview_source_size(window);
         let cards = range
             .map(|index| {
-                let source = items.get(index).or_else(|| items.last()).map_or_else(
-                    || self.overview_stage_bounds(window).size,
-                    |item| self.overview_item_size(item, window),
-                );
                 let mut bounds = grid.document_preview(
                     index,
                     if transition.is_some() {

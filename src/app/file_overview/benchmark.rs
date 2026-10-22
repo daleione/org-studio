@@ -461,8 +461,8 @@ async fn scenario(
     })
     .await?;
     screenshot(window, output, "07-overview-narrow.png", cx)?;
-    // Reproduce two tall document frames, including one cached in the
-    // background. Their borders must follow the original document ratio.
+    // Retain a wide frame, resize to portrait, then open the overview.
+    // Both cards must use the current viewport and refresh their real layouts.
     window
         .update(cx, |w, window, cx| {
             w.close_file_overview_now(window, cx);
@@ -475,22 +475,28 @@ async fn scenario(
             cx.notify();
         })
         .map_err(|e| e.to_string())?;
-    for id in ids.iter().copied().take(2) {
+    for (index, id) in ids.iter().copied().take(2).enumerate() {
         window
-            .update(cx, |w, _, cx| {
+            .update(cx, |w, window, cx| {
+                window.resize(if index == 0 {
+                    size(px(1280.), px(800.))
+                } else {
+                    size(px(900.), px(1050.))
+                });
                 w.activate_buffer(id, cx);
                 w.show_editor(cx);
             })
             .map_err(|e| e.to_string())?;
         advance(window, cx, 180).await?;
     }
+    let resized_entry = Instant::now();
     window
         .update(cx, |w, window, cx| {
             w.open_file_overview(window, cx);
             let items = w.overview_items(cx);
             let grid = w.overview_grid(window, &items);
-            for (index, item) in items.iter().enumerate() {
-                let source = w.overview_item_size(item, window);
+            for index in 0..items.len() {
+                let source = w.overview_source_size(window);
                 let preview = grid.document_preview(index, px(0.), source);
                 assert!(
                     (f32::from(preview.size.width / preview.size.height)
@@ -508,6 +514,31 @@ async fn scenario(
             .is_some_and(|s| s.phase == Phase::Visible)
     })
     .await?;
+    let (stage, documents) = window
+        .update(cx, |w, window, cx| {
+            (
+                w.overview_stage_bounds(window),
+                w.overview_items(cx)
+                    .iter()
+                    .map(|item| (item.id, item.revision))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .map_err(|e| e.to_string())?;
+    wait_for(window, cx, "resized visible previews", |w| {
+        documents.iter().all(|(id, revision)| {
+            w.file_overview
+                .cache
+                .get(*id, *revision)
+                .is_some_and(|frame| frame.source.bounds == stage)
+        })
+    })
+    .await?;
+    eprintln!(
+        "resized overview: {} visible layouts ready in {:.3} ms including entry animation",
+        documents.len(),
+        resized_entry.elapsed().as_secs_f64() * 1000.
+    );
     screenshot(window, output, "08-overview-portrait.png", cx)?;
     window
         .update(cx, |w, _, cx| {
@@ -677,7 +708,7 @@ async fn check_pinch_follow(
             .is_some_and(|s| s.phase == Phase::Visible)
     })
     .await?;
-    let (target, position) = window
+    let (target, position, commit_delta) = window
         .update(cx, |w, window, cx| {
             let items = w.overview_items(cx);
             let (index, item) = items
@@ -686,10 +717,13 @@ async fn check_pinch_follow(
                 .find(|(_, item)| item.id != origin)
                 .unwrap();
             let grid = w.overview_grid(window, &items);
-            let source = w.overview_item_size(item, window);
+            let source = w.overview_source_size(window);
+            let preview = grid.document_preview(index, px(0.), source);
+            let scale = w.overview_stage_bounds(window).size.width / preview.size.width;
             (
                 item.id,
-                grid.document_preview(index, px(0.), source).center(),
+                preview.center(),
+                f32::from(scale).powf(1. / 24.) - 1.,
             )
         })
         .map_err(|e| e.to_string())?;
@@ -732,7 +766,9 @@ async fn check_pinch_follow(
         return Err("regrabbing an expansion activated its target".into());
     }
     for cancel in [true, false] {
-        let mut expansion = vec![(Some(0.018), TouchPhase::Moved); 24];
+        // Cross the commit distance without relying on diagnostic frame speed.
+        let delta = if cancel { 0.018 } else { commit_delta };
+        let mut expansion = vec![(Some(delta), TouchPhase::Moved); 24];
         if !cancel {
             expansion.push((Some(0.), TouchPhase::Ended));
         }
@@ -824,6 +860,11 @@ async fn check_handoff_and_motion(
         }
         for returning in [false, true] {
             let action = if returning { "return" } else { "open" };
+            // Native pointer hover tooltips must not enter pixel comparisons.
+            cx.update_window(window.into(), |_, window, cx| {
+                window.simulate_mouse_move(point(px(-100.), px(-100.)), cx);
+            })
+            .map_err(|e| e.to_string())?;
             window
                 .update(cx, |w, window, cx| w.open_file_overview(window, cx))
                 .map_err(|e| e.to_string())?;

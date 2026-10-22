@@ -1417,7 +1417,7 @@ fn outward_pinch_ignores_header_and_noise_and_can_be_cancelled(cx: &mut gpui::Te
             let items = w.overview_items(cx);
             let grid = w.overview_grid(window, &items);
             let position = grid
-                .document_preview(0, px(0.), w.overview_item_size(&items[0], window))
+                .document_preview(0, px(0.), w.overview_source_size(window))
                 .center();
             w.file_overview_pinch(&event(position, 0.01, TouchPhase::Moved), window, cx);
             assert_eq!(
@@ -1443,36 +1443,72 @@ fn outward_pinch_ignores_header_and_noise_and_can_be_cancelled(cx: &mut gpui::Te
 }
 
 #[gpui::test]
-fn document_frames_and_opening_use_the_original_aspect_ratio(cx: &mut gpui::TestAppContext) {
+fn resized_overview_uses_current_proportions_and_refreshes_old_frames(
+    cx: &mut gpui::TestAppContext,
+) {
     cx.update(crate::editor::init);
-    cx.update(|cx| cx.set_reduce_motion(true));
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(size(px(480.), px(1000.)));
     let a = draft(&w, "portrait.org", "* Portrait", cx);
-    draft(&w, "current.org", "* Current", cx);
     cx.run_until_parked();
-    w.update(cx, |w, cx| {
-        // Exercise size metadata after the retained paint frame was evicted.
-        w.file_overview.cache.clear();
+    let current = draft(&w, "current.org", "* Current", cx);
+    cx.run_until_parked();
+    let old_size = w.read_with(cx, |w, cx| {
         w.file_overview
-            .frame_sizes
-            .insert(a.read(cx).id(), size(px(300.), px(900.)));
+            .cache
+            .get(a.read(cx).id(), a.read(cx).revision())
+            .expect("previous document frame")
+            .source
+            .bounds
+            .size
     });
+    let revision = a.read_with(cx, |doc, _| doc.revision());
+    cx.simulate_resize(size(px(1200.), px(800.)));
+    cx.run_until_parked();
     open(&w, cx);
+    w.update(cx, |w, cx| {
+        w.file_overview.session.as_mut().unwrap().motion =
+            Some(Motion::settle(Instant::now(), 1., 1., 0., true));
+        cx.notify();
+    });
+    cx.run_until_parked();
     let preview = cx.debug_bounds("file-overview-preview-0").unwrap();
+    let current_preview = cx.debug_bounds("file-overview-preview-1").unwrap();
     let card = cx.debug_bounds("file-overview-card-0").unwrap();
-    assert!((f32::from(preview.size.width / preview.size.height) - 1. / 3.).abs() < 0.0001);
+    assert_eq!(preview.size, current_preview.size);
+    assert_eq!(preview.top(), current_preview.top());
     assert_eq!(card.size.width, preview.size.width);
     assert_eq!(card.size.height, preview.size.height + px(layout::CAPTION));
+    for _ in 0..4 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
     cx.update(|window, app| {
         w.update(app, |w, cx| {
+            let stage = w.overview_stage_bounds(window);
+            assert_ne!(stage.size, old_size);
+            let frame = w
+                .file_overview
+                .cache
+                .get(a.read(cx).id(), revision)
+                .expect("refreshed document frame");
+            assert_eq!(frame.source.bounds, stage);
+            assert_eq!(a.read(cx).revision(), revision);
+            assert_eq!(w.document_session().unwrap(), &current);
+            // Rendered card edges are rounded to device pixels.
+            let aspect_ratio = stage.size.width / stage.size.height;
+            assert!((preview.size.width - preview.size.height * aspect_ratio).abs() <= px(1.));
             w.select_overview_item(a.read(cx).id(), window, cx);
             let state = w.file_overview.session.as_ref().unwrap();
-            assert_eq!(state.target_from, preview);
-            assert!(
-                (f32::from(state.target_to.size.width / state.target_to.size.height) - 1. / 3.)
-                    .abs()
-                    < 0.0001
-            );
+            for (actual, expected) in [
+                (state.target_from.left(), preview.left()),
+                (state.target_from.top(), preview.top()),
+                (state.target_from.right(), preview.right()),
+                (state.target_from.bottom(), preview.bottom()),
+            ] {
+                assert!((actual - expected).abs() <= px(1.));
+            }
+            assert_eq!(state.target_to, stage);
         })
     });
 }
