@@ -1,0 +1,15 @@
+#+title: 内置 Typst 绘图资源
+
+为离线使用 CeTZ 提供固定版本的原始包资源，不包含 CeTZ-Plot。
+保留各包的清单和许可文件；源码与 WASM 均来自上游发布包，未修改。
+
+| 包     | 版本  | 上游发布包 SHA256                                                |
+|--------+-------+------------------------------------------------------------------|
+| CeTZ   | 0.5.2 | 77cf8490114ae04c6e665a11efa691d284a0cadb9719771b5708c1197292f23f |
+| oxifmt | 1.0.0 | 7d17a1fc8ad01740ec3cb2b03c7360a4225ff9318e5710765fa98ea6fd59594f |
+
+CeTZ 的格式化辅助依赖为 oxifmt；没有其他包依赖。资源由 typst_runtime/packages.rs
+按精确包身份和虚拟路径只读加载，不访问用户包缓存，不在运行时联网。
+
+- [[https://packages.typst.org/preview/cetz-0.5.2.tar.gz][CeTZ 发布包]]、[[https://github.com/cetz-package/cetz][源码仓库]]；LGPL-3.0-or-later。
+- [[https://packages.typst.org/preview/oxifmt-1.0.0.tar.gz][oxifmt 发布包]]、[[https://github.com/PgBiel/typst-oxifmt][源码仓库]]；MIT OR Apache-2.0。
