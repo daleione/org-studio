@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+mod settings;
+
 use super::{PlotCandidate, PlotDiagnostic, PlotKind, PlotLayout, PlotOutputTarget, PlotSpec};
 use crate::{
     document::{ByteRange, TextSnapshot},
@@ -140,9 +142,11 @@ enum Value {
 
 pub(super) fn parse_spec(lines: &[String]) -> Result<PlotSpec, PlotDiagnostic> {
     let mut options = BTreeMap::new();
+    let mut sets = Vec::new();
     // org-plot scans upward and overwrites each option: the first declaration wins.
     for line in lines {
         let mut text = line.as_str();
+        let mut line_sets = Vec::new();
         while !text.trim_start().is_empty() {
             text = text.trim_start();
             let Some(colon) = text.find(':') else {
@@ -160,8 +164,14 @@ pub(super) fn parse_spec(lines: &[String]) -> Result<PlotSpec, PlotDiagnostic> {
                 "max" => "ymax".to_owned(),
                 name => name.to_owned(),
             };
-            options.entry(name).or_insert(value);
+            if name == "set" {
+                line_sets.push(value);
+            } else {
+                options.entry(name).or_insert(value);
+            }
         }
+        // Org keeps every set value, reversing their order within each declaration.
+        sets.extend(line_sets.into_iter().rev());
     }
     let mut spec = PlotSpec::default();
     let mut map = None;
@@ -215,6 +225,7 @@ pub(super) fn parse_spec(lines: &[String]) -> Result<PlotSpec, PlotDiagnostic> {
                     }
                     "impulses" => PlotKind::Impulses,
                     "boxes" => PlotKind::Boxes,
+                    "boxplot" => PlotKind::BoxPlot,
                     other => {
                         return Err(PlotDiagnostic::new(
                             "unsupported-option",
@@ -302,6 +313,7 @@ pub(super) fn parse_spec(lines: &[String]) -> Result<PlotSpec, PlotDiagnostic> {
     if spec.layout == PlotLayout::Radar && !explicit_ind {
         spec.x_column = 1;
     }
+    settings::apply(&sets, &mut spec)?;
     Ok(spec)
 }
 

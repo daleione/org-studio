@@ -56,7 +56,7 @@
     content((pad, top-y), title, anchor: "north-west", padding: 0)
     top-y -= measure(title).height / u + 16
   }
-  if p.series.len() > 1 and p.layout != "grid" {
+  if p.series.len() > 1 and p.layout != "grid" and p.kind != "box_plot" {
     let legend-x = pad
     let legend-y = top-y - base / 2
     for (i, series) in p.series.enumerate() {

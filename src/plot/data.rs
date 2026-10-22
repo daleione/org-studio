@@ -128,6 +128,18 @@ pub(super) fn prepare_input(
         ));
     }
     let kind = spec.kind.unwrap_or(PlotKind::Lines);
+    if kind == PlotKind::BoxPlot
+        && (spec.x_column != 0
+            || spec.time
+            || spec.time_format.is_some()
+            || spec.x_axis.min.is_some()
+            || spec.x_axis.max.is_some())
+    {
+        return Err(PlotDiagnostic::new(
+            "invalid-option",
+            "Boxplots summarize each selected numeric column; use ind:0 and deps, without x-axis options",
+        ));
+    }
     if spec.layout == PlotLayout::Radar && !rows.is_empty() && !(3..=16).contains(&rows.len()) {
         return Err(PlotDiagnostic::new(
             "invalid-table",
@@ -266,6 +278,9 @@ pub(super) fn prepare_input(
         y_axis: spec.y_axis,
         ticks: spec.ticks,
         fill_to_zero: spec.fill_to_zero,
+        histogram: spec.histogram.unwrap_or_default(),
+        box_width: spec.box_width,
+        boxplot: spec.boxplot.unwrap_or_default(),
     })
 }
 

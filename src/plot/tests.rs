@@ -1,6 +1,8 @@
 use super::*;
 use crate::document::{DocumentSnapshot, TextSnapshot};
 
+mod statistics;
+
 fn prepared(source: &str) -> PlotPreparation {
     let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
     let arena = crate::org_syntax::parse(&snapshot);
@@ -252,6 +254,22 @@ fn bundled_cetz_renders_all_basic_marks_offline_with_literal_unicode_labels() {
         ("points", "with:points"),
         ("linespoints", "with:linespoints"),
         ("histograms", "with:histograms"),
+        (
+            "stacked",
+            "with:histograms set:\"style histogram rowstacked\"",
+        ),
+        (
+            "stacked-dark",
+            "with:histograms set:\"style histogram rowstacked\"",
+        ),
+        (
+            "column-stacked",
+            "with:histograms set:\"style histogram columnstacked\"",
+        ),
+        ("frequency", "with:boxes set:\"boxwidth 50\""),
+        ("boxplot", "with:boxplot"),
+        ("boxplot-dark", "with:boxplot"),
+        ("boxplot-small", "with:boxplot"),
         ("steps", "with:steps"),
         ("fsteps", "with:fsteps"),
         ("histeps", "with:histeps"),
@@ -269,7 +287,13 @@ fn bundled_cetz_renders_all_basic_marks_offline_with_literal_unicode_labels() {
             "with:lines xmin:0 xmax:20 ymin:0 ymax:10 ticks:4",
         ),
     ] {
-        let table = if name.starts_with("radar") {
+        let table = if name == "frequency" {
+            "| midpoint | count |\n|---+---|\n| 25 | 3 |\n| 75 | 0 |\n| 175 | 2 |\n"
+        } else if name == "boxplot-small" {
+            "| 少量样本 | 常量样本 | 全部缺失 |\n|---+---+---|\n| 10 | 20 | NULL |\n| 15 | 20 | NULL |\n| NULL | 20 | NULL |\n| NULL | 20 | NULL |\n"
+        } else if name.starts_with("boxplot") {
+            "| 直营 | 合作渠道 |\n|---+---|\n| 10 | 12 |\n| 12 | 15 |\n| 14 | 18 |\n| 16 | 22 |\n| 18 | 25 |\n| 20 | 30 |\n| 22 | 35 |\n| 100 | NULL |\n"
+        } else if name.starts_with("radar") {
             "| method | 性能 | 易用性 | 兼容性 | 维护性 | 扩展性 |\n|---+---+---+---+---+---|\n| A | 4 | 5 | 3 | 4 | 3 |\n| B | 5 | 3 | 4 | 3 | 5 |\n"
         } else if name == "time" {
             "| date | orders |\n|---+---|\n| 2026-10-01 | 120 |\n| 2026-10-02 | 145 |\n| 2026-10-05 | 210 |\n| 2026-10-08 | 185 |\n"
@@ -278,7 +302,8 @@ fn bundled_cetz_renders_all_basic_marks_offline_with_literal_unicode_labels() {
         } else {
             "| month | 本期 | 上期 |\n|-------+------+------|\n| 七月 | 120 | 100 |\n| 八月 | 180 | NULL |\n| 九月 | -20 | 130 |\n"
         };
-        let source = format!("#+PLOT: title:\"中文与 #literal()\" ind:1 {options}\n{table}");
+        let ind = if name.starts_with("boxplot") { 0 } else { 1 };
+        let source = format!("#+PLOT: title:\"中文与 #literal()\" ind:{ind} {options}\n{table}");
         let PlotPreparation::Ready(plot) = prepared(&source) else {
             panic!("valid plot")
         };

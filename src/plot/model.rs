@@ -54,6 +54,30 @@ pub(crate) enum PlotKind {
     FilledCurves,
     Impulses,
     Boxes,
+    BoxPlot,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+pub(crate) enum HistogramStyle {
+    #[default]
+    Clustered,
+    RowStacked,
+    ColumnStacked,
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(crate) struct BoxPlotStyle {
+    pub(crate) range: f64,
+    pub(crate) outliers: bool,
+}
+
+impl Default for BoxPlotStyle {
+    fn default() -> Self {
+        Self {
+            range: 1.5,
+            outliers: true,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
@@ -96,6 +120,9 @@ pub(crate) struct PlotSpec {
     pub(crate) y_axis: PlotAxisSpec,
     pub(crate) ticks: Option<usize>,
     pub(crate) fill_to_zero: bool,
+    pub(crate) histogram: Option<HistogramStyle>,
+    pub(crate) box_width: Option<f64>,
+    pub(crate) boxplot: Option<BoxPlotStyle>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -124,6 +151,9 @@ pub(crate) struct PlotInput {
     pub(crate) y_axis: PlotAxisSpec,
     pub(crate) ticks: Option<usize>,
     pub(crate) fill_to_zero: bool,
+    pub(crate) histogram: HistogramStyle,
+    pub(crate) box_width: Option<f64>,
+    pub(crate) boxplot: BoxPlotStyle,
 }
 
 #[derive(Clone, Debug)]
@@ -159,6 +189,17 @@ pub(crate) struct PlotTick {
 pub(crate) struct PlotPlanSeries {
     pub(crate) label: String,
     pub(crate) points: Vec<Option<(f64, f64)>>,
+    pub(crate) bases: Vec<Option<f64>>,
+    pub(crate) boxplot: Option<PlotBoxSummary>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PlotBoxSummary {
+    pub(crate) position: f64,
+    pub(crate) width: Option<f64>,
+    // Lower whisker, first quartile, median, third quartile, upper whisker.
+    pub(crate) statistics: Option<[f64; 5]>,
+    pub(crate) outliers: Vec<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -176,6 +217,7 @@ pub(crate) struct PlotPlan {
     pub(crate) box_bounds: Vec<Option<(f64, f64)>>,
     pub(crate) fill_to_zero: bool,
     pub(crate) clip: bool,
+    pub(crate) stacked: bool,
 }
 
 #[derive(Clone, Debug)]

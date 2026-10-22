@@ -3,10 +3,17 @@ use super::{
     PlotTick, PlotX, PreparedPlot,
 };
 
-pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
+mod boxplot;
+mod histograms;
+
+pub(super) fn build_plan(mut input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
     if input.layout == PlotLayout::Radar {
         return radar(input);
     }
+    if input.kind == PlotKind::BoxPlot {
+        return boxplot::build(input);
+    }
+    histograms::transpose_columns(&mut input)?;
     let rows = match &input.x {
         PlotX::Numeric(x) | PlotX::Time(x) => x.len(),
         PlotX::Category(x) => x.len(),
@@ -15,12 +22,15 @@ pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotD
         PlotX::Numeric(x) | PlotX::Time(x) => x[index].is_some(),
         PlotX::Category(_) => true,
     };
+    let stacks = histograms::stack(&input, rows)?;
     let y = input
         .series
         .iter()
-        .flat_map(|series| {
-            series
-                .values
+        .enumerate()
+        .flat_map(|(index, series)| {
+            stacks
+                .as_ref()
+                .map_or(&series.values, |stacks| &stacks[index].tops)
                 .iter()
                 .enumerate()
                 .filter_map(|(i, value)| valid_x(i).then_some(*value).flatten())
@@ -34,7 +44,7 @@ pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotD
         bars || matches!(input.kind, PlotKind::Boxes | PlotKind::Impulses) || input.fill_to_zero;
     let (y_min, y_max, y_ticks) = axis(&y, zero, input.y_axis, input.ticks)?;
     let raw_boxes = if input.kind == PlotKind::Boxes {
-        box_bounds(&input.x, rows)
+        box_bounds(&input.x, rows, input.box_width)?
     } else {
         Vec::new()
     };
@@ -90,10 +100,12 @@ pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotD
     let series = input
         .series
         .iter()
-        .map(|series| PlotPlanSeries {
+        .enumerate()
+        .map(|(index, series)| PlotPlanSeries {
             label: series.label.clone(),
-            points: series
-                .values
+            points: stacks
+                .as_ref()
+                .map_or(&series.values, |stacks| &stacks[index].tops)
                 .iter()
                 .enumerate()
                 .map(|(index, y)| {
@@ -102,6 +114,14 @@ pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotD
                         .map(|(x, y)| (x, normalize(y, y_min, y_max)))
                 })
                 .collect(),
+            bases: stacks.as_ref().map_or_else(Vec::new, |stacks| {
+                stacks[index]
+                    .bases
+                    .iter()
+                    .map(|value| value.map(|value| normalize(value, y_min, y_max)))
+                    .collect()
+            }),
+            boxplot: None,
         })
         .collect::<Vec<_>>();
     if series
@@ -111,9 +131,7 @@ pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotD
     {
         return Err(range_error());
     }
-    let content_key = serde_json::to_vec(&input)
-        .map_err(|error| PlotDiagnostic::new("invalid-number", error.to_string()))?
-        .into();
+    let content_key = content_key(&input)?;
     Ok(Some(PreparedPlot {
         content_key,
         plan: PlotPlan {
@@ -145,11 +163,16 @@ pub(super) fn build_plan(input: PlotInput) -> Result<Option<PreparedPlot>, PlotD
                 || input.y_axis.min.is_some()
                 || input.y_axis.max.is_some()
                 || input.kind == PlotKind::HiSteps,
+            stacked: stacks.is_some(),
         },
     }))
 }
 
-fn box_bounds(x: &PlotX, rows: usize) -> Vec<Option<(f64, f64)>> {
+fn box_bounds(
+    x: &PlotX,
+    rows: usize,
+    width: Option<f64>,
+) -> Result<Vec<Option<(f64, f64)>>, PlotDiagnostic> {
     let values = match x {
         PlotX::Numeric(values) | PlotX::Time(values) => values.clone(),
         PlotX::Category(_) => (0..rows).map(|index| Some(index as f64 + 0.5)).collect(),
@@ -157,22 +180,25 @@ fn box_bounds(x: &PlotX, rows: usize) -> Vec<Option<(f64, f64)>> {
     let mut sorted = values.iter().copied().flatten().collect::<Vec<_>>();
     sorted.sort_by(f64::total_cmp);
     sorted.dedup();
-    values
+    let bounds = values
         .iter()
         .map(|value| {
             let value = (*value)?;
+            if let Some(width) = width {
+                return Some((value - width / 2.0, value + width / 2.0));
+            }
             let index = sorted
                 .binary_search_by(|probe| probe.total_cmp(&value))
                 .ok()?;
             let left = index
                 .checked_sub(1)
-                .map(|index| (sorted[index] + value) / 2.0)
+                .map(|index| sorted[index] / 2.0 + value / 2.0)
                 .unwrap_or_else(|| {
                     value - sorted.get(index + 1).map_or(1.0, |next| next - value) / 2.0
                 });
             let right = sorted
                 .get(index + 1)
-                .map(|next| (value + next) / 2.0)
+                .map(|next| value / 2.0 + next / 2.0)
                 .unwrap_or_else(|| {
                     value
                         + index
@@ -182,7 +208,15 @@ fn box_bounds(x: &PlotX, rows: usize) -> Vec<Option<(f64, f64)>> {
                 });
             Some((left, right))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    if bounds
+        .iter()
+        .flatten()
+        .any(|(a, b)| !a.is_finite() || !b.is_finite() || a >= b)
+    {
+        return Err(range_error());
+    }
+    Ok(bounds)
 }
 
 fn radar(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
@@ -239,11 +273,11 @@ fn radar(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
                     })
                 })
                 .collect(),
+            bases: Vec::new(),
+            boxplot: None,
         })
         .collect();
-    let content_key = serde_json::to_vec(&input)
-        .map_err(|error| PlotDiagnostic::new("invalid-number", error.to_string()))?
-        .into();
+    let content_key = content_key(&input)?;
     Ok(Some(PreparedPlot {
         content_key,
         plan: PlotPlan {
@@ -267,8 +301,15 @@ fn radar(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
             box_bounds: Vec::new(),
             fill_to_zero: false,
             clip: false,
+            stacked: false,
         },
     }))
+}
+
+fn content_key(input: &PlotInput) -> Result<std::sync::Arc<[u8]>, PlotDiagnostic> {
+    serde_json::to_vec(input)
+        .map(Into::into)
+        .map_err(|error| PlotDiagnostic::new("invalid-number", error.to_string()))
 }
 
 fn normalize(value: f64, min: f64, max: f64) -> f64 {

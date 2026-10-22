@@ -1,6 +1,7 @@
 #chart((p, pad, top-y) => {
   import cetz.draw: *
   let bars = p.kind == "histograms"
+  let categorical = bars or p.kind == "box_plot"
   let start-alignment = left
   let end-alignment = right
   let y-width = p.y_ticks.map(t => measure(text(t.label)).width / u).fold(0, calc.max)
@@ -12,15 +13,15 @@
   let max-labels = calc.max(2, calc.floor(pw / (base * 4)))
   let stride = calc.max(1, calc.ceil(p.x_ticks.len() / max-labels))
   let ticks = p.x_ticks.enumerate()
-    .filter(((i, t)) => calc.rem(i, stride) == 0 or (not bars and i == p.x_ticks.len() - 1))
+    .filter(((i, t)) => calc.rem(i, stride) == 0 or (not categorical and i == p.x_ticks.len() - 1))
     .map(((i, t)) => t)
     .filter(t => not bars or pw * (1 - t.position) + slot / 2 >= base * 2)
   let label-inset = calc.min(base / 2, slot * stride * 0.12)
-  let label-width = if bars {
+  let label-width = if categorical {
     calc.min(120, slot * stride - 2 * label-inset)
   } else { calc.min(120, pw / calc.max(1, ticks.len()) * 0.95) }
   let label-span(tick) = {
-    let available = if bars { pw * (1 - tick.position) + slot / 2 - 2 * label-inset } else { label-width }
+    let available = if categorical { pw * (1 - tick.position) + slot / 2 - 2 * label-inset } else { label-width }
     calc.max(1, calc.min(label-width, available, measure(text(size: base * u, tick.label)).width / u))
   }
   let label-body(tick, alignment: center) = block(width: label-span(tick) * u, {
@@ -31,7 +32,7 @@
   let bottom = pad + label-height + 12
   let ph = top-y - bottom
   assert(ph >= 50, message: "The chart labels leave too little space to draw; shorten the labels or use fewer series")
-  if bars {
+  if categorical {
     let divisions = ()
     for i in range(0, p.rows + 1, step: int(stride)) {
       let x = left + i * slot
@@ -74,19 +75,21 @@
         let paint = color(cfg.style.colors.at(i))
         let stroke = (paint: paint, thickness: 2.7 * u, cap: "round", join: "round", dash: dashes.at(i))
         if bars {
-          let count = p.series.len()
+          let count = if p.stacked { 1 } else { p.series.len() }
           let group = calc.min(slot * 0.64, count * 48 + (count - 1) * 4)
           let gap = calc.min(4, group / count * 0.12)
           let bw = (group - gap * (count - 1)) / count
-          let zero = bottom + p.zero * ph
           let bars = ()
-          for point in series.points {
+          for (j, point) in series.points.enumerate() {
             if point != none {
-              let x = left + point.at(0) * pw - group / 2 + i * (bw + gap)
+              let x = left + point.at(0) * pw - group / 2 + (if p.stacked { 0 } else { i * (bw + gap) })
+              let zero = bottom + (if p.stacked { series.bases.at(j) } else { p.zero }) * ph
               let y = bottom + point.at(1) * ph
               if calc.abs(y - zero) > 0.001 {
-                let r = calc.min(2, bw / 3, calc.abs(y - zero) / 3)
                 let sign = if y > zero { 1 } else { -1 }
+                let exposed = not p.stacked or not p.series.slice(i + 1).any(s =>
+                  s.points.at(j) != none and (s.points.at(j).at(1) - s.bases.at(j)) * sign > 0)
+                let r = if exposed { calc.min(2, bw / 3, calc.abs(y - zero) / 3) } else { 0 }
                 let k = r * (1 - 0.551784)
                 bars.push(((x, zero, 0), true, (
                   ("l", (x + bw, zero, 0)), ("l", (x + bw, y - sign * r, 0)),
@@ -98,6 +101,24 @@
             }
           }
           draw-paths(bars, fill: paint)
+        } else if p.kind == "box_plot" {
+          let box = series.boxplot
+          if box != none {
+            let x = left + box.position * pw
+            let bw = if box.width == none { calc.min(slot * 0.5, 42) } else { box.width * pw }
+            if box.statistics != none {
+              let (low, q1, median, q3, high) = box.statistics.map(value => bottom + value * ph)
+              let outline = (paint: paint, thickness: 1.3 * u)
+              line((x, low), (x, q1), stroke: outline)
+              line((x, q3), (x, high), stroke: outline)
+              line((x - bw * 0.28, low), (x + bw * 0.28, low), stroke: outline)
+              line((x - bw * 0.28, high), (x + bw * 0.28, high), stroke: outline)
+              rect((x - bw / 2, q1), (x + bw / 2, q3), stroke: outline, fill: paint.transparentize(84%))
+              line((x - bw / 2, median), (x + bw / 2, median), stroke: (paint: paint, thickness: 2.4 * u))
+            }
+            let paths = box.outliers.map(value => marker-path((x, bottom + value * ph), 0))
+            draw-paths(paths, stroke: (paint: paint, thickness: 1.3 * u), fill: bg)
+          }
         } else if p.kind == "boxes" {
           let paths = ()
           for (j, point) in series.points.enumerate() {
