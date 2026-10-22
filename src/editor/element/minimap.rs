@@ -25,7 +25,23 @@ pub(super) struct MinimapPaint {
     pub(super) background: Option<PaintQuad>,
     pub(super) image: Option<(Arc<RenderImage>, Bounds<Pixels>)>,
     pub(super) media: Vec<MinimapImagePaint>,
+    pub(super) plots: Vec<PlotMediaPaint>,
+    plot_requests: Vec<(crate::plot::PlotDemand, crate::plot::PlotRenderRequest)>,
     pub(super) overlays: Vec<PaintQuad>,
+}
+
+pub(super) struct PlotMediaPaint {
+    demand: crate::plot::PlotDemand,
+    row_y: f32,
+    row_height: f32,
+}
+
+impl MinimapPaint {
+    pub(super) fn prepare_plot_images(&mut self, cx: &mut App) {
+        for (demand, request) in self.plot_requests.drain(..) {
+            demand.request(request, cx);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -83,12 +99,16 @@ pub(super) fn build_minimap(
 ) -> (MinimapPaint, Option<MinimapRasterRequest>) {
     editor.minimap.note_semantics_pending(semantics_pending);
     if f32::from(bounds.size.width) <= 0.0 {
+        editor.plots.minimap_demands.borrow_mut().clear();
+        editor.plots.minimap_geometry.borrow_mut().take();
         return (
             MinimapPaint {
                 bounds,
                 background: None,
                 image: None,
                 media: Vec::new(),
+                plots: Vec::new(),
+                plot_requests: Vec::new(),
                 overlays: Vec::new(),
             },
             None,
@@ -206,7 +226,9 @@ pub(super) fn build_minimap(
         let mut media_candidates = Vec::with_capacity(source_lines.len());
         for &line in &source_lines {
             let start_units = request_layout.line_start_y(line) / editor_line_height;
-            let height_units = request_layout.line_height_px(line) / editor_line_height;
+            let height_units = (request_layout.line_height_px(line)
+                - request_layout.trailing_height(line))
+                / editor_line_height;
             let row_offset_units = start_units - first_unit as f32;
             crate::editor::minimap::fill_visual_rows(
                 &mut raster_lines,
@@ -237,7 +259,7 @@ pub(super) fn build_minimap(
             .note_request(snapshot.revision(), &source_lines);
         raster_request = Some(MinimapRasterRequest {
             key,
-            layout: request_layout,
+            layout: request_layout.clone(),
             path: path.to_path_buf(),
             snapshot: snapshot.clone(),
             source_lines,
@@ -277,6 +299,14 @@ pub(super) fn build_minimap(
             + (cached.key.first_unit as f32 - placement_content_top) * placement_line_height;
         let image_height = usize::from(cached.key.rows) as f32 * cached.line_height;
         for source in cached.media.iter() {
+            if editor
+                .plots
+                .sources
+                .get(&source.line)
+                .is_some_and(|plot| plot.source.image_link.is_some())
+            {
+                continue;
+            }
             let row_y = density.edge_padding()
                 + (cached.key.first_unit as f32 + source.row_offset_units - placement_content_top)
                     * placement_line_height;
@@ -340,12 +370,120 @@ pub(super) fn build_minimap(
             ));
         }
     }
+    let mut plots = Vec::new();
+    let mut plot_requests = Vec::new();
+    let can_paint_plots = active_frame
+        .as_ref()
+        .is_none_or(|frame| frame.raster.key.generation == editor.minimap.generation);
+    let sizing = crate::editor::inline_image::image_sizing(
+        request_layout.wrap_width(),
+        f32::from(bounds.size.height),
+        editor.font_size_px(),
+    );
+    let style = crate::plot::PlotStyle::for_theme(theme, 12.0);
+    let current = editor
+        .plots
+        .host
+        .as_ref()
+        .is_some_and(|host| host.is_current());
+    let mut demands = editor.plots.minimap_demands.borrow_mut();
+    let mut retained_geometry = editor.plots.minimap_geometry.borrow_mut();
+    if can_paint_plots {
+        *retained_geometry = Some(crate::editor::plot::PlotMinimapGeometry {
+            generation: editor.minimap.generation,
+            images: Vec::new(),
+        });
+    }
+    let mut requested = std::collections::HashSet::new();
+    for (&line, entry) in &editor.plots.sources {
+        let linked = entry.source.image_link.is_some();
+        if !matches!(entry.prepared, crate::plot::PlotPreparation::Ready(_))
+            || request_layout.is_hidden(line)
+            || entry
+                .source
+                .image_link
+                .is_some_and(|link| !editor.previews_inline_image_at(link.start))
+        {
+            continue;
+        }
+        let tail = request_layout.trailing_height(line);
+        let top = request_layout.line_start_y(line)
+            + if linked {
+                6.0
+            } else {
+                request_layout.line_height_px(line) - tail + 6.0
+            };
+        let (_, height) = crate::plot::plot_image_size(
+            entry.dimensions(),
+            entry.display.lock().unwrap().requested_width,
+            &entry.source.image_attributes,
+            &sizing,
+        );
+        if top + height < first_unit as f32 * editor_line_height
+            || top > (first_unit as f32 + row_count as f32) * editor_line_height
+        {
+            continue;
+        }
+        requested.insert(entry.id);
+        let demand = demands.entry(entry.id).or_default();
+        if current && let crate::plot::PlotPreparation::Ready(plot) = &entry.prepared {
+            plot_requests.push((
+                demand.clone(),
+                crate::plot::PlotRenderRequest::natural(plot.clone(), style.clone()),
+            ));
+        }
+        if !can_paint_plots {
+            continue;
+        }
+        let base = minimap_layout.base_line_height().max(1.0);
+        let tail = minimap_layout.trailing_height(line);
+        let top = minimap_layout.line_start_y(line)
+            + if linked {
+                6.0
+            } else {
+                minimap_layout.line_height_px(line) - tail + 6.0
+            };
+        retained_geometry
+            .as_mut()
+            .unwrap()
+            .images
+            .push(crate::editor::plot::PlotMinimapImage {
+                id: entry.id,
+                top_units: top / base,
+                height_units: height / base,
+            });
+    }
+    // Keep generated media attached to the same frozen geometry as the text raster.
+    let active_generation = active_frame
+        .as_ref()
+        .map_or(editor.minimap.generation, |frame| {
+            frame.raster.key.generation
+        });
+    if let Some(retained) = retained_geometry
+        .as_ref()
+        .filter(|retained| retained.generation == active_generation)
+    {
+        for image in &retained.images {
+            if let Some(demand) = demands.get(&image.id) {
+                requested.insert(image.id);
+                plots.push(PlotMediaPaint {
+                    demand: demand.clone(),
+                    row_y: density.edge_padding()
+                        + (image.top_units - geometry.content_top) * line_height,
+                    row_height: image.height_units * line_height,
+                });
+            }
+        }
+    }
+    demands.retain(|id, _| requested.contains(id));
     (
         MinimapPaint {
             bounds,
             background: Some(background),
             image,
             media,
+            plots,
+            plot_requests,
             overlays,
         },
         raster_request,
@@ -382,6 +520,7 @@ pub(super) fn paint_minimap_layer(
             false,
         );
     }
+    let mut media_images = Vec::new();
     for media in &state.minimap.media {
         let source: Arc<std::path::Path> = media.path.clone().into();
         let Some(Ok(loaded)) =
@@ -389,13 +528,35 @@ pub(super) fn paint_minimap_layer(
         else {
             continue;
         };
-        let image = loaded.image;
-        let Some((x, y, width, height)) = editor_minimap_media_geometry(
-            loaded.dimensions.0 as f32,
-            loaded.dimensions.1 as f32,
-            f32::from(state.minimap.bounds.size.width),
+        media_images.push((
+            loaded.image,
+            (loaded.dimensions.0 as f32, loaded.dimensions.1 as f32),
             media.row_y,
             media.row_height,
+        ));
+    }
+    for plot in &state.minimap.plots {
+        let state = plot.demand.state();
+        let Some(rendered) = state
+            .as_ref()
+            .and_then(crate::plot::PlotRenderState::rendered)
+        else {
+            continue;
+        };
+        media_images.push((
+            rendered.image.clone(),
+            (rendered.artifact.width, rendered.artifact.height),
+            plot.row_y,
+            plot.row_height,
+        ));
+    }
+    for (image, (natural_width, natural_height), row_y, row_height) in media_images {
+        let Some((x, y, width, height)) = editor_minimap_media_geometry(
+            natural_width,
+            natural_height,
+            f32::from(state.minimap.bounds.size.width),
+            row_y,
+            row_height,
         ) else {
             continue;
         };

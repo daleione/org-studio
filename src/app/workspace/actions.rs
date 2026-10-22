@@ -22,6 +22,45 @@ impl WorkspaceWindow {
             return;
         }
         match action {
+            PreviewAction::ResizeImage { target, width } => {
+                let result = self
+                    .document_session()
+                    .cloned()
+                    .ok_or("Document is no longer open")
+                    .and_then(|session| {
+                        session.update(cx, |session, cx| {
+                            let (range, source) = validate_target(session, &target)?;
+                            if crate::org_syntax::standalone_image_path(&source).is_none() {
+                                return Err("Image is no longer present");
+                            }
+                            let snapshot = session.snapshot();
+                            let Some(edit) = crate::org_syntax::attributes::image_width_edit(
+                                &snapshot,
+                                range.start,
+                                width.map(|width| width as f32),
+                            ) else {
+                                return Ok(());
+                            };
+                            let selection = Selection::caret(range.start);
+                            session
+                                .edit(
+                                    DocumentCommand::new(
+                                        EditTransaction::new(snapshot.revision(), vec![edit]),
+                                        selection,
+                                        selection,
+                                        EditOrigin::Other,
+                                    ),
+                                    cx,
+                                )
+                                .map(|_| ())
+                                .map_err(|_| "Could not resize the image")
+                        })
+                    });
+                if let Err(message) = result {
+                    self.set_document_notice(Some(message.into()));
+                }
+                cx.notify();
+            }
             PreviewAction::ToggleCheckbox { target, expected } => {
                 let Some(action_id) =
                     panel.update(cx, |panel, _| panel.begin_action(target.identity()))

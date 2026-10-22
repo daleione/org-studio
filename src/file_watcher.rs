@@ -88,10 +88,14 @@ impl AgendaWatch {
         &self.roots
     }
 
-    pub async fn changed(&self) -> notify::Result<AgendaWatchBatch> {
-        let first = match self.receiver.recv().await {
+    /// Drain events without registering a waker on the file system's callback thread.
+    pub fn try_changed(&self) -> notify::Result<Option<AgendaWatchBatch>> {
+        let first = match self.receiver.try_recv() {
             Ok(event) => event?,
-            Err(_) => return Ok(AgendaWatchBatch::default()),
+            Err(async_channel::TryRecvError::Empty) => return Ok(None),
+            Err(async_channel::TryRecvError::Closed) => {
+                return Err(notify::Error::generic("Agenda file watcher stopped"));
+            }
         };
         let mut paths = first.paths;
         let mut rescan_roots = event_requires_discovery(&first.kind);
@@ -103,10 +107,10 @@ impl AgendaWatch {
         paths.retain(|path| self.roots.iter().any(|root| path.starts_with(root)));
         paths.sort();
         paths.dedup();
-        Ok(AgendaWatchBatch {
+        Ok(Some(AgendaWatchBatch {
             paths: paths.into(),
             rescan_roots,
-        })
+        }))
     }
 }
 
@@ -248,7 +252,11 @@ mod tests {
             std::fs::rename(&temporary, &path).unwrap();
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             loop {
-                if watch.receiver.try_recv().is_ok() {
+                if watch
+                    .try_changed()
+                    .unwrap()
+                    .is_some_and(|batch| batch.paths.contains(&watch.roots()[0]))
+                {
                     break;
                 }
                 assert!(

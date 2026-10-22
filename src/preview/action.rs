@@ -32,6 +32,10 @@ pub(crate) enum PreviewAction {
         destination: Arc<str>,
     },
     CopyCode(PreviewActionTarget),
+    ResizeImage {
+        target: PreviewActionTarget,
+        width: Option<u32>,
+    },
     OpenImage {
         target: PreviewActionTarget,
         path: Arc<str>,
@@ -41,7 +45,9 @@ pub(crate) enum PreviewAction {
 impl PreviewAction {
     pub(crate) fn target(&self) -> &PreviewActionTarget {
         match self {
-            Self::ToggleCheckbox { target, .. } | Self::CopyCode(target) => target,
+            Self::ToggleCheckbox { target, .. }
+            | Self::ResizeImage { target, .. }
+            | Self::CopyCode(target) => target,
             Self::OpenLink { target, .. } | Self::OpenImage { target, .. } => target,
         }
     }

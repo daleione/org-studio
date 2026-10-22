@@ -148,6 +148,32 @@ fn emit_block(output: &mut String, block: &ExportBlock, heading_offset: u8) {
             }
             output.push(')');
         }
+        ExportBlock::GeneratedImage {
+            svg,
+            alt,
+            size,
+            width,
+            ..
+        } => {
+            let svg = std::str::from_utf8(svg).expect("Typst SVG output is UTF-8");
+            let width = match width {
+                Some(super::model::ExportImageWidth::Pixels(value)) => {
+                    format!("{}pt", value * 0.75)
+                }
+                Some(super::model::ExportImageWidth::Percent(value)) => {
+                    format!("area.width * {}", value / 100.0)
+                }
+                Some(super::model::ExportImageWidth::Em(value)) => format!("text.size * {value}"),
+                None => format!("{}pt", size.0 * 0.75),
+            };
+            let _ = write!(
+                output,
+                "#context layout(area => image(bytes({}), format: \"svg\", width: calc.min(area.width, {}), alt: {}))",
+                string_literal(svg),
+                width,
+                string_literal(alt)
+            );
+        }
         ExportBlock::Rule { .. } => output.push_str("#divider()"),
     }
 }

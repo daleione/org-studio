@@ -4,10 +4,7 @@
 //! This module owns the display rules (`image_sizing`, `resolved_image_size`)
 //! and the row-height write-back the paint pass and the minimap consume.
 
-use crate::org_syntax::attributes::{
-    ImageAttributeSpec, attr_org_line_above, attr_org_line_with_width, attr_org_line_without_width,
-    image_attributes_at,
-};
+use crate::org_syntax::attributes::{ImageAttributeSpec, image_attributes_at, image_width_edit};
 
 use super::*;
 
@@ -52,16 +49,11 @@ pub(super) fn resolved_image_size(
     sizing: &crate::preview::ImageSizing,
 ) -> (f32, f32) {
     let spec = editor.effective_inline_image_spec(ByteOffset(metrics.line_start), &metrics.spec);
-    crate::preview::resolve_image_size(metrics.source, Some(&spec), sizing)
-}
-
-/// The closest `#+ATTR_ORG:` line above an image line.
-struct ImageAttributeLine {
-    /// Line content, without the newline.
-    content: ByteRange,
-    /// Whole line, including the newline.
-    full: ByteRange,
-    text: String,
+    if metrics.plot {
+        crate::plot::plot_image_size(metrics.source, None, &spec, sizing)
+    } else {
+        crate::preview::resolve_image_size(metrics.source, Some(&spec), sizing)
+    }
 }
 
 impl SemanticEditor {
@@ -82,7 +74,7 @@ impl SemanticEditor {
     pub(super) fn inline_image_resize_width(&self, line_start: ByteOffset) -> Option<f32> {
         self.image_resize
             .as_ref()
-            .filter(|session| session.line_start == line_start)
+            .filter(|session| session.plot.is_none() && session.line_start == line_start)
             .map(|session| session.current_width)
     }
 
@@ -146,9 +138,19 @@ impl SemanticEditor {
         };
         if event.click_count >= 2 {
             // Double-clicking the grip returns the image to its auto size.
-            self.reset_inline_image_size(handle.line_start, cx);
+            if let Some(id) = handle.plot {
+                self.resize_plot(id, None, cx);
+            } else {
+                self.reset_inline_image_size(handle.line_start, cx);
+            }
         } else {
+            let previous_width = handle
+                .plot
+                .and_then(|id| self.plots.lines.values().find(|plot| plot.entry.id == id))
+                .and_then(|plot| plot.entry.display.lock().unwrap().requested_width);
             self.image_resize = Some(ImageResizeSession {
+                plot: handle.plot,
+                previous_width,
                 line: handle.line,
                 line_start: handle.line_start,
                 start_pointer_x: f32::from(event.position.x),
@@ -172,7 +174,7 @@ impl SemanticEditor {
         }
         let column_width = self.display_map.wrap_width();
         let viewport_height = self.image_drag_viewport_height();
-        let line = {
+        let (line, plot, width) = {
             let Some(session) = self.image_resize.as_mut() else {
                 return false;
             };
@@ -183,14 +185,18 @@ impl SemanticEditor {
             }
             session.current_width = width;
             session.moved = true;
-            session.line
+            (session.line, session.plot, width)
         };
         // Keep the row measured at its new height. Invalidating it instead would
         // drop the line to an estimated height, so the document height would
         // oscillate between estimated and measured on every pointer move and the
         // viewport would thrash. The shape cache stays untouched: text shaping
         // does not depend on an image's size.
-        self.apply_inline_image_row_height(line, column_width, viewport_height);
+        if let Some(id) = plot {
+            self.resize_plot(id, Some(width), cx);
+        } else {
+            self.apply_inline_image_row_height(line, column_width, viewport_height);
+        }
         cx.notify();
         true
     }
@@ -206,6 +212,10 @@ impl SemanticEditor {
         let Some(session) = self.image_resize.take() else {
             return;
         };
+        if session.plot.is_some() {
+            cx.notify();
+            return;
+        }
         let column_width = self.display_map.wrap_width();
         let viewport_height = self.image_drag_viewport_height();
         if !session.moved {
@@ -217,6 +227,15 @@ impl SemanticEditor {
         self.write_inline_image_width(session.line_start, session.current_width, cx);
     }
 
+    fn resize_plot(&mut self, id: crate::plot::PlotId, width: Option<f32>, cx: &mut Context<Self>) {
+        let Some(plot) = self.plots.lines.values().find(|plot| plot.entry.id == id) else {
+            return;
+        };
+        plot.document
+            .update(cx, |document, cx| document.resize(id, width, cx));
+        cx.notify();
+    }
+
     /// Writes the dragged width to the image's `#+ATTR_ORG:` line.
     fn write_inline_image_width(
         &mut self,
@@ -226,63 +245,28 @@ impl SemanticEditor {
     ) {
         let snapshot = self.snapshot(cx);
         let width = crate::preview::clamp_image_width(width, self.display_map.wrap_width());
-        match self.inline_image_attribute_line(&snapshot, line_start) {
-            Some(attribute) => {
-                let Some(updated) = attr_org_line_with_width(&attribute.text, width) else {
-                    return;
-                };
-                if updated == attribute.text.trim_end() {
-                    return;
-                }
-                let revision = snapshot.revision();
-                self.apply_image_edit(revision, attribute.content, updated, line_start, cx);
-            }
-            None => {
-                let revision = snapshot.revision();
-                let inserted = format!("#+ATTR_ORG: :width {}\n", width.round() as i64);
-                self.apply_image_edit(
-                    revision,
-                    ByteRange::new(line_start.0, line_start.0),
-                    inserted,
-                    line_start,
-                    cx,
-                );
-            }
+        if let Some(edit) = image_width_edit(&snapshot, line_start, Some(width)) {
+            self.apply_image_edit(
+                snapshot.revision(),
+                edit.range,
+                edit.replacement,
+                line_start,
+                cx,
+            );
         }
     }
 
-    /// Drops the image's `:width` attribute so it returns to its auto size.
     fn reset_inline_image_size(&mut self, line_start: ByteOffset, cx: &mut Context<Self>) {
         let snapshot = self.snapshot(cx);
-        let Some(attribute) = self.inline_image_attribute_line(&snapshot, line_start) else {
-            return;
-        };
-        let revision = snapshot.revision();
-        match attr_org_line_without_width(&attribute.text) {
-            Some(updated) => {
-                self.apply_image_edit(revision, attribute.content, updated, line_start, cx)
-            }
-            // The width was the only attribute: drop the whole line.
-            None => self.apply_image_edit(revision, attribute.full, String::new(), line_start, cx),
+        if let Some(edit) = image_width_edit(&snapshot, line_start, None) {
+            self.apply_image_edit(
+                snapshot.revision(),
+                edit.range,
+                edit.replacement,
+                line_start,
+                cx,
+            );
         }
-    }
-
-    /// The closest `#+ATTR_ORG:` line above the image, if any.
-    fn inline_image_attribute_line(
-        &self,
-        snapshot: &DocumentSnapshot,
-        line_start: ByteOffset,
-    ) -> Option<ImageAttributeLine> {
-        let line = snapshot.line_index_at(line_start).ok()?;
-        let index = LineIndex(attr_org_line_above(snapshot, line.0)?);
-        let content = snapshot.line_content_range(index).ok()?;
-        let text = snapshot.copy_range(content);
-        let full = snapshot.line_range(index).ok()?;
-        Some(ImageAttributeLine {
-            content,
-            full,
-            text,
-        })
     }
 
     /// Applies one programmatic edit as a single undo step, keeping the
@@ -381,6 +365,7 @@ impl SemanticEditor {
                 cache.insert(
                     new_line,
                     InlineImageMetrics {
+                        plot: metrics.plot,
                         line_start: new_start.0,
                         source: metrics.source,
                         spec,

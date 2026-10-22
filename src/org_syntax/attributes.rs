@@ -91,6 +91,40 @@ pub(crate) fn image_attributes_at(snapshot: &DocumentSnapshot, line: u64) -> Ima
         .unwrap_or_default()
 }
 
+/// One source edit shared by image resizing in Editor and Reading.
+pub(crate) fn image_width_edit(
+    snapshot: &DocumentSnapshot,
+    image: crate::document::ByteOffset,
+    width: Option<f32>,
+) -> Option<crate::document::TextEdit> {
+    let line = snapshot.line_index_at(image).ok()?;
+    if let Some(index) = attr_org_line_above(snapshot, line.0) {
+        let content = snapshot.line_content_range(LineIndex(index)).ok()?;
+        let text = snapshot.copy_range(content);
+        let updated = match width {
+            Some(width) => attr_org_line_with_width(&text, width),
+            None => attr_org_line_without_width(&text),
+        };
+        match updated {
+            Some(updated) if updated != text.trim_end() => {
+                Some(crate::document::TextEdit::new(content, updated))
+            }
+            Some(_) => None,
+            None => Some(crate::document::TextEdit::new(
+                snapshot.line_range(LineIndex(index)).ok()?,
+                "",
+            )),
+        }
+    } else {
+        width.map(|width| {
+            crate::document::TextEdit::new(
+                crate::document::ByteRange::new(image.0, image.0),
+                format!("#+ATTR_ORG: :width {}\n", width.round() as i64),
+            )
+        })
+    }
+}
+
 /// Parses one `#+ATTR_ORG:` line. Other keywords and unusable input return `None`.
 pub(crate) fn parse_attr_org_line(line: &str) -> Option<ImageAttributeSpec> {
     if !keyword_name(line)?.eq_ignore_ascii_case("ATTR_ORG") {

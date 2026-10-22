@@ -21,6 +21,7 @@ pub(super) fn paint_frame(
     let focus_handle = host.read(cx).focus_handle.clone();
     let editor_focused = focus_handle.is_focused(window);
     let has_selection = !host.read(cx).selection().is_empty();
+    let image_resize = host.read(cx).image_resize;
     let caret_visible = editor_focused && state.caret.is_some();
     let caret_opacity = host.update(cx, |editor, cx| editor.caret_opacity(caret_visible, cx));
     let table_hover = host.read(cx).hovered_table_cell();
@@ -42,6 +43,9 @@ pub(super) fn paint_frame(
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         crate::document_preview::quad(window, gutter);
         paint_minimap_layer(host, state, window, cx);
+        for plot in &mut state.plots {
+            plot.paint(window, cx);
+        }
         let text_left = state.gutter.bounds.right() + px(1.0);
         for (index, row) in state.rows.iter().enumerate() {
             let number_x = text_left - px(GUTTER_PADDING) - row.gutter_layout.width();
@@ -257,21 +261,18 @@ pub(super) fn paint_frame(
                     }
                     let mut paint = |window: &mut Window| {
                         if let Some(preview) = &row.inline_image {
-                            let radius = px(4.0);
-                            let _ = crate::document_preview::image(
-                                window,
-                                preview.bounds,
-                                preview.bounds,
-                                Corners {
-                                    top_left: radius,
-                                    top_right: radius,
-                                    bottom_right: radius,
-                                    bottom_left: radius,
-                                },
-                                preview.image.clone(),
-                                0,
-                                false,
+                            let selected = row.active
+                                || row.selected
+                                || image_resize.is_some_and(|resize| resize.line == row.hit.line.0)
+                                || host.read(cx).plots.lines.get(&row.hit.line.0).is_some_and(
+                                    |plot| plot.entry.display.lock().unwrap().selected,
+                                );
+                            let frame = crate::components::image_frame::ImageFrame::new(
+                                theme.background,
+                                selected.then_some(theme.accent),
                             );
+                            let _ =
+                                frame.paint_image(preview.bounds, preview.image.clone(), window);
                         } else if let Some(table) = &row.hit.table_layout {
                             for fragment in table.fragments.iter() {
                                 let repeats = if fragment.delimiter {
@@ -324,12 +325,15 @@ pub(super) fn paint_frame(
                         paint(window);
                     }
                 }
+                for error in &mut state.plot_output_errors {
+                    error.paint(window, cx);
+                }
                 let grip_icon = resize_grip_icon(cx);
                 for handle in &state.image_resize_handles {
-                    let dragging = host
-                        .read(cx)
-                        .inline_image_resize_width(handle.line_start)
-                        .is_some();
+                    let dragging = host.read(cx).image_resize.is_some_and(|session| {
+                        session.plot == handle.plot
+                            && (handle.plot.is_some() || session.line_start == handle.line_start)
+                    });
                     if handle.hitbox.is_hovered(window) || dragging {
                         window.set_cursor_style(INLINE_IMAGE_RESIZE_CURSOR, &handle.hitbox);
                     }
@@ -342,11 +346,15 @@ pub(super) fn paint_frame(
                         continue;
                     }
                     if let Some(icon) = grip_icon.as_ref() {
+                        let icon_bounds = handle.bounds.inset(px(1.0));
                         let _ = crate::document_preview::image(
                             window,
-                            handle.bounds,
-                            handle.bounds,
-                            Corners::default(),
+                            handle.image_bounds.inset(px(1.0)),
+                            icon_bounds,
+                            Corners {
+                                bottom_right: px(crate::components::image_frame::CONTENT_RADIUS),
+                                ..Corners::default()
+                            },
                             icon.clone(),
                             0,
                             false,
@@ -444,19 +452,19 @@ fn paint_tall_image_marker(
     next: Option<&PaintRow>,
     active: bool,
 ) {
-    let (number_top, number_bottom) = gutter_number_span(row);
+    let (number_top, number_bottom) = row.gutter_number_span();
     let gap = px(3.0);
     let top = previous
         .filter(|previous| {
             previous.hit.line.0 + 1 == row.hit.line.0 && previous.inline_image.is_none()
         })
         .map_or(row.hit.visible_top, |previous| {
-            gutter_number_span(previous).1 + gap
+            previous.gutter_number_span().1 + gap
         });
     let bottom = next
         .filter(|next| next.hit.line.0 == row.hit.line.0 + 1 && next.inline_image.is_none())
         .map_or(row.hit.visible_bottom, |next| {
-            gutter_number_span(next).0 - gap
+            next.gutter_number_span().0 - gap
         });
     let x = number_x + row.gutter_layout.width() / 2.0;
     let stroke = px(if active { 1.3 } else { 1.1 });
@@ -479,12 +487,6 @@ fn paint_tall_image_marker(
             );
         }
     }
-}
-
-fn gutter_number_span(row: &PaintRow) -> (Pixels, Pixels) {
-    let center = row.hit.origin_y + row.hit.line_height / 2.0;
-    let half_height = (row.gutter_layout.ascent + row.gutter_layout.descent) / 2.0;
-    (center - half_height, center + half_height)
 }
 
 /// Rounded resize grip drawn at the bottom-right corner of a resizable image.

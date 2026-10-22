@@ -170,6 +170,114 @@ fn cached_target_uses_current_layout_and_invalidates_safely(cx: &mut gpui::TestA
 }
 
 #[gpui::test]
+fn resized_overview_frames_keep_in_memory_plot_images(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, _| w.minimap_visible = false);
+    cx.simulate_resize(size(px(1000.), px(900.)));
+    let target = draft(
+        &w,
+        "Chart.org",
+        "#+PLOT: title:\"Revenue\" ind:1\n| category | revenue |\n|---+---|\n| a | 420 |\n| b | 650 |\n",
+        cx,
+    );
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(81));
+    cx.run_until_parked();
+    for _ in 0..4 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
+    let original = w.read_with(cx, |w, _| {
+        let frame = w
+            .file_overview
+            .drawn_frame
+            .latest()
+            .expect("chart has painted");
+        assert_eq!(frame.image_count(), 1);
+        frame.bounds.size
+    });
+    let cold = draft(
+        &w,
+        "Cold-chart.org",
+        "#+PLOT: ind:1\n| x | y |\n|---+---|\n| a | 5 |\n",
+        cx,
+    );
+    let current = draft(&w, "Current.md", "# Current", cx);
+    cx.run_until_parked();
+    cx.simulate_resize(size(px(480.), px(1000.)));
+    open(&w, cx);
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            let state = w.file_overview.session.as_mut().unwrap();
+            state.phase = Phase::Visible;
+            state.progress = 1.;
+            state.motion = None;
+            w.select_overview_item(cold.read(cx).id(), window, cx);
+        })
+    });
+    for _ in 0..2 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
+    w.read_with(cx, |w, _| {
+        let state = w.file_overview.session.as_ref().unwrap();
+        assert!(state.preparation.is_some());
+        assert!(
+            state.target_frame.is_none(),
+            "do not freeze a table-only frame while the plot index is pending"
+        );
+    });
+    cx.executor().advance_clock(Duration::from_millis(81));
+    cx.run_until_parked();
+    for _ in 0..5 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
+    w.read_with(cx, |w, _| {
+        assert_eq!(
+            w.file_overview
+                .session
+                .as_ref()
+                .unwrap()
+                .target_frame
+                .as_ref()
+                .unwrap()
+                .source
+                .image_count(),
+            1
+        )
+    });
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            let state = w.file_overview.session.as_mut().unwrap();
+            state.phase = Phase::Visible;
+            state.progress = 1.;
+            state.motion = None;
+            w.select_overview_item(target.read(cx).id(), window, cx);
+        })
+    });
+    for _ in 0..5 {
+        cx.update(|window, app| window.simulate_next_frame(app));
+        cx.run_until_parked();
+    }
+    w.read_with(cx, |w, _| {
+        let state = w.file_overview.session.as_ref().unwrap();
+        let frame = state
+            .target_frame
+            .as_ref()
+            .expect("resized chart frame is ready");
+        assert_ne!(frame.source.bounds.size, original);
+        assert_eq!(
+            frame.source.image_count(),
+            1,
+            "the overview must record the SVG image, not just its table"
+        );
+        assert_eq!(w.document_session().unwrap(), &current);
+    });
+}
+
+#[gpui::test]
 fn cold_document_paints_a_real_frame_before_opening_or_committing(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));

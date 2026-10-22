@@ -13,6 +13,7 @@ use super::{
 use crate::preview::{PreviewSnapshot, PreviewStyle, projection::VisualPatch};
 
 pub(crate) struct MinimapState {
+    pub(super) plot_demands: Mutex<HashMap<crate::plot::PlotId, crate::plot::PlotDemand>>,
     pub(crate) line_index: Mutex<Option<CachedMinimapLineIndex>>,
     line_index_history: Mutex<VecDeque<CachedMinimapLineIndex>>,
     pub(crate) line_index_build: Mutex<Option<MinimapLineIndexBuilder>>,
@@ -29,10 +30,18 @@ pub(crate) struct MinimapState {
 }
 
 impl MinimapState {
+    pub(crate) fn clear_plot_demands(&self) {
+        self.plot_demands
+            .lock()
+            .expect("minimap plot demands poisoned")
+            .clear();
+    }
+
     const RECENT_LINE_INDEX_VARIANTS: usize = 3;
 
     pub(crate) fn new() -> Self {
         Self {
+            plot_demands: Mutex::default(),
             line_index: Mutex::new(None),
             line_index_history: Mutex::new(VecDeque::with_capacity(
                 Self::RECENT_LINE_INDEX_VARIANTS,

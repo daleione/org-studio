@@ -28,6 +28,7 @@ mod minimap;
 mod minimap_layout;
 mod minimap_raster;
 mod paint;
+mod plots;
 mod prepaint;
 mod quads;
 mod rows;
@@ -121,6 +122,8 @@ pub struct PrepaintState {
     #[cfg(feature = "benchmarks")]
     started_at: Instant,
     rows: Vec<PaintRow>,
+    plots: Vec<gpui::AnyElement>,
+    plot_output_errors: Vec<gpui::AnyElement>,
     block_backgrounds: Vec<PaintQuad>,
     tag_pills: Vec<PaintQuad>,
     swatches: Vec<PaintQuad>,

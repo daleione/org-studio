@@ -109,6 +109,15 @@ pub(crate) struct PreviewDisplayMap {
 }
 
 impl PreviewDisplayMap {
+    pub(crate) fn invalidate_image_geometry(&self, rows: impl Iterator<Item = usize>) {
+        let ids = rows
+            .filter_map(|row| self.projection.rows.get(row).map(|row| row.id))
+            .collect::<std::collections::HashSet<_>>();
+        let mut lines = self.display_lines.lock().unwrap();
+        lines.entries.retain(|key, _| !ids.contains(&key.0.0));
+        lines.order.retain(|key| !ids.contains(&key.0.0));
+    }
+
     pub(crate) fn source_row(&self, row: usize) -> PreviewRow {
         self.projection
             .source_row(row)
@@ -452,6 +461,9 @@ impl PreviewDisplayMap {
             .get(row)
             .expect("preview row index is in bounds");
         let mut layout = style.row_layout(visual_row.style_kind);
+        if matches!(visual_row.kind, VisualRowKind::Plot(_)) {
+            layout.margin_top += 12.0;
+        }
         if row == 0 {
             layout.margin_top += style.spacing.content_padding_top;
         }
@@ -575,6 +587,15 @@ impl PreviewDisplayMap {
                     .min(1.0);
                 (width * scale, height * scale)
             }),
+            VisualRowKind::Plot(plot) => Some(crate::plot::plot_image_size(
+                plot.entry.dimensions(),
+                plot.entry.display.lock().unwrap().requested_width,
+                &plot.entry.source.image_attributes,
+                &super::ImageSizing {
+                    max_width: available_width,
+                    ..*plot.sizing.lock().unwrap()
+                },
+            )),
             _ => None,
         }
     }
@@ -602,7 +623,9 @@ impl PreviewDisplayMap {
             VisualRowKind::Code(_) => PreviewLineKind::Code,
             VisualRowKind::Blank | VisualRowKind::Hidden => PreviewLineKind::Blank,
             VisualRowKind::Table(_) => PreviewLineKind::Table,
-            VisualRowKind::Image { .. } | VisualRowKind::Diagram(_) => PreviewLineKind::Image,
+            VisualRowKind::Image { .. } | VisualRowKind::Diagram(_) | VisualRowKind::Plot(_) => {
+                PreviewLineKind::Image
+            }
             VisualRowKind::Rule => PreviewLineKind::Rule,
         }
     }
@@ -710,6 +733,7 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
         }
         (_, VisualRowKind::Code(ReadingCodeRow::End), _) => String::new(),
         (_, VisualRowKind::Diagram(_), _) => String::new(),
+        (_, VisualRowKind::Plot(_), _) => String::new(),
         (_, VisualRowKind::Hidden, _) => String::new(),
         _ => source.to_owned(),
     };

@@ -5,6 +5,7 @@ use unicode_width::UnicodeWidthStr;
 mod batch;
 mod edit;
 mod formula;
+mod typing;
 pub(super) use batch::resize_table;
 pub(crate) use batch::{TableAlignmentPlan, plan_table_alignment};
 pub(super) use edit::EditableTable;
@@ -12,6 +13,7 @@ pub(super) use formula::recalculate as recalculate_table;
 pub(super) use formula::recalculate_buffer_tables;
 pub(super) use formula::recalculate_iteratively as iterate_table;
 pub(super) use formula::recalculate_marked_row_on_navigation;
+pub(super) use typing::edit_table_field;
 
 use crate::{
     document::{
@@ -208,11 +210,7 @@ pub(super) fn align_table(
         },
         TableNavigation::PreviousCell => current
             .and_then(|index| {
-                let previous = if index == 0 {
-                    cells.len() - 1
-                } else {
-                    index - 1
-                };
+                let previous = index.saturating_sub(1);
                 cells.get(previous).copied()
             })
             .or_else(|| {
@@ -239,22 +237,38 @@ pub(super) fn align_table(
         TableNavigation::Stay => character,
         _ => 0,
     };
-    let aligned = source_rows_aligned(&rows, columns, format);
-    let widths = formatting_widths(&rows, &parsed, columns, format);
+    let aligned = (format != DocumentFormat::Org || navigation == TableNavigation::Stay)
+        && source_rows_aligned(&rows, columns, format);
+    let widths = if format == DocumentFormat::Org && navigation != TableNavigation::Stay {
+        table_widths(&parsed, columns, format)
+    } else {
+        formatting_widths(&rows, &parsed, columns, format)
+    };
+    let numeric_columns =
+        (format == DocumentFormat::Org).then(|| org_numeric_columns(&parsed, columns));
     let mut replacement = String::new();
     let mut caret_local = None;
     for (row_index, row) in parsed.iter().enumerate() {
         let line = start + row_index as u64;
         let replacement_start = replacement.len();
         let caret_position = (row_index == target.0).then_some((target.1, target_character));
-        let (formatted, caret) = if aligned {
+        let (formatted, mut caret) = if aligned {
             let text = rows[row_index].clone();
             let caret = caret_position
                 .map(|(column, character)| cell_offset(&text, column, character, format));
             (text, caret)
         } else {
-            aligned_row(row, &widths, caret_position, format)
+            aligned_row(
+                row,
+                &widths,
+                caret_position,
+                format,
+                numeric_columns.as_deref(),
+            )
         };
+        if navigation != TableNavigation::Stay && row_index == target.0 {
+            caret = Some(cell_input_offset(&formatted, target.1, format));
+        }
         replacement.push_str(&formatted);
         if let Some(caret) = caret {
             caret_local = Some(replacement_start + caret);
@@ -275,9 +289,9 @@ pub(super) fn align_table(
             separator_alignments: Vec::new(),
         };
         let replacement_start = replacement.len();
-        let (formatted, caret) = aligned_row(&blank, &widths, Some((target.1, 0)), format);
+        let (formatted, _) = aligned_row(&blank, &widths, None, format, numeric_columns.as_deref());
         replacement.push_str(&formatted);
-        caret_local = caret.map(|caret| replacement_start + caret);
+        caret_local = Some(replacement_start + cell_input_offset(&formatted, target.1, format));
     }
     let start_range = snapshot.line_content_range(LineIndex(start)).ok()?;
     let end_range = snapshot.line_content_range(LineIndex(end - 1)).ok()?;
@@ -325,7 +339,7 @@ fn table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> V
     widths
 }
 
-fn table_text_width(text: &str) -> usize {
+pub(super) fn table_text_width(text: &str) -> usize {
     text.split('\t').map(UnicodeWidthStr::width).sum::<usize>()
         + text.bytes().filter(|byte| *byte == b'\t').count() * 4
 }
@@ -357,20 +371,21 @@ fn source_table_widths(
     let index = rows.iter().position(|row| row.separator).unwrap_or(0);
     let text = source.get(index)?;
     let widths = source_row_widths(text, columns, format)?;
-    if !source_rows_aligned(source, columns, format) {
-        // Dragging keeps at least three content columns. Short placeholder
-        // rules in an unformatted table carry no reliable width preference.
-        let natural = table_widths(rows, columns, format);
-        if widths
-            .iter()
-            .zip(natural)
-            .any(|(width, natural)| *width < MIN_RESIZED_COLUMN_WIDTH && *width < natural)
-            || !source.iter().zip(rows).all(|(text, row)| {
-                row.cells.len() == columns && aligned_row(row, &widths, None, format).0 == *text
-            })
-        {
-            return None;
-        }
+    let natural = table_widths(rows, columns, format);
+    // Short, unfinished fields must not be mistaken for a column resize.
+    if widths
+        .iter()
+        .zip(&natural)
+        .any(|(width, natural)| *width < MIN_RESIZED_COLUMN_WIDTH && width < natural)
+    {
+        return None;
+    }
+    if !source_rows_aligned(source, columns, format)
+        && !source.iter().zip(rows).all(|(text, row)| {
+            row.cells.len() == columns && aligned_row(row, &widths, None, format, None).0 == *text
+        })
+    {
+        return None;
     }
     Some(widths)
 }
@@ -419,11 +434,21 @@ fn cell_offset(text: &str, column: usize, character: usize, format: DocumentForm
         })
 }
 
+fn cell_input_offset(text: &str, column: usize, format: DocumentFormat) -> usize {
+    source_table::parse_line(text, format)
+        .cells
+        .get(column)
+        .map_or(text.len(), |cell| {
+            cell.raw_range.start + usize::from(text[cell.raw_range.clone()].starts_with(' '))
+        })
+}
+
 fn aligned_row(
     row: &ParsedRow,
     widths: &[usize],
     caret_position: Option<(usize, usize)>,
     format: DocumentFormat,
+    align_right: Option<&[bool]>,
 ) -> (String, Option<usize>) {
     let mut output = row.indent.clone();
     let mut caret = None;
@@ -462,6 +487,11 @@ fn aligned_row(
         for (index, width) in widths.iter().enumerate() {
             output.push(' ');
             let cell = row.cells.get(index).map_or("", String::as_str);
+            let padding = width.saturating_sub(table_text_width(cell));
+            let right = align_right.is_some_and(|columns| columns[index]);
+            if right {
+                output.push_str(&" ".repeat(padding));
+            }
             if let Some((_, character)) = caret_position.filter(|(column, _)| *column == index) {
                 let byte = cell
                     .char_indices()
@@ -470,11 +500,87 @@ fn aligned_row(
                 caret = Some(output.len() + byte);
             }
             output.push_str(cell);
-            output.push_str(&" ".repeat(width.saturating_sub(table_text_width(cell))));
+            if !right {
+                output.push_str(&" ".repeat(padding));
+            }
             output.push_str(" |");
         }
     }
     (output, caret)
+}
+
+fn org_numeric_columns(rows: &[ParsedRow], columns: usize) -> Vec<bool> {
+    (0..columns)
+        .map(|column| {
+            let (numbers, nonempty) = rows
+                .iter()
+                .filter(|row| !row.separator)
+                .filter_map(|row| row.cells.get(column))
+                .filter(|cell| !cell.is_empty())
+                .fold((0, 0), |(numbers, nonempty), cell| {
+                    (numbers + usize::from(org_table_number(cell)), nonempty + 1)
+                });
+            numbers * 2 >= nonempty
+        })
+        .collect()
+}
+
+/// The permissive forms accepted by Org's default `org-table-number-regexp`.
+fn org_table_number(text: &str) -> bool {
+    if text.eq_ignore_ascii_case("nan")
+        || text
+            .strip_prefix(['+', '-', 'u', 'U'])
+            .unwrap_or(text)
+            .eq_ignore_ascii_case("inf")
+    {
+        return true;
+    }
+    let text = text.strip_prefix(['<', '>']).unwrap_or(text);
+    let unsigned = text.strip_prefix(['+', '-']).unwrap_or(text);
+    if let Some(hex) = unsigned
+        .strip_prefix("0x")
+        .or_else(|| unsigned.strip_prefix("0X"))
+        && !hex.is_empty()
+        && hex.bytes().all(|ch| ch.is_ascii_hexdigit() || ch == b'.')
+    {
+        return true;
+    }
+    if let Some((radix, digits)) = unsigned.split_once('#')
+        && !radix.is_empty()
+        && radix.bytes().all(|ch| ch.is_ascii_digit())
+        && !digits.is_empty()
+        && digits
+            .bytes()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == b'.')
+    {
+        return true;
+    }
+    let Some(digit) = text.bytes().position(|ch| ch.is_ascii_digit()) else {
+        return false;
+    };
+    text[..digit]
+        .bytes()
+        .all(|ch| matches!(ch, b'-' | b'+' | b'^' | b'.'))
+        && text[digit..].bytes().all(|ch| {
+            matches!(
+                ch,
+                b'0'..=b'9'
+                    | b'-'
+                    | b'+'
+                    | b'^'
+                    | b'.'
+                    | b'e'
+                    | b'E'
+                    | b'd'
+                    | b'D'
+                    | b'x'
+                    | b'X'
+                    | b'('
+                    | b')'
+                    | b'%'
+                    | b':'
+            )
+        })
 }
 
 fn parse_row(text: &str, format: DocumentFormat) -> ParsedRow {
@@ -602,6 +708,29 @@ pub(super) fn table_columns(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn org_numeric_alignment_recognizes_default_org_number_forms() {
+        for value in [
+            "12",
+            "12.2",
+            "2.4e-08",
+            "2x10^12",
+            "4.034+-0.02",
+            "2.7(10)",
+            ">3.5",
+            "0xAF",
+            "16#FF",
+            "nan",
+            "uINF",
+            "12:30",
+        ] {
+            assert!(org_table_number(value), "{value}");
+        }
+        for value in ["", "item12", "v1.2", "1 2", "1,234", "NULL"] {
+            assert!(!org_table_number(value), "{value}");
+        }
+    }
 
     #[test]
     fn context_distinguishes_org_structures_without_ui_state() {

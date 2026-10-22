@@ -44,6 +44,7 @@ pub(crate) enum VisualRowKind {
     Table(TableRowProjection),
     Image { dimensions: Option<(u32, u32)> },
     Diagram(DiagramProjection),
+    Plot(super::plot::PlotProjection),
     Rule,
     Hidden,
 }
@@ -325,6 +326,99 @@ pub(crate) struct ReadingProjection {
 }
 
 impl ReadingProjection {
+    pub(super) fn with_plots(
+        &self,
+        entries: &[Arc<crate::plot::PlotEntry>],
+    ) -> (Self, Vec<(usize, crate::plot::PlotId)>) {
+        let mut result = self.clone();
+        let mut ordered = entries.iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|entry| {
+            entry
+                .source
+                .image_link
+                .map(|range| range.start)
+                .unwrap_or(entry.source.table.end)
+        });
+        let mut inserted = Vec::with_capacity(ordered.len());
+        for entry in ordered {
+            let position = entry
+                .source
+                .image_link
+                .map(|range| range.start)
+                .unwrap_or(entry.source.table.end);
+            let (mut low, mut high) = (0, result.rows.len());
+            while low < high {
+                let middle = low + (high - low) / 2;
+                if result
+                    .source_row(middle)
+                    .is_some_and(|row| row.content.range.start < position)
+                {
+                    low = middle + 1;
+                } else {
+                    high = middle;
+                }
+            }
+            if entry.source.image_link.is_none()
+                && (low == 0
+                    || result
+                        .rows
+                        .get(low - 1)
+                        .is_none_or(|row| row.block_id != entry.source.owner))
+            {
+                continue;
+            }
+            if let Some(link) = entry.source.image_link {
+                let Some(existing) = result.rows.get(low) else {
+                    continue;
+                };
+                if existing.source.range.start != link.start {
+                    continue;
+                }
+                let mut row = existing.clone();
+                row.kind = VisualRowKind::Plot(super::plot::PlotProjection::new(entry.clone()));
+                row.style_kind = RowStyleKind::Image;
+                result.presentation = result
+                    .presentation
+                    .replace(low..low + 1, std::slice::from_ref(&row));
+                result.rows = result.rows.replace(low..low + 1, vec![row]);
+                inserted.push((low, entry.id));
+                continue;
+            }
+            let source = RevisionRange::new(
+                self.revision,
+                crate::document::ByteRange {
+                    start: entry.source.table.end,
+                    end: entry.source.table.end,
+                },
+            );
+            let render = PreviewRow {
+                block_id: entry.source.owner,
+                content: source,
+                continuation: false,
+                blank: false,
+            };
+            let plot = super::plot::PlotProjection::new(entry.clone());
+            let row = VisualRow {
+                id: VisualRowId(entry.id.0 ^ 0x706c6f745f726f77),
+                source,
+                block_id: entry.source.owner,
+                semantic_revision: 0,
+                kind: VisualRowKind::Plot(plot),
+                code_language: None,
+                code_action_range: None,
+                style_kind: RowStyleKind::Image,
+                render,
+            };
+            result.presentation = result
+                .presentation
+                .replace(low..low, std::slice::from_ref(&row));
+            result.rows = result.rows.replace(low..low, vec![row]);
+            inserted.push((low, entry.id));
+        }
+        result.revisions.geometry = result.revisions.geometry.wrapping_add(1);
+        result.revisions.paint = result.revisions.paint.wrapping_add(1);
+        (result, inserted)
+    }
     pub(crate) fn row_count(&self) -> usize {
         self.presentation.len()
     }
@@ -768,7 +862,7 @@ fn visual_row_style_kind(
 ) -> RowStyleKind {
     match visual {
         VisualRowKind::Caption => return RowStyleKind::Caption,
-        VisualRowKind::Diagram(_) => return RowStyleKind::Image,
+        VisualRowKind::Diagram(_) | VisualRowKind::Plot(_) => return RowStyleKind::Image,
         VisualRowKind::Code(ReadingCodeRow::End) | VisualRowKind::Hidden => {
             return RowStyleKind::Hidden;
         }
@@ -892,6 +986,7 @@ fn geometry_compatible(old: &VisualRow, new: &VisualRow) -> bool {
         (VisualRowKind::Diagram(old), VisualRowKind::Diagram(new)) => {
             old.dimensions() == new.dimensions()
         }
+        (VisualRowKind::Plot(_), VisualRowKind::Plot(_)) => true,
         (VisualRowKind::Rule, VisualRowKind::Rule)
         | (VisualRowKind::Blank, VisualRowKind::Blank)
         | (VisualRowKind::Hidden, VisualRowKind::Hidden) => true,

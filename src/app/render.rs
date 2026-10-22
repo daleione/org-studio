@@ -320,7 +320,10 @@ impl Render for WorkspaceWindow {
             .visible_panes()
             .filter_map(|pane| self.reading_panel_for(pane))
         {
-            viewport_changed |= panel.update(cx, |panel, _| panel.note_viewport(viewport_key));
+            viewport_changed |= panel.update(cx, |panel, _| {
+                panel.retain_plot_demands();
+                panel.note_viewport(viewport_key)
+            });
         }
         if viewport_changed {
             self.cancel_sidebar_resize();

@@ -48,6 +48,7 @@ pub(super) fn publish_frame(
         .iter()
         .map(|handle| crate::editor::InlineImageResizeHandle {
             bounds: handle.interaction_bounds,
+            plot: handle.plot,
             line: handle.line,
             line_start: handle.line_start,
             width: f32::from(handle.image_bounds.size.width),

@@ -257,8 +257,12 @@ impl WorkspaceWindow {
                 }
             };
             loop {
-                let change = watcher.changed().await;
+                // OS callbacks must not wake or drop GPUI foreground tasks directly.
                 executor.timer(Duration::from_millis(80)).await;
+                let change = match watcher.try_changed() {
+                    Ok(None) => continue,
+                    change => change,
+                };
                 if this
                     .update(cx, |this, cx| {
                         if let Err(error) = change {

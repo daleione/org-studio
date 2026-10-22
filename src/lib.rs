@@ -19,6 +19,7 @@ pub mod navigation;
 pub(crate) mod org_semantic;
 pub mod org_syntax;
 pub mod perf_tracing;
+pub(crate) mod plot;
 pub mod preview;
 pub mod recent_documents;
 pub mod search;

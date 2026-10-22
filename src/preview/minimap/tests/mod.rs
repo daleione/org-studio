@@ -10,6 +10,73 @@ fn base_style() -> crate::preview::PreviewStyle {
     *crate::preview::preview_style(crate::preview::PreviewStyleId::Base)
 }
 
+#[gpui::test]
+fn minimap_requests_memory_plots_without_a_reading_body_consumer(cx: &mut gpui::TestAppContext) {
+    let snapshot = crate::document::DocumentSnapshot::from_utf8(
+        b"#+PLOT: ind:1\n| x | y |\n|---+---|\n| a | 2 |\n".to_vec(),
+    )
+    .unwrap();
+    let plot_document =
+        cx.update(|cx| crate::plot::PlotDocument::shared(Arc::new(snapshot.clone()), cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(81));
+    cx.run_until_parked();
+    let entries = cx.read(|cx| plot_document.read(cx).entries.clone());
+    let document = Arc::new(crate::preview::loading::derive_preview(
+        "plot.org".into(),
+        snapshot,
+    ));
+    let (projection, rows) = document.projection.with_plots(&entries);
+    let visual = projection.rows.get(rows[0].0).unwrap().clone();
+    let image = std::rc::Rc::new(std::cell::RefCell::new(None));
+    struct Probe {
+        document: Arc<crate::preview::PreviewSnapshot>,
+        visual: crate::preview::projection::VisualRow,
+        demand: crate::plot::PlotDemand,
+        image: std::rc::Rc<std::cell::RefCell<Option<Arc<RenderImage>>>>,
+    }
+    impl gpui::Render for Probe {
+        fn render(
+            &mut self,
+            _: &mut gpui::Window,
+            _: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            let document = self.document.clone();
+            let visual = self.visual.clone();
+            let demand = self.demand.clone();
+            let image = self.image.clone();
+            canvas(
+                move |_, window, cx| {
+                    *image.borrow_mut() = super::media::image(
+                        &document,
+                        &visual,
+                        base_style(),
+                        Some(&demand),
+                        window,
+                        cx,
+                    );
+                },
+                |_, _, _, _| {},
+            )
+            .size_full()
+        }
+    }
+    let (probe, window) = cx.add_window_view(|_, _| Probe {
+        document,
+        visual,
+        demand: Default::default(),
+        image: image.clone(),
+    });
+    for _ in 0..3 {
+        probe.update(window, |_, cx| cx.notify());
+        window.run_until_parked();
+    }
+    assert!(
+        image.borrow().is_some(),
+        "the minimap must render the plot before the body ever visits its row"
+    );
+}
+
 fn test_line_index(
     width: u16,
     rows_signature: u64,

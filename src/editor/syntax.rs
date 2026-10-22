@@ -346,6 +346,14 @@ impl EditorBlockDecoration {
 }
 
 impl EditorStyleId {
+    pub(super) fn font_role(self) -> crate::typography::FontRole {
+        if self == Self::Table {
+            crate::typography::FontRole::Table
+        } else {
+            crate::typography::FontRole::Editor
+        }
+    }
+
     pub(super) const fn cache_key(self) -> u8 {
         match self {
             Self::Plain => 0,

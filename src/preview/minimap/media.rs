@@ -56,6 +56,8 @@ pub(super) fn geometry(
 pub(super) fn image(
     document: &PreviewSnapshot,
     visual: &VisualRow,
+    style: crate::preview::PreviewStyle,
+    plot_demand: Option<&crate::plot::PlotDemand>,
     window: &mut gpui::Window,
     cx: &mut gpui::App,
 ) -> Option<Arc<RenderImage>> {
@@ -84,6 +86,20 @@ pub(super) fn image(
         VisualRowKind::Diagram(crate::preview::diagram::DiagramProjection::Ready {
             image, ..
         }) => image.clone().use_render_image(window, cx),
+        VisualRowKind::Plot(plot) => {
+            let crate::plot::PlotPreparation::Ready(prepared) = &plot.entry.prepared else {
+                return None;
+            };
+            let state = plot_demand?.request(
+                crate::plot::PlotRenderRequest::natural(
+                    prepared.clone(),
+                    crate::preview::plot::plot_style(style),
+                ),
+                cx,
+            )?;
+            let rendered = state.rendered()?;
+            Some(rendered.image.clone())
+        }
         _ => None,
     }
 }

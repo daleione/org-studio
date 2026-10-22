@@ -1,8 +1,9 @@
 //! Sandboxed Typst world shared by export and executable source blocks.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     path::{Path, PathBuf},
+    sync::Mutex,
 };
 
 use ::typst::{
@@ -66,6 +67,7 @@ pub(super) struct OrgStudioWorld<'a> {
     root: Option<PathBuf>,
     canonical_root: Option<PathBuf>,
     library_override: Option<LazyHash<Library>>,
+    package_sources: Mutex<HashMap<FileId, Source>>,
 }
 
 impl<'a> OrgStudioWorld<'a> {
@@ -95,6 +97,7 @@ impl<'a> OrgStudioWorld<'a> {
             root,
             canonical_root,
             library_override,
+            package_sources: Mutex::new(HashMap::new()),
         }
     }
 
@@ -139,13 +142,26 @@ impl World for OrgStudioWorld<'_> {
 
     fn source(&self, id: FileId) -> FileResult<Source> {
         if id == self.source.id() {
-            Ok(self.source.clone())
-        } else {
-            Err(FileError::AccessDenied)
+            return Ok(self.source.clone());
         }
+        let bytes = super::packages::lookup(id).ok_or(FileError::AccessDenied)?;
+        let mut sources = self
+            .package_sources
+            .lock()
+            .map_err(|_| FileError::AccessDenied)?;
+        if let Some(source) = sources.get(&id) {
+            return Ok(source.clone());
+        }
+        let text = std::str::from_utf8(bytes).map_err(|_| FileError::AccessDenied)?;
+        let source = Source::new(id, text.to_owned());
+        sources.insert(id, source.clone());
+        Ok(source)
     }
 
     fn file(&self, id: FileId) -> FileResult<Bytes> {
+        if let Some(bytes) = super::packages::lookup(id) {
+            return Ok(Bytes::new(bytes));
+        }
         let path = self.resolve_path(id)?;
         let metadata = std::fs::metadata(&path)
             .map_err(|_| FileError::NotFound(id.get().vpath().get_without_slash().into()))?;

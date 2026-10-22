@@ -385,7 +385,7 @@ impl WorkspaceWindow {
         };
         for &pane in &panes {
             if let Some(panel) = ready.readers.get(pane).clone() {
-                let current = panel.read(cx).document().clone();
+                let current = panel.read(cx).derived_document().clone();
                 if !Arc::ptr_eq(&current, &document)
                     || current.document_id != document.document_id
                     || current.revision != document.revision
@@ -407,7 +407,13 @@ impl WorkspaceWindow {
                 }));
             }
         }
+        let file_path = self
+            .document_session()
+            .and_then(|session| session.read(cx).file_path().map(ToOwned::to_owned));
         for pane in panes {
+            if let Some(panel) = self.reading_panel_for(pane) {
+                panel.update(cx, |panel, cx| panel.attach_plots(file_path.clone(), cx));
+            }
             self.apply_pending_surface_anchor(pane, cx);
         }
         self.apply_pending_navigation(self.generation, cx);
@@ -838,6 +844,9 @@ impl WorkspaceWindow {
                 cx,
             },
         );
+        let document = drawing.document.clone();
+        let workspace = drawing.workspace;
+        let has_plots = drawing.has_plots;
         Some(
             div()
                 .id("file-overview-preparing-document")
@@ -847,11 +856,31 @@ impl WorkspaceWindow {
                 .top(drawing.bounds.top())
                 .w(drawing.bounds.size.width)
                 .h(drawing.bounds.size.height)
-                .child(crate::document_preview::DocumentStage::new(
-                    content,
-                    drawing.frame.clone(),
-                    true,
-                ))
+                .child(
+                    crate::document_preview::DocumentStage::new(
+                        content,
+                        drawing.frame.clone(),
+                        true,
+                    )
+                    .with_media_ready(move |cx| {
+                        !has_plots
+                            || [PaneSide::Left, PaneSide::Right]
+                                .into_iter()
+                                .filter(|pane| workspace.pane_is_visible(*pane))
+                                .all(|pane| match workspace.surface(pane) {
+                                    PaneSurface::Editor => {
+                                        document.editors.get(pane).as_ref().is_some_and(|editor| {
+                                            editor.read(cx).plot_previews_ready(cx)
+                                        })
+                                    }
+                                    PaneSurface::Reading => {
+                                        document.readers.get(pane).as_ref().is_some_and(|panel| {
+                                            panel.read(cx).plot_previews_ready(cx)
+                                        })
+                                    }
+                                })
+                    }),
+                )
                 .into_any_element(),
         )
     }

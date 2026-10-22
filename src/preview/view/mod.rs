@@ -63,6 +63,7 @@ pub(crate) type ReadingMinimapWidthDispatcher =
     Arc<dyn Fn(minimap::MinimapWidthChange, &mut gpui::App)>;
 
 struct ReadingRowHost<'a> {
+    plot: Option<crate::plot::PlotPresentation>,
     available_width: f32,
     zoom: f32,
     style: PreviewStyle,

@@ -51,6 +51,7 @@ pub(super) fn build_frame(
         cx,
     );
     let generated = host.read(cx).generated_highlights.is_some();
+    crate::editor::plot::prepare(host, &snapshot, wrap_width, bounds, cx);
     let inline_images = resolve_inline_images(host, &snapshot, bounds, wrap_width, window, cx);
     let editor = host.read(cx);
     let editor_focused = editor.focus_handle.is_focused(window);
@@ -124,7 +125,7 @@ pub(super) fn build_frame(
         selection_quads,
         link_hits,
         caret,
-        image_resize_handles,
+        mut image_resize_handles,
     ) = {
         let mut shaping = RowShaping {
             editor,
@@ -181,7 +182,7 @@ pub(super) fn build_frame(
         visible_top,
         visible_bottom,
     );
-    let (minimap, minimap_raster_request) = build_minimap(
+    let (mut minimap, minimap_raster_request) = build_minimap(
         editor,
         editor.session.read(cx).syntax_path(),
         &snapshot,
@@ -195,6 +196,7 @@ pub(super) fn build_frame(
     let source_run_feedback = editor.source_run_feedback;
     let copy_feedback = editor.source_copy.feedback;
     let horizontal_scroll = editor.scroll_x;
+    minimap.prepare_plot_images(cx);
     if let Some((service, path, syntax_snapshot)) = syntax_build_request {
         schedule_syntax_builder(host.clone(), service, path, syntax_snapshot, cx);
     }
@@ -225,10 +227,20 @@ pub(super) fn build_frame(
         prepare_copy_buttons(&rows, &chrome, &snapshot, copy_feedback, window);
     let block_backgrounds = chrome.backgrounds;
     let block_left = chrome.left;
+    let (plots, plot_output_errors) = super::plots::prepaint(
+        host,
+        &rows,
+        bounds.left() + px(gutter_width),
+        &mut image_resize_handles,
+        window,
+        cx,
+    );
     PrepaintState {
         #[cfg(feature = "benchmarks")]
         started_at,
         rows,
+        plots,
+        plot_output_errors,
         block_backgrounds,
         tag_pills: tag_pill_quads,
         swatches: swatch_quads,

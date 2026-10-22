@@ -6,6 +6,7 @@ use super::{
     Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingInteraction, ReadingRowContext, div,
     img, markdown, px, render_code_row, render_table_row, resolve_image_path, rgb,
 };
+use crate::components::image_frame::{CONTENT_RADIUS, ImageFrame};
 use crate::preview::CodeRowRole;
 use crate::preview::projection::VisualRowKind;
 use gpui::prelude::*;
@@ -212,6 +213,7 @@ pub(super) fn render_markdown_block(
                 .get(display_row)
                 .map(|visual| crate::preview::image_action(document, visual, path.as_str()));
             let interaction = interaction.cloned();
+            let frame = ImageFrame::new(palette.background, None);
             div().w_full().child(
                 div()
                     .id(("reading-image", display_row))
@@ -220,16 +222,17 @@ pub(super) fn render_markdown_block(
                     .flex()
                     .items_start()
                     .child(if let Some((width, height)) = fitted {
-                        img(source)
-                            .w(px(width))
-                            .h(px(height))
-                            .rounded(px(style.spacing.radius))
+                        frame.image(source, width, height)
                     } else {
-                        img(source)
-                            .max_w(px(context
-                                .available_width
-                                .min(style.spacing.content_max_width)))
-                            .rounded(px(style.spacing.radius))
+                        let max_width =
+                            context.available_width.min(style.spacing.content_max_width);
+                        crate::document_preview::record_box(
+                            frame.surface().max_w(px(max_width)).child(
+                                img(source)
+                                    .max_w(px((max_width - 2.0).max(1.0)))
+                                    .rounded(px(CONTENT_RADIUS)),
+                            ),
+                        )
                     })
                     .when_some(action.zip(interaction), |element, (action, interaction)| {
                         element.cursor_pointer().on_click(move |_, window, cx| {

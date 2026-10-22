@@ -170,7 +170,7 @@ impl SemanticEditor {
                         .find(|fragment| {
                             !fragment.delimiter
                                 && fragment.display_range == (start..end)
-                                && fragment.content_range != fragment.display_range
+                                && fragment.x + fragment.width < right - px(0.1)
                         })
                         .map(|fragment| fragment.x + fragment.width)
                 })

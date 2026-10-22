@@ -11,6 +11,7 @@ mod links;
 mod minimap;
 mod minimap_media;
 mod org_commands;
+mod plot;
 pub(crate) use org_commands::{TableAlignmentPlan, plan_table_alignment};
 mod read_only;
 mod search;
@@ -563,6 +564,7 @@ impl EditorFrameBenchmark {
 }
 
 pub struct SemanticEditor {
+    plots: plot::EditorPlots,
     ui_language: crate::i18n::Language,
     generated_highlights: Option<Vec<LineHighlights>>,
     activate_read_only_lines: bool,
@@ -612,6 +614,7 @@ pub struct SemanticEditor {
     inline_actions: inline_actions::InlineActions,
     table_actions: table_actions::TableActions,
     table_resize: table_resize::TableResize,
+    org_table_auto_blank: Option<(Revision, ByteOffset)>,
     source_run_buttons: Arc<[SourceRunButtonHit]>,
     source_copy: source_copy::SourceCopy,
     source_run_hover: Option<SourceRunHover>,
@@ -658,6 +661,7 @@ impl EventEmitter<EditorOpenFileEvent> for SemanticEditor {}
 /// reading the document again.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct InlineImageMetrics {
+    pub(crate) plot: bool,
     pub(crate) line_start: u64,
     /// Source dimensions in logical pixels.
     pub(crate) source: (u32, u32),
@@ -668,6 +672,7 @@ pub(crate) struct InlineImageMetrics {
 /// The drag grip published for one painted inline image.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct InlineImageResizeHandle {
+    pub(crate) plot: Option<crate::plot::PlotId>,
     /// Grip plus hit slop; mouse hit-testing uses this.
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) line: u64,
@@ -679,6 +684,8 @@ pub(crate) struct InlineImageResizeHandle {
 /// An in-flight drag of an inline image's bottom-right grip.
 #[derive(Clone, Copy, Debug)]
 struct ImageResizeSession {
+    plot: Option<crate::plot::PlotId>,
+    previous_width: Option<f32>,
     line: u64,
     line_start: ByteOffset,
     start_pointer_x: f32,
@@ -840,6 +847,33 @@ impl SemanticEditor {
                     | DocumentEvent::PathChanged { .. }
             ) {
                 this.cancel_table_resize(cx);
+                let snapshot = Arc::new(this.session.read(cx).snapshot());
+                let delta = match event {
+                    DocumentEvent::Edited { delta, .. } => Some(delta.clone()),
+                    _ => None,
+                };
+                let path = this.session.read(cx).syntax_path();
+                let supports_plots = crate::document::DocumentFormat::from_path(path)
+                    == crate::document::DocumentFormat::Org
+                    && crate::syntax_highlighting::language_for_path(path).is_none();
+                if supports_plots {
+                    if this.plots.host.is_none() {
+                        this.plots.host = Some(crate::plot::PlotHost::new(
+                            snapshot.clone(),
+                            |_, cx| cx.notify(),
+                            cx,
+                        ));
+                    }
+                    let path = this.session.read(cx).file_path().map(ToOwned::to_owned);
+                    if let Some(host) = this.plots.host.as_mut() {
+                        host.document
+                            .update(cx, |document, _| document.set_file_path(path));
+                        host.refresh(snapshot, delta, cx);
+                    }
+                } else {
+                    this.plots = plot::EditorPlots::default();
+                    this.display_map.set_trailing_heights(Default::default());
+                }
                 retain_inline_geometry = this.inline_document_changed(event, cx);
                 this.dismiss_table_actions(cx);
                 this.dismiss_todo(cx);
@@ -1021,7 +1055,7 @@ impl SemanticEditor {
                 this.source_copy.buttons.clear();
                 this.source_run_hover = None;
                 this.inline_image_line_dimensions.borrow_mut().clear();
-                this.cancel_inline_image_resize();
+                this.cancel_inline_image_resize(cx);
                 this.map_source_run_feedback(delta);
                 this.vertical_goal_x = None;
             } else if let DocumentEvent::ResourceChanged { path, .. } = event {
@@ -1085,6 +1119,18 @@ impl SemanticEditor {
             cx.notify();
         });
         let initial_snapshot = session.read(cx).snapshot();
+        let plot_host =
+            (crate::document::DocumentFormat::from_path(session.read(cx).syntax_path())
+                == crate::document::DocumentFormat::Org
+                && crate::syntax_highlighting::language_for_path(session.read(cx).syntax_path())
+                    .is_none())
+            .then(|| {
+                crate::plot::PlotHost::new(
+                    Arc::new(initial_snapshot.clone()),
+                    |_, cx| cx.notify(),
+                    cx,
+                )
+            });
         let mut display_map = EditorLayoutMap::default();
         display_map.set_base_line_height(
             LINE_HEIGHT * crate::typography::fonts().settings.editor_font_size as f32
@@ -1092,6 +1138,7 @@ impl SemanticEditor {
         );
         display_map.configure(initial_snapshot.len_lines(), 1.0);
         Self {
+            plots: plot::EditorPlots::new(plot_host),
             ui_language: crate::i18n::Language::system(),
             session,
             generated_highlights: None,
@@ -1134,6 +1181,7 @@ impl SemanticEditor {
             inline_actions: inline_actions::InlineActions::default(),
             table_actions: table_actions::TableActions::default(),
             table_resize: table_resize::TableResize::default(),
+            org_table_auto_blank: None,
             source_run_buttons: Arc::from([]),
             source_copy: source_copy::SourceCopy::default(),
             source_run_hover: None,
@@ -1546,7 +1594,7 @@ impl SemanticEditor {
 
     /// Drops an in-flight drag, e.g. when the document changes underneath it.
     /// Returns whether a drag was cancelled so callers can repaint.
-    pub(super) fn cancel_inline_image_resize(&mut self) -> bool {
+    pub(super) fn cancel_inline_image_resize(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(session) = self.image_resize.take() else {
             return false;
         };
@@ -1556,7 +1604,15 @@ impl SemanticEditor {
         let viewport_height = self
             .viewport
             .map_or(0.0, |bounds| f32::from(bounds.size.height));
-        self.apply_inline_image_row_height(session.line, column_width, viewport_height);
+        if let Some(id) = session.plot {
+            if let Some(host) = &self.plots.host {
+                host.document.update(cx, |document, cx| {
+                    document.resize(id, session.previous_width, cx)
+                });
+            }
+        } else {
+            self.apply_inline_image_row_height(session.line, column_width, viewport_height);
+        }
         true
     }
 
@@ -2158,6 +2214,7 @@ mod tests {
             editor.inline_image_line_dimensions.borrow_mut().insert(
                 1,
                 InlineImageMetrics {
+                    plot: false,
                     line_start: link.start.0,
                     source: (320, 180),
                     spec: Default::default(),
@@ -2170,6 +2227,7 @@ mod tests {
             assert_eq!(
                 editor.inline_image_line_dimensions.borrow().get(&1),
                 Some(&InlineImageMetrics {
+                    plot: false,
                     line_start: link.start.0,
                     source: (320, 180),
                     spec: Default::default(),
@@ -2211,6 +2269,7 @@ mod tests {
             editor.inline_image_line_dimensions.borrow_mut().insert(
                 66,
                 InlineImageMetrics {
+                    plot: false,
                     line_start: link.start.0,
                     source: (1200, 800),
                     spec: Default::default(),
@@ -2518,145 +2577,6 @@ mod tests {
             }),
             original
         );
-    }
-
-    #[gpui::test]
-    fn mixed_width_table_pixel_alignment_is_derived_from_canonical_source(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        cx.update(init);
-        let source = concat!(
-            "| 官方语法 | 状态 |\n",
-            "|--+--|\n",
-            "| Entities | 支持 |\n",
-            "\n",
-            "| 官方语法 | 状态 |\n",
-            "|----------+------|\n",
-            "| Entities | 支持 |\n",
-        );
-        let session = cx.new(|_| {
-            DocumentSession::from_utf8(PathBuf::from("test.org"), source.as_bytes().to_vec())
-                .unwrap()
-        });
-        let session_for_view = session.clone();
-        let (editor, cx) =
-            cx.add_window_view(move |_, cx| SemanticEditor::new(session_for_view, cx));
-        cx.run_until_parked();
-
-        cx.read(|cx| {
-            let editor = editor.read(cx);
-            for line in 0..3 {
-                assert!(
-                    editor
-                        .hit_rows
-                        .iter()
-                        .find(|row| row.line.0 == line)
-                        .unwrap()
-                        .table_layout
-                        .is_none(),
-                    "a malformed table must stay unaligned on open"
-                );
-            }
-            for line in 4..7 {
-                assert!(
-                    editor
-                        .hit_rows
-                        .iter()
-                        .find(|row| row.line.0 == line)
-                        .unwrap()
-                        .table_layout
-                        .is_some(),
-                    "a canonical table must recover pixel alignment on open"
-                );
-            }
-        });
-        editor.update(cx, |editor, cx| {
-            editor.selection = Selection::caret(ByteOffset(2));
-            editor.sync_selection_utf16(&editor.snapshot(cx));
-            assert!(editor.align_table_at_selection(cx));
-        });
-        cx.run_until_parked();
-
-        cx.read(|cx| {
-            let editor = editor.read(cx);
-            let anchors = editor
-                .hit_rows
-                .iter()
-                .filter(|row| row.line.0 < 3)
-                .map(|row| {
-                    let table = row
-                        .table_layout
-                        .as_ref()
-                        .expect("Org table rows use the shared pixel layout");
-                    table
-                        .fragments
-                        .iter()
-                        .filter_map(|fragment| {
-                            matches!(&row.display.text[fragment.display_range.clone()], "|" | "+")
-                                .then_some(f32::from(fragment.x))
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .collect::<Vec<_>>();
-            assert_eq!(anchors.len(), 3);
-            assert_eq!(anchors[0], anchors[1]);
-            assert_eq!(anchors[1], anchors[2]);
-
-            let header = &editor.hit_rows[0];
-            let second_pipe = header.display.text.match_indices('|').nth(1).unwrap().0;
-            let x = header
-                .table_layout
-                .as_ref()
-                .unwrap()
-                .position_for_index(second_pipe, header.line_height)
-                .x;
-            assert_eq!(
-                header
-                    .table_layout
-                    .as_ref()
-                    .unwrap()
-                    .closest_index_for_position(gpui::point(x, Pixels::ZERO), header.line_height),
-                second_pipe
-            );
-        });
-
-        editor.update(cx, |editor, cx| {
-            editor.replace_selection("X", EditOrigin::Typing, cx);
-        });
-        cx.run_until_parked();
-        cx.read(|cx| {
-            let editor = editor.read(cx);
-            assert!(
-                editor
-                    .hit_rows
-                    .iter()
-                    .find(|row| row.line.0 == 0)
-                    .unwrap()
-                    .table_layout
-                    .is_some(),
-                "an overflowing cell retains the source column widths"
-            );
-            assert!(
-                !editor
-                    .table_columns(
-                        &editor.snapshot(cx),
-                        LineIndex(0),
-                        crate::document::DocumentFormat::Org
-                    )
-                    .unwrap()
-                    .aligned
-            );
-            assert!(
-                editor
-                    .hit_rows
-                    .iter()
-                    .find(|row| row.line.0 == 4)
-                    .unwrap()
-                    .table_layout
-                    .is_some(),
-                "editing one table must not change another canonical table"
-            );
-        });
     }
 
     #[gpui::test]

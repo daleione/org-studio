@@ -4,6 +4,7 @@ pub struct FontSettings {
     pub editor_font_family: Option<String>,
     pub editor_cjk_font_family: Option<String>,
     pub editor_font_size: u16,
+    pub table_font_family: Option<String>,
     pub reading_font_family: Option<String>,
     pub reading_cjk_font_family: Option<String>,
     pub reading_font_size: Option<u16>,
@@ -22,6 +23,7 @@ impl Default for FontSettings {
             editor_font_family: None,
             editor_cjk_font_family: None,
             editor_font_size: Self::DEFAULT_EDITOR_SIZE,
+            table_font_family: None,
             reading_font_family: None,
             reading_cjk_font_family: None,
             reading_font_size: None,
@@ -41,6 +43,7 @@ impl FontSettings {
     pub const MAX_SIZE: u16 = 96;
     pub const DEFAULT_EDITOR_SIZE: u16 = 15;
     pub const DEFAULT_UI_SIZE: u16 = 14;
+    pub const DEFAULT_TABLE_FONT_FAMILY: &str = "LXGW WenKai Mono";
 
     pub(crate) fn description(key: &str) -> Option<&'static str> {
         Some(match key {
@@ -49,6 +52,9 @@ impl FontSettings {
                 "Chinese editor font family, or auto (keep the base font and fallbacks). Shares the editor size."
             }
             "editor_font_size" => "Editor base font size, 5..96 logical pixels; default 15.",
+            "table_font_family" => {
+                "Font for source tables, Chinese and Latin together; shares the editor size. Use a CJK monospace font with a 2:1 width ratio. Auto uses LXGW WenKai Mono when installed, otherwise the editor font."
+            }
             "reading_font_family" => "Installed font family, or auto (reading style default).",
             "reading_cjk_font_family" => {
                 "Chinese reading font family, or auto (keep the base font and fallbacks). Shares the reading size."
@@ -85,6 +91,7 @@ impl FontSettings {
             "editor_font_size" => {
                 self.editor_font_size = parse_size(value).unwrap_or(Self::DEFAULT_EDITOR_SIZE)
             }
+            "table_font_family" => self.table_font_family = parse_family(value),
             "reading_font_family" => self.reading_font_family = parse_family(value),
             "reading_cjk_font_family" => self.reading_cjk_font_family = parse_family(value),
             "reading_font_size" => self.reading_font_size = parse_size(value),
@@ -102,7 +109,7 @@ impl FontSettings {
         true
     }
 
-    pub(crate) fn entries(&self) -> [(&'static str, String); 13] {
+    pub(crate) fn entries(&self) -> [(&'static str, String); 14] {
         let family = |value: &Option<String>| value.clone().unwrap_or_else(|| "auto".into());
         let size =
             |value: Option<u16>| value.map_or_else(|| "auto".into(), |size| size.to_string());
@@ -113,6 +120,7 @@ impl FontSettings {
                 family(&self.editor_cjk_font_family),
             ),
             ("editor_font_size", self.editor_font_size.to_string()),
+            ("table_font_family", family(&self.table_font_family)),
             ("reading_font_family", family(&self.reading_font_family)),
             (
                 "reading_cjk_font_family",

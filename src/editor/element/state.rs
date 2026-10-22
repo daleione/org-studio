@@ -18,6 +18,7 @@ pub(super) struct InlineImage {
 
 /// The bottom-right drag grip of one painted inline image.
 pub(super) struct InlineImageResizeHandlePaint {
+    pub(super) plot: Option<crate::plot::PlotId>,
     /// Painted grip quad.
     pub(super) bounds: Bounds<Pixels>,
     /// Grip plus hit slop; the editor hit-tests against this.
@@ -48,6 +49,14 @@ pub(super) struct PaintRow {
     pub(super) inline_image: Option<InlineImagePaint>,
 }
 
+impl PaintRow {
+    pub(super) fn gutter_number_span(&self) -> (Pixels, Pixels) {
+        let center = self.hit.origin_y + self.hit.line_height / 2.0;
+        let half_height = (self.gutter_layout.ascent + self.gutter_layout.descent) / 2.0;
+        (center - half_height, center + half_height)
+    }
+}
+
 pub(super) struct InlineImagePaint {
     pub(super) image: Arc<RenderImage>,
     pub(super) bounds: Bounds<Pixels>,
@@ -60,4 +69,39 @@ pub(super) struct SourceRunButtonPaint {
     pub(super) hitbox: Hitbox,
     pub(super) accent: u32,
     pub(super) icon: ShapedLine,
+}
+
+impl InlineImageResizeHandlePaint {
+    pub(super) fn new(
+        image_bounds: Bounds<Pixels>,
+        line: u64,
+        line_start: ByteOffset,
+        plot: Option<crate::plot::PlotId>,
+        window: &mut gpui::Window,
+    ) -> Self {
+        use gpui::{HitboxBehavior, point, px, size};
+        let edge = super::INLINE_IMAGE_RESIZE_HANDLE_SIZE;
+        let slop = super::INLINE_IMAGE_RESIZE_HANDLE_SLOP;
+        let bounds = Bounds::new(
+            point(
+                image_bounds.right() - px(edge),
+                image_bounds.bottom() - px(edge),
+            ),
+            size(px(edge), px(edge)),
+        );
+        let interaction_bounds = Bounds::new(
+            point(bounds.left() - px(slop), bounds.top() - px(slop)),
+            size(px(edge + slop * 2.0), px(edge + slop * 2.0)),
+        );
+        Self {
+            plot,
+            bounds,
+            interaction_bounds,
+            line,
+            line_start,
+            image_bounds,
+            hitbox: window.insert_hitbox(interaction_bounds, HitboxBehavior::Normal),
+            image_hitbox: window.insert_hitbox(image_bounds, HitboxBehavior::Normal),
+        }
+    }
 }

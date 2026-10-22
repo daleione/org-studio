@@ -143,7 +143,7 @@ pub(in crate::preview) fn resolve_visual_row(
     };
     let mut primitives = SmallVec::new();
     let content = match &visual.kind {
-        VisualRowKind::Code(ReadingCodeRow::End) => VisualContent::None,
+        VisualRowKind::Code(ReadingCodeRow::End) | VisualRowKind::Plot(_) => VisualContent::None,
         VisualRowKind::Code(_) => {
             primitives.push(VisualPrimitive::Rect {
                 x: 2.0,

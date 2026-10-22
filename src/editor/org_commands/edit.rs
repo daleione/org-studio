@@ -316,6 +316,7 @@ impl EditableTable {
                 &widths,
                 (index == self.row).then_some((self.column, self.character)),
                 self.format,
+                None,
             );
             if let Some(local) = local {
                 caret = ByteOffset(self.range.start.0 + (replacement.len() + local) as u64);

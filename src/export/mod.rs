@@ -10,6 +10,7 @@ mod markdown;
 mod model;
 mod org;
 mod output;
+mod plot;
 mod template;
 
 pub use crate::typst_runtime::{CompileOutput, TypstEngine, shared_engine};
@@ -174,6 +175,15 @@ pub fn export_snapshot(
         ExportSourceFormat::Org => org::parse(&source, options.include_org_task_metadata),
     };
     let mut document = document.map_err(ExportError::Parse)?;
+    if document_format == ExportSourceFormat::Org {
+        plot::insert_charts(
+            engine,
+            snapshot,
+            document_path,
+            &mut document,
+            &mut diagnostics,
+        )?;
+    }
     filter_unavailable_assets(
         &mut document.blocks,
         document_path.parent(),

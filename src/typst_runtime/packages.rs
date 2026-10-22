@@ -1,0 +1,210 @@
+use typst::syntax::{FileId, VirtualRoot};
+
+pub(super) fn lookup(id: FileId) -> Option<&'static [u8]> {
+    let VirtualRoot::Package(package) = id.get().root() else {
+        return None;
+    };
+    if package.namespace.as_str() != "preview" {
+        return None;
+    }
+    let files = match (package.name.as_str(), package.version.to_string().as_str()) {
+        ("cetz", "0.5.2") => CETZ,
+        ("oxifmt", "1.0.0") => OXIFMT,
+        _ => return None,
+    };
+    let path = id.get().vpath().get_without_slash();
+    files
+        .iter()
+        .find(|(name, _)| *name == path)
+        .map(|(_, bytes)| *bytes)
+}
+
+const CETZ: &[(&str, &[u8])] = &[
+    (
+        "LICENSE",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/LICENSE"),
+    ),
+    (
+        "cetz-core/cetz_core.wasm",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/cetz-core/cetz_core.wasm"),
+    ),
+    (
+        "src/aabb.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/aabb.typ"),
+    ),
+    (
+        "src/anchor.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/anchor.typ"),
+    ),
+    (
+        "src/bezier.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/bezier.typ"),
+    ),
+    (
+        "src/canvas.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/canvas.typ"),
+    ),
+    (
+        "src/complex.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/complex.typ"),
+    ),
+    (
+        "src/coordinate.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/coordinate.typ"),
+    ),
+    (
+        "src/deps.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/deps.typ"),
+    ),
+    (
+        "src/draw/boolean.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/boolean.typ"),
+    ),
+    (
+        "src/draw/grouping.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/grouping.typ"),
+    ),
+    (
+        "src/draw/projection.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/projection.typ"),
+    ),
+    (
+        "src/draw/shapes.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/shapes.typ"),
+    ),
+    (
+        "src/draw/styling.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/styling.typ"),
+    ),
+    (
+        "src/draw/transformations.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/transformations.typ"),
+    ),
+    (
+        "src/draw/util.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw/util.typ"),
+    ),
+    (
+        "src/draw.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/draw.typ"),
+    ),
+    (
+        "src/drawable.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/drawable.typ"),
+    ),
+    (
+        "src/hobby.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/hobby.typ"),
+    ),
+    (
+        "src/intersection.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/intersection.typ"),
+    ),
+    (
+        "src/lib/angle.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib/angle.typ"),
+    ),
+    (
+        "src/lib/decorations/brace.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib/decorations/brace.typ"),
+    ),
+    (
+        "src/lib/decorations/path.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib/decorations/path.typ"),
+    ),
+    (
+        "src/lib/decorations.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib/decorations.typ"),
+    ),
+    (
+        "src/lib/palette.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib/palette.typ"),
+    ),
+    (
+        "src/lib/tree.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib/tree.typ"),
+    ),
+    (
+        "src/lib.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/lib.typ"),
+    ),
+    (
+        "src/mark-shapes.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/mark-shapes.typ"),
+    ),
+    (
+        "src/mark.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/mark.typ"),
+    ),
+    (
+        "src/matrix.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/matrix.typ"),
+    ),
+    (
+        "src/path-util.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/path-util.typ"),
+    ),
+    (
+        "src/polygon.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/polygon.typ"),
+    ),
+    (
+        "src/process.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/process.typ"),
+    ),
+    (
+        "src/sorting.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/sorting.typ"),
+    ),
+    (
+        "src/styles.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/styles.typ"),
+    ),
+    (
+        "src/util.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/util.typ"),
+    ),
+    (
+        "src/vector.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/vector.typ"),
+    ),
+    (
+        "src/version.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/version.typ"),
+    ),
+    (
+        "src/wasm.typ",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/src/wasm.typ"),
+    ),
+    (
+        "typst.toml",
+        include_bytes!("../../assets/typst/packages/cetz-0.5.2/typst.toml"),
+    ),
+];
+
+const OXIFMT: &[(&str, &[u8])] = &[
+    (
+        "LICENSE",
+        include_bytes!("../../assets/typst/packages/oxifmt-1.0.0/LICENSE"),
+    ),
+    (
+        "LICENSE-APACHE",
+        include_bytes!("../../assets/typst/packages/oxifmt-1.0.0/LICENSE-APACHE"),
+    ),
+    (
+        "LICENSE-MIT",
+        include_bytes!("../../assets/typst/packages/oxifmt-1.0.0/LICENSE-MIT"),
+    ),
+    (
+        "lib.typ",
+        include_bytes!("../../assets/typst/packages/oxifmt-1.0.0/lib.typ"),
+    ),
+    (
+        "oxifmt.typ",
+        include_bytes!("../../assets/typst/packages/oxifmt-1.0.0/oxifmt.typ"),
+    ),
+    (
+        "typst.toml",
+        include_bytes!("../../assets/typst/packages/oxifmt-1.0.0/typst.toml"),
+    ),
+];

@@ -9,6 +9,7 @@ use unicode_segmentation::UnicodeSegmentation;
 #[derive(Clone, Copy)]
 pub(crate) enum FontRole {
     Editor,
+    Table,
     Reading,
     Code,
     Ui,
@@ -19,6 +20,7 @@ impl FontRole {
         let fonts = super::fonts();
         match self {
             Self::Editor => fonts.editor_cjk_family.as_deref(),
+            Self::Table => None,
             Self::Reading => fonts.reading_cjk_family.as_deref(),
             Self::Code => fonts.code_cjk_family.as_deref(),
             Self::Ui => fonts.ui_cjk_family.as_deref(),

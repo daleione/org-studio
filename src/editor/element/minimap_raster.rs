@@ -394,6 +394,9 @@ pub(super) fn minimap_text_row(
     let block = line_style.and_then(|style| style.block.as_ref());
     let rich_spans = rich_span_budget.adapt(&text, spans, theme);
     crate::editor::minimap::TextRow {
+        font_role: line_style.map_or(crate::typography::FontRole::Editor, |style| {
+            style.id.font_role()
+        }),
         color: line_style.map_or(theme.foreground, |style| {
             minimap_text_color(style.id, theme)
         }),

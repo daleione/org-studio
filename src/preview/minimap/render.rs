@@ -199,6 +199,11 @@ pub fn render(
                 first..end.max(first.saturating_add(1).min(shape_rows.len()))
             };
             let mut media: SmallVec<[MinimapMediaPaint; 4]> = SmallVec::new();
+            let mut plot_demands = shape_state
+                .plot_demands
+                .lock()
+                .expect("minimap plot demands poisoned");
+            let mut requested_plots = HashSet::new();
             let media_range = visible_range.start.saturating_sub(RASTER_TILE_ROWS)
                 ..visible_range
                     .end
@@ -211,13 +216,24 @@ pub fn render(
                 };
                 if !matches!(
                     visual.kind,
-                    VisualRowKind::Image { .. } | VisualRowKind::Diagram(_)
+                    VisualRowKind::Image { .. } | VisualRowKind::Diagram(_) | VisualRowKind::Plot(_)
                 ) {
                     continue;
                 }
-                let Some(image) =
-                    minimap_media_image(&shape_document, visual, window, cx)
-                else {
+                let plot_demand = if let VisualRowKind::Plot(plot) = &visual.kind {
+                    requested_plots.insert(plot.entry.id);
+                    Some(plot_demands.entry(plot.entry.id).or_default())
+                } else {
+                    None
+                };
+                let Some(image) = minimap_media_image(
+                    &shape_document,
+                    visual,
+                    style,
+                    plot_demand.as_deref(),
+                    window,
+                    cx,
+                ) else {
                     continue;
                 };
                 let Some((reading_width, reading_height)) =
@@ -257,6 +273,8 @@ pub fn render(
                     });
                 }
             }
+            plot_demands.retain(|id, _| requested_plots.contains(id));
+            drop(plot_demands);
             let first_line = visible_range.start;
             let last_line = visible_range.end;
             let mut tiles: SmallVec<[RasterTilePaint; 6]> = SmallVec::new();

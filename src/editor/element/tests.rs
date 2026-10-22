@@ -108,9 +108,9 @@ fn editor_table_entities_display_data_and_preserve_columns_caret_and_undo(
                     .text
                     .replace('\u{200c}', "")
                     .replace('\u{a0}', " "),
-                *expected
+                format!(" {expected} ")
             );
-            assert_eq!(cells[1].layout.text.as_ref(), "tail");
+            assert_eq!(cells[1].layout.text.as_ref(), " tail ");
         }
         assert!(
             editor.link_hits.is_empty(),
@@ -152,6 +152,244 @@ fn editor_table_entities_display_data_and_preserve_columns_caret_and_undo(
             source
         );
     });
+}
+
+#[gpui::test]
+fn org_table_character_commands_match_emacs_source_and_caret(cx: &mut gpui::TestAppContext) {
+    use crate::document::{ByteOffset, ByteRange, Selection};
+    cx.update(crate::editor::init);
+    // Buffer contents and point checked against Emacs 30.2 / Org 9.7.11.
+    for (source, input, keys, expected) in [
+        ("| B | 5¦   | tail |", "1", "", "| B | 51¦  | tail |"),
+        ("| B | 5¦   | tail |", " ", "", "| B | 5 ¦  | tail |"),
+        ("| B | 5¦   | tail |", "   ", "", "| B | 5   ¦ | tail |"),
+        ("| B | 5¦   | tail |", "1 2", "", "| B | 51 2¦ | tail |"),
+        (
+            "| B | 5¦   | tail |",
+            "",
+            "backspace",
+            "| B | ¦    | tail |",
+        ),
+        (
+            "| B | 5 ¦  | tail |",
+            "",
+            "backspace",
+            "| B | 5¦   | tail |",
+        ),
+        ("| B | ¦5   | tail |", "", "delete", "| B | ¦    | tail |"),
+        ("| B | 5¦   | tail |", "", "delete", "| B | 5¦   | tail |"),
+        ("| B |¦ 5   | tail |", "", "backspace", "| B ¦ 5   | tail |"),
+        ("| B | 5¦   | tail |", "|", "", "| B | 5|¦  | tail |"),
+        ("| 中 | 5¦   | tail |", "文", "", "| 中 | 5文¦  | tail |"),
+        ("| 名 |    5¦ |", "1", "", "| 名 |    51¦ |"),
+        (
+            "| B | 5   ¦| tail |",
+            "",
+            "backspace",
+            "| B | 5  ¦ | tail |",
+        ),
+        ("| B | 5  ¦ | tail |", "", "delete", "| B | 5  ¦ | tail |"),
+    ] {
+        let offset = source.find('¦').unwrap();
+        let source = source.replace('¦', "");
+        let expected_caret = expected.find('¦').unwrap();
+        let expected = expected.replace('¦', "");
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8("typing.org".into(), source.as_bytes().to_vec()).unwrap()
+        });
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        view.simulate_resize(gpui::size(px(1500.), px(800.)));
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(offset as u64)), cx);
+        });
+        for ch in input.chars() {
+            view.simulate_input(&ch.to_string());
+        }
+        if !keys.is_empty() {
+            view.simulate_keystrokes(keys);
+        }
+        view.run_until_parked();
+        editor.read_with(view, |editor, cx| {
+            let snapshot = editor.snapshot(cx);
+            assert_eq!(
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                expected,
+                "source={source:?}, input={input:?}, keys={keys}"
+            );
+            assert_eq!(editor.selection().head().0 as usize, expected_caret);
+            let utf16 = expected[..expected_caret].encode_utf16().count();
+            assert_eq!(editor.selection_utf16, utf16..utf16);
+            let row = editor.hit_rows.iter().find(|row| row.line.0 == 0).unwrap();
+            let table = row.table_layout.as_ref().unwrap();
+            assert_eq!(table.metrics.font, crate::typography::table_font());
+            assert!(table.fragments.iter().all(|fragment| {
+                fragment
+                    .preview_runs
+                    .iter()
+                    .all(|run| run.font.family == table.metrics.font.family)
+            }));
+            for index in row
+                .display
+                .text
+                .char_indices()
+                .map(|(index, _)| index)
+                .chain(std::iter::once(row.display.text.len()))
+            {
+                let actual = row.position_for_display_index(index).unwrap();
+                let native = row
+                    .layout
+                    .position_for_index(index, row.line_height)
+                    .unwrap();
+                assert!(
+                    (f32::from(actual.x - native.x)).abs() < 0.1,
+                    "source whitespace must use native positions: {expected:?}, index={index}"
+                );
+                assert_eq!(row.closest_display_index(actual), index);
+            }
+        });
+        view.simulate_keystrokes("cmd-z");
+        view.run_until_parked();
+        editor.read_with(view, |editor, cx| {
+            let snapshot = editor.snapshot(cx);
+            assert_eq!(
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                source
+            );
+            assert_eq!(editor.selection().head().0 as usize, offset);
+        });
+    }
+
+    let source = "| Name | Value |\n|------+-------|\n| B    |     5 |\n| C    |    25 |\n";
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("navigation.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    editor.update(view, |editor, cx| {
+        editor.set_selection(
+            Selection::caret(ByteOffset(source.find("| B").unwrap() as u64 + 3)),
+            cx,
+        );
+    });
+    view.simulate_keystrokes("tab");
+    view.simulate_input("7");
+    view.run_until_parked();
+    editor.read_with(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source.replace("| B    |     5 |", "| B    | 7     |")
+        );
+    });
+    view.simulate_keystrokes("cmd-z");
+    view.run_until_parked();
+    editor.read_with(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source
+        );
+    });
+    let source = "| Name|Value|\n|---+---|\n| A|5|\n| B|25|\n";
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("align.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    editor.update(view, |editor, cx| {
+        editor.set_selection(
+            Selection::caret(ByteOffset(source.find('5').unwrap() as u64 + 1)),
+            cx,
+        );
+    });
+    view.simulate_input("1");
+    view.simulate_keystrokes("tab");
+    view.run_until_parked();
+    editor.read_with(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            "| Name | Value |\n|------+-------|\n| A    |    51 |\n| B    |    25 |\n"
+        );
+        assert_eq!(editor.selection().head().0, 53);
+    });
+    view.simulate_keystrokes("tab enter");
+    view.run_until_parked();
+    editor.read_with(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        assert!(
+            snapshot
+                .copy_range(ByteRange::new(
+                    editor.selection().head().0,
+                    snapshot.len_bytes(),
+                ))
+                .starts_with("      |")
+        );
+    });
+}
+
+#[gpui::test]
+fn org_table_compensation_excludes_literals_paste_and_selected_text(cx: &mut gpui::TestAppContext) {
+    use crate::document::{ByteOffset, ByteRange, EditOrigin, Selection};
+    cx.update(crate::editor::init);
+    for (path, source) in [
+        (
+            "literal.org",
+            "#+begin_src text\n| B | 5   | tail |\n#+end_src\n",
+        ),
+        (
+            "literal.org",
+            "#+begin_example\n| B | 5   | tail |\n#+end_example\n",
+        ),
+        ("table.md", "| B | 5   | tail |\n|---|-----|------|\n"),
+    ] {
+        let offset = source.find('5').unwrap() + 1;
+        let session = cx
+            .new(|_| DocumentSession::from_utf8(path.into(), source.as_bytes().to_vec()).unwrap());
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(offset as u64)), cx);
+        });
+        view.simulate_input("1");
+        view.run_until_parked();
+        editor.read_with(view, |editor, cx| {
+            let snapshot = editor.snapshot(cx);
+            assert_eq!(
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                source.replace('5', "51")
+            );
+        });
+    }
+    let source = "| B | 5   | tail |";
+    for selected in [false, true] {
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8("table.org".into(), source.as_bytes().to_vec()).unwrap()
+        });
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        editor.update(view, |editor, cx| {
+            let caret = ByteOffset(source.find('5').unwrap() as u64 + 1);
+            editor.set_selection(
+                if selected {
+                    Selection::new(ByteOffset(caret.0 - 1), caret)
+                } else {
+                    Selection::caret(caret)
+                },
+                cx,
+            );
+            if !selected {
+                editor.replace_selection("1", EditOrigin::Paste, cx);
+            }
+        });
+        if selected {
+            view.simulate_keystrokes("backspace");
+        }
+        view.run_until_parked();
+        editor.read_with(view, |editor, cx| {
+            let snapshot = editor.snapshot(cx);
+            assert_eq!(
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                source.replace('5', if selected { "" } else { "51" })
+            );
+        });
+    }
 }
 
 #[gpui::test]
@@ -628,6 +866,10 @@ fn minimap_rows_adapt_the_canonical_editor_semantics() {
         let spans = semantic_spans(Path::new("contract.org"), &text, style);
         let row = minimap_text_row(text, Some(style), spans, &mut rich_span_budget, theme);
         assert_eq!(row.color, minimap_text_color(style.id, theme));
+        assert_eq!(
+            matches!(row.font_role, crate::typography::FontRole::Table),
+            expected_style == EditorStyleId::Table
+        );
         assert_eq!(row.block_edge, style.block.as_ref().map(|block| block.edge));
         if line == 9 {
             assert!(
@@ -907,6 +1149,7 @@ fn minimap_opened_after_scroll_keeps_visible_svg_dimensions_stable(cx: &mut gpui
                 editor.inline_image_line_dimensions.borrow_mut().insert(
                     source.line,
                     crate::editor::InlineImageMetrics {
+                        plot: false,
                         line_start: source.line_start,
                         source: (width, height),
                         spec: Default::default(),
@@ -1497,6 +1740,166 @@ fn committing_a_new_width_attribute_keeps_the_image_in_place(cx: &mut gpui::Test
     assert_eq!(settled.height, 232.0);
     assert_document_text(&editor, view, Some("#+ATTR_ORG: :width 440"));
     std::fs::remove_dir_all(&dir).expect("cleanup");
+}
+
+#[gpui::test]
+fn a_linked_chart_keeps_its_image_when_new_numbers_finish_rendering(cx: &mut gpui::TestAppContext) {
+    use crate::document::{ByteOffset, EditOrigin, Selection};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = "#+PLOT: ind:1 with:histograms file:\"chart.svg\"\n| category | revenue |\n|----------+---------|\n| service  |     510 |\n| product  |     650 |\n\n#+ATTR_ORG: :width 320\n[[file:chart.svg]]\n";
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8(dir.path().join("plot.org"), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(1100.0), px(900.0)));
+    view.run_until_parked();
+    view.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    view.run_until_parked();
+    let height = editor.read_with(view, |editor, _| {
+        let row = editor.hit_rows.iter().find(|row| row.line.0 == 7).unwrap();
+        assert!(row.inline_image_preview);
+        row.line_height
+    });
+    let updates = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _observer = view.update(|window, cx| {
+        let handle = window.window_handle();
+        let service = crate::plot::PlotService::shared(cx);
+        let editor = editor.clone();
+        let updates = updates.clone();
+        cx.observe(&service, move |_, cx| {
+            cx.update_window(handle, |_, window, cx| {
+                window.refresh();
+                window.draw(cx).clear(cx);
+                let editor = editor.read(cx);
+                let row = editor.hit_rows.iter().find(|row| row.line.0 == 7).unwrap();
+                assert!(
+                    row.inline_image_preview,
+                    "a finished chart must be immediately paintable"
+                );
+                assert!((row.line_height - height).abs() < px(0.01));
+                updates.set(updates.get() + 1);
+            })
+            .unwrap();
+        })
+    });
+    for number in ["520", "530", "510"] {
+        editor.update(view, |editor, cx| {
+            let start = ByteOffset(source.find("510").unwrap() as u64);
+            editor.set_selection(Selection::new(start, ByteOffset(start.0 + 3)), cx);
+            editor.replace_selection(number, EditOrigin::Typing, cx);
+        });
+        view.run_until_parked();
+        view.executor()
+            .advance_clock(std::time::Duration::from_millis(81));
+        view.run_until_parked();
+        editor.read_with(view, |editor, _| {
+            let row = editor.hit_rows.iter().find(|row| row.line.0 == 7).unwrap();
+            assert!(row.inline_image_preview);
+            assert!((row.line_height - height).abs() < px(0.01));
+        });
+    }
+    assert!(updates.get() >= 2, "exercise uncached chart completions");
+}
+
+#[gpui::test]
+fn background_layout_preserves_a_linked_plots_in_progress_resize(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("chart.svg"),
+        br#"<svg xmlns="http://www.w3.org/2000/svg" width="360pt" height="187.5pt" viewBox="0 0 360 187.5"><rect width="360" height="187.5"/></svg>"#,
+    )
+    .unwrap();
+    let source = format!(
+        "{}#+PLOT: ind:1 with:histograms file:\"chart.svg\"\n| category | revenue |\n|---+---|\n| a | 420 |\n| b | 650 |\n\n#+ATTR_ORG: :width 866.2164\n[[file:chart.svg]]\n",
+        "filler\n".repeat(30)
+    );
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8(dir.path().join("plot.org"), source.into_bytes()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(1200.0), px(600.0)));
+    editor.update(view, |editor, cx| editor.set_minimap(true, Some(80), cx));
+    view.run_until_parked();
+    view.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    view.run_until_parked();
+    editor.update(view, |editor, cx| {
+        editor.scroll_y = (editor.display_map.total_height() - 600.0).max(0.0);
+        editor.scroll_at_end = true;
+        cx.notify();
+    });
+    view.run_until_parked();
+    view.simulate_mouse_move(
+        gpui::point(px(100.0), px(100.0)),
+        None,
+        gpui::Modifiers::default(),
+    );
+    let start = grip_center(&editor, view);
+    press_grip(&editor, view, start);
+    for delta in [-10.0f32, -30.0, -60.0, -20.0] {
+        // Start a measurement of the authored width, then drag before it publishes.
+        editor.update(view, |editor, cx| {
+            editor.minimap.cancel_layout_preparation();
+            let path = editor.session.read(cx).syntax_path().to_path_buf();
+            let preparation = prepare_minimap_layout_request(
+                editor,
+                &path,
+                &editor.snapshot(cx),
+                editor.display_map.wrap_width(),
+                crate::typography::editor_font(),
+                px(editor.font_size_px()),
+                cx.text_system().clone(),
+            )
+            .unwrap();
+            schedule_minimap_layout_preparation(cx.entity(), preparation, cx);
+        });
+        drag_grip_to(&editor, view, start + gpui::point(px(delta), px(0.0)));
+        let before = image_sample(&editor, view);
+        let samples = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let _observation = view.update(|_, cx| {
+            let samples = samples.clone();
+            let line = before.line;
+            cx.observe(&editor, move |editor, cx| {
+                let editor = editor.read(cx);
+                samples
+                    .borrow_mut()
+                    .push((editor.display_map.line_height_px(line), editor.scroll_y));
+            })
+        });
+        for frame in 0..3 {
+            view.simulate_mouse_move(
+                start + gpui::point(px(delta), px(0.0)),
+                Some(gpui::MouseButton::Left),
+                gpui::Modifiers::default(),
+            );
+            view.run_until_parked();
+            let after = image_sample(&editor, view);
+            assert!(
+                (after.height - before.height).abs() < 0.01,
+                "drag {delta}, frame {frame}: row height {} -> {} (screen {} -> {}, total {} -> {})",
+                before.height,
+                after.height,
+                before.screen_y,
+                after.screen_y,
+                before.total,
+                after.total,
+            );
+        }
+        assert!(
+            !samples.borrow().is_empty()
+                && samples
+                    .borrow()
+                    .iter()
+                    .all(|(height, _)| (height - before.height).abs() < 0.01),
+            "drag {delta}, expected height {}, samples {:?}",
+            before.height,
+            samples.borrow(),
+        );
+    }
+    release_grip(&editor, view);
 }
 
 /// With the viewport pinned at the document end, the commit must not let the end

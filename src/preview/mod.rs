@@ -44,6 +44,7 @@ mod folding;
 pub(crate) mod markdown;
 pub(crate) mod minimap;
 mod org_line;
+mod plot;
 mod projection;
 mod reading_panel;
 mod rows;

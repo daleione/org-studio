@@ -84,7 +84,7 @@ fn mysql_ignores_example_properties_and_sibling_subtrees() {
 #[test]
 fn mysql_result_replacement_consumes_entire_table_and_preserves_prose() {
     let source = "#+name: report\n#+begin_src sql\nSELECT 1;\n#+end_src\n\n\
-Explanation.\n\n#+RESULTS[oldhash]: report\n#+CAPTION: My report\n| a | b |\n|---+---|\n| 1 | 2 |\n| 3 | 4 |\n\nFollowing paragraph.\n* Next\n";
+Explanation.\n\n#+RESULTS[oldhash]: report\n#+CAPTION: My report\n#+PLOT: ind:1 deps:(2) with:lines\n| a | b |\n|---+---|\n| 1 | 2 |\n| 3 | 4 |\n\nFollowing paragraph.\n* Next\n";
     let request = mysql_request(source).unwrap();
     let RequestedResult::Table {
         range, attributes, ..
@@ -92,7 +92,10 @@ Explanation.\n\n#+RESULTS[oldhash]: report\n#+CAPTION: My report\n| a | b |\n|--
     else {
         panic!("expected table")
     };
-    assert_eq!(attributes, "#+CAPTION: My report\n");
+    assert_eq!(
+        attributes,
+        "#+CAPTION: My report\n#+PLOT: ind:1 deps:(2) with:lines\n"
+    );
     let text = snapshot(source);
     let old = text.copy_range(range);
     assert!(old.starts_with("#+RESULTS[oldhash]: report"));

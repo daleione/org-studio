@@ -707,6 +707,7 @@ mod tests {
             r#"version=8
 editor_font_family=JetBrains Mono
 editor_font_size=19
+table_font_family=LXGW WenKai Mono
 reading_font_family=PingFang SC
 reading_font_size=24
 code_font_family=Menlo
@@ -718,6 +719,10 @@ font_fallbacks=PingFang SC, Apple Color Emoji, pingfang sc
         )
         .unwrap();
         assert_eq!(settings.fonts.editor_font_size, 19);
+        assert_eq!(
+            settings.fonts.table_font_family.as_deref(),
+            Some("LXGW WenKai Mono")
+        );
         assert_eq!(settings.fonts.reading_font_size, Some(24));
         assert_eq!(settings.fonts.code_font_size, Some(13));
         assert_eq!(settings.fonts.ui_font_size, 16);
@@ -768,6 +773,7 @@ font_fallbacks=auto
         assert_eq!(fonts.editor_font_family.as_deref(), Some("My Font"));
         assert_eq!(fonts.editor_font_size, 21);
         assert_eq!(fonts.reading_font_size, None);
+        assert!(upgraded.contains("table_font_family=auto\n"));
         assert_eq!(upgraded.matches("editor_font_family=").count(), 1);
         assert!(WorkspaceSettings::add_missing_font_settings(&upgraded).is_none());
         assert!(WorkspaceSettings::add_missing_font_settings("version=99\n# preserve\n").is_none());
@@ -779,10 +785,14 @@ font_fallbacks=auto
             minimap_enabled: false,
             ..WorkspaceSettings::default()
         };
-        settings.preserve_font_edits("version=8\neditor_font_size=22\nreading_font_size=18\ncode_font_size=12\nui_font_size=16\neditor_font_family=My Font\n");
+        settings.preserve_font_edits("version=8\neditor_font_size=22\nreading_font_size=18\ncode_font_size=12\nui_font_size=16\neditor_font_family=My Font\ntable_font_family=My Table Font\n");
         assert!(!settings.minimap_enabled);
         assert_eq!(settings.fonts.editor_font_size, 22);
         assert_eq!(settings.fonts.reading_font_size, Some(18));
+        assert_eq!(
+            settings.fonts.table_font_family.as_deref(),
+            Some("My Table Font")
+        );
         assert_eq!(
             settings.fonts.editor_font_family.as_deref(),
             Some("My Font")

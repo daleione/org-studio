@@ -14,6 +14,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Clone)]
 pub struct PreviewSnapshot {
     pub document_id: DocumentId,
     pub path: PathBuf,

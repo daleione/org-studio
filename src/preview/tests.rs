@@ -75,6 +75,7 @@ fn reading_semantic_golden(document: &super::PreviewSnapshot) -> String {
             }
             VisualRowKind::Image { .. } => "image".to_owned(),
             VisualRowKind::Diagram(_) => "diagram".to_owned(),
+            VisualRowKind::Plot(_) => "plot".to_owned(),
             VisualRowKind::Text => format!("text:{text}"),
         };
         output.push_str(&line);

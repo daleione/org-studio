@@ -1,4 +1,4 @@
-use std::{ops::Range, path::PathBuf};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 
 pub type SourceRange = Range<usize>;
 
@@ -52,9 +52,23 @@ pub enum ExportBlock {
         caption: Option<String>,
         source: SourceRange,
     },
+    GeneratedImage {
+        svg: Arc<[u8]>,
+        alt: String,
+        size: (f32, f32),
+        width: Option<ExportImageWidth>,
+        source: SourceRange,
+    },
     Rule {
         source: SourceRange,
     },
+}
+
+#[derive(Clone, Copy, Debug)]
+pub enum ExportImageWidth {
+    Pixels(f32),
+    Percent(f32),
+    Em(f32),
 }
 
 #[derive(Clone, Debug)]
@@ -82,6 +96,7 @@ impl ExportBlock {
             | Self::Code { source, .. }
             | Self::Table { source, .. }
             | Self::Image { source, .. }
+            | Self::GeneratedImage { source, .. }
             | Self::Rule { source } => source,
         }
     }

@@ -268,6 +268,7 @@ pub(super) fn fill_visual_rows(
 
 pub(super) struct TextRow {
     pub(super) text: String,
+    pub(super) font_role: crate::typography::FontRole,
     pub(super) color: u32,
     pub(super) weight: TextWeight,
     pub(super) italic: bool,
@@ -419,18 +420,25 @@ pub(super) fn rasterize_text_rows(
     let attrs = Attrs::new().family(crate::typography::cosmic_family(
         &crate::typography::fonts().editor_family,
     ));
+    let table_attrs = Attrs::new().family(crate::typography::cosmic_family(
+        &crate::typography::fonts().table_family,
+    ));
     let mut buffer = Buffer::new(
         font_system,
         Metrics::new(density.font_px() * scale_factor, physical_line_height),
     );
     buffer.set_wrap(Wrap::None);
-    buffer.set_text(" ", &attrs, Shaping::Advanced, None);
-    buffer.shape_until_scroll(font_system, false);
-    let space_advance = buffer
-        .layout_runs()
-        .next()
-        .map_or(density.font_px() * scale_factor * 0.6, |run| run.line_w)
-        .max(1.0);
+    let space_advance = if rows.iter().any(|row| row.table.is_some()) {
+        buffer.set_text(" ", &table_attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(font_system, false);
+        buffer
+            .layout_runs()
+            .next()
+            .map_or(density.font_px() * scale_factor * 0.6, |run| run.line_w)
+            .max(1.0)
+    } else {
+        0.0
+    };
     for (row, source) in rows.iter().enumerate() {
         if row.is_multiple_of(32) && epoch.load(Ordering::Relaxed) != expected_epoch {
             return None;
@@ -490,6 +498,11 @@ pub(super) fn rasterize_text_rows(
                 );
             }
         }
+        let attrs = if matches!(source.font_role, crate::typography::FontRole::Table) {
+            &table_attrs
+        } else {
+            &attrs
+        };
         let base_attrs =
             attrs
                 .clone()
@@ -532,6 +545,7 @@ pub(super) fn rasterize_text_rows(
                     text,
                     &spans,
                     &base_attrs,
+                    source.font_role.cjk_family(),
                     base,
                     origin_x + (x_units as f32 * space_advance).round() as i32,
                     origin_y,
@@ -549,6 +563,7 @@ pub(super) fn rasterize_text_rows(
                 &source.text,
                 &source.spans,
                 &base_attrs,
+                source.font_role.cjk_family(),
                 base,
                 origin_x,
                 origin_y,
@@ -574,6 +589,7 @@ fn draw_minimap_text(
     text: &str,
     spans: &[TextSpan],
     attrs: &cosmic_text::Attrs<'static>,
+    chinese_family: Option<&'static str>,
     color: cosmic_text::Color,
     origin_x: i32,
     origin_y: i32,
@@ -581,11 +597,11 @@ fn draw_minimap_text(
     use cosmic_text::Shaping;
 
     buffer.set_size(Some(width as f32), Some(line_height));
-    if spans.is_empty() && crate::typography::FontRole::Editor.cjk_family().is_none() {
+    if spans.is_empty() && chinese_family.is_none() {
         buffer.set_text(text, attrs, Shaping::Advanced, None);
     } else {
         buffer.set_rich_text(
-            rich_text_segments(text, spans, attrs),
+            rich_text_segments(text, spans, attrs, chinese_family),
             attrs,
             Shaping::Advanced,
             None,
@@ -656,10 +672,10 @@ fn rich_text_segments<'a>(
     text: &'a str,
     spans: &[TextSpan],
     base: &cosmic_text::Attrs<'static>,
+    chinese_family: Option<&'static str>,
 ) -> Vec<(&'a str, cosmic_text::Attrs<'static>)> {
     use cosmic_text::{Color, Style, UnderlineStyle};
 
-    let chinese_family = crate::typography::FontRole::Editor.cjk_family();
     let chinese = if chinese_family.is_some() {
         crate::typography::cjk_ranges(text)
     } else {
@@ -2195,6 +2211,7 @@ mod tests {
     fn rich_text_segments_preserve_color_emphasis_and_utf8_boundaries() {
         let row = TextRow {
             text: "甲😀b".to_owned(),
+            font_role: crate::typography::FontRole::Editor,
             color: 0,
             weight: TextWeight::Normal,
             italic: false,
@@ -2213,7 +2230,7 @@ mod tests {
             table: None,
         };
         let base = cosmic_text::Attrs::new().family(cosmic_text::Family::Monospace);
-        let segments = rich_text_segments(&row.text, &row.spans, &base);
+        let segments = rich_text_segments(&row.text, &row.spans, &base, None);
 
         assert_eq!(
             segments.iter().map(|(text, _)| *text).collect::<String>(),

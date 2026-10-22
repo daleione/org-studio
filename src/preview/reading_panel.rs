@@ -22,6 +22,14 @@ use super::{
 type SearchFoldOrigin = (Arc<Vec<usize>>, Arc<HashSet<BlockId>>);
 
 pub(crate) struct ReadingPreviewPanel {
+    pub(super) plots: Option<crate::plot::PlotHost>,
+    pub(super) plot_source: Option<Arc<PreviewSnapshot>>,
+    pub(super) plot_style: super::PreviewStyleId,
+    pub(super) plot_signature: Option<(crate::document::Revision, bool, Vec<crate::plot::PlotId>)>,
+    pub(super) plot_rows: Vec<(usize, crate::plot::PlotId)>,
+    plot_visible: Arc<HashSet<crate::plot::PlotId>>,
+    pub(super) plot_display_revision: u64,
+    pub(super) plot_resize: Option<super::plot::PlotResize>,
     search_ranges: Arc<[crate::document::ByteRange]>,
     search_current: Option<crate::document::ByteRange>,
     search_origin: Option<SearchFoldOrigin>,
@@ -39,7 +47,7 @@ pub(crate) struct ReadingPreviewPanel {
     fold_animation: Option<FoldTransition>,
     geometry_revision: u64,
     content_font_size: crate::typography::ContentFontSize,
-    viewport_revision_key: Option<(u32, u32)>,
+    pub(super) viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
     next_action_id: u64,
@@ -81,6 +89,7 @@ impl ReadingTextSelection {
 
 #[derive(Clone)]
 pub(crate) struct ReadingRenderState {
+    pub(crate) plot_visible: Arc<HashSet<crate::plot::PlotId>>,
     pub(crate) search_ranges: Arc<[crate::document::ByteRange]>,
     pub(crate) search_current: Option<crate::document::ByteRange>,
     pub(crate) document: Arc<PreviewSnapshot>,
@@ -125,6 +134,22 @@ fn table_scroll_handles(
 }
 
 impl ReadingPreviewPanel {
+    pub(crate) fn retain_plot_demands(&mut self) {
+        let visible = self
+            .plot_rows
+            .iter()
+            .filter_map(|(row, id)| {
+                let index = self.visible_rows.binary_search(row).ok()?;
+                (self.list_state.item_is_above_viewport(index) != Some(true)
+                    && self.list_state.item_is_below_viewport(index) != Some(true))
+                .then_some(*id)
+            })
+            .collect();
+        if let Some(host) = self.plots.as_mut() {
+            host.retain(&visible);
+        }
+        self.plot_visible = Arc::new(visible);
+    }
     pub(crate) fn new(document: Arc<PreviewSnapshot>, list_overdraw: f32) -> Self {
         let visible_rows = Arc::new((0..document.projection.rows.len()).collect::<Vec<_>>());
         let list_state = ListState::new(visible_rows.len(), ListAlignment::Top, px(list_overdraw));
@@ -134,6 +159,14 @@ impl ReadingPreviewPanel {
         let minimap_state = Arc::new(minimap::MinimapState::new());
         let table_scroll_handles = table_scroll_handles(&document, None);
         Self {
+            plots: None,
+            plot_resize: None,
+            plot_display_revision: 0,
+            plot_source: None,
+            plot_style: super::PreviewStyleId::Base,
+            plot_signature: None,
+            plot_rows: Vec::new(),
+            plot_visible: Arc::new(HashSet::new()),
             document,
             pending_viewport_deltas: Vec::new(),
             list_state,
@@ -166,6 +199,7 @@ impl ReadingPreviewPanel {
 
     pub(crate) fn render_state(&self) -> ReadingRenderState {
         ReadingRenderState {
+            plot_visible: self.plot_visible.clone(),
             search_ranges: self.search_ranges.clone(),
             search_current: self.search_current,
             document: self.document.clone(),
@@ -355,7 +389,17 @@ impl ReadingPreviewPanel {
             return false;
         }
         self.discard_fold_animation();
+        let zoom_ratio = font_size.scale() / self.content_font_size.scale();
         self.content_font_size = font_size;
+        for &(row, _) in &self.plot_rows {
+            if let Some(super::projection::VisualRow {
+                kind: super::projection::VisualRowKind::Plot(plot),
+                ..
+            }) = self.document.projection.rows.get(row)
+            {
+                plot.sizing.lock().unwrap().font_size *= zoom_ratio;
+            }
+        }
         self.remeasure_all_preserving_viewport();
         self.invalidate_minimap_layout();
         true
@@ -377,10 +421,26 @@ impl ReadingPreviewPanel {
         }
     }
 
-    fn invalidate_minimap_layout(&mut self) {
+    pub(super) fn invalidate_minimap_layout(&mut self) {
         self.minimap_pending_seek = None;
         self.minimap_seek_scheduled = false;
         self.minimap_state.invalidate_style();
+    }
+
+    pub(super) fn remeasure_plot_rows(&mut self) {
+        let anchor = self.top_source_anchor();
+        if let Some(map) = &self.document.display_map {
+            map.invalidate_image_geometry(self.plot_rows.iter().map(|(row, _)| *row));
+        }
+        for &(row, _) in &self.plot_rows {
+            if let Ok(index) = self.visible_rows.binary_search(&row) {
+                self.list_state.remeasure_items(index..index + 1);
+            }
+        }
+        self.bump_geometry_revision();
+        if let Some((offset, offset_in_item)) = anchor {
+            self.scroll_to_source_offset_with_offset(offset, offset_in_item);
+        }
     }
 
     #[cfg(test)]
@@ -430,6 +490,10 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        self.plot_source = None;
+        self.plot_signature = None;
+        self.plot_rows.clear();
+        self.plot_style = style.id;
         // Sample at publication time so scrolling during the background parse is respected.
         let source_anchor = self.top_source_anchor();
         let mapped = source_anchor.and_then(|(source, offset)| {
@@ -442,6 +506,13 @@ impl ReadingPreviewPanel {
             }
             (range.revision == document.revision).then_some((range.range.start, offset))
         });
+        if let Some(host) = self.plots.as_mut() {
+            for delta in &self.pending_viewport_deltas {
+                if delta.after <= document.revision {
+                    host.map_source_delta(delta);
+                }
+            }
+        }
         self.pending_viewport_deltas.clear();
         let source_anchor = mapped.or(source_anchor);
         let scroll_top = self.list_state.logical_scroll_top();
@@ -848,7 +919,20 @@ impl ReadingPreviewPanel {
             return false;
         }
         self.viewport_revision_key = Some(viewport);
-        self.geometry_revision = self.geometry_revision.wrapping_add(1);
+        for &(row, _) in &self.plot_rows {
+            if let Some(super::projection::VisualRow {
+                kind: super::projection::VisualRowKind::Plot(plot),
+                ..
+            }) = self.document.projection.rows.get(row)
+            {
+                plot.sizing.lock().unwrap().max_height = f32::from_bits(viewport.1) * 2.0;
+            }
+        }
+        if !self.plot_rows.is_empty() {
+            self.remeasure_plot_rows();
+        } else {
+            self.bump_geometry_revision();
+        }
         self.cancel_minimap_interaction();
         true
     }

@@ -1,3 +1,4 @@
+mod packages;
 mod render;
 mod world;
 
@@ -105,7 +106,7 @@ impl TypstEngine {
         self.compile_with_inputs(source, format, per_page, png_ppi, root, &BTreeMap::new())
     }
 
-    pub(super) fn compile_with_inputs(
+    pub(crate) fn compile_with_inputs(
         &self,
         source: String,
         format: OutputFormat,

@@ -6,14 +6,16 @@ use std::time::Duration;
 
 use gpui::{App, Pixels, TextRun, point, px};
 
-use crate::document::{LineIndex, TextSnapshot};
+use crate::document::{ByteOffset, LineIndex, TextSnapshot};
 use crate::editor::{SemanticEditor, layout_map::EditorLayoutMap, syntax};
 
 use super::blocks::editor_block_wrap_width;
 use super::rows::visible_source_lines;
 use super::scroll::{scroll_is_at_end, stabilized_scroll_y};
 use super::text::folded_display_text;
-use crate::editor::inline_image::{INLINE_IMAGE_VERTICAL_PADDING, image_sizing};
+use crate::editor::inline_image::{
+    INLINE_IMAGE_VERTICAL_PADDING, image_sizing, resolved_image_size,
+};
 use crate::editor::table_layout::{TableColumnMetrics, TableVisualLayout};
 
 pub(super) struct MinimapLayoutPreparationRequest {
@@ -211,12 +213,18 @@ pub(super) fn schedule_minimap_layout_preparation(
                     let display = source_line.display;
                     let text: gpui::SharedString =
                         folded_display_text(display.text.clone(), folded).into();
+                    let is_table = line_style.id == syntax::EditorStyleId::Table;
+                    let font = if is_table {
+                        crate::typography::table_font()
+                    } else {
+                        request.font.clone()
+                    };
                     let runs = syntax::runs(
                         &request.key.path,
                         &text,
                         TextRun {
                             len: text.len(),
-                            font: request.font.clone(),
+                            font: font.clone(),
                             color: base_run_color,
                             background_color: None,
                             underline: None,
@@ -226,14 +234,10 @@ pub(super) fn schedule_minimap_layout_preparation(
                         None,
                         &request.theme,
                     );
-                    let runs = crate::typography::cjk_runs(
-                        &text,
-                        runs,
-                        crate::typography::FontRole::Editor,
-                    );
+                    let runs = crate::typography::cjk_runs(&text, runs, line_style.id.font_role());
                     let shaped_font_size = px(f32::from(request.font_size) * metrics.font_scale);
                     let effective_wrap_width = request.key.soft_wrap.then_some(px(row_wrap_width));
-                    let columns = if line_style.id == syntax::EditorStyleId::Table {
+                    let columns = if is_table {
                         crate::editor::org_commands::table_start(
                             &request.snapshot,
                             line_number,
@@ -251,7 +255,7 @@ pub(super) fn schedule_minimap_layout_preparation(
                                     let metrics = Arc::new(TableColumnMetrics::measure(
                                         &request.snapshot,
                                         &columns,
-                                        request.font.clone(),
+                                        font,
                                         shaped_font_size,
                                         &text_system,
                                     ));
@@ -308,18 +312,43 @@ pub(super) fn schedule_minimap_layout_preparation(
             }
             scheduler.timer(Duration::from_millis(0)).await;
         }
-        Some((Arc::new(layout), started_at.elapsed()))
+        Some((layout, request.snapshot, started_at.elapsed()))
     });
 
     cx.spawn(async move |cx| {
         let prepared = background.await;
         editor.update(cx, |editor, cx| {
-            let Some((layout, elapsed)) = prepared else {
+            let Some((mut layout, snapshot, elapsed)) = prepared else {
                 if editor.minimap.abandon_layout_preparation(&key, epoch) {
                     cx.notify();
                 }
                 return;
             };
+            let viewport_height = editor
+                .viewport
+                .map_or(0.0, |viewport| f32::from(viewport.size.height));
+            let sizing = image_sizing(layout.wrap_width(), viewport_height, editor.font_size_px());
+            // Image loading and resizing may advance while the background pass runs.
+            // Publish its text layout with the current image geometry, including drags.
+            for (&line, metrics) in editor.inline_image_line_dimensions.borrow().iter() {
+                if !editor.previews_inline_image_at(ByteOffset(metrics.line_start)) {
+                    continue;
+                }
+                let mut metrics = metrics.clone();
+                if !metrics.plot {
+                    metrics.spec =
+                        crate::org_syntax::attributes::image_attributes_at(&snapshot, line);
+                }
+                let (_, height) = resolved_image_size(editor, &metrics, &sizing);
+                layout.update_line_layout(
+                    line,
+                    1,
+                    height,
+                    INLINE_IMAGE_VERTICAL_PADDING,
+                    INLINE_IMAGE_VERTICAL_PADDING,
+                );
+            }
+            let layout = Arc::new(layout);
             if editor
                 .minimap
                 .publish_prepared_layout(&key, epoch, layout.clone())
@@ -327,9 +356,6 @@ pub(super) fn schedule_minimap_layout_preparation(
                 // Once complete geometry exists, make it authoritative for both the Editor and
                 // its minimap. Keeping the live Editor sparse would require two scroll cameras
                 // and gives the thumb/background a different follow policy from Reading.
-                let viewport_height = editor
-                    .viewport
-                    .map_or(0.0, |viewport| f32::from(viewport.size.height));
                 let was_at_end = editor.scroll_at_end
                     || scroll_is_at_end(
                         editor.scroll_y,

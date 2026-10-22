@@ -25,14 +25,31 @@ impl SemanticEditor {
         }
         self.finish_composition(cx);
         self.vertical_goal_x = None;
-        let range = self.selection.range();
-        let after = Selection::caret(ByteOffset(range.start.0 + text.len() as u64));
-        let after_utf16 = self.selection_utf16.start + text.encode_utf16().count();
         let revision = self.session.read(cx).revision();
+        let blank_field =
+            self.org_table_auto_blank.take() == Some((revision, history_before.head()));
+        let field_edit = history_before
+            .is_empty()
+            .then(|| self.org_table_field_edit(text, origin, blank_field, cx))
+            .flatten();
+        let (edit, after, after_utf16) = if let Some((edit, caret)) = field_edit {
+            let snapshot = self.snapshot(cx);
+            let start_utf16 = snapshot.byte_to_utf16(edit.range.start).unwrap().0 as usize;
+            let local = (caret.0 - edit.range.start.0) as usize;
+            let after_utf16 = start_utf16 + edit.replacement[..local].encode_utf16().count();
+            (edit, Selection::caret(caret), after_utf16)
+        } else {
+            let range = self.selection.range();
+            (
+                TextEdit::new(range, text.to_owned()),
+                Selection::caret(ByteOffset(range.start.0 + text.len() as u64)),
+                self.selection_utf16.start + text.encode_utf16().count(),
+            )
+        };
         let result = self.session.update(cx, |session, cx| {
             session.edit(
                 DocumentCommand::new(
-                    EditTransaction::new(revision, vec![TextEdit::new(range, text.to_owned())]),
+                    EditTransaction::new(revision, vec![edit]),
                     history_before,
                     after,
                     origin,
@@ -51,6 +68,61 @@ impl SemanticEditor {
             self.selection_utf16_reversed = false;
             cx.notify();
         }
+    }
+
+    fn org_table_field_edit(
+        &self,
+        text: &str,
+        origin: EditOrigin,
+        blank_field: bool,
+        cx: &App,
+    ) -> Option<(TextEdit, ByteOffset)> {
+        if !matches!(
+            origin,
+            EditOrigin::Typing | EditOrigin::DeleteBackward | EditOrigin::DeleteForward
+        ) {
+            return None;
+        }
+        let path = self.session.read(cx).syntax_path();
+        if crate::document::DocumentFormat::detect(path)
+            != Some(crate::document::DocumentFormat::Org)
+        {
+            return None;
+        }
+        let snapshot = self.snapshot(cx);
+        let range = self.selection.range();
+        let line = snapshot.line_index_at(range.start).ok()?;
+        let line_range = snapshot.line_content_range(line).ok()?;
+        if range.end > line_range.end {
+            return None;
+        }
+        let source = snapshot.copy_range(line_range);
+        if !source.trim_start().starts_with('|') {
+            return None;
+        }
+        let styles = syntax::SparseEditorStyleSnapshot::query_lines(
+            path,
+            &snapshot,
+            &[line.0],
+            &self.syntax_service,
+        );
+        if styles.snapshot.line(line.0)?.id != syntax::EditorStyleId::Table {
+            return None;
+        }
+        let local = (range.start.0 - line_range.start.0) as usize
+            ..(range.end.0 - line_range.start.0) as usize;
+        let edit =
+            super::org_commands::edit_table_field(&source, local, text, origin, blank_field)?;
+        Some((
+            TextEdit::new(
+                ByteRange::new(
+                    line_range.start.0 + edit.range.start as u64,
+                    line_range.start.0 + edit.range.end as u64,
+                ),
+                edit.replacement,
+            ),
+            ByteOffset(line_range.start.0 + edit.caret as u64),
+        ))
     }
 
     fn delete_backward(&mut self, _: &Backspace, _: &mut Window, cx: &mut Context<Self>) {
@@ -222,22 +294,57 @@ impl SemanticEditor {
                 let goal_x = *self
                     .vertical_goal_x
                     .get_or_insert_with(|| f32::from(position.x));
-                let mut target = self.hit_test(gpui::point(
-                    row.text_origin_x + px(goal_x),
-                    row.origin_y
-                        + position.y
-                        + px(delta as f32 * f32::from(row.line_height)
-                            + f32::from(row.line_height) / 2.0),
-                ));
-                // A shorter cell has no caret positions in the blank space below its text.
-                // Continue to the adjacent source row instead of getting stuck in that cell.
-                if target == head && row.table_layout.is_some() && delta != 0 {
-                    let y = if delta > 0 {
-                        row.visible_bottom + row.line_height / 2.
-                    } else {
-                        row.visible_top - row.line_height / 2.
-                    };
-                    target = self.hit_test(gpui::point(row.text_origin_x + px(goal_x), y));
+                let y = row.origin_y + position.y + row.line_height * (delta as f32 + 0.5);
+                let mut target = self.hit_test(gpui::point(row.text_origin_x + px(goal_x), y));
+                let past_cell_text = row.table_layout.is_some() && {
+                    let local_target = row
+                        .display
+                        .source_to_display(target.0.saturating_sub(row.range.start.0) as usize);
+                    let format = crate::document::DocumentFormat::from_path(
+                        self.session.read(cx).syntax_path(),
+                    );
+                    crate::document::table::parse_line(&row.display.text, format)
+                        .cells
+                        .iter()
+                        .any(|cell| {
+                            cell.text_range.contains(&display_local)
+                                && if delta > 0 {
+                                    local_target >= cell.text_range.end
+                                } else {
+                                    local_target < cell.text_range.start
+                                }
+                        })
+                };
+                // Cross source rows directly: gaps such as plot previews have no caret positions.
+                // A shorter table cell can also run out of caret positions before its row ends.
+                if delta != 0
+                    && (y < row.visible_top
+                        || y >= row.visible_bottom
+                        || (target == head && row.table_layout.is_some())
+                        || past_cell_text)
+                {
+                    let ordinal = self.display_map.visible_ordinal_for_line(row.line.0);
+                    if let Some(line) = ordinal
+                        .checked_add_signed(delta)
+                        .filter(|ordinal| *ordinal < self.display_map.visible_line_count())
+                        .and_then(|ordinal| {
+                            self.display_map.source_line_for_visible_ordinal(ordinal)
+                        })
+                    {
+                        if let Some(adjacent) = self.hit_rows.iter().find(|row| row.line.0 == line)
+                        {
+                            let y = if delta > 0 {
+                                adjacent.origin_y + adjacent.line_height / 2.
+                            } else {
+                                adjacent.visible_bottom - adjacent.line_height / 2.
+                            };
+                            target = self.hit_test(gpui::point(row.text_origin_x + px(goal_x), y));
+                        } else if let Ok((_, column)) = snapshot.line_and_column_at(head) {
+                            target = snapshot
+                                .byte_at_line_column(LineIndex(line), column)
+                                .unwrap_or(head);
+                        }
+                    }
                 }
                 self.selection = if extend {
                     self.selection.with_head(target)
@@ -347,6 +454,15 @@ impl SemanticEditor {
             return;
         }
         let snapshot = self.snapshot(cx);
+        if self.selection.is_empty()
+            && let Ok(line) = snapshot.line_index_at(self.selection.head())
+            && let Ok(range) = snapshot.line_content_range(line)
+            && (self.selection.head() == range.start || self.selection.head() == range.end)
+        {
+            let newline = self.session.read(cx).newline_sequence();
+            self.replace_selection(newline, EditOrigin::Newline, cx);
+            return;
+        }
         let path = self.session.read(cx).syntax_path().to_path_buf();
         let table_candidate = crate::document::DocumentFormat::detect(&path)
             .and_then(|format| {
@@ -799,26 +915,36 @@ impl SemanticEditor {
         cx: &mut Context<Self>,
     ) -> bool {
         let newline = self.session.read(cx).newline_sequence().to_owned();
-        match super::org_commands::recalculate_marked_row_on_navigation(
+        let alignment = match super::org_commands::recalculate_marked_row_on_navigation(
             snapshot,
             context,
             self.selection.head(),
             &newline,
             navigation,
         ) {
-            Ok(Some(change)) => return self.apply_table_change(snapshot, change, cx),
-            Ok(None) => {}
+            Ok(Some(change)) => change,
+            Ok(None) => {
+                let Some(alignment) =
+                    super::org_commands::align_table(snapshot, context, &newline, navigation)
+                else {
+                    return false;
+                };
+                alignment
+            }
             Err(error) => {
                 self.show_command_feedback(&error, cx);
                 return false;
             }
-        }
-        let Some(alignment) =
-            super::org_commands::align_table(snapshot, context, &newline, navigation)
-        else {
-            return false;
         };
-        self.apply_table_change(snapshot, alignment, cx)
+        let applied = self.apply_table_change(snapshot, alignment, cx);
+        if applied
+            && crate::document::DocumentFormat::detect(self.session.read(cx).syntax_path())
+                == Some(crate::document::DocumentFormat::Org)
+        {
+            self.org_table_auto_blank =
+                Some((self.session.read(cx).revision(), self.selection.head()));
+        }
+        applied
     }
 
     pub(crate) fn available_table_edits(
@@ -937,7 +1063,8 @@ impl SemanticEditor {
         let before = self.selection;
         let after = Selection::caret(alignment.caret);
         let revision = snapshot.revision();
-        if snapshot.copy_range(alignment.range) == alignment.replacement {
+        let current = snapshot.copy_range(alignment.range);
+        if current == alignment.replacement {
             self.command_feedback = None;
             self.selection = after;
             self.selection_revision = revision;
@@ -946,15 +1073,38 @@ impl SemanticEditor {
             cx.notify();
             return true;
         }
+        // Keep unchanged source anchors and measured rows outside the actual edit.
+        let replacement = alignment.replacement;
+        let mut prefix = current
+            .bytes()
+            .zip(replacement.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !current.is_char_boundary(prefix) || !replacement.is_char_boundary(prefix) {
+            prefix -= 1;
+        }
+        let mut suffix = current[prefix..]
+            .bytes()
+            .rev()
+            .zip(replacement[prefix..].bytes().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !current.is_char_boundary(current.len() - suffix)
+            || !replacement.is_char_boundary(replacement.len() - suffix)
+        {
+            suffix -= 1;
+        }
+        let range = ByteRange::new(
+            alignment.range.start.0 + prefix as u64,
+            alignment.range.end.0 - suffix as u64,
+        );
+        let replacement = replacement[prefix..replacement.len() - suffix].to_owned();
         if self
             .session
             .update(cx, |session, cx| {
                 session.edit(
                     DocumentCommand::new(
-                        EditTransaction::new(
-                            revision,
-                            vec![TextEdit::new(alignment.range, alignment.replacement)],
-                        ),
+                        EditTransaction::new(revision, vec![TextEdit::new(range, replacement)]),
                         before,
                         after,
                         EditOrigin::Other,
@@ -1180,6 +1330,7 @@ impl SemanticEditor {
     }
 
     fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        self.org_table_auto_blank = None;
         if !self.selection.is_empty() {
             let snapshot = self.snapshot(cx);
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1189,6 +1340,7 @@ impl SemanticEditor {
     }
 
     fn cut(&mut self, _: &Cut, _: &mut Window, cx: &mut Context<Self>) {
+        self.org_table_auto_blank = None;
         if !self.selection.is_empty() {
             let snapshot = self.snapshot(cx);
             cx.write_to_clipboard(ClipboardItem::new_string(
@@ -1353,7 +1505,7 @@ impl SemanticEditor {
         self.todo.hover_range = None;
         self.dismiss_timestamp(cx);
         self.finish_composition(cx);
-        if self.cancel_inline_image_resize() {
+        if self.cancel_inline_image_resize(cx) {
             cx.notify();
         }
         self.emacs_mark_active = false;
@@ -1439,6 +1591,10 @@ impl SemanticEditor {
         }
         if self.image_resize_down(event, cx) {
             return;
+        }
+        if let Some(host) = &self.plots.host {
+            host.document
+                .update(cx, |document, cx| document.select(None, cx));
         }
         if self.source_copy_down(event) {
             return;
@@ -2051,6 +2207,7 @@ impl SemanticEditor {
     }
 
     pub(super) fn sync_selection_utf16(&mut self, snapshot: &DocumentSnapshot) {
+        self.org_table_auto_blank = None;
         let range = self.selection.range();
         let Some(start) = snapshot
             .byte_to_utf16(range.start)

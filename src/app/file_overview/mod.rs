@@ -121,6 +121,7 @@ pub(crate) struct PreparingDocument {
     pub(crate) bounds: Bounds<Pixels>,
     revision: Revision,
     path: std::path::PathBuf,
+    pub(crate) has_plots: bool,
     pub(crate) frame: crate::document_preview::FrameSlot,
 }
 
@@ -274,6 +275,9 @@ impl WorkspaceWindow {
                 PreparingDocument {
                     revision: doc.revision(),
                     path: doc.syntax_path().to_path_buf(),
+                    has_plots: crate::document::DocumentFormat::from_path(doc.syntax_path())
+                        == crate::document::DocumentFormat::Org
+                        && crate::plot::may_have_plots(&doc.snapshot()),
                     document,
                     workspace,
                     bounds,

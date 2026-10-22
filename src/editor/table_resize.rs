@@ -123,7 +123,7 @@ impl SemanticEditor {
                 self.table_column_metrics(
                     &snapshot,
                     &columns,
-                    crate::typography::editor_font(),
+                    crate::typography::table_font(),
                     px(self.font_size_px()),
                     &text_system,
                 )

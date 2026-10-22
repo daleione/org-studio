@@ -3,7 +3,10 @@ use std::{ops::Range, sync::Arc};
 
 use gpui::{Bounds, Font, Pixels, Point, TextRun, WrappedLine, point, px};
 
-use super::{org_commands::TableColumns, syntax};
+use super::{
+    org_commands::{TableColumns, table_text_width},
+    syntax,
+};
 use crate::document::{DocumentFormat, DocumentSnapshot, LineIndex, TextSnapshot, table};
 use crate::org_syntax::inline::EntityText;
 
@@ -14,7 +17,7 @@ pub(super) struct TableColumnMetrics {
     pub(super) space_width: Pixels,
     pub(super) pipe_width: Pixels,
     pub(super) natural_widths: Vec<Pixels>,
-    has_entities: bool,
+    raw_widths: Vec<Pixels>,
 }
 
 impl TableColumnMetrics {
@@ -46,6 +49,7 @@ impl TableColumnMetrics {
             .iter()
             .map(|width| space_width * *width)
             .collect::<Vec<_>>();
+        let mut raw_widths = vec![Pixels::ZERO; natural_widths.len()];
         let first = snapshot
             .line_index_at(columns.source_range.start)
             .expect("table starts on a line");
@@ -56,7 +60,6 @@ impl TableColumnMetrics {
             DocumentFormat::Org => "table.org",
             DocumentFormat::Markdown => "table.md",
         });
-        let mut has_entities = false;
         for line in first.0..=last.0 {
             let range = snapshot
                 .line_content_range(LineIndex(line))
@@ -79,13 +82,23 @@ impl TableColumnMetrics {
                 None,
                 crate::theme::current_theme(),
             );
-            let runs =
-                crate::typography::cjk_runs(&text, runs, crate::typography::FontRole::Editor);
-            for (width, cell) in natural_widths.iter_mut().zip(row.cells) {
+            for (column, ((width, raw_width), cell)) in natural_widths
+                .iter_mut()
+                .zip(&mut raw_widths)
+                .zip(row.cells)
+                .enumerate()
+            {
+                let whitespace = measure(&text[cell.raw_range.start..cell.text_range.start])
+                    + measure(&text[cell.text_range.end..cell.raw_range.end]);
                 let content = &text[cell.text_range.clone()];
+                let source_padding =
+                    if columns.format == DocumentFormat::Org && columns.source_widths.is_some() {
+                        columns.widths[column].saturating_sub(table_text_width(content))
+                    } else {
+                        0
+                    };
                 let runs = slice_text_runs(&runs, cell.text_range);
                 let entities = cell_entities(content, columns.format, None);
-                has_entities |= entities.is_some();
                 let content = entities
                     .as_ref()
                     .map_or(content, |entities| entities.text.as_str());
@@ -96,7 +109,8 @@ impl TableColumnMetrics {
                 let measured = text_system
                     .shape_line(content.to_owned().into(), font_size, &runs, None)
                     .width();
-                *width = (*width).max(measured);
+                *width = (*width).max(measured + space_width * source_padding);
+                *raw_width = (*raw_width).max(measured + whitespace);
             }
         }
         for width in &mut natural_widths {
@@ -108,7 +122,7 @@ impl TableColumnMetrics {
             space_width,
             pipe_width,
             natural_widths,
-            has_entities,
+            raw_widths,
         }
     }
 
@@ -200,7 +214,7 @@ impl TableVisualFragment {
 pub(crate) struct TableVisualLayout {
     pub(super) fragments: Vec<TableVisualFragment>,
     pub(super) width: Pixels,
-    pub(super) len: usize,
+    len: usize,
     pub(super) visual_rows: usize,
     pub(super) column_widths: Vec<Pixels>,
     pub(super) metrics: Arc<TableColumnMetrics>,
@@ -338,23 +352,42 @@ impl TableVisualLayout {
             },
             |widths| widths.iter().map(|width| font_size * *width).collect(),
         );
-        // With wrapping disabled, keep enough space for each column's text.
-        if wrap_width.is_none() {
-            for (width, minimum) in widths.iter_mut().zip(&metrics.natural_widths) {
-                *width = (*width).max(*minimum);
+        // Source spaces use normal glyph advances; only explicitly narrowed columns wrap them.
+        for (column, width) in widths.iter_mut().enumerate() {
+            if wrap_width.is_none() {
+                *width = (*width).max(metrics.natural_widths[column]);
+                if columns.format == DocumentFormat::Org {
+                    *width = (*width).max(metrics.raw_widths[column]);
+                }
+            } else if preferred.is_none()
+                && columns.format == DocumentFormat::Org
+                && source_widths.is_none_or(|requested| requested[column] >= columns.widths[column])
+            {
+                *width = (*width).max(metrics.raw_widths[column]);
             }
         }
         let natural_width =
             indent + pipe * (columns.widths.len() + 1) + widths.iter().copied().sum::<Pixels>();
         let constrained = wrap_width.is_some_and(|width| natural_width > width);
-        if !columns.aligned
+        let markdown = columns.format == DocumentFormat::Markdown;
+        if markdown
+            && !columns.aligned
             && source_widths.is_none()
             && !constrained
             && preferred.is_none()
-            && !metrics.has_entities
         {
             return None;
         }
+        let column_layout = markdown
+            || constrained
+            || preferred.is_some()
+            || wrap_width.is_some()
+                && source_widths.is_some_and(|widths| {
+                    widths
+                        .iter()
+                        .zip(&columns.widths)
+                        .any(|(width, natural)| width < natural)
+                });
         if let Some(width) = wrap_width.filter(|_| constrained) {
             let budget = (width - indent - pipe * (columns.widths.len() + 1))
                 .max(px(columns.widths.len() as f32));
@@ -407,18 +440,35 @@ impl TableVisualLayout {
             });
             let end = delimiters.get(column + 1).copied().unwrap_or(text.len());
             let range = start + 1..end;
-            let width = widths.get(column).copied().unwrap_or_default();
+            let mut width = if column_layout {
+                widths.get(column).copied().unwrap_or_default()
+            } else {
+                Pixels::ZERO
+            };
             if !range.is_empty() {
                 let raw = &text[range.clone()];
                 let padding = space.min(width / 4.);
                 let content_width = (width - padding * 2.).max(gpui::px(1.));
-                let trimmed = raw.trim();
-                let start = range.start + raw.len() - raw.trim_start().len();
-                let content_range = start..start + trimmed.len();
+                let content_range = if markdown {
+                    let trimmed = raw.trim();
+                    let start = range.start + raw.len() - raw.trim_start().len();
+                    start..start + trimmed.len()
+                } else {
+                    range.clone()
+                };
+                let content = &text[content_range.clone()];
+                let text_width = if (separator && column_layout) || markdown {
+                    content_width
+                } else if column_layout {
+                    // Keep the menu outside wrapped text, without dropping a source space.
+                    (width - padding).max(px(1.))
+                } else {
+                    width.max(px(1.))
+                };
                 let entities = (!separator)
                     .then(|| {
                         cell_entities(
-                            trimmed,
+                            content,
                             columns.format,
                             caret
                                 .filter(|caret| content_range.contains(caret))
@@ -431,7 +481,7 @@ impl TableVisualLayout {
                     Some(entities) => entity_runs(&source_runs, entities),
                     None => source_runs,
                 };
-                let (layout, scaled_source) = if separator {
+                let (layout, scaled_source) = if separator && column_layout {
                     let count = (f32::from(content_width) / f32::from(advance("-")))
                         .floor()
                         .max(1.) as usize;
@@ -451,13 +501,14 @@ impl TableVisualLayout {
                             entities
                                 .as_ref()
                                 .map_or_else(
-                                    || trimmed.to_owned(),
+                                    || content.to_owned(),
                                     |entities| entities.text.clone(),
                                 )
                                 .into(),
                             &preview_runs,
-                            // Padding subtraction can round down an exact fit.
-                            wrap_width.map(|_| content_width + px(0.01)),
+                            // Floating-point sums can round down an exact fit.
+                            (column_layout && wrap_width.is_some())
+                                .then_some(text_width + px(0.01)),
                         ),
                         false,
                     )
@@ -467,10 +518,17 @@ impl TableVisualLayout {
                     run.len = layout.text.len();
                     preview_runs = vec![run];
                 }
-                let right_aligned = !separator
-                    && raw.len() - raw.trim_start().len() > raw.len() - raw.trim_end().len();
-                let alignment_offset = if right_aligned && layout.wrap_boundaries().is_empty() {
-                    (content_width - layout.width()).max(Pixels::ZERO)
+                if !column_layout {
+                    // Ordinary table editing paints every source space at its native advance.
+                    // Only narrow columns and active resize gestures need a shared wrap grid.
+                    width = layout.width();
+                }
+                let alignment_offset = if markdown
+                    && !separator
+                    && raw.len() - raw.trim_start().len() > raw.len() - raw.trim_end().len()
+                    && layout.wrap_boundaries().is_empty()
+                {
+                    (text_width - layout.width()).max(Pixels::ZERO)
                 } else {
                     Pixels::ZERO
                 };
@@ -478,13 +536,26 @@ impl TableVisualLayout {
                     preview_runs,
                     display_range: range,
                     content_range,
-                    x: x + pipe + padding + alignment_offset,
-                    width: content_width - alignment_offset,
+                    x: x + pipe
+                        + if (separator && column_layout) || markdown {
+                            padding
+                        } else {
+                            Pixels::ZERO
+                        }
+                        + alignment_offset,
+                    width: if column_layout {
+                        text_width - alignment_offset
+                    } else {
+                        width
+                    },
                     layout,
                     delimiter: false,
                     scaled_source,
                     entities,
                 });
+            }
+            if !column_layout && let Some(column_width) = widths.get_mut(column) {
+                *column_width = width;
             }
             if delimiters.get(column + 1).is_some() {
                 x += pipe + width;

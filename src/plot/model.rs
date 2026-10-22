@@ -1,0 +1,290 @@
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
+
+use serde::Serialize;
+
+use crate::{document::ByteRange, org_syntax::BlockId};
+
+pub(crate) const MAX_SERIES: usize = 8;
+pub(crate) const MAX_POINTS: usize = 10_000;
+pub(crate) const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
+pub(crate) const PLOT_WIDTH: f32 = 480.0;
+pub(crate) const PLOT_HEIGHT: f32 = 250.0;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) enum PlotOutputTarget {
+    #[default]
+    Memory,
+    File(PathBuf),
+}
+
+#[derive(Debug, Default)]
+pub(crate) struct PlotDisplayState {
+    pub(crate) requested_width: Option<f32>,
+    pub(crate) selected: bool,
+}
+
+pub(crate) type PlotDisplay = Arc<Mutex<PlotDisplayState>>;
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PlotId(pub(crate) u64);
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlotCandidate {
+    pub(crate) declaration: ByteRange,
+    pub(crate) table: ByteRange,
+    pub(crate) owner: BlockId,
+    pub(crate) options: Vec<String>,
+    pub(crate) image_link: Option<ByteRange>,
+    pub(crate) image_attributes: crate::org_syntax::attributes::ImageAttributeSpec,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlotKind {
+    Lines,
+    Points,
+    LinesPoints,
+    Histograms,
+    Steps,
+    FSteps,
+    HiSteps,
+    FilledCurves,
+    Impulses,
+    Boxes,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PlotLayout {
+    #[default]
+    Cartesian,
+    Radar,
+    Grid,
+}
+
+impl PlotLayout {
+    pub(crate) fn dimensions(self) -> (u32, u32) {
+        match self {
+            Self::Radar => (360, 320),
+            _ => (PLOT_WIDTH as u32, PLOT_HEIGHT as u32),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize)]
+pub(crate) struct PlotAxisSpec {
+    pub(crate) min: Option<f64>,
+    pub(crate) max: Option<f64>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PlotSpec {
+    pub(crate) output: PlotOutputTarget,
+    pub(crate) title: Option<String>,
+    pub(crate) kind: Option<PlotKind>,
+    pub(crate) x_column: usize,
+    pub(crate) columns: Option<Vec<usize>>,
+    pub(crate) labels: Option<Vec<Option<String>>>,
+    pub(crate) layout: PlotLayout,
+    pub(crate) transpose: bool,
+    pub(crate) time: bool,
+    pub(crate) time_format: Option<String>,
+    pub(crate) x_axis: PlotAxisSpec,
+    pub(crate) y_axis: PlotAxisSpec,
+    pub(crate) ticks: Option<usize>,
+    pub(crate) fill_to_zero: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PlotSeries {
+    pub(crate) column: usize,
+    pub(crate) label: String,
+    pub(crate) values: Vec<Option<f64>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) enum PlotX {
+    Numeric(Vec<Option<f64>>),
+    Time(Vec<Option<f64>>),
+    Category(Vec<String>),
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PlotInput {
+    pub(crate) layout: PlotLayout,
+    pub(crate) kind: PlotKind,
+    pub(crate) title: Option<String>,
+    pub(crate) x: PlotX,
+    pub(crate) series: Vec<PlotSeries>,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) x_axis: PlotAxisSpec,
+    pub(crate) y_axis: PlotAxisSpec,
+    pub(crate) ticks: Option<usize>,
+    pub(crate) fill_to_zero: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlotDiagnostic {
+    pub(crate) code: &'static str,
+    pub(crate) message: String,
+}
+
+impl PlotDiagnostic {
+    pub(crate) fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for PlotDiagnostic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for PlotDiagnostic {}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PlotTick {
+    pub(crate) position: f64,
+    pub(crate) label: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PlotPlanSeries {
+    pub(crate) label: String,
+    pub(crate) points: Vec<Option<(f64, f64)>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct PlotPlan {
+    pub(crate) layout: PlotLayout,
+    pub(crate) kind: PlotKind,
+    pub(crate) title: Option<String>,
+    pub(crate) x_ticks: Vec<PlotTick>,
+    pub(crate) y_ticks: Vec<PlotTick>,
+    pub(crate) series: Vec<PlotPlanSeries>,
+    pub(crate) zero: f64,
+    pub(crate) rows: usize,
+    pub(crate) warnings: Vec<String>,
+    pub(crate) radar_ticks: Vec<Vec<PlotTick>>,
+    pub(crate) box_bounds: Vec<Option<(f64, f64)>>,
+    pub(crate) fill_to_zero: bool,
+    pub(crate) clip: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedPlot {
+    pub(crate) content_key: Arc<[u8]>,
+    pub(crate) plan: PlotPlan,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum PlotPreparation {
+    Ready(Arc<PreparedPlot>),
+    Empty,
+    Invalid(Arc<PlotDiagnostic>),
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize)]
+pub(crate) struct PlotStyle {
+    pub(crate) background: u32,
+    pub(crate) foreground: u32,
+    pub(crate) muted: u32,
+    pub(crate) grid: u32,
+    pub(crate) colors: [u32; MAX_SERIES],
+    pub(crate) fonts: Vec<String>,
+    pub(crate) font_size_100: u32,
+}
+
+impl PlotStyle {
+    pub(crate) fn for_theme(theme: &crate::theme::Theme, font_size: f32) -> Self {
+        let dark = theme.editor_background == crate::theme::ORG_STUDIO_DARK.editor_background;
+        let fonts = crate::typography::fonts();
+        let mut families = Vec::new();
+        families.extend(
+            fonts
+                .reading_family
+                .iter()
+                .chain(fonts.ui_family.iter())
+                .cloned(),
+        );
+        families.extend(["Helvetica Neue".into(), "Arial".into()]);
+        families.extend(
+            fonts
+                .reading_cjk_family
+                .iter()
+                .chain(fonts.ui_cjk_family.iter())
+                .cloned(),
+        );
+        families.extend(fonts.fallbacks.iter().cloned());
+        families.extend([
+            "PingFang SC".into(),
+            "Noto Sans CJK SC".into(),
+            "Libertinus Serif".into(),
+        ]);
+        Self {
+            background: if dark {
+                theme.elevated
+            } else {
+                theme.editor_background
+            },
+            foreground: theme.foreground,
+            muted: if dark { 0xa5b3c2 } else { 0x737780 },
+            grid: if dark { 0x47596f } else { 0xd1d5dc },
+            colors: if dark {
+                [
+                    0x66b3ff, 0xc4a4ff, 0x53d4c1, 0xf5b84b, 0xf58bb5, 0x9bc46b, 0x85c5e8, 0xc7a98b,
+                ]
+            } else {
+                [
+                    theme.accent,
+                    0x8e5bef,
+                    0x168a84,
+                    0xa66c00,
+                    0xc1477b,
+                    0x547c25,
+                    0x367b9d,
+                    0x8e6345,
+                ]
+            },
+            fonts: families,
+            font_size_100: (font_size.clamp(8.0, 48.0) * 100.0).round() as u32,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct PlotRenderKey {
+    pub(crate) content: Arc<[u8]>,
+    pub(crate) style: PlotStyle,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlotRenderRequest {
+    pub(crate) key: PlotRenderKey,
+    pub(crate) plot: Arc<PreparedPlot>,
+}
+
+impl PlotRenderRequest {
+    pub(crate) fn natural(plot: Arc<PreparedPlot>, style: PlotStyle) -> Self {
+        let key = PlotRenderKey {
+            content: plot.content_key.clone(),
+            style,
+        };
+        Self { key, plot }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct PlotArtifact {
+    pub(crate) key: PlotRenderKey,
+    pub(crate) svg: Arc<[u8]>,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+}

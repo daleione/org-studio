@@ -43,7 +43,13 @@ impl FrameSlot {
 }
 
 thread_local! {
-    static RECORDING: RefCell<Option<Vec<Command>>> = const { RefCell::new(None) };
+    static RECORDING: RefCell<Option<Recording>> = const { RefCell::new(None) };
+}
+
+#[derive(Default)]
+struct Recording {
+    commands: Vec<Command>,
+    pending_images: bool,
 }
 
 pub(crate) struct PreviewFrame {
@@ -105,8 +111,8 @@ fn recording() -> bool {
 }
 fn push(window: &Window, paint: Paint) {
     RECORDING.with(|state| {
-        if let Some(commands) = state.borrow_mut().as_mut() {
-            commands.push(Command {
+        if let Some(recording) = state.borrow_mut().as_mut() {
+            recording.commands.push(Command {
                 mask: window.content_mask().bounds,
                 paint,
             });
@@ -119,6 +125,25 @@ pub(crate) fn quad(window: &mut Window, quad: PaintQuad) {
         push(window, Paint::Quad(quad.clone()));
     }
     window.paint_quad(quad);
+}
+
+pub(crate) fn drop_shadow(
+    window: &mut Window,
+    bounds: Bounds<Pixels>,
+    radii: Corners<Pixels>,
+    shadow: &BoxShadow,
+) {
+    if recording() {
+        push(
+            window,
+            Paint::Shadows {
+                bounds,
+                radii,
+                shadows: vec![shadow.clone()],
+            },
+        );
+    }
+    window.paint_drop_shadows(bounds, radii, std::slice::from_ref(shadow));
 }
 
 pub(crate) fn path(window: &mut Window, path: gpui::Path<Pixels>, color: impl Into<Background>) {
@@ -148,8 +173,8 @@ pub(crate) fn image(
         // The source clip remains separate from the image geometry.
         let mask = window.content_mask().bounds.intersect(&bounds);
         RECORDING.with(|state| {
-            if let Some(commands) = state.borrow_mut().as_mut() {
-                commands.push(Command {
+            if let Some(recording) = state.borrow_mut().as_mut() {
+                recording.commands.push(Command {
                     mask,
                     paint: Paint::Image {
                         image: data.clone(),
@@ -333,6 +358,14 @@ fn scaled_wrapped(
 }
 
 impl PreviewFrame {
+    #[cfg(test)]
+    pub(crate) fn image_count(&self) -> usize {
+        self.commands
+            .iter()
+            .filter(|command| matches!(command.paint, Paint::Image { .. }))
+            .count()
+    }
+
     pub fn estimated_bytes(&self) -> usize {
         self.commands
             .iter()
@@ -536,11 +569,14 @@ impl PreviewFrame {
     }
 }
 
+type MediaReady = Box<dyn Fn(&App) -> bool>;
+
 pub(crate) struct DocumentStage {
     content: AnyElement,
     slot: FrameSlot,
     enabled: bool,
     ready: bool,
+    media_ready: Option<MediaReady>,
 }
 impl DocumentStage {
     pub fn new(content: impl IntoElement, slot: FrameSlot, enabled: bool) -> Self {
@@ -549,11 +585,17 @@ impl DocumentStage {
             slot,
             enabled,
             ready: true,
+            media_ready: None,
         }
     }
 
     pub fn with_ready(mut self, ready: bool) -> Self {
         self.ready = ready;
+        self
+    }
+
+    pub fn with_media_ready(mut self, ready: impl Fn(&App) -> bool + 'static) -> Self {
+        self.media_ready = Some(Box::new(ready));
         self
     }
 }
@@ -601,7 +643,7 @@ impl Element for DocumentStage {
             self.content.paint(window, cx);
             return;
         }
-        if !self.ready {
+        if !self.ready || self.media_ready.as_ref().is_some_and(|ready| !ready(cx)) {
             // A loading pane must never inherit a previous document's frame
             // merely because it has the same viewport dimensions.
             self.slot.clear();
@@ -609,7 +651,7 @@ impl Element for DocumentStage {
             return;
         }
         let scope = RecordingScope(Some(
-            RECORDING.with(|state| state.replace(Some(Vec::new()))),
+            RECORDING.with(|state| state.replace(Some(Recording::default()))),
         ));
         // The base color belongs to this immutable frame, just like its text.
         // Replaying must not mix the recorded palette with the current theme.
@@ -618,8 +660,15 @@ impl Element for DocumentStage {
             fill(bounds, rgb(crate::theme::current_theme().background)),
         );
         self.content.paint(window, cx);
-        let commands = scope.finish();
-        self.slot.publish(PreviewFrame { bounds, commands });
+        let recording = scope.finish();
+        if recording.pending_images {
+            self.slot.clear();
+        } else {
+            self.slot.publish(PreviewFrame {
+                bounds,
+                commands: recording.commands,
+            });
+        }
     }
 }
 impl IntoElement for DocumentStage {
@@ -629,9 +678,9 @@ impl IntoElement for DocumentStage {
     }
 }
 
-struct RecordingScope(Option<Option<Vec<Command>>>);
+struct RecordingScope(Option<Option<Recording>>);
 impl RecordingScope {
-    fn finish(mut self) -> Vec<Command> {
+    fn finish(mut self) -> Recording {
         RECORDING
             .with(|state| state.replace(self.0.take().unwrap()))
             .unwrap_or_default()
@@ -986,6 +1035,13 @@ impl Element for RecordedImage {
                 ImageSource::Image(image) => image.clone().use_render_image(w, cx).map(Ok),
                 ImageSource::Custom(loader) => loader(w, cx),
             };
+            if data.is_none() {
+                RECORDING.with(|state| {
+                    if let Some(recording) = state.borrow_mut().as_mut() {
+                        recording.pending_images = true;
+                    }
+                });
+            }
             if let Some(Ok(image)) = data {
                 let dimensions = image.size(0);
                 let fitted = ObjectFit::Contain.get_bounds(bounds, dimensions);

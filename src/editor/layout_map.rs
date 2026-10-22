@@ -96,6 +96,7 @@ pub(super) struct EditorLayoutMap {
     wrap_width_bits: u32,
     measured_heights: HashMap<u64, Box<[u32; CHUNK_LINES as usize]>>,
     measured_wrap_starts: HashMap<u64, Arc<[u32]>>,
+    trailing_heights: std::collections::BTreeMap<u64, f32>,
     height_fenwick: Vec<i64>,
     hidden_ranges: Vec<(Range<u64>, u64)>,
 }
@@ -112,6 +113,7 @@ impl Default for EditorLayoutMap {
             wrap_width_bits: 0,
             measured_heights: HashMap::new(),
             measured_wrap_starts: HashMap::new(),
+            trailing_heights: Default::default(),
             height_fenwick: vec![0],
             hidden_ranges: Vec::new(),
         }
@@ -237,7 +239,23 @@ impl EditorLayoutMap {
     fn clear_layout(&mut self) {
         self.measured_heights.clear();
         self.measured_wrap_starts.clear();
-        self.height_fenwick = vec![0; self.line_count.div_ceil(CHUNK_LINES) as usize + 1];
+        self.rebuild_fenwick();
+    }
+
+    pub(super) fn set_trailing_heights(
+        &mut self,
+        heights: std::collections::BTreeMap<u64, f32>,
+    ) -> bool {
+        if self.trailing_heights == heights {
+            return false;
+        }
+        self.trailing_heights = heights;
+        self.rebuild_fenwick();
+        true
+    }
+
+    pub(super) fn trailing_height(&self, line: u64) -> f32 {
+        self.trailing_heights.get(&line).copied().unwrap_or(0.0)
     }
 
     pub(super) fn invalidate_layout(&mut self) {
@@ -341,6 +359,27 @@ impl EditorLayoutMap {
         let old_count = old_end - old_start;
         let measured = std::mem::take(&mut self.measured_heights);
         let measured_wraps = std::mem::take(&mut self.measured_wrap_starts);
+        self.trailing_heights = std::mem::take(&mut self.trailing_heights)
+            .into_iter()
+            .filter_map(|(line, height)| {
+                let mapped = if line < old_start {
+                    Some(line)
+                } else if line == old_start && new_count > 0 {
+                    Some(old_start)
+                } else if line >= old_end {
+                    Some(if new_count >= old_count {
+                        line.saturating_add(new_count - old_count)
+                    } else {
+                        line.saturating_sub(old_count - new_count)
+                    })
+                } else {
+                    None
+                };
+                mapped
+                    .filter(|line| *line < new_total)
+                    .map(|line| (line, height))
+            })
+            .collect();
         self.line_count = new_total;
 
         for (chunk, heights) in measured {
@@ -410,6 +449,16 @@ impl EditorLayoutMap {
             let mut index = chunk as usize + 1;
             while index < self.height_fenwick.len() {
                 self.height_fenwick[index] += delta;
+                index += index.isolate_lowest_one();
+            }
+        }
+        for (&line, &height) in &self.trailing_heights {
+            if line >= self.line_count || self.is_hidden(line) {
+                continue;
+            }
+            let mut index = (line / CHUNK_LINES) as usize + 1;
+            while index < self.height_fenwick.len() {
+                self.height_fenwick[index] += i64::from(pixels_to_fixed(height));
                 index += index.isolate_lowest_one();
             }
         }
@@ -517,11 +566,13 @@ impl EditorLayoutMap {
         }
         let chunk = line / CHUNK_LINES;
         let local = (line % CHUNK_LINES) as usize;
-        self.measured_heights
-            .get(&chunk)
-            .map_or(self.line_height, |heights| {
-                fixed_to_pixels(heights[local].max(pixels_to_fixed(self.line_height)))
-            })
+        self.trailing_height(line)
+            + self
+                .measured_heights
+                .get(&chunk)
+                .map_or(self.line_height, |heights| {
+                    fixed_to_pixels(heights[local].max(pixels_to_fixed(self.line_height)))
+                })
     }
 
     pub(super) fn line_start_y(&self, line: u64) -> f32 {
@@ -542,7 +593,13 @@ impl EditorLayoutMap {
         fixed_to_pixels_i64(
             (line - self.hidden_before(line)) as i64 * i64::from(baseline)
                 + self.extra_height_before_chunk(chunk as usize)
-                + local_extra,
+                + local_extra
+                + self
+                    .trailing_heights
+                    .range(chunk * CHUNK_LINES..line)
+                    .filter(|(line, _)| !self.is_hidden(**line))
+                    .map(|(_, height)| i64::from(pixels_to_fixed(*height)))
+                    .sum::<i64>(),
         )
     }
 
@@ -638,6 +695,27 @@ fn fixed_to_pixels_i64(pixels: i64) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plot_trailing_height_survives_reflow_moves_with_source_and_respects_folds() {
+        let mut map = EditorLayoutMap::default();
+        map.configure(500, 640.0);
+        let before = map.total_height();
+        map.set_trailing_heights(std::collections::BTreeMap::from([(130, 300.0)]));
+        assert_eq!(map.total_height(), before + 300.0);
+        assert_eq!(map.line_at_y(map.line_start_y(130) + 250.0), 130);
+        map.invalidate_layout();
+        assert_eq!(map.total_height(), before + 300.0);
+        map.splice_lines(0..0, 2, 502);
+        assert_eq!(map.trailing_height(132), 300.0);
+        assert_eq!(map.trailing_height(130), 0.0);
+        map.set_hidden_ranges(std::iter::once(100..200).collect());
+        assert_eq!(map.line_height_px(132), 0.0);
+        map.set_hidden_ranges(Vec::new());
+        assert_eq!(map.line_height_px(132), map.base_line_height() + 300.0);
+        map.set_trailing_heights(Default::default());
+        assert_eq!(map.total_height(), 502.0 * map.base_line_height());
+    }
 
     #[test]
     fn sparse_height_index_maps_both_directions() {

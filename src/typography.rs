@@ -17,6 +17,7 @@ pub(crate) struct ResolvedFonts {
     pub(crate) settings: FontSettings,
     pub(crate) editor_family: String,
     pub(crate) editor_cjk_family: Option<String>,
+    pub(crate) table_family: String,
     pub(crate) reading_family: Option<String>,
     pub(crate) reading_cjk_family: Option<String>,
     pub(crate) code_family: Option<String>,
@@ -59,6 +60,9 @@ impl ResolvedFonts {
                     .find_map(find)
             })
             .unwrap_or_else(|| SYSTEM_FONT_FAMILY.into());
+        let table_family = configured("table_font_family", &settings.table_font_family)
+            .or_else(|| find(FontSettings::DEFAULT_TABLE_FONT_FAMILY))
+            .unwrap_or_else(|| editor_family.clone());
         let reading_family = configured("reading_font_family", &settings.reading_font_family);
         let editor_cjk_family =
             configured("editor_cjk_font_family", &settings.editor_cjk_font_family);
@@ -82,6 +86,7 @@ impl ResolvedFonts {
             settings,
             editor_family,
             editor_cjk_family,
+            table_family,
             reading_family,
             reading_cjk_family,
             code_family,
@@ -123,6 +128,7 @@ pub(crate) fn fonts() -> &'static ResolvedFonts {
         settings: FontSettings::default(),
         editor_family: "JetBrains Mono".into(),
         editor_cjk_family: None,
+        table_family: FontSettings::DEFAULT_TABLE_FONT_FAMILY.into(),
         reading_family: None,
         reading_cjk_family: None,
         code_family: None,
@@ -139,6 +145,15 @@ pub(crate) fn editor_font() -> gpui::Font {
         &fonts().editor_family,
         &["Menlo", "PingFang SC", "Apple Color Emoji"],
     )
+}
+
+pub(crate) fn table_font() -> gpui::Font {
+    let mut font = font_with_fallbacks(
+        &fonts().table_family,
+        &["Menlo", "PingFang SC", "Apple Color Emoji"],
+    );
+    font.features = gpui::FontFeatures::disable_ligatures();
+    font
 }
 
 pub(crate) fn font_with_fallbacks(family: &str, defaults: &[&str]) -> gpui::Font {
@@ -306,5 +321,34 @@ mod tests {
         assert_eq!(resolved.fallbacks, [".SystemUIFont", "Menlo"]);
         assert_eq!(resolved.settings, settings);
         assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn table_font_resolves_independently_and_falls_back_when_unavailable() {
+        for (requested, installed, expected, warnings) in [
+            (None, true, "LXGW WenKai Mono", 0),
+            (Some("menlo"), true, "Menlo", 0),
+            (Some("Missing Table Font"), true, "LXGW WenKai Mono", 1),
+            (None, false, "Paper Mono", 0),
+        ] {
+            let settings = FontSettings {
+                editor_font_family: Some("Paper Mono".into()),
+                editor_cjk_font_family: Some("LXGW WenKai".into()),
+                table_font_family: requested.map(String::from),
+                ..Default::default()
+            };
+            let mut names = ["Paper Mono", "LXGW WenKai", "Menlo"]
+                .map(String::from)
+                .to_vec();
+            if installed {
+                names.push(FontSettings::DEFAULT_TABLE_FONT_FAMILY.into());
+            }
+            let resolved = ResolvedFonts::resolve(settings.clone(), &names);
+            assert_eq!(resolved.table_family, expected);
+            assert_eq!(resolved.editor_family, "Paper Mono");
+            assert_eq!(resolved.editor_cjk_family.as_deref(), Some("LXGW WenKai"));
+            assert_eq!(resolved.warnings.len(), warnings);
+            assert_eq!(resolved.settings, settings);
+        }
     }
 }

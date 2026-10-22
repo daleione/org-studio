@@ -26,6 +26,14 @@ pub(super) fn resolve_inline_images(
             editor.font_size_px(),
         )
     };
+    let linked = host
+        .read(cx)
+        .plots
+        .lines
+        .iter()
+        .filter(|(_, plot)| plot.entry.source.image_link.is_some())
+        .map(|(line, plot)| (*line, plot.clone()))
+        .collect::<HashMap<_, _>>();
     let inline_image_candidates = {
         let editor = host.read(cx);
         let document_path = editor.session.read(cx).syntax_path().to_path_buf();
@@ -41,6 +49,9 @@ pub(super) fn resolve_inline_images(
             visible_lines
                 .filter(|line| !editor.display_map.is_hidden(*line))
                 .filter_map(|line| {
+                    if linked.contains_key(&line) {
+                        return None;
+                    }
                     let range = snapshot.line_content_range(LineIndex(line)).ok()?;
                     if !editor.previews_inline_image_at(range.start) {
                         return None;
@@ -54,6 +65,7 @@ pub(super) fn resolve_inline_images(
                         editor.inline_image_line_dimensions.borrow_mut().insert(
                             line,
                             InlineImageMetrics {
+                                plot: false,
                                 line_start: range.start.0,
                                 source: *dimensions,
                                 spec: spec.clone(),
@@ -68,7 +80,7 @@ pub(super) fn resolve_inline_images(
         }
     };
 
-    inline_image_candidates
+    let mut images = inline_image_candidates
         .into_iter()
         .filter_map(|(line, line_start, path, cached, spec)| {
             let previous_dimensions = cached.as_ref().map(|(_, dimensions)| *dimensions);
@@ -98,6 +110,7 @@ pub(super) fn resolve_inline_images(
             // The cache keeps the authored attributes only: a drag is layered on
             // top at resolve time so it can never re-enter this notify path.
             let metrics = InlineImageMetrics {
+                plot: false,
                 line_start: line_start.0,
                 source: dimensions,
                 spec,
@@ -128,5 +141,49 @@ pub(super) fn resolve_inline_images(
                 },
             ))
         })
-        .collect::<std::collections::HashMap<_, _>>()
+        .collect::<std::collections::HashMap<_, _>>();
+    for (line, plot) in linked {
+        let line_start = plot.entry.source.image_link.unwrap().start;
+        if !host.read(cx).previews_inline_image_at(line_start) {
+            continue;
+        }
+        let Some(rendered) = plot
+            .state
+            .as_ref()
+            .and_then(crate::plot::PlotRenderState::rendered)
+        else {
+            continue;
+        };
+        let metrics = InlineImageMetrics {
+            plot: true,
+            line_start: line_start.0,
+            source: plot.entry.dimensions(),
+            spec: plot
+                .entry
+                .display
+                .lock()
+                .unwrap()
+                .requested_width
+                .map(crate::org_syntax::attributes::ImageAttributeSpec::from_width_px)
+                .unwrap_or_else(|| {
+                    host.read(cx)
+                        .inline_image_attribute_spec(snapshot, line_start)
+                }),
+        };
+        host.read(cx)
+            .inline_image_line_dimensions
+            .borrow_mut()
+            .insert(line, metrics.clone());
+        let (width, height) = resolved_image_size(host.read(cx), &metrics, &sizing);
+        images.insert(
+            line,
+            InlineImage {
+                image: rendered.image.clone(),
+                width,
+                height,
+                line_start,
+            },
+        );
+    }
+    images
 }

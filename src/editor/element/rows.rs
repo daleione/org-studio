@@ -178,7 +178,8 @@ impl RowShaping<'_> {
             fallback_style = syntax::EditorLineStyle::pending_fallback(source_content_range);
             &fallback_style
         };
-        let table_columns = if line_style.id == syntax::EditorStyleId::Table {
+        let is_table = line_style.id == syntax::EditorStyleId::Table;
+        let table_columns = if is_table {
             self.editor
                 .table_columns(self.snapshot, line, self.document_format)
         } else {
@@ -205,9 +206,14 @@ impl RowShaping<'_> {
             metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
         }
         let text: gpui::SharedString = display_text.into();
+        let font = if is_table {
+            crate::typography::table_font()
+        } else {
+            self.style.font()
+        };
         let base_run = TextRun {
             len: text.len(),
-            font: self.style.font(),
+            font: font.clone(),
             color: gpui::rgb(self.theme.foreground).into(),
             background_color: None,
             underline: None,
@@ -249,13 +255,13 @@ impl RowShaping<'_> {
             syntax::apply_swatch_text(&mut runs, &semantic_row, self.theme);
             runs
         };
-        let runs = crate::typography::cjk_runs(&text, runs, crate::typography::FontRole::Editor);
+        let runs = crate::typography::cjk_runs(&text, runs, line_style.id.font_role());
         let shaped_font_size = px(f32::from(self.font_size) * metrics.font_scale);
         let table_layout = table_columns.as_ref().and_then(|columns| {
             let metrics = self.editor.table_column_metrics(
                 self.snapshot,
                 columns,
-                self.style.font(),
+                font.clone(),
                 shaped_font_size,
                 self.window.text_system(),
             );
@@ -278,7 +284,7 @@ impl RowShaping<'_> {
         let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
         let mut shape_key = shape_key(
             &text,
-            self.style.font(),
+            font,
             shaped_font_size,
             marked_display,
             effective_wrap_width,
@@ -379,6 +385,7 @@ impl RowShaping<'_> {
             });
         let total_height =
             metrics.before + visual_rows as f32 * metrics.line_height + metrics.after;
+        let trailing_height = self.editor.display_map.trailing_height(line_number);
         // A fold transition may paint a sparse sample, so those rows need absolute animated
         // coordinates. Normal editing paints contiguous visible rows and deliberately uses
         // the heights shaped in this frame; after a window-width change that avoids showing
@@ -422,40 +429,14 @@ impl RowShaping<'_> {
         if let (Some(preview), Some(source)) = (inline_image.as_ref(), inline_image_source.as_ref())
             && line_animation_scale >= 0.999
         {
-            let grip = Bounds::new(
-                point(
-                    preview.bounds.right() - px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
-                    preview.bounds.bottom() - px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
-                ),
-                size(
-                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
-                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE),
-                ),
-            );
-            let interaction_bounds = Bounds::new(
-                point(
-                    grip.left() - px(INLINE_IMAGE_RESIZE_HANDLE_SLOP),
-                    grip.top() - px(INLINE_IMAGE_RESIZE_HANDLE_SLOP),
-                ),
-                size(
-                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE + INLINE_IMAGE_RESIZE_HANDLE_SLOP * 2.0),
-                    px(INLINE_IMAGE_RESIZE_HANDLE_SIZE + INLINE_IMAGE_RESIZE_HANDLE_SLOP * 2.0),
-                ),
-            );
             self.image_resize_handles
-                .push(InlineImageResizeHandlePaint {
-                    bounds: grip,
-                    interaction_bounds,
-                    hitbox: self
-                        .window
-                        .insert_hitbox(interaction_bounds, HitboxBehavior::Normal),
-                    image_bounds: preview.bounds,
-                    image_hitbox: self
-                        .window
-                        .insert_hitbox(preview.bounds, HitboxBehavior::Normal),
-                    line: line_number,
-                    line_start: source.line_start,
-                });
+                .push(InlineImageResizeHandlePaint::new(
+                    preview.bounds,
+                    line_number,
+                    source.line_start,
+                    None,
+                    self.window,
+                ));
         }
 
         if !semantic_row.is_empty() && inline_image.is_none() && line_animation_scale >= 0.999 {
@@ -724,7 +705,7 @@ impl RowShaping<'_> {
             inline_image,
         });
         if !self.fold_animation_active {
-            self.next_y += total_height;
+            self.next_y += total_height + trailing_height;
         }
     }
 }

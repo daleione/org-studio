@@ -1118,7 +1118,7 @@ fn recalculate_impl(
                 DocumentFormat::Org,
             )
         });
-        let (text, local) = aligned_row(row, &widths, caret_position, DocumentFormat::Org);
+        let (text, local) = aligned_row(row, &widths, caret_position, DocumentFormat::Org, None);
         if let Some(local) = local {
             caret_after = ByteOffset(range.start.0 + (replacement.len() + local) as u64);
         }

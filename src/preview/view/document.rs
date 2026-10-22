@@ -5,7 +5,7 @@ use super::{
     render_code_row, render_markdown_block, render_table_row, resolve_image_path, rgb,
     styled_inline_runs,
 };
-use crate::components::UiTextExt;
+use crate::components::{UiTextExt, image_frame::ImageFrame};
 use crate::preview::BlockId;
 use crate::preview::{
     CodeRowRole, ReadingPreviewPanel, ReadingRenderState,
@@ -39,6 +39,7 @@ pub(crate) fn render_reading_document(
     options: ReadingRenderOptions,
 ) -> gpui::Div {
     let ReadingRenderState {
+        plot_visible,
         document,
         minimap_state,
         table_scroll_handles,
@@ -69,6 +70,9 @@ pub(crate) fn render_reading_document(
     } = options;
     let (minimap_layout_width, minimap_visual_width) =
         crate::motion::sliding_panel_widths(minimap_width, minimap_visible, minimap_reveal);
+    if minimap_visual_width <= 0.0 {
+        minimap_state.clear_plot_demands();
+    }
     let minimap_interactive = minimap_visible && minimap_reveal >= 1.0;
     let palette = style.palette;
     let reading_display_map = document.display_map.clone();
@@ -92,6 +96,11 @@ pub(crate) fn render_reading_document(
     let minimap_rows = visible_rows.clone();
     let clear_selection_panel = panel_entity.clone();
     let finish_selection_panel = panel_entity.clone();
+    let drag_panel = panel_entity.clone();
+    let drag_finish_panel = panel_entity.clone();
+    let drag_dispatch = interaction.dispatch.clone();
+    let outside_panel = panel_entity.clone();
+    let outside_dispatch = interaction.dispatch.clone();
     div()
         .size_full()
         .flex()
@@ -103,12 +112,31 @@ pub(crate) fn render_reading_document(
         ))
         .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
             clear_selection_panel.update(cx, |panel, cx| {
+                if let Some(host) = &panel.plots {
+                    host.document
+                        .update(cx, |document, cx| document.select(None, cx));
+                }
                 if panel.clear_text_selection_unless_dragging() {
                     cx.notify();
                 }
             });
         })
-        .on_mouse_up(gpui::MouseButton::Left, move |_, _, cx| {
+        .on_mouse_move(move |event, _, cx| {
+            drag_panel.update(cx, |panel, cx| {
+                panel.move_plot_resize(f32::from(event.position.x), cx)
+            });
+        })
+        .on_mouse_up_out(gpui::MouseButton::Left, move |_, window, cx| {
+            if let Some(action) = outside_panel.update(cx, |panel, cx| panel.finish_plot_resize(cx))
+            {
+                outside_dispatch(action, outside_panel.clone(), window, cx);
+            }
+        })
+        .on_mouse_up(gpui::MouseButton::Left, move |_, window, cx| {
+            let action = drag_finish_panel.update(cx, |panel, cx| panel.finish_plot_resize(cx));
+            if let Some(action) = action {
+                drag_dispatch(action, drag_finish_panel.clone(), window, cx);
+            }
             finish_selection_panel.update(cx, |panel, cx| {
                 if panel.text_selection_pending() {
                     panel.finish_text_selection();
@@ -131,7 +159,7 @@ pub(crate) fn render_reading_document(
                     let fold_markers = fold_markers.clone();
                     let fold_animation = fold_animation.clone();
                     let interaction = interaction.clone();
-                    list(list_state, move |index, _window, _cx| {
+                    list(list_state, move |index, _window, cx| {
                         let available_width =
                             { reading_content_width(pane_width, minimap_layout_width, style) };
                         if let Some(animation) = fold_animation.as_ref()
@@ -172,12 +200,32 @@ pub(crate) fn render_reading_document(
                         let entity_for_click = panel_entity.clone();
                         let row_interaction =
                             interaction.scoped_to_row(super::ReadingRowBounds::default());
+                        let plot = match &document
+                            .projection
+                            .rows
+                            .get(actual_index)
+                            .map(|row| &row.kind)
+                        {
+                            Some(VisualRowKind::Plot(plot)) => {
+                                panel_entity.update(cx, |panel, cx| {
+                                    panel.plot_presentation(
+                                        plot,
+                                        plot_visible.contains(&plot.entry.id),
+                                        available_width,
+                                        style,
+                                        cx,
+                                    )
+                                })
+                            }
+                            _ => None,
+                        };
                         let row_element = render_reading_row(
                             &document,
                             actual_index,
                             row,
                             is_folded,
                             ReadingRowHost {
+                                plot,
                                 available_width,
                                 zoom,
                                 style,
@@ -351,6 +399,7 @@ fn render_fold_shell_row(
         row,
         false,
         ReadingRowHost {
+            plot: None,
             available_width,
             zoom,
             style,
@@ -369,6 +418,7 @@ fn render_reading_row(
     host: ReadingRowHost<'_>,
 ) -> gpui::Div {
     let ReadingRowHost {
+        plot,
         available_width,
         zoom,
         style,
@@ -432,7 +482,15 @@ fn render_reading_row(
                 .pt(px(row_layout.margin_top))
                 .pb(px(row_layout.margin_bottom))
                 .child(div().w_full().child(crate::document_preview::record_box(
-                    if document.format == DocumentFormat::Markdown {
+                    if let Some(plot) = plot {
+                        render_plot_image(
+                            document,
+                            actual_index,
+                            &plot,
+                            context.available_width,
+                            interaction,
+                        )
+                    } else if document.format == DocumentFormat::Markdown {
                         render_markdown_block(
                             document,
                             actual_index,
@@ -618,12 +676,7 @@ fn render_block(
                     .flex()
                     .items_start()
                     .justify_start()
-                    .child(
-                        img(source)
-                            .w(px(width))
-                            .h(px(height))
-                            .rounded(px(style.spacing.radius)),
-                    )
+                    .child(ImageFrame::new(palette.background, None).image(source, width, height))
                     .when_some(action.zip(interaction), |element, (action, interaction)| {
                         element.cursor_pointer().on_click(move |_, window, cx| {
                             (interaction.dispatch)(
@@ -811,6 +864,132 @@ fn render_block(
             .w_full()
             .bg(rgb(palette.border)),
     }
+}
+
+fn render_plot_image(
+    document: &PreviewSnapshot,
+    row: usize,
+    plot: &crate::plot::PlotPresentation,
+    column_width: f32,
+    interaction: Option<&ReadingInteraction>,
+) -> gpui::Div {
+    use gpui::prelude::*;
+    let Some(interaction) = interaction else {
+        return div().child(crate::plot::render_plot_surface(plot, false));
+    };
+    let panel = interaction.panel.clone();
+    let source_panel = panel.clone();
+    let grip_panel = panel.clone();
+    let dispatch = interaction.dispatch.clone();
+    let entry = plot.entry.clone();
+    let grip_plot = plot.clone();
+    let demand = plot.demand.clone();
+    let target = entry
+        .source
+        .image_link
+        .and_then(|_| document.projection.rows.get(row))
+        .map(|row| crate::preview::source_action_target(document, row));
+    let selected = entry.display.lock().unwrap().selected;
+    static GRIP: std::sync::OnceLock<Arc<gpui::Image>> = std::sync::OnceLock::new();
+    let grip = GRIP
+        .get_or_init(|| {
+            Arc::new(gpui::Image::from_bytes(
+                gpui::ImageFormat::Svg,
+                include_bytes!("../../../assets/editor/resize.svg").to_vec(),
+            ))
+        })
+        .clone();
+    div()
+        .group("reading-plot-image")
+        .relative()
+        .w(px(plot.width))
+        .h(px(plot.height))
+        .child(
+            crate::plot::render_plot_surface(
+                plot,
+                crate::i18n::Language::system() == crate::i18n::Language::Chinese,
+            )
+            .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
+                let document = panel
+                    .read(cx)
+                    .plots
+                    .as_ref()
+                    .map(|host| host.document.clone());
+                if let Some(document) = document {
+                    document.update(cx, |document, cx| document.select(Some(entry.id), cx));
+                }
+                if let Some(demand) = &demand {
+                    demand.retry();
+                }
+                panel.update(cx, |_, cx| cx.notify());
+                cx.stop_propagation();
+            }),
+        )
+        .child(
+            div()
+                .id(("reading-plot-source", plot.entry.id.0))
+                .absolute()
+                .left(px(-22.0))
+                .top(px(4.0))
+                .text_size(px(13.0))
+                .text_color(rgb(plot.style.muted))
+                .cursor_pointer()
+                .child("↗")
+                .on_mouse_down(gpui::MouseButton::Left, {
+                    let declaration = plot.entry.source.declaration.start;
+                    move |_, _, cx| {
+                        source_panel.update(cx, |panel, cx| {
+                            panel.scroll_to_source_offset_with_offset(declaration, px(0.0));
+                            cx.notify();
+                        });
+                        cx.stop_propagation();
+                    }
+                }),
+        )
+        .child(
+            div()
+                .id(("reading-plot-grip", plot.entry.id.0))
+                .absolute()
+                .right_0()
+                .bottom_0()
+                .w(px(24.0))
+                .h(px(24.0))
+                .p(px(1.0))
+                .cursor(gpui::CursorStyle::ResizeUpLeftDownRight)
+                .opacity(if selected { 1.0 } else { 0.0 })
+                .group_hover("reading-plot-image", |style| style.opacity(1.0))
+                .child(
+                    img(grip)
+                        .size_full()
+                        .rounded_br(px(crate::components::image_frame::CONTENT_RADIUS)),
+                )
+                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                    if event.click_count >= 2 {
+                        grip_panel.update(cx, |panel, cx| panel.reset_plot_size(&grip_plot, cx));
+                        if let Some(target) = &target {
+                            dispatch(
+                                crate::preview::PreviewAction::ResizeImage {
+                                    target: target.clone(),
+                                    width: None,
+                                },
+                                grip_panel.clone(),
+                                window,
+                                cx,
+                            );
+                        }
+                    } else {
+                        grip_panel.update(cx, |panel, _| {
+                            panel.start_plot_resize(
+                                &grip_plot,
+                                f32::from(event.position.x),
+                                column_width,
+                                target.clone(),
+                            )
+                        });
+                    }
+                    cx.stop_propagation();
+                }),
+        )
 }
 
 pub(super) fn render_diagram(

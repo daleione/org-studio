@@ -132,7 +132,7 @@ pub(in crate::editor) fn resize_table(
         rows: vec![],
     };
     for (index, ((range, old), row)) in ranges.into_iter().zip(source).zip(&rows).enumerate() {
-        let (mut new, _) = aligned_row(row, &widths, None, format);
+        let (mut new, _) = aligned_row(row, &widths, None, format, None);
         if index == 0 && add_separator {
             let separator = ParsedRow {
                 indent: row.indent.clone(),
@@ -141,7 +141,7 @@ pub(in crate::editor) fn resize_table(
                 separator_alignments: vec![(false, false); columns],
             };
             new.push_str(newline);
-            new.push_str(&aligned_row(&separator, &widths, None, format).0);
+            new.push_str(&aligned_row(&separator, &widths, None, format, None).0);
         }
         plan.add_row(range, old, new);
     }
@@ -274,7 +274,7 @@ pub(crate) fn plan_table_alignment(
         let widths = formatting_widths(&source, &parsed, columns, format);
         let before = plan.edits.len();
         for ((range, old), parsed) in rows.into_iter().zip(parsed) {
-            let (new, _) = aligned_row(&parsed, &widths, None, format);
+            let (new, _) = aligned_row(&parsed, &widths, None, format, None);
             plan.add_row(range, old, new);
         }
         plan.changed += usize::from(plan.edits.len() > before);
