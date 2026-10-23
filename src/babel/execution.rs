@@ -160,10 +160,7 @@ impl BabelExecutionRequest {
                 attributes,
             },
         };
-        self.name = name.clone();
-        if let Some(mysql) = &mut self.mysql {
-            mysql.source_name = name;
-        }
+        self.name = name;
         self.document_id = snapshot.document_id();
         self.revision = snapshot.revision();
         self.selection = selection;
@@ -181,6 +178,29 @@ impl BabelExecutionRequest {
             BabelExecutor::Bash => Some("/bin/bash"),
             _ => None,
         }
+    }
+
+    fn data_result_edit(&self, payload: &str) -> Option<TextEdit> {
+        let RequestedResult::Data {
+            range,
+            existing,
+            newline,
+            silent,
+            attributes,
+        } = &self.result
+        else {
+            unreachable!("data executors produce a table or text result");
+        };
+        if *silent {
+            return None;
+        }
+        let marker = self
+            .name
+            .as_ref()
+            .map(|name| format!(" {name}"))
+            .unwrap_or_default();
+        let replacement = format!("{newline}#+RESULTS:{marker}{newline}{attributes}{payload}");
+        (*existing != replacement).then(|| TextEdit::new(*range, replacement))
     }
 
     #[cfg(test)]
@@ -466,14 +486,7 @@ pub(crate) fn execute_source_block(
     if let Some(mysql) = &request.mysql {
         let table =
             super::mysql::execute_with_variables(mysql, &request.source, &request.variables)?;
-        let RequestedResult::Data {
-            range,
-            existing,
-            newline,
-            silent,
-            attributes,
-        } = &request.result
-        else {
+        let RequestedResult::Data { newline, .. } = &request.result else {
             unreachable!("MySQL produces a table");
         };
         let payload = table.serialize(
@@ -484,14 +497,7 @@ pub(crate) fn execute_source_block(
             newline,
             mysql.byte_limit(),
         )?;
-        let marker = mysql
-            .source_name
-            .as_ref()
-            .map(|name| format!(" {name}"))
-            .unwrap_or_default();
-        let replacement = format!("{newline}#+RESULTS:{marker}{newline}{attributes}{payload}");
-        let result_edit =
-            (!silent && *existing != replacement).then(|| TextEdit::new(*range, replacement));
+        let result_edit = request.data_result_edit(&payload);
         return Ok(PreparedBabelOutput {
             document_id: request.document_id,
             revision: request.revision,
@@ -560,28 +566,15 @@ pub(crate) fn execute_source_block(
             data = data.preprocess(&request.headers)?;
         }
         let RequestedResult::Data {
-            range,
-            existing,
-            newline,
-            silent,
-            attributes,
-        } = request.result
+            newline, silent, ..
+        } = &request.result
         else {
             unreachable!("external executors produce text")
         };
         let result_edit = (!silent)
             .then(|| {
-                let marker = request
-                    .name
-                    .as_ref()
-                    .map(|n| format!(" {n}"))
-                    .unwrap_or_default();
                 let payload = super::result::payload(&data, &request.headers, newline)?;
-                let replacement =
-                    format!("{newline}#+RESULTS:{marker}{newline}{attributes}{payload}");
-                Ok::<_, String>(
-                    (existing != replacement).then(|| TextEdit::new(range, replacement)),
-                )
+                Ok::<_, String>(request.data_result_edit(&payload))
             })
             .transpose()?
             .flatten();
@@ -737,8 +730,7 @@ fn prepare_mysql(
     };
     let (range, attributes, name) = super::syntax::result_range(snapshot, blocks, index, false)?;
     let silent = !headers.writes_result();
-    let mut mysql = super::mysql::MySqlRequest::from_headers(headers.clone())?;
-    mysql.source_name = name.clone();
+    let mysql = super::mysql::MySqlRequest::from_headers(headers.clone())?;
     Ok(BabelExecutionRequest {
         headers: headers.clone(),
         variables: literal_variables(&headers),

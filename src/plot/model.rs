@@ -69,10 +69,17 @@ pub(crate) struct PlotCandidate {
     pub(crate) identity: PlotIdentity,
     pub(crate) declaration: ByteRange,
     pub(crate) table: ByteRange,
+    pub(crate) formulas: Option<ByteRange>,
     pub(crate) owner: BlockId,
     pub(crate) options: Vec<String>,
     pub(crate) image_link: Option<ByteRange>,
     pub(crate) image_attributes: crate::org_syntax::attributes::ImageAttributeSpec,
+}
+
+impl PlotCandidate {
+    pub(crate) fn source_end(&self) -> crate::document::ByteOffset {
+        self.formulas.map_or(self.table.end, |range| range.end)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]

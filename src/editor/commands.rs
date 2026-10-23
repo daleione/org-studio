@@ -804,14 +804,14 @@ impl SemanticEditor {
         all_rows: bool,
         cx: &mut Context<Self>,
     ) -> Result<bool, String> {
-        self.recalculate_table_with_mode(all_rows, false, cx)
+        self.recalculate_table_with_mode(self.selection.head(), all_rows, false, cx)
     }
 
     pub(crate) fn iterate_table_at_selection(
         &mut self,
         cx: &mut Context<Self>,
     ) -> Result<bool, String> {
-        self.recalculate_table_with_mode(true, true, cx)
+        self.recalculate_table_with_mode(self.selection.head(), true, true, cx)
     }
 
     pub(crate) fn recalculate_buffer_tables(
@@ -846,6 +846,7 @@ impl SemanticEditor {
 
     fn recalculate_table_with_mode(
         &mut self,
+        caret: ByteOffset,
         all_rows: bool,
         iterate: bool,
         cx: &mut Context<Self>,
@@ -863,13 +864,13 @@ impl SemanticEditor {
         let change = if iterate {
             super::org_commands::iterate_table(
                 &snapshot,
-                self.selection.head(),
+                caret,
                 self.session.read(cx).newline_sequence(),
             )
         } else {
             super::org_commands::recalculate_table(
                 &snapshot,
-                self.selection.head(),
+                caret,
                 self.session.read(cx).newline_sequence(),
                 all_rows,
             )
@@ -1602,14 +1603,42 @@ impl SemanticEditor {
         if self.inline_mouse_down(event, cx) {
             return;
         }
-        if let Some(source_offset) = self
+        if let Some(button) = self
             .source_run_buttons
             .iter()
             .find(|button| button.visible && button.bounds.contains(&event.position))
-            .map(|button| button.source_offset)
+            .copied()
         {
-            self.show_source_run_feedback(source_offset, super::SourceRunPhase::Running, cx);
-            window.dispatch_action(Box::new(super::RunSourceBlockAt { source_offset }), cx);
+            let source_offset = button.source_offset;
+            match button.action {
+                super::SourceRunAction::Babel => {
+                    self.show_source_run_feedback(
+                        source_offset,
+                        super::SourceRunPhase::Running,
+                        cx,
+                    );
+                    window.dispatch_action(Box::new(super::RunSourceBlockAt { source_offset }), cx);
+                }
+                super::SourceRunAction::TableFormula => {
+                    match self.recalculate_table_with_mode(source_offset, true, false, cx) {
+                        Ok(true) => self.show_source_run_feedback(
+                            self.selection.head(),
+                            super::SourceRunPhase::Success,
+                            cx,
+                        ),
+                        result => {
+                            if let Err(error) = result {
+                                self.show_command_feedback(&error, cx);
+                            }
+                            self.show_source_run_feedback(
+                                source_offset,
+                                super::SourceRunPhase::Failure,
+                                cx,
+                            );
+                        }
+                    }
+                }
+            }
             return;
         }
         if event.click_count == 2

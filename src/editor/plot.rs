@@ -1,6 +1,6 @@
 use super::SemanticEditor;
 use crate::{
-    document::{ByteOffset, DocumentSnapshot, TextSnapshot},
+    document::{DocumentSnapshot, TextSnapshot},
     plot::{PlotDemand, PlotEntry, PlotHost, PlotId, PlotPresentation, PlotStyle},
 };
 use gpui::{App, Bounds, Pixels};
@@ -60,10 +60,18 @@ pub(super) fn prepare(
                 .source
                 .image_link
                 .map(|range| range.start)
-                .unwrap_or(ByteOffset(entry.source.table.end.0.saturating_sub(1)));
-            let Ok(line) = snapshot.line_index_at(end) else {
+                .unwrap_or(entry.source.source_end());
+            let Ok(mut line) = snapshot.line_index_at(end) else {
                 continue;
             };
+            if entry.source.image_link.is_none()
+                && line.0 > 0
+                && snapshot
+                    .line_range(line)
+                    .is_ok_and(|range| range.start == end)
+            {
+                line.0 -= 1;
+            }
             if editor.display_map.is_hidden(line.0) {
                 continue;
             }

@@ -1,5 +1,5 @@
 use super::*;
-use crate::document::{DocumentSession, EditOrigin, Selection};
+use crate::document::{ByteOffset, DocumentSession, EditOrigin, Selection};
 use gpui::AppContext;
 
 #[gpui::test]
@@ -628,4 +628,26 @@ fn memory_plot_resize_is_transient_and_survives_source_edits(cx: &mut gpui::Test
             "closing the editor must restore the shared chart size"
         );
     });
+}
+
+#[gpui::test]
+fn plot_follows_the_last_formula_at_eof_without_a_newline(cx: &mut gpui::TestAppContext) {
+    for formula in ["#+TBLFM: $2=$1", "#+tblfm: 变量"] {
+        let source = format!("#+PLOT: ind:1\n| 1 | 2 |\n{formula}");
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8("formulas.org".into(), source.as_bytes().to_vec()).unwrap()
+        });
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+        view.run_until_parked();
+        view.executor()
+            .advance_clock(std::time::Duration::from_millis(81));
+        view.run_until_parked();
+        view.read(|cx| {
+            let editor = editor.read(cx);
+            assert_eq!(editor.plots.lines.len(), 1);
+            assert!(editor.plots.lines.contains_key(&2));
+            assert_eq!(editor.display_map.trailing_height(1), 0.);
+            assert!(editor.display_map.trailing_height(2) > 200.);
+        });
+    }
 }

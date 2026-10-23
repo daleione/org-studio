@@ -1,0 +1,22 @@
+#+NAME: measurements_query
+#+begin_src sql :results table replace
+SELECT measured_on AS Date, value AS Value, weight AS Weight, sample_count AS Samples
+FROM measurements
+ORDER BY measured_on;
+#+end_src
+
+#+RESULTS: measurements_query
+#+NAME: measurements_data
+#+PLOT: title:"Measurements" ind:1 deps:(2) timeind:1 timefmt:"%Y-%m-%d" with:linespoints
+| Date       | Value | Weight | Samples |
+|------------+-------+--------+---------|
+| 2025-01-01 |     2 |   1.25 |      10 |
+| 2025-01-02 |     4 |   2.50 |      20 |
+| 2025-01-05 |     6 |   3.75 |      30 |
+
+* Summary
+
+| Metric | Value | Weight | Samples |
+|--------+-------+--------+---------|
+| Total  |       |        |         |
+#+TBLFM: @2$2=vsum(remote(measurements_data,@2$2..@>$2));N::@2$3=vsum(remote(measurements_data,@2$3..@>$3));N%.2f::@2$4=vsum(remote(measurements_data,@2$4..@>$4));N

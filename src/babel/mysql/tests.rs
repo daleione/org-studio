@@ -63,7 +63,6 @@ impl Fixture {
             connection: connection::from_headers(&headers).unwrap(),
             cancel: CancelToken::default(),
             ask_each_time: false,
-            source_name: None,
             headers,
             limits: QueryLimits::default(),
         }

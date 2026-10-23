@@ -39,6 +39,7 @@ fn mysql_inherits_file_subtree_and_affiliated_arguments() {
 * Reports\n:PROPERTIES:\n:header-args:sql:\t:database reports :dbuser reader :dbhost subtree-host\n:END:\n\
 #+name: report\n#+HEADER: :dbport 3307\n#+CAPTION: Query\n#+ATTR_ORG: :width 42\n#+begin_src sql :dbhost block-host :dbpassword \":quoted secret\"\nSELECT 1;\n#+end_src\n";
     let request = mysql_request(source).unwrap();
+    assert_eq!(request.block_name(), Some("report"));
     let mysql = request.mysql.unwrap();
     let target = mysql.target().unwrap();
     assert_eq!(target.user, "reader");
@@ -46,11 +47,11 @@ fn mysql_inherits_file_subtree_and_affiliated_arguments() {
     assert_eq!(target.port, 3307);
     assert_eq!(target.database, "reports");
     assert_eq!(mysql.headers.get(":dbpassword"), Some(":quoted secret"));
-    assert_eq!(mysql.source_name.as_deref(), Some("report"));
 
     let separated = source.replace("#+begin_src", "\n#+begin_src");
-    let mysql = mysql_request(&separated).unwrap().mysql.unwrap();
-    assert!(mysql.source_name.is_none());
+    let request = mysql_request(&separated).unwrap();
+    assert!(request.block_name().is_none());
+    let mysql = request.mysql.unwrap();
     assert!(mysql.headers.get(":dbport").is_none());
 }
 
@@ -123,6 +124,131 @@ fn mysql_rejects_ambiguous_names_and_results_before_connecting() {
         "#+begin_src sql\nSELECT 1;\n#+end_src\n#+RESULTS:\n[[file:old.csv]]\n",
     ] {
         assert!(mysql_request(source).is_err());
+    }
+}
+
+#[gpui::test]
+fn sql_result_refresh_preserves_the_plot_and_independent_summary(cx: &mut gpui::TestAppContext) {
+    use crate::document::{DocumentCommand, DocumentSession, EditOrigin, EditTransaction};
+    use gpui::AppContext;
+
+    let original = include_str!("../../tests/fixtures/sql-report-summary.org");
+    let path = Path::new("/tmp/measurements.org");
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8(path.to_path_buf(), original.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, cx) =
+        cx.add_window_view(|_, cx| crate::editor::SemanticEditor::new(session.clone(), cx));
+    let rows = [
+        ["2025-02-01", "8", "1.50", "12"],
+        ["2025-02-02", "10", "2.25", "16"],
+    ];
+    for (count, expected) in [(1, ["8", "1.50", "12"]), (2, ["18", "3.75", "28"])] {
+        let snapshot = session.read_with(cx, |session, _| session.snapshot());
+        let before = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+        let old_summary = before.split_once("* Summary\n").unwrap().1.to_owned();
+        let request = prepare_source_block_execution(
+            &snapshot,
+            path,
+            Selection::caret(ByteOffset(before.find("SELECT ").unwrap() as u64)),
+        )
+        .unwrap();
+        assert_eq!(request.block_name(), Some("measurements_query"));
+        let RequestedResult::Data {
+            range,
+            attributes,
+            newline,
+            ..
+        } = &request.result
+        else {
+            panic!("SQL produces a table result");
+        };
+        assert!(attributes.contains("#+NAME: measurements_data\n"));
+        assert!(attributes.contains("#+PLOT:"));
+        assert!(!snapshot.copy_range(*range).contains("* Summary"));
+        let columns = ["Date", "Value", "Weight", "Samples"].map(str::to_owned);
+        let values = rows[..count]
+            .iter()
+            .map(|row| row.iter().map(|value| Some((*value).to_owned())).collect())
+            .collect::<Vec<_>>();
+        // Exercise the SQL result boundary and table serializer without a database.
+        let payload = crate::babel::result::serialize_table(
+            &columns,
+            &values,
+            &[false, true, true, true],
+            true,
+            newline,
+            10_000,
+        )
+        .unwrap();
+        let edit = request.data_result_edit(&payload).unwrap();
+        session.update(cx, |session, cx| {
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(snapshot.revision(), vec![edit]),
+                        Selection::default(),
+                        Selection::default(),
+                        EditOrigin::Other,
+                    ),
+                    cx,
+                )
+                .unwrap();
+        });
+        cx.run_until_parked();
+        let snapshot = session.read_with(cx, |session, _| session.snapshot());
+        let refreshed = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+        assert_eq!(refreshed.split_once("* Summary\n").unwrap().1, old_summary);
+        assert_eq!(refreshed.matches("#+NAME: measurements_data").count(), 1);
+        assert_eq!(refreshed.matches("#+PLOT:").count(), 1);
+        let repeated = prepare_source_block_execution(
+            &snapshot,
+            path,
+            Selection::caret(ByteOffset(refreshed.find("SELECT ").unwrap() as u64)),
+        )
+        .unwrap();
+        assert!(repeated.data_result_edit(&payload).is_none());
+        let plots = crate::plot::collect_plots(&snapshot, &crate::org_syntax::parse(&snapshot));
+        assert_eq!(plots.len(), 1);
+        assert!(matches!(crate::plot::prepare_plot(&snapshot, &plots[0]),
+            crate::plot::PlotPreparation::Ready(plot) if plot.plan.rows == count));
+
+        editor.update(cx, |editor, cx| {
+            editor.set_selection(
+                Selection::caret(ByteOffset(refreshed.find("#+TBLFM:").unwrap() as u64)),
+                cx,
+            );
+            assert!(editor.recalculate_table_at_selection(true, cx).unwrap());
+        });
+        cx.run_until_parked();
+        let calculated = session.read_with(cx, |session, _| {
+            let snapshot = session.snapshot();
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+        });
+        let summary = calculated
+            .lines()
+            .find(|line| line.contains("Total"))
+            .unwrap();
+        let parsed =
+            crate::document::table::parse_line(summary, crate::document::DocumentFormat::Org);
+        for (cell, expected) in parsed.cells.iter().skip(1).zip(expected) {
+            assert_eq!(&summary[cell.text_range.clone()], expected);
+        }
+        session.update(cx, |session, cx| {
+            session.undo(cx).unwrap();
+        });
+        cx.run_until_parked();
+        session.read_with(cx, |session, _| {
+            let snapshot = session.snapshot();
+            assert_eq!(
+                snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                refreshed
+            );
+        });
+        session.update(cx, |session, cx| {
+            session.redo(cx).unwrap();
+        });
+        cx.run_until_parked();
     }
 }
 

@@ -90,6 +90,9 @@ impl PlotHost {
                 let mut entry = (**entry).clone();
                 entry.source.declaration = source_range(entry.source.declaration)?;
                 entry.source.table = source_range(entry.source.table)?;
+                if let Some(range) = entry.source.formulas {
+                    entry.source.formulas = Some(source_range(range)?);
+                }
                 if let Some(range) = entry.source.image_link {
                     entry.source.image_link = Some(map(range)?);
                 }

@@ -215,6 +215,24 @@ fn named_remote_table_supports_field_and_range_references() {
 }
 
 #[test]
+fn remote_tables_keep_their_names_through_standard_affiliated_keywords() {
+    for attributes in [
+        "#+NAME: measurements\n#+PLOT: ind:1 deps:(2) with:linespoints\n",
+        "#+NAME: measurements\n#+RESULTS: query\n#+CAPTION: Values\n#+PLOT: ind:1\n",
+        "#+NAME: measurements\n#+RESULTS[cached]: query\n#+PLOT: ind:1\n",
+        "#+PLOT: ind:1\n#+NAME: measurements\n",
+    ] {
+        let source = format!(
+            "{attributes}| Date | Value |\n|---+---|\n| a | 2 |\n| b | 4 |\n\n| Metric | Value |\n|---+---|\n| Total | 0 |\n#+TBLFM: @2$2=vsum(remote(measurements,@2$2..@>$2));N\n"
+        );
+        let result = calculated(&source).unwrap();
+        let summary = result.lines().find(|line| line.contains("Total")).unwrap();
+        let parsed = source_table::parse_line(summary, DocumentFormat::Org);
+        assert_eq!(&summary[parsed.cells[1].text_range.clone()], "6");
+    }
+}
+
+#[test]
 fn multiple_formula_lines_use_only_the_line_at_the_caret() {
     let source = "| 2 | 0 |\n#+TBLFM: $2=$1*2\n#+TBLFM: $2=$1*3\n";
     let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();

@@ -54,7 +54,6 @@ pub(crate) struct MySqlRequest {
     connection: Option<connection::Connection>,
     pub(crate) cancel: CancelToken,
     pub(crate) ask_each_time: bool,
-    pub(crate) source_name: Option<String>,
     pub(super) headers: Headers,
     limits: QueryLimits,
 }
@@ -75,7 +74,6 @@ impl MySqlRequest {
                 .is_some_and(|v| v.eq_ignore_ascii_case("query")),
             headers,
             cancel: CancelToken::default(),
-            source_name: None,
             limits: QueryLimits::load()?,
         })
     }

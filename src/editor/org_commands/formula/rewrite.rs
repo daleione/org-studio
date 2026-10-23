@@ -76,12 +76,7 @@ fn adapt_line(
 ) -> Option<Option<String>> {
     let indent = line.len() - line.trim_start().len();
     let prefix_end = indent + 8;
-    if !line
-        .get(indent..prefix_end)?
-        .eq_ignore_ascii_case("#+TBLFM:")
-    {
-        return None;
-    }
+    crate::document::table::formula_expression(line)?;
     let mut formulas = Vec::new();
     for part in split_top_level(&line[prefix_end..], "::") {
         if part.trim().is_empty() {

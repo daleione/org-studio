@@ -1437,6 +1437,130 @@ fn org_source_block_actions_follow_first_body_line_and_hover(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn tblfm_run_action_recalculates_the_independent_summary_in_one_undo_step(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::document::{ByteOffset, ByteRange};
+    use crate::editor::{SourceRunAction, SourceRunPhase};
+
+    cx.update(crate::editor::init);
+    let report = include_str!("../../../tests/fixtures/sql-report-summary.org");
+    let source = format!(
+        "{report}\n#+begin_example\n| 1 | 0 |\n#+TBLFM: $2=$1*2\n#+end_example\n\n#+TBLFM: $2=99\n"
+    );
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("report.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session.clone(), cx));
+    view.simulate_resize(gpui::size(px(1100.), px(1200.)));
+    view.run_until_parked();
+    view.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    view.run_until_parked();
+    let (button, detail) = view.read(|cx| {
+        let e = editor.read(cx);
+        let formulas = e
+            .source_run_buttons
+            .iter()
+            .filter(|button| matches!(button.action, SourceRunAction::TableFormula))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            formulas.len(),
+            1,
+            "literal and orphan formulas have no action"
+        );
+        let button = *formulas[0];
+        assert!(button.visible);
+        let row = e
+            .hit_rows
+            .iter()
+            .find(|row| row.range.start == button.source_offset)
+            .unwrap();
+        assert!(button.bounds.left() >= row.text_origin_x - px(super::GUTTER_PADDING));
+        assert!(button.bounds.right() <= row.text_origin_x);
+        let plot = e.plots.lines.values().next().unwrap();
+        assert!(plot.entry.source.formulas.is_none());
+        (button, e.snapshot(cx).copy_range(plot.entry.source.table))
+    });
+    view.simulate_click(button.bounds.center(), Modifiers::default());
+    view.run_until_parked();
+    view.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    view.run_until_parked();
+    view.read(|cx| {
+        let e = editor.read(cx);
+        let snapshot = e.snapshot(cx);
+        let text = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+        let summary = text.lines().find(|line| line.contains("Total")).unwrap();
+        let cells =
+            crate::document::table::parse_line(summary, crate::document::DocumentFormat::Org).cells;
+        for (cell, expected) in cells.iter().skip(1).zip(["12", "7.50", "60"]) {
+            assert_eq!(&summary[cell.text_range.clone()], expected);
+        }
+        let feedback = e.source_run_feedback.unwrap();
+        assert_eq!(feedback.phase, SourceRunPhase::Success);
+        assert!(text[feedback.source_offset.0 as usize..].starts_with("#+TBLFM:"));
+        assert_eq!(e.plots.lines.len(), 1);
+        let (&plot_line, plot) = e.plots.lines.iter().next().unwrap();
+        assert!(matches!(&plot.entry.prepared,
+            crate::plot::PlotPreparation::Ready(plot) if plot.plan.rows == 3));
+        assert_eq!(snapshot.copy_range(plot.entry.source.table), detail);
+        assert!(e.display_map.trailing_height(plot_line) > 200.);
+        let formula_line = snapshot
+            .line_index_at(ByteOffset(text.find("#+TBLFM:").unwrap() as u64))
+            .unwrap()
+            .0;
+        assert_eq!(e.display_map.trailing_height(formula_line), 0.);
+    });
+    session.update(view, |session, cx| {
+        session.undo(cx).unwrap();
+    });
+    view.run_until_parked();
+    view.read(|cx| {
+        let snapshot = session.read(cx).snapshot();
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source
+        );
+    });
+
+    let markdown = cx.new(|_| {
+        DocumentSession::from_utf8("report.md".into(), report.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(markdown, cx));
+    view.run_until_parked();
+    view.read(|cx| assert!(editor.read(cx).source_run_buttons.is_empty()));
+}
+
+#[gpui::test]
+fn tblfm_run_errors_preserve_the_table_and_show_failure(cx: &mut gpui::TestAppContext) {
+    use crate::document::ByteRange;
+    cx.update(crate::editor::init);
+    let source = "| 2 | 0 |\n#+TBLFM: $2=unknown($1)\n";
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("formulas.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.run_until_parked();
+    let position = view.read(|cx| editor.read(cx).source_run_buttons[0].bounds.center());
+    view.simulate_click(position, Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| {
+        let e = editor.read(cx);
+        assert_eq!(
+            e.source_run_feedback.unwrap().phase,
+            crate::editor::SourceRunPhase::Failure
+        );
+        assert!(e.command_feedback.as_ref().unwrap().contains("Unsupported"));
+        let snapshot = e.snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source
+        );
+    });
+}
+
+#[gpui::test]
 fn org_call_run_actions_use_the_line_gutter_and_ignore_literal_calls(
     cx: &mut gpui::TestAppContext,
 ) {

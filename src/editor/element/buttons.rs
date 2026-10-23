@@ -1,4 +1,4 @@
-//! Babel run actions and source copying. Run actions retain their Org entry
+//! Babel and table formula run actions, and source copying. Actions retain their Org entry
 //! offset as their location changes between a code body and the document gutter.
 use gpui::{TextStyle, Window};
 
@@ -39,7 +39,7 @@ fn block_bounds_for_row(row: &PaintRow, chrome: &BlockChrome) -> Option<Bounds<P
         .map(|quad| quad.bounds)
 }
 
-/// The body action appears on hover. CALL and folded-source actions stay
+/// The body action appears on hover. CALL, TBLFM and folded-source actions stay
 /// beside the document line number and share the same execution feedback.
 pub(super) fn prepare_run_buttons(
     rows: &[PaintRow],
@@ -64,18 +64,25 @@ pub(super) fn prepare_run_buttons(
                     block.kind == syntax::EditorBlockKind::Source
                         && block.edge == syntax::EditorBlockEdge::Open
                 });
-            let call = row.shape_key.syntax_key == syntax::EditorStyleId::Meta.cache_key()
-                && row.block.is_none()
-                && snapshot
+            let directive = (row.shape_key.syntax_key == syntax::EditorStyleId::Meta.cache_key()
+                && row.block.is_none())
+            .then(|| {
+                snapshot
                     .line_content_range(row.hit.line)
                     .ok()
-                    .is_some_and(|range| {
-                        syntax::classification_text(snapshot, range)
-                            .trim_start()
-                            .get(..7)
-                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+CALL:"))
-                    });
-            let gutter = folded_source || call;
+                    .map(|range| syntax::classification_text(snapshot, range))
+            })
+            .flatten();
+            let call = directive.as_ref().is_some_and(|text| {
+                text.trim_start()
+                    .get(..7)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+CALL:"))
+            });
+            let formula = directive.as_ref().is_some_and(|text| {
+                crate::document::table::formula_expression(text).is_some()
+                    && formula_has_table(snapshot, row.hit.line)
+            });
+            let gutter = folded_source || call || formula;
             if !body && !gutter {
                 return None;
             }
@@ -178,6 +185,11 @@ pub(super) fn prepare_run_buttons(
                 gutter,
                 hit: crate::editor::SourceRunButtonHit {
                     source_offset,
+                    action: if formula {
+                        crate::editor::SourceRunAction::TableFormula
+                    } else {
+                        crate::editor::SourceRunAction::Babel
+                    },
                     body_bounds,
                     visible,
                     bounds: interaction_bounds,
@@ -195,6 +207,24 @@ pub(super) fn prepare_run_buttons(
             })
         })
         .collect()
+}
+
+fn formula_has_table(snapshot: &crate::document::DocumentSnapshot, line: LineIndex) -> bool {
+    let mut line = line.0;
+    while let Some(previous) = line.checked_sub(1) {
+        let Ok(range) = snapshot.line_content_range(LineIndex(previous)) else {
+            return false;
+        };
+        let source = snapshot.copy_range(range);
+        if crate::document::table::formula_expression(&source).is_none() {
+            return crate::document::table::is_table_row(
+                &source,
+                crate::document::DocumentFormat::Org,
+            );
+        }
+        line = previous;
+    }
+    false
 }
 
 // A truly empty or manually folded Org block has no visible first body

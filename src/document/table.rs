@@ -45,6 +45,14 @@ pub(crate) fn is_separator(source: &str) -> bool {
             .all(|character| matches!(character, '|' | '+' | '-' | ':' | ' ' | '\t'))
 }
 
+pub(crate) fn formula_expression(source: &str) -> Option<&str> {
+    let source = source.trim_start();
+    source
+        .get(..8)
+        .filter(|prefix| prefix.eq_ignore_ascii_case("#+TBLFM:"))
+        .map(|_| source[8..].trim())
+}
+
 pub(crate) fn is_table_row(source: &str, format: DocumentFormat) -> bool {
     let source = source.trim_start();
     source.starts_with('|')

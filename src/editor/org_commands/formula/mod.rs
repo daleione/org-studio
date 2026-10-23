@@ -675,8 +675,7 @@ fn affiliated_table_name(
         {
             return Some(text[7..].trim().to_owned());
         }
-        let upper = text.to_ascii_uppercase();
-        if !upper.starts_with("#+CAPTION:") && !upper.starts_with("#+ATTR_") {
+        if !crate::org_syntax::attributes::is_affiliated_keyword(text) {
             return None;
         }
     }
@@ -1167,10 +1166,7 @@ fn formula_line(
     starts: &std::collections::HashSet<u64>,
 ) -> Option<String> {
     let text = structural_line_text(snapshot, line, starts)?;
-    let text = text.trim_start();
-    text.get(..8)
-        .filter(|prefix| prefix.eq_ignore_ascii_case("#+TBLFM:"))
-        .map(|_| text[8..].trim().to_owned())
+    source_table::formula_expression(&text).map(str::to_owned)
 }
 
 fn top_level_separator(source: &str, delimiter: &str) -> Option<usize> {

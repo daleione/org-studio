@@ -3,6 +3,7 @@ use crate::document::{DocumentSnapshot, TextSnapshot};
 
 mod layout;
 mod statistics;
+mod tables;
 
 fn prepared(source: &str) -> PlotPreparation {
     let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();

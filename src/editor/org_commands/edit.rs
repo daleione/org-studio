@@ -46,11 +46,7 @@ impl EditableTable {
         if format == DocumentFormat::Org {
             while let Ok(range) = snapshot.line_content_range(LineIndex(formula_end)) {
                 let line = snapshot.copy_range(range);
-                if !line
-                    .trim_start()
-                    .get(..8)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+TBLFM:"))
-                {
+                if source_table::formula_expression(&line).is_none() {
                     break;
                 }
                 formula_lines.push(line);

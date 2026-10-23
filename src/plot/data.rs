@@ -20,12 +20,14 @@ pub(super) fn prepare_input(
     let source = snapshot.copy_range(candidate.table);
     let mut rows = Vec::new();
     let mut header = None;
+    let mut saw_separator = false;
     for line in source.lines() {
         let parsed = table::parse_line(line, DocumentFormat::Org);
         if parsed.separator {
-            if rows.len() == 1 && header.is_none() {
+            if !saw_separator && rows.len() == 1 {
                 header = rows.pop();
             }
+            saw_separator = true;
             continue;
         }
         let raw_cells = parsed

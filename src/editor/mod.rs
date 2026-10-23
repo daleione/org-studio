@@ -272,11 +272,18 @@ struct TableGeometryCache {
 }
 
 #[derive(Clone, Copy)]
+pub(super) enum SourceRunAction {
+    Babel,
+    TableFormula,
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct SourceRunButtonHit {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) body_bounds: Bounds<Pixels>,
     pub(super) visible: bool,
     pub(super) source_offset: ByteOffset,
+    pub(super) action: SourceRunAction,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -306,6 +313,7 @@ const SOURCE_RUN_MIN_RUNNING_DURATION: Duration = Duration::from_millis(450);
 
 #[derive(Clone, Copy)]
 struct SourceRunFeedback {
+    revision: Revision,
     source_offset: ByteOffset,
     phase: SourceRunPhase,
     started_at: Instant,
@@ -1459,12 +1467,16 @@ impl SemanticEditor {
         let Some(mut feedback) = self.source_run_feedback else {
             return;
         };
+        if feedback.revision != delta.before {
+            return;
+        }
         let position = RevisionRange::new(
             delta.before,
             ByteRange::new(feedback.source_offset.0, feedback.source_offset.0),
         );
         match delta.map_range(position) {
             Ok(mapped) => {
+                feedback.revision = delta.after;
                 feedback.source_offset = mapped.range.start;
                 self.source_run_feedback = Some(feedback);
             }
@@ -1515,6 +1527,7 @@ impl SemanticEditor {
     ) {
         self.clear_source_run_feedback();
         self.source_run_feedback = Some(SourceRunFeedback {
+            revision: self.snapshot(cx).revision(),
             source_offset,
             phase,
             started_at: Instant::now(),

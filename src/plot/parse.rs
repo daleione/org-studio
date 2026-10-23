@@ -28,6 +28,17 @@ pub(crate) fn collect_plots(snapshot: &dyn TextSnapshot, arena: &BlockArena) -> 
             index += 1;
         }
         let end = index;
+        let mut formula_end = end;
+        while formula_end + 1 < nodes.len()
+            && nodes[formula_end].source.end == nodes[formula_end + 1].source.start
+            && matches!(nodes[formula_end + 1].kind, BlockKind::Keyword)
+            && crate::document::table::formula_expression(
+                &snapshot.copy_range(nodes[formula_end + 1].content),
+            )
+            .is_some()
+        {
+            formula_end += 1;
+        }
         while previous > 0
             && matches!(nodes[previous - 1].kind, BlockKind::Keyword)
             && nodes[previous - 1].source.end == nodes[previous].source.start
@@ -55,6 +66,10 @@ pub(crate) fn collect_plots(snapshot: &dyn TextSnapshot, arena: &BlockArena) -> 
                     start: nodes[start].source.start,
                     end: nodes[end].source.end,
                 },
+                formulas: (formula_end > end).then(|| ByteRange {
+                    start: nodes[end + 1].source.start,
+                    end: nodes[formula_end].source.end,
+                }),
                 owner: end as u32,
                 options: declarations.into_iter().map(|(_, value)| value).collect(),
                 image_link: None,
