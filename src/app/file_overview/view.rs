@@ -26,7 +26,6 @@ pub(crate) fn toolbar_button(entity: Entity<WorkspaceWindow>) -> gpui::Stateful<
         .bg(rgb(theme.background_alt))
         .cursor_pointer()
         .hover(|style| style.bg(rgb(theme.code_active_background)))
-        .tooltip(|_, cx| cx.new(|_| Hint("文件总览 / Open Files".into())).into())
         .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
             accessible_entity.update(cx, |this, cx| this.open_file_overview(window, cx));
         })
