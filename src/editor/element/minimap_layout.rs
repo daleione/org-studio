@@ -335,7 +335,7 @@ pub(super) fn schedule_minimap_layout_preparation(
                     continue;
                 }
                 let mut metrics = metrics.clone();
-                if !metrics.plot {
+                if metrics.plot.is_none() {
                     metrics.spec =
                         crate::org_syntax::attributes::image_attributes_at(&snapshot, line);
                 }

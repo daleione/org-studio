@@ -29,7 +29,8 @@
     align(alignment, text(size: base * u, fill: muted, tick.label.clusters().join("\u{200b}")))
   })
   let label-height = ticks.map(t => measure(label-body(t)).height / u).fold(0, calc.max)
-  let bottom = pad + label-height + 12
+  let context-height = if p.x_context.len() > 0 { base * 1.6 } else { 0 }
+  let bottom = pad + label-height + context-height + 12
   let ph = top-y - bottom
   assert(ph >= 50, message: "The chart labels leave too little space to draw; shorten the labels or use fewer series")
   if categorical {
@@ -49,7 +50,12 @@
     line((left, y), (right, y), stroke: (paint: grid-color, thickness: thickness * u))
     content((right + 10, y), text(size: base * u, fill: muted, tick.label), anchor: "west", padding: 0)
   }
+  for position in p.x_minor_ticks {
+    let x = left + position * pw
+    line((x, bottom), (x, bottom - 4), stroke: (paint: grid-color, thickness: 0.75 * u))
+  }
   let last-label-right = -1000
+  let visible-ticks = ()
   for tick in ticks {
     let x = left + tick.position * pw
     let span = label-span(tick)
@@ -60,9 +66,26 @@
       if bars {
         content((label-left, bottom - 12), label-body(tick, alignment: start-alignment), anchor: "north-west", padding: 0)
       } else {
-        content((x, bottom - 12), label-body(tick, alignment: if near-left { start-alignment } else if near-right { end-alignment } else { center }), anchor: if near-left { "north-west" } else if near-right { "north-east" } else { "north" }, padding: 0)
+        let anchor = if near-left { "north-west" } else if near-right { "north-east" } else { "north" }
+        content((x, bottom - 12), label-body(tick, alignment: if near-left { start-alignment } else if near-right { end-alignment } else { center }), anchor: anchor, padding: 0)
+        visible-ticks.push((position: tick.position, x: x, anchor: anchor))
       }
       last-label-right = label-left + span
+    }
+  }
+  let context-right = -1000
+  for (i, tick) in p.x_context.enumerate() {
+    let end = if i + 1 < p.x_context.len() { p.x_context.at(i + 1).position } else { 2 }
+    let candidates = visible-ticks.filter(t => t.position >= tick.position - 0.000001 and t.position < end - 0.000001)
+    if candidates.len() > 0 {
+      let target = candidates.first()
+      let label = text(size: base * 0.9 * u, fill: muted, weight: "medium", tick.label)
+      let span = measure(label).width / u
+      let label-left = target.x - if target.anchor == "north-west" { 0 } else if target.anchor == "north-east" { span } else { span / 2 }
+      if label-left >= context-right + 6 {
+        content((target.x, bottom - 12 - label-height - base * 0.5), label, anchor: target.anchor, padding: 0)
+        context-right = label-left + span
+      }
     }
   }
   let marks = block(width: pw * u, height: ph * u, clip: p.clip, cetz.canvas(length: u, {

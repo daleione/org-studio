@@ -1,5 +1,4 @@
-//! Inline images in the editor: how big they are drawn, the bottom-right grip
-//! drag, and the `#+ATTR_ORG:` width edit it commits.
+//! Inline image sizing, drag previews and standard `#+ATTR_ORG:` size edits.
 //!
 //! This module owns the display rules (`image_sizing`, `resolved_image_size`)
 //! and the row-height write-back the paint pass and the minimap consume.
@@ -49,8 +48,8 @@ pub(super) fn resolved_image_size(
     sizing: &crate::preview::ImageSizing,
 ) -> (f32, f32) {
     let spec = editor.effective_inline_image_spec(ByteOffset(metrics.line_start), &metrics.spec);
-    if metrics.plot {
-        crate::plot::plot_image_size(metrics.source, None, &spec, sizing)
+    if let Some(plot) = &metrics.plot {
+        plot.image_size_with_attributes(sizing, &spec)
     } else {
         crate::preview::resolve_image_size(metrics.source, Some(&spec), sizing)
     }
@@ -139,23 +138,33 @@ impl SemanticEditor {
         if event.click_count >= 2 {
             // Double-clicking the grip returns the image to its auto size.
             if let Some(id) = handle.plot {
-                self.resize_plot(id, None, cx);
+                self.reset_plot_size(id, cx);
+                self.write_plot_size(id, None, cx);
             } else {
                 self.reset_inline_image_size(handle.line_start, cx);
             }
         } else {
-            let previous_width = handle
+            let previous = handle
                 .plot
                 .and_then(|id| self.plots.lines.values().find(|plot| plot.entry.id == id))
-                .and_then(|plot| plot.entry.display.lock().unwrap().requested_width);
+                .map(|plot| {
+                    let display = plot.entry.display.lock().unwrap();
+                    (display.requested_width, display.requested_height)
+                })
+                .unwrap_or_default();
             self.image_resize = Some(ImageResizeSession {
                 plot: handle.plot,
-                previous_width,
+                previous_width: previous.0,
+                previous_height: previous.1,
+                axis: handle.axis,
                 line: handle.line,
                 line_start: handle.line_start,
                 start_pointer_x: f32::from(event.position.x),
+                start_pointer_y: f32::from(event.position.y),
                 start_width: handle.width,
+                start_height: handle.height,
                 current_width: handle.width,
+                current_height: handle.height,
                 moved: false,
             });
         }
@@ -174,26 +183,43 @@ impl SemanticEditor {
         }
         let column_width = self.display_map.wrap_width();
         let viewport_height = self.image_drag_viewport_height();
-        let (line, plot, width) = {
+        let (line, plot, width, height) = {
             let Some(session) = self.image_resize.as_mut() else {
                 return false;
             };
-            let dragged = session.start_width + (f32::from(position.x) - session.start_pointer_x);
-            let width = crate::preview::clamp_image_width(dragged, column_width);
-            if (width - session.current_width).abs() < 0.25 {
+            let delta = (
+                f32::from(position.x) - session.start_pointer_x,
+                f32::from(position.y) - session.start_pointer_y,
+            );
+            let (width, height) = if session.plot.is_some() {
+                session.axis.resize(
+                    (session.start_width, session.start_height),
+                    delta,
+                    column_width,
+                )
+            } else {
+                (
+                    crate::preview::clamp_image_width(session.start_width + delta.0, column_width),
+                    session.start_height,
+                )
+            };
+            if (width - session.current_width).abs() < 0.25
+                && (height - session.current_height).abs() < 0.25
+            {
                 return true;
             }
             session.current_width = width;
+            session.current_height = height;
             session.moved = true;
-            (session.line, session.plot, width)
+            (session.line, session.plot, width, height)
         };
-        // Keep the row measured at its new height. Invalidating it instead would
-        // drop the line to an estimated height, so the document height would
-        // oscillate between estimated and measured on every pointer move and the
-        // viewport would thrash. The shape cache stays untouched: text shaping
-        // does not depend on an image's size.
+        // Preserve measured row heights so the viewport does not jump during a drag.
         if let Some(id) = plot {
-            self.resize_plot(id, Some(width), cx);
+            if let Some(host) = &self.plots.host {
+                host.document.update(cx, |document, cx| {
+                    document.resize_canvas(id, Some(width), Some(height), true, cx)
+                });
+            }
         } else {
             self.apply_inline_image_row_height(line, column_width, viewport_height);
         }
@@ -212,7 +238,20 @@ impl SemanticEditor {
         let Some(session) = self.image_resize.take() else {
             return;
         };
-        if session.plot.is_some() {
+        if let Some(id) = session.plot {
+            let (width, height) = if session.moved {
+                (Some(session.current_width), Some(session.current_height))
+            } else {
+                (session.previous_width, session.previous_height)
+            };
+            if let Some(host) = &self.plots.host {
+                host.document.update(cx, |document, cx| {
+                    document.resize_canvas(id, width, height, false, cx)
+                });
+            }
+            if session.moved {
+                self.write_plot_size(id, width.zip(height), cx);
+            }
             cx.notify();
             return;
         }
@@ -227,13 +266,42 @@ impl SemanticEditor {
         self.write_inline_image_width(session.line_start, session.current_width, cx);
     }
 
-    fn resize_plot(&mut self, id: crate::plot::PlotId, width: Option<f32>, cx: &mut Context<Self>) {
+    fn reset_plot_size(&mut self, id: crate::plot::PlotId, cx: &mut Context<Self>) {
         let Some(plot) = self.plots.lines.values().find(|plot| plot.entry.id == id) else {
             return;
         };
         plot.document
-            .update(cx, |document, cx| document.resize(id, width, cx));
+            .update(cx, |document, cx| document.reset_size(id, cx));
         cx.notify();
+    }
+
+    fn write_plot_size(
+        &mut self,
+        id: crate::plot::PlotId,
+        size: Option<(f32, f32)>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(link) = self
+            .plots
+            .lines
+            .values()
+            .find(|plot| plot.entry.id == id)
+            .and_then(|plot| plot.entry.source.image_link)
+        else {
+            return;
+        };
+        let snapshot = self.snapshot(cx);
+        if let Some(edit) =
+            crate::org_syntax::attributes::image_size_edit(&snapshot, link.start, size)
+        {
+            self.apply_image_edit(
+                snapshot.revision(),
+                edit.range,
+                edit.replacement,
+                link.start,
+                cx,
+            );
+        }
     }
 
     /// Writes the dragged width to the image's `#+ATTR_ORG:` line.

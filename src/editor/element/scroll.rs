@@ -46,12 +46,26 @@ pub(super) fn publish_frame(
     let image_resize_handles = state
         .image_resize_handles
         .iter()
-        .map(|handle| crate::editor::InlineImageResizeHandle {
-            bounds: handle.interaction_bounds,
-            plot: handle.plot,
-            line: handle.line,
-            line_start: handle.line_start,
-            width: f32::from(handle.image_bounds.size.width),
+        .flat_map(|handle| {
+            let make = |bounds, axis| crate::editor::InlineImageResizeHandle {
+                bounds,
+                axis,
+                plot: handle.plot,
+                line: handle.line,
+                line_start: handle.line_start,
+                width: f32::from(handle.image_bounds.size.width),
+                height: f32::from(handle.image_bounds.size.height),
+            };
+            std::iter::once(make(
+                handle.interaction_bounds,
+                crate::plot::PlotResizeAxis::Both,
+            ))
+            .chain(
+                handle
+                    .edges
+                    .iter()
+                    .map(move |(axis, bounds, _)| make(*bounds, *axis)),
+            )
         })
         .collect::<std::sync::Arc<[_]>>();
     let shaped = state

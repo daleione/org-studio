@@ -27,16 +27,6 @@ pub(crate) struct PlotEntry {
 }
 
 impl PlotEntry {
-    pub(crate) fn dimensions(&self) -> (u32, u32) {
-        let layout = match &self.prepared {
-            PlotPreparation::Ready(plot) => plot.plan.layout,
-            _ => super::parse::parse_spec(&self.source.options)
-                .map(|spec| spec.layout)
-                .unwrap_or_default(),
-        };
-        layout.dimensions()
-    }
-
     pub(crate) fn placeholder(source: PlotCandidate) -> Arc<Self> {
         let output = super::parse::parse_spec(&source.options)
             .map(|spec| spec.output)
@@ -131,9 +121,30 @@ impl PlotDocument {
         }
     }
 
-    pub(crate) fn resize(&mut self, id: PlotId, width: Option<f32>, cx: &mut Context<Self>) {
+    pub(crate) fn reset_size(&mut self, id: PlotId, cx: &mut Context<Self>) {
+        self.resize_canvas(id, None, None, false, cx);
+    }
+
+    pub(crate) fn resize_canvas(
+        &mut self,
+        id: PlotId,
+        width: Option<f32>,
+        height: Option<f32>,
+        resizing: bool,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(entry) = self.entries.iter().find(|entry| entry.id == id) {
-            entry.display.lock().unwrap().requested_width = width;
+            let mut display = entry.display.lock().unwrap();
+            if display.requested_width == width
+                && display.requested_height == height
+                && display.resizing == resizing
+            {
+                return;
+            }
+            display.requested_width = width;
+            display.requested_height = height;
+            display.resizing = resizing;
+            drop(display);
             self.display_revision = self.display_revision.wrapping_add(1);
             cx.notify();
         }
@@ -336,7 +347,10 @@ impl PlotDocument {
                                 || old.source.image_attributes != source.image_attributes
                         })
                     {
-                        display.lock().unwrap().requested_width = None;
+                        let mut state = display.lock().unwrap();
+                        state.requested_width = None;
+                        state.requested_height = None;
+                        state.resizing = false;
                     }
                     Arc::new(PlotEntry {
                         id,

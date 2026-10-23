@@ -60,9 +60,10 @@ pub(super) fn insert_charts(
                         .collect::<Vec<_>>()
                         .join(", ")
                 });
-                let request = PlotRenderRequest::natural(
+                let request = PlotRenderRequest::for_export(
                     plot,
                     PlotStyle::for_theme(&crate::theme::ORG_STUDIO_LIGHT, 12.0),
+                    &candidate.image_attributes,
                 );
                 crate::plot::render_plot(engine, &request).map(|artifact| {
                     Some(ExportBlock::GeneratedImage {

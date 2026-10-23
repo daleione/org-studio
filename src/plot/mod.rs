@@ -1,5 +1,6 @@
 mod data;
 mod document;
+mod layout;
 mod model;
 pub(crate) mod output;
 mod parse;
@@ -10,15 +11,14 @@ mod time;
 mod view;
 
 pub(crate) use document::{PlotDocument, PlotEntry};
+pub(crate) use layout::PlotResizeAxis;
 pub(crate) use model::*;
 pub(crate) use parse::{bind_images, collect_plots};
 pub(crate) use render::render_plot;
 #[cfg(test)]
 pub(crate) use service::PlotRendered;
 pub(crate) use service::{PlotDemand, PlotRenderState, PlotService};
-pub(crate) use view::{
-    PlotHost, PlotPresentation, plot_image_size, render_plot_output_error, render_plot_surface,
-};
+pub(crate) use view::{PlotHost, PlotPresentation, render_plot_output_error, render_plot_surface};
 
 pub(crate) fn may_have_plots(snapshot: &dyn crate::document::TextSnapshot) -> bool {
     let mut offset = 0;

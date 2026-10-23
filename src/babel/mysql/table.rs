@@ -1,5 +1,6 @@
 use std::time::Duration;
-use unicode_width::UnicodeWidthStr;
+
+use crate::document::{DocumentFormat, table::text_width};
 
 #[derive(Debug)]
 pub(crate) struct QueryTable {
@@ -43,7 +44,7 @@ impl QueryTable {
         for row in rows.iter().chain(names.then_some(&columns)) {
             for (index, cell) in row.iter().enumerate() {
                 if let Some(width) = widths.get_mut(index) {
-                    *width = (*width).max(cell.width());
+                    *width = (*width).max(text_width(cell, DocumentFormat::Org));
                 }
             }
         }
@@ -59,7 +60,7 @@ impl QueryTable {
                     output.push(' ');
                     let numeric =
                         !header && self.numeric_columns.get(index).copied().unwrap_or(false);
-                    let pad = width.saturating_sub(cell.width());
+                    let pad = width.saturating_sub(text_width(cell, DocumentFormat::Org));
                     if numeric {
                         output.push_str(&" ".repeat(pad));
                     }
@@ -150,6 +151,7 @@ fn escape_cell(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use unicode_width::UnicodeWidthStr;
     #[test]
     fn preserves_empty_results_and_exact_values() {
         let mut table = QueryTable::new(vec!["id".into(), "value".into()]);
@@ -192,6 +194,8 @@ mod tests {
             "包含竖线 a|b",
             "[[file:demo][链接形态]] *粗体* _下划线_ =原样= ~代码~ {{{macro}}}",
             " leading and trailing ",
+            "《示例：A12》 ",
+            "用于测试列宽的较长中文示例文本",
             r"C:\Users\demo",
             r#"{"message":"中文"}"#,
             r"\alpha \vert{}",
@@ -202,6 +206,16 @@ mod tests {
             .map(|sample| vec![Some((*sample).into())])
             .collect();
         let result = table.serialize(true, "\n", 10_000).unwrap();
+        let width = result.lines().next().unwrap().width();
+        for row in result.lines() {
+            assert_eq!(
+                crate::org_syntax::inline::EntityText::new(row, None)
+                    .text
+                    .width(),
+                width,
+                "serialized table must align as displayed: {row}"
+            );
+        }
         for (row, sample) in result.lines().skip(2).zip(samples) {
             let parsed =
                 crate::document::table::parse_line(row, crate::document::DocumentFormat::Org);

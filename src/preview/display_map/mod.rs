@@ -587,15 +587,10 @@ impl PreviewDisplayMap {
                     .min(1.0);
                 (width * scale, height * scale)
             }),
-            VisualRowKind::Plot(plot) => Some(crate::plot::plot_image_size(
-                plot.entry.dimensions(),
-                plot.entry.display.lock().unwrap().requested_width,
-                &plot.entry.source.image_attributes,
-                &super::ImageSizing {
-                    max_width: available_width,
-                    ..*plot.sizing.lock().unwrap()
-                },
-            )),
+            VisualRowKind::Plot(plot) => Some(plot.entry.image_size(&super::ImageSizing {
+                max_width: available_width,
+                ..*plot.sizing.lock().unwrap()
+            })),
             _ => None,
         }
     }

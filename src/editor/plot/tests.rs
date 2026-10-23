@@ -402,9 +402,37 @@ fn memory_plot_resize_is_transient_and_survives_source_edits(cx: &mut gpui::Test
             cx
         ));
         assert!(
-            editor.image_resize_move(position + gpui::point(gpui::px(80.0), gpui::px(0.0)), cx)
+            editor.image_resize_move(position + gpui::point(gpui::px(80.0), gpui::px(50.0)), cx)
+        );
+        {
+            let display = plot.entry.display.lock().unwrap();
+            assert!(display.resizing);
+            assert_eq!(display.requested_height, Some(handle.height + 50.0));
+        }
+        let sizing = super::super::inline_image::image_sizing(
+            editor.display_map.wrap_width(),
+            900.0,
+            editor.font_size_px(),
+        );
+        let demand = plot.demand.as_ref().unwrap().clone();
+        let before = demand.state().and_then(|state| state.rendered().cloned());
+        let during = editor.plots.host.as_mut().unwrap().present(
+            plot.entry.clone(),
+            sizing,
+            plot.style.clone(),
+            true,
+            cx,
+        );
+        let during = during.state.and_then(|state| state.rendered().cloned());
+        assert!(
+            before
+                .as_ref()
+                .zip(during.as_ref())
+                .is_some_and(|(before, during)| Arc::ptr_eq(before, during)),
+            "dragging retains the existing rendered image"
         );
         editor.image_resize_up(cx);
+        assert!(!plot.entry.display.lock().unwrap().resizing);
         assert_eq!(
             editor.snapshot(cx).revision(),
             crate::document::Revision::INITIAL
@@ -419,11 +447,18 @@ fn memory_plot_resize_is_transient_and_survives_source_edits(cx: &mut gpui::Test
         let handle = *editor
             .inline_image_handles
             .iter()
-            .find(|handle| handle.plot == Some(id))
+            .find(|handle| {
+                handle.plot == Some(id) && handle.axis == crate::plot::PlotResizeAxis::Height
+            })
             .unwrap();
         let position = handle.bounds.center();
         let document = editor.plots.host.as_ref().unwrap().document.clone();
         let before = document.read(cx).display_revision;
+        let previous_height = document.read(cx).entries[0]
+            .display
+            .lock()
+            .unwrap()
+            .requested_height;
         assert!(editor.image_resize_down(
             &gpui::MouseDownEvent {
                 position,
@@ -434,9 +469,22 @@ fn memory_plot_resize_is_transient_and_survives_source_edits(cx: &mut gpui::Test
             },
             cx
         ));
-        editor.image_resize_move(position + gpui::point(gpui::px(40.0), gpui::px(0.0)), cx);
+        editor.image_resize_move(position + gpui::point(gpui::px(40.0), gpui::px(40.0)), cx);
+        assert_eq!(
+            document.read(cx).entries[0]
+                .display
+                .lock()
+                .unwrap()
+                .requested_width,
+            requested,
+            "dragging the bottom edge only changes height"
+        );
         assert!(editor.cancel_inline_image_resize(cx));
         let document = document.read(cx);
+        assert_eq!(
+            document.entries[0].display.lock().unwrap().requested_height,
+            previous_height
+        );
         assert_eq!(
             document.entries[0].display.lock().unwrap().requested_width,
             requested
@@ -496,6 +544,50 @@ fn memory_plot_resize_is_transient_and_survives_source_edits(cx: &mut gpui::Test
                     editor.read(cx).snapshot(cx).len_bytes()
                 ))
                 .contains("ATTR_ORG")
+        );
+    });
+    let (document, entry, settled_size, dragged_revision) = editor.update(cx, |editor, cx| {
+        let plot = editor.plots.lines.values().next().unwrap().clone();
+        let settled_size = {
+            let display = plot.entry.display.lock().unwrap();
+            (display.requested_width, display.requested_height)
+        };
+        let handle = *editor
+            .inline_image_handles
+            .iter()
+            .find(|handle| handle.plot == Some(id))
+            .unwrap();
+        let position = handle.bounds.center();
+        editor.image_resize_down(
+            &gpui::MouseDownEvent {
+                position,
+                button: gpui::MouseButton::Left,
+                click_count: 1,
+                modifiers: Default::default(),
+                first_mouse: false,
+            },
+            cx,
+        );
+        editor.image_resize_move(position + gpui::point(gpui::px(40.0), gpui::px(40.0)), cx);
+        let revision = plot.document.read(cx).display_revision;
+        (plot.document, plot.entry, settled_size, revision)
+    });
+    cx.update(|window, cx| {
+        window.replace_root(cx, |_, _| gpui::Empty);
+        window.draw(cx).clear(cx);
+    });
+    cx.cx.update(|_| drop(editor));
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let display = entry.display.lock().unwrap();
+        assert_eq!(
+            (display.requested_width, display.requested_height),
+            settled_size
+        );
+        assert!(!display.resizing);
+        assert!(
+            document.read(cx).display_revision > dragged_revision,
+            "closing the editor must restore the shared chart size"
         );
     });
 }

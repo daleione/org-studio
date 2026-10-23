@@ -36,6 +36,10 @@ impl ReadingPreviewPanel {
             return;
         }
         if self.plots.is_none() {
+            cx.on_release(|panel, cx| {
+                panel.cancel_plot_resize(cx);
+            })
+            .detach();
             self.plots = Some(PlotHost::new(document.text.clone(), Self::sync_plots, cx));
         } else if let Some(host) = self.plots.as_mut() {
             host.refresh(document.text.clone(), None, cx);
@@ -190,12 +194,15 @@ pub(super) fn plot_style(style: super::PreviewStyle) -> PlotStyle {
     plot
 }
 
-pub(super) struct PlotResize {
-    entry: Arc<PlotEntry>,
+pub(super) struct PlotResizeSession {
+    document: gpui::Entity<crate::plot::PlotDocument>,
+    id: crate::plot::PlotId,
     target: Option<super::PreviewActionTarget>,
-    pointer_x: f32,
-    start_width: f32,
-    previous_width: Option<f32>,
+    pointer: (f32, f32),
+    start_size: (f32, f32),
+    current_size: (f32, f32),
+    previous_size: (Option<f32>, Option<f32>),
+    axis: crate::plot::PlotResizeAxis,
     column_width: f32,
     moved: bool,
 }
@@ -207,48 +214,63 @@ impl ReadingPreviewPanel {
         cx.notify();
     }
 
+    pub(super) fn cancel_plot_resize(&mut self, cx: &mut gpui::App) {
+        if let Some(drag) = self.plot_resize.take() {
+            drag.document.update(cx, |document, cx| {
+                document.resize_canvas(
+                    drag.id,
+                    drag.previous_size.0,
+                    drag.previous_size.1,
+                    false,
+                    cx,
+                )
+            });
+        }
+    }
+
     pub(super) fn start_plot_resize(
         &mut self,
         plot: &PlotPresentation,
-        pointer_x: f32,
+        pointer: (f32, f32),
         column_width: f32,
         target: Option<super::PreviewActionTarget>,
+        axis: crate::plot::PlotResizeAxis,
+        cx: &mut gpui::Context<Self>,
     ) {
-        self.plot_resize = Some(PlotResize {
-            entry: plot.entry.clone(),
+        self.cancel_plot_resize(cx);
+        let display = plot.entry.display.lock().unwrap();
+        self.plot_resize = Some(PlotResizeSession {
+            document: plot.document.clone(),
+            id: plot.entry.id,
             target,
-            pointer_x,
-            start_width: plot.width,
-            previous_width: plot.entry.display.lock().unwrap().requested_width,
+            pointer,
+            start_size: (plot.width, plot.height),
+            current_size: (plot.width, plot.height),
+            previous_size: (display.requested_width, display.requested_height),
             column_width,
+            axis,
             moved: false,
         });
     }
 
-    pub(super) fn move_plot_resize(&mut self, pointer_x: f32, cx: &mut gpui::Context<Self>) {
+    pub(super) fn move_plot_resize(&mut self, pointer: (f32, f32), cx: &mut gpui::Context<Self>) {
         let Some(drag) = &mut self.plot_resize else {
             return;
         };
-        let width = super::clamp_image_width(
-            drag.start_width + pointer_x - drag.pointer_x,
+        let (width, height) = drag.axis.resize(
+            drag.start_size,
+            (pointer.0 - drag.pointer.0, pointer.1 - drag.pointer.1),
             drag.column_width,
         );
-        if drag
-            .entry
-            .display
-            .lock()
-            .unwrap()
-            .requested_width
-            .is_some_and(|current| (width - current).abs() < 0.25)
+        if (width - drag.current_size.0).abs() < 0.25 && (height - drag.current_size.1).abs() < 0.25
         {
             return;
         }
+        drag.current_size = (width, height);
         drag.moved = true;
-        let id = drag.entry.id;
-        if let Some(host) = &self.plots {
-            host.document
-                .update(cx, |document, cx| document.resize(id, Some(width), cx));
-        }
+        drag.document.update(cx, |document, cx| {
+            document.resize_canvas(drag.id, Some(width), Some(height), true, cx)
+        });
     }
 
     pub(super) fn finish_plot_resize(
@@ -256,16 +278,23 @@ impl ReadingPreviewPanel {
         cx: &mut gpui::Context<Self>,
     ) -> Option<super::PreviewAction> {
         let drag = self.plot_resize.take()?;
-        let width = drag.entry.display.lock().unwrap().requested_width;
+        let (width, height) = if drag.moved {
+            (Some(drag.current_size.0), Some(drag.current_size.1))
+        } else {
+            drag.previous_size
+        };
+        drag.document.update(cx, |document, cx| {
+            document.resize_canvas(drag.id, width, height, false, cx)
+        });
         if !drag.moved {
-            drag.entry.display.lock().unwrap().requested_width = drag.previous_width;
+            return None;
         }
-        self.invalidate_plot_sizes(cx);
-        drag.moved.then_some(drag.target).flatten().map(|target| {
-            super::PreviewAction::ResizeImage {
-                target,
-                width: width.map(|width| width.round() as u32),
-            }
+        drag.target.map(|target| super::PreviewAction::ResizeImage {
+            target,
+            size: Some((
+                drag.current_size.0.round() as u32,
+                drag.current_size.1.round() as u32,
+            )),
         })
     }
 
@@ -275,8 +304,7 @@ impl ReadingPreviewPanel {
         cx: &mut gpui::Context<Self>,
     ) {
         plot.document
-            .update(cx, |document, cx| document.resize(plot.entry.id, None, cx));
-        self.invalidate_plot_sizes(cx);
+            .update(cx, |document, cx| document.reset_size(plot.entry.id, cx));
     }
 }
 

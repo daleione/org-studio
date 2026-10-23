@@ -34,7 +34,7 @@ pub(crate) enum PreviewAction {
     CopyCode(PreviewActionTarget),
     ResizeImage {
         target: PreviewActionTarget,
-        width: Option<u32>,
+        size: Option<(u32, u32)>,
     },
     OpenImage {
         target: PreviewActionTarget,

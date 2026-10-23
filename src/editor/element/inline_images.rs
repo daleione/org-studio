@@ -65,7 +65,7 @@ pub(super) fn resolve_inline_images(
                         editor.inline_image_line_dimensions.borrow_mut().insert(
                             line,
                             InlineImageMetrics {
-                                plot: false,
+                                plot: None,
                                 line_start: range.start.0,
                                 source: *dimensions,
                                 spec: spec.clone(),
@@ -110,7 +110,7 @@ pub(super) fn resolve_inline_images(
             // The cache keeps the authored attributes only: a drag is layered on
             // top at resolve time so it can never re-enter this notify path.
             let metrics = InlineImageMetrics {
-                plot: false,
+                plot: None,
                 line_start: line_start.0,
                 source: dimensions,
                 spec,
@@ -155,20 +155,10 @@ pub(super) fn resolve_inline_images(
             continue;
         };
         let metrics = InlineImageMetrics {
-            plot: true,
+            plot: Some(plot.entry.clone()),
             line_start: line_start.0,
             source: plot.entry.dimensions(),
-            spec: plot
-                .entry
-                .display
-                .lock()
-                .unwrap()
-                .requested_width
-                .map(crate::org_syntax::attributes::ImageAttributeSpec::from_width_px)
-                .unwrap_or_else(|| {
-                    host.read(cx)
-                        .inline_image_attribute_spec(snapshot, line_start)
-                }),
+            spec: plot.entry.source.image_attributes.clone(),
         };
         host.read(cx)
             .inline_image_line_dimensions

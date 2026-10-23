@@ -23,7 +23,29 @@ pub(crate) enum PlotOutputTarget {
 #[derive(Debug, Default)]
 pub(crate) struct PlotDisplayState {
     pub(crate) requested_width: Option<f32>,
+    pub(crate) requested_height: Option<f32>,
+    pub(crate) resizing: bool,
     pub(crate) selected: bool,
+}
+
+impl PlotDisplayState {
+    pub(crate) fn attributes(
+        &self,
+        authored: &crate::org_syntax::attributes::ImageAttributeSpec,
+    ) -> crate::org_syntax::attributes::ImageAttributeSpec {
+        use crate::org_syntax::attributes::{ImageAttributeSpec, ImageLength};
+        if self.requested_width.is_none() && self.requested_height.is_none() {
+            return authored.clone();
+        }
+        ImageAttributeSpec {
+            width: self.requested_width.map(ImageLength::Px).or(authored.width),
+            height: self
+                .requested_height
+                .map(ImageLength::Px)
+                .or(authored.height),
+            scale: None,
+        }
+    }
 }
 
 pub(crate) type PlotDisplay = Arc<Mutex<PlotDisplayState>>;
@@ -218,12 +240,35 @@ pub(crate) struct PlotPlan {
     pub(crate) fill_to_zero: bool,
     pub(crate) clip: bool,
     pub(crate) stacked: bool,
+    #[serde(skip)]
+    pub(crate) time_axis: Option<PlotTimeAxis>,
+    pub(crate) x_minor_ticks: Vec<f64>,
+    pub(crate) x_context: Vec<PlotTick>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PlotTimeAxis {
+    pub(crate) min: f64,
+    pub(crate) max: f64,
+    pub(crate) ticks: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct PreparedPlot {
     pub(crate) content_key: Arc<[u8]>,
     pub(crate) plan: PlotPlan,
+    pub(crate) natural_size: (u32, u32),
+}
+
+impl PreparedPlot {
+    pub(super) fn new(content_key: Arc<[u8]>, plan: PlotPlan) -> Self {
+        let natural_size = super::layout::natural_size(&plan);
+        Self {
+            content_key,
+            plan,
+            natural_size,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -305,6 +350,7 @@ impl PlotStyle {
 pub(crate) struct PlotRenderKey {
     pub(crate) content: Arc<[u8]>,
     pub(crate) style: PlotStyle,
+    pub(crate) size: (u32, u32),
 }
 
 #[derive(Clone, Debug)]
@@ -315,9 +361,53 @@ pub(crate) struct PlotRenderRequest {
 
 impl PlotRenderRequest {
     pub(crate) fn natural(plot: Arc<PreparedPlot>, style: PlotStyle) -> Self {
+        let (width, height) = plot.natural_size;
+        Self::sized(plot, style, width as f32, height as f32)
+    }
+
+    pub(crate) fn for_display(
+        plot: Arc<PreparedPlot>,
+        style: PlotStyle,
+        size: (f32, f32),
+        font_size: f32,
+    ) -> Self {
+        let scale = super::layout::display_scale(font_size);
+        Self::sized(plot, style, size.0 / scale, size.1 / scale)
+    }
+
+    pub(crate) fn for_export(
+        plot: Arc<PreparedPlot>,
+        style: PlotStyle,
+        attributes: &crate::org_syntax::attributes::ImageAttributeSpec,
+    ) -> Self {
+        use crate::org_syntax::attributes::ImageLength;
+        if attributes.scale.is_some() {
+            return Self::natural(plot, style);
+        }
+        // Relative lengths remain relative to the exported page. Dragged pixel
+        // dimensions must reflow the SVG before it is embedded.
+        let pixels = |length| match length {
+            Some(ImageLength::Px(value)) => Some(value),
+            _ => None,
+        };
+        let (width, height) = super::layout::canvas_size(
+            pixels(attributes.width).unwrap_or(plot.natural_size.0 as f32),
+            pixels(attributes.height).unwrap_or(plot.natural_size.1 as f32),
+        );
+        let height = (height as f32).max(super::layout::minimum_height(&plot.plan, width as f32));
+        Self::sized(plot, style, width as f32, height)
+    }
+
+    pub(crate) fn sized(
+        plot: Arc<PreparedPlot>,
+        style: PlotStyle,
+        width: f32,
+        height: f32,
+    ) -> Self {
         let key = PlotRenderKey {
             content: plot.content_key.clone(),
             style,
+            size: super::layout::canvas_size(width, height),
         };
         Self { key, plot }
     }

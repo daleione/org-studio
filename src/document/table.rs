@@ -1,6 +1,21 @@
 use std::ops::Range;
 
+use unicode_width::UnicodeWidthStr;
+
 use super::DocumentFormat;
+use crate::org_syntax::inline::EntityText;
+
+/// Table padding counts the same entity glyphs shown by the editor, while
+/// keeping the original source available for editing and copying.
+pub(crate) fn text_width(source: &str, format: DocumentFormat) -> usize {
+    let entities = (format == DocumentFormat::Org && source.contains('\\'))
+        .then(|| EntityText::new(source, None));
+    let text = entities
+        .as_ref()
+        .map_or(source, |entities| entities.text.as_str());
+    text.split('\t').map(UnicodeWidthStr::width).sum::<usize>()
+        + text.bytes().filter(|byte| *byte == b'\t').count() * 4
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct SeparatorAlignment {

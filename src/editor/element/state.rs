@@ -19,6 +19,7 @@ pub(super) struct InlineImage {
 /// The bottom-right drag grip of one painted inline image.
 pub(super) struct InlineImageResizeHandlePaint {
     pub(super) plot: Option<crate::plot::PlotId>,
+    pub(super) edges: Vec<(crate::plot::PlotResizeAxis, Bounds<Pixels>, Hitbox)>,
     /// Painted grip quad.
     pub(super) bounds: Bounds<Pixels>,
     /// Grip plus hit slop; the editor hit-tests against this.
@@ -93,8 +94,50 @@ impl InlineImageResizeHandlePaint {
             point(bounds.left() - px(slop), bounds.top() - px(slop)),
             size(px(edge + slop * 2.0), px(edge + slop * 2.0)),
         );
+        let edges = if plot.is_some() {
+            [
+                (
+                    crate::plot::PlotResizeAxis::Width,
+                    Bounds::new(
+                        point(
+                            image_bounds.right() - px(5.0),
+                            image_bounds.top() + px(12.0),
+                        ),
+                        size(
+                            px(10.0),
+                            (image_bounds.size.height - px(edge + 12.0)).max(px(0.0)),
+                        ),
+                    ),
+                ),
+                (
+                    crate::plot::PlotResizeAxis::Height,
+                    Bounds::new(
+                        point(
+                            image_bounds.left() + px(12.0),
+                            image_bounds.bottom() - px(5.0),
+                        ),
+                        size(
+                            (image_bounds.size.width - px(edge + 12.0)).max(px(0.0)),
+                            px(10.0),
+                        ),
+                    ),
+                ),
+            ]
+            .into_iter()
+            .map(|(axis, bounds)| {
+                (
+                    axis,
+                    bounds,
+                    window.insert_hitbox(bounds, HitboxBehavior::Normal),
+                )
+            })
+            .collect()
+        } else {
+            Vec::new()
+        };
         Self {
             plot,
+            edges,
             bounds,
             interaction_bounds,
             line,

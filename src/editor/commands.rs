@@ -2261,6 +2261,9 @@ impl Render for SemanticEditor {
         if self.focus_lost_subscription.is_none() {
             self.focus_lost_subscription = Some(cx.on_focus_lost(window, |this, _, cx| {
                 this.cancel_table_resize(cx);
+                if this.cancel_inline_image_resize(cx) {
+                    cx.notify();
+                }
                 this.finish_composition(cx);
             }));
         }

@@ -123,7 +123,10 @@ pub(crate) fn render_reading_document(
         })
         .on_mouse_move(move |event, _, cx| {
             drag_panel.update(cx, |panel, cx| {
-                panel.move_plot_resize(f32::from(event.position.x), cx)
+                panel.move_plot_resize(
+                    (f32::from(event.position.x), f32::from(event.position.y)),
+                    cx,
+                )
             });
         })
         .on_mouse_up_out(gpui::MouseButton::Left, move |_, window, cx| {
@@ -946,49 +949,81 @@ fn render_plot_image(
                     }
                 }),
         )
-        .child(
-            div()
-                .id(("reading-plot-grip", plot.entry.id.0))
-                .absolute()
-                .right_0()
-                .bottom_0()
-                .w(px(24.0))
-                .h(px(24.0))
-                .p(px(1.0))
-                .cursor(gpui::CursorStyle::ResizeUpLeftDownRight)
-                .opacity(if selected { 1.0 } else { 0.0 })
-                .group_hover("reading-plot-image", |style| style.opacity(1.0))
-                .child(
-                    img(grip)
-                        .size_full()
-                        .rounded_br(px(crate::components::image_frame::CONTENT_RADIUS)),
-                )
-                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+        .children(
+            [
+                crate::plot::PlotResizeAxis::Width,
+                crate::plot::PlotResizeAxis::Height,
+                crate::plot::PlotResizeAxis::Both,
+            ]
+            .into_iter()
+            .map(move |axis| {
+                let panel = grip_panel.clone();
+                let plot = grip_plot.clone();
+                let target = target.clone();
+                let dispatch = dispatch.clone();
+                let id = match axis {
+                    crate::plot::PlotResizeAxis::Width => "reading-plot-width",
+                    crate::plot::PlotResizeAxis::Height => "reading-plot-height",
+                    crate::plot::PlotResizeAxis::Both => "reading-plot-grip",
+                };
+                let handle = div()
+                    .id((id, plot.entry.id.0))
+                    .absolute()
+                    .cursor(axis.cursor());
+                let handle = match axis {
+                    crate::plot::PlotResizeAxis::Width => handle
+                        .right(px(-5.0))
+                        .top(px(12.0))
+                        .bottom(px(24.0))
+                        .w(px(10.0)),
+                    crate::plot::PlotResizeAxis::Height => handle
+                        .bottom(px(-5.0))
+                        .left(px(12.0))
+                        .right(px(24.0))
+                        .h(px(10.0)),
+                    crate::plot::PlotResizeAxis::Both => handle
+                        .right_0()
+                        .bottom_0()
+                        .w(px(24.0))
+                        .h(px(24.0))
+                        .p(px(1.0))
+                        .opacity(if selected { 1.0 } else { 0.0 })
+                        .group_hover("reading-plot-image", |style| style.opacity(1.0))
+                        .child(
+                            img(grip.clone())
+                                .size_full()
+                                .rounded_br(px(crate::components::image_frame::CONTENT_RADIUS)),
+                        ),
+                };
+                handle.on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
                     if event.click_count >= 2 {
-                        grip_panel.update(cx, |panel, cx| panel.reset_plot_size(&grip_plot, cx));
+                        panel.update(cx, |panel, cx| panel.reset_plot_size(&plot, cx));
                         if let Some(target) = &target {
                             dispatch(
                                 crate::preview::PreviewAction::ResizeImage {
                                     target: target.clone(),
-                                    width: None,
+                                    size: None,
                                 },
-                                grip_panel.clone(),
+                                panel.clone(),
                                 window,
                                 cx,
                             );
                         }
                     } else {
-                        grip_panel.update(cx, |panel, _| {
+                        panel.update(cx, |panel, cx| {
                             panel.start_plot_resize(
-                                &grip_plot,
-                                f32::from(event.position.x),
+                                &plot,
+                                (f32::from(event.position.x), f32::from(event.position.y)),
                                 column_width,
                                 target.clone(),
+                                axis,
+                                cx,
                             )
                         });
                     }
                     cx.stop_propagation();
-                }),
+                })
+            }),
         )
 }
 

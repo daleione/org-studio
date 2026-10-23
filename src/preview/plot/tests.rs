@@ -142,7 +142,7 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
     cx.executor()
         .advance_clock(std::time::Duration::from_millis(81));
     cx.run_until_parked();
-    panel.update(cx, |panel, cx| {
+    let (document, entry, settled_size, dragged_revision) = panel.update(cx, |panel, cx| {
         assert_eq!(panel.document().projection.rows.len(), base_count);
         let (index, visual) = panel
             .document()
@@ -171,15 +171,22 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
             )
             .unwrap();
         assert_eq!(plot.width, 320.0);
-        panel.start_plot_resize(&plot, 100.0, 900.0, Some(target));
-        panel.move_plot_resize(180.0, cx);
+        panel.start_plot_resize(
+            &plot,
+            (100.0, 0.0),
+            900.0,
+            Some(target),
+            crate::plot::PlotResizeAxis::Both,
+            cx,
+        );
+        panel.move_plot_resize((180.0, 80.0), cx);
         let action = panel.finish_plot_resize(cx).unwrap();
         assert!(matches!(
             action,
             super::super::PreviewAction::ResizeImage {
-                width: Some(400),
+                size: Some((400, height)),
                 ..
-            }
+            } if height == (plot.height + 80.0).round() as u32
         ));
         assert_eq!(panel.document().revision, snapshot.revision());
         assert_eq!(
@@ -192,6 +199,44 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
                 .unwrap()
                 .0,
             400.0
+        );
+        let settled_size = {
+            let display = plot.entry.display.lock().unwrap();
+            (display.requested_width, display.requested_height)
+        };
+        let plot = panel
+            .plot_presentation(
+                &projection,
+                false,
+                900.0,
+                *super::super::preview_style(super::super::PreviewStyleId::Base),
+                cx,
+            )
+            .unwrap();
+        panel.start_plot_resize(
+            &plot,
+            (0.0, 0.0),
+            900.0,
+            None,
+            crate::plot::PlotResizeAxis::Both,
+            cx,
+        );
+        panel.move_plot_resize((40.0, 40.0), cx);
+        let revision = plot.document.read(cx).display_revision;
+        (plot.document, plot.entry, settled_size, revision)
+    });
+    cx.update(|_| drop(panel));
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let display = entry.display.lock().unwrap();
+        assert_eq!(
+            (display.requested_width, display.requested_height),
+            settled_size
+        );
+        assert!(!display.resizing);
+        assert!(
+            document.read(cx).display_revision > dragged_revision,
+            "closing a pane must publish the cancelled size to other hosts"
         );
     });
 }

@@ -434,7 +434,11 @@ impl RowShaping<'_> {
                     preview.bounds,
                     line_number,
                     source.line_start,
-                    None,
+                    self.editor
+                        .plots
+                        .lines
+                        .get(&line_number)
+                        .map(|plot| plot.entry.id),
                     self.window,
                 ));
         }

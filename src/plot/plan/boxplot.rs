@@ -104,9 +104,9 @@ pub(super) fn build(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagno
             label: series.label.clone(),
         })
         .collect();
-    Ok(Some(PreparedPlot {
+    Ok(Some(PreparedPlot::new(
         content_key,
-        plan: PlotPlan {
+        PlotPlan {
             layout: input.layout,
             kind: input.kind,
             title: input.title,
@@ -123,8 +123,11 @@ pub(super) fn build(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagno
                 || input.y_axis.max.is_some()
                 || input.box_width.is_some(),
             stacked: false,
+            time_axis: None,
+            x_minor_ticks: Vec::new(),
+            x_context: Vec::new(),
         },
-    }))
+    )))
 }
 
 // Gnuplot averages adjacent ranks only when n*p is integral (p = 1/4, 1/2, 3/4).

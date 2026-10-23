@@ -65,6 +65,12 @@ fn editor_table_entities_display_data_and_preserve_columns_caret_and_undo(
     let cases = [
         (r"a\vert{}b", "a|b"),
         (r"\nbsp{}padded\nbsp{}", " padded "),
+        (r"《示例：A12》\nbsp{}", "《示例：A12》 "),
+        (
+            "用于测试列宽的较长中文示例文本",
+            "用于测试列宽的较长中文示例文本",
+        ),
+        (r"=\nbsp{}= \unknown{}", r"=\nbsp{}= \unknown{}"),
         (
             r"\ast{}粗体\ast{} \under{}下划线\under{} \equal{}原样\equal{} \tilde{}代码\tilde{}",
             "*粗体* _下划线_ =原样= ~代码~",
@@ -150,6 +156,53 @@ fn editor_table_entities_display_data_and_preserve_columns_caret_and_undo(
         assert_eq!(
             snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
             source
+        );
+    });
+    editor.update(view, |editor, cx| {
+        assert!(editor.align_table_at_selection(cx));
+    });
+    view.run_until_parked();
+    let aligned = view.read(|cx| {
+        use unicode_width::UnicodeWidthStr;
+
+        let editor = editor.read(cx);
+        let snapshot = editor.snapshot(cx);
+        let source = snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()));
+        for (line, (encoded, _)) in source.lines().skip(2).zip(cases) {
+            let parsed =
+                crate::document::table::parse_line(line, crate::document::DocumentFormat::Org);
+            assert_eq!(&line[parsed.cells[0].text_range.clone()], encoded);
+        }
+        let mut expected = None;
+        for row in editor.hit_rows.iter() {
+            let Some(table) = &row.table_layout else {
+                continue;
+            };
+            let widths = table
+                .fragments
+                .iter()
+                .filter(|fragment| !fragment.delimiter)
+                .map(|fragment| fragment.layout.text.width())
+                .collect::<Vec<_>>();
+            if let Some(expected) = &expected {
+                assert_eq!(
+                    &widths, expected,
+                    "displayed columns must align: {:?}",
+                    row.display.text
+                );
+            } else {
+                expected = Some(widths);
+            }
+        }
+        source
+    });
+    view.simulate_keystrokes("tab");
+    view.run_until_parked();
+    view.read(|cx| {
+        let snapshot = editor.read(cx).snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            aligned
         );
     });
 }
@@ -1149,7 +1202,7 @@ fn minimap_opened_after_scroll_keeps_visible_svg_dimensions_stable(cx: &mut gpui
                 editor.inline_image_line_dimensions.borrow_mut().insert(
                     source.line,
                     crate::editor::InlineImageMetrics {
-                        plot: false,
+                        plot: None,
                         line_start: source.line_start,
                         source: (width, height),
                         spec: Default::default(),

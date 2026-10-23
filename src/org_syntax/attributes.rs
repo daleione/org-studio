@@ -97,15 +97,64 @@ pub(crate) fn image_width_edit(
     image: crate::document::ByteOffset,
     width: Option<f32>,
 ) -> Option<crate::document::TextEdit> {
+    image_attribute_edit(
+        snapshot,
+        image,
+        |text| match width {
+            Some(width) => attr_org_line_with_width(text, width),
+            None => attr_org_line_without_width(text),
+        },
+        width.map(|width| format!("#+ATTR_ORG: :width {}", format_width(width))),
+    )
+}
+
+/// Chart canvases have independent dimensions; ordinary images keep width-only edits.
+pub(crate) fn image_size_edit(
+    snapshot: &DocumentSnapshot,
+    image: crate::document::ByteOffset,
+    size: Option<(f32, f32)>,
+) -> Option<crate::document::TextEdit> {
+    let dimensions = size.map(|(width, height)| {
+        format!(
+            ":width {} :height {}",
+            format_width(width),
+            format_width(height)
+        )
+    });
+    image_attribute_edit(
+        snapshot,
+        image,
+        |text| {
+            let keyword = attr_org_literal(text)?;
+            let mut tokens = key_value_tokens(text)
+                .filter(|(key, _)| {
+                    !matches!(
+                        key.to_ascii_lowercase().as_str(),
+                        ":width" | ":height" | ":scale"
+                    )
+                })
+                .map(|(key, value)| format!("{key} {value}"))
+                .collect::<Vec<_>>();
+            tokens.extend(dimensions.clone());
+            (!tokens.is_empty()).then(|| format!("{keyword} {}", tokens.join(" ")))
+        },
+        dimensions
+            .as_ref()
+            .map(|dimensions| format!("#+ATTR_ORG: {dimensions}")),
+    )
+}
+
+fn image_attribute_edit(
+    snapshot: &DocumentSnapshot,
+    image: crate::document::ByteOffset,
+    rewrite: impl FnOnce(&str) -> Option<String>,
+    new_line: Option<String>,
+) -> Option<crate::document::TextEdit> {
     let line = snapshot.line_index_at(image).ok()?;
     if let Some(index) = attr_org_line_above(snapshot, line.0) {
         let content = snapshot.line_content_range(LineIndex(index)).ok()?;
         let text = snapshot.copy_range(content);
-        let updated = match width {
-            Some(width) => attr_org_line_with_width(&text, width),
-            None => attr_org_line_without_width(&text),
-        };
-        match updated {
+        match rewrite(&text) {
             Some(updated) if updated != text.trim_end() => {
                 Some(crate::document::TextEdit::new(content, updated))
             }
@@ -116,10 +165,10 @@ pub(crate) fn image_width_edit(
             )),
         }
     } else {
-        width.map(|width| {
+        new_line.map(|line| {
             crate::document::TextEdit::new(
                 crate::document::ByteRange::new(image.0, image.0),
-                format!("#+ATTR_ORG: :width {}\n", width.round() as i64),
+                format!("{line}\n"),
             )
         })
     }
@@ -394,5 +443,32 @@ mod tests {
         );
         // Nothing left to keep means the whole line can go.
         assert!(attr_org_line_without_width("#+ATTR_ORG: :width 320").is_none());
+    }
+    #[test]
+    fn size_edits_preserve_other_attributes_and_remove_conflicting_scale() {
+        let source = "#+ATTR_ORG: :align center :scale 0.5 :width 320\n[[file:chart.svg]]\n";
+        let snapshot =
+            crate::document::DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let image = crate::document::ByteOffset(source.find("[[").unwrap() as u64);
+        let edit = image_size_edit(&snapshot, image, Some((720.0, 280.0))).unwrap();
+        let spec = parse_attr_org_line(&edit.replacement).unwrap();
+        assert_eq!(
+            (spec.width, spec.height, spec.scale),
+            (
+                Some(ImageLength::Px(720.0)),
+                Some(ImageLength::Px(280.0)),
+                None
+            )
+        );
+        assert!(edit.replacement.contains(":align center"));
+        let updated = format!("{}\n[[file:chart.svg]]\n", edit.replacement);
+        let snapshot =
+            crate::document::DocumentSnapshot::from_utf8(updated.as_bytes().to_vec()).unwrap();
+        let image = crate::document::ByteOffset(updated.find("[[").unwrap() as u64);
+        assert!(image_size_edit(&snapshot, image, Some((720.0, 280.0))).is_none());
+        assert_eq!(
+            image_size_edit(&snapshot, image, None).unwrap().replacement,
+            "#+ATTR_ORG: :align center"
+        );
     }
 }

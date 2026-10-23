@@ -1,6 +1,7 @@
 use super::*;
 use crate::document::{DocumentSnapshot, TextSnapshot};
 
+mod layout;
 mod statistics;
 
 fn prepared(source: &str) -> PlotPreparation {
@@ -328,11 +329,7 @@ fn bundled_cetz_renders_all_basic_marks_offline_with_literal_unicode_labels() {
             .split_whitespace()
             .map(|number| number.parse::<f64>().unwrap())
             .collect::<Vec<_>>();
-        let expected_ratio = if name.starts_with("radar") {
-            9.0 / 8.0
-        } else {
-            48.0 / 25.0
-        };
+        let expected_ratio = request.key.size.0 as f64 / request.key.size.1 as f64;
         assert!((view_box[2] / view_box[3] - expected_ratio).abs() < 1e-5);
     }
     let PlotPreparation::Ready(plot) = prepared(
@@ -353,15 +350,17 @@ fn bundled_cetz_renders_all_basic_marks_offline_with_literal_unicode_labels() {
 #[test]
 fn plots_are_exported_from_the_frozen_org_table_without_image_files() {
     let directory = tempfile::tempdir().unwrap();
-    for (file, link) in [
-        ("", ""),
+    for (file, link, expected_ratio) in [
+        ("", "", 480.0 / 250.0),
         (
             " file:\"images/orders.svg\"",
-            "\nAfter the table.\n\n#+ATTR_ORG: :width 320\n[[file:images/orders.svg]]\n",
+            "\nAfter the table.\n\n#+ATTR_ORG: :width 320 :height 400\n[[file:images/orders.svg]]\n",
+            320.0 / 400.0,
         ),
         (
             " file:\"images/orders.png\"",
             "\n#+ATTR_ORG: :width 320\n[[file:images/orders.png]]\n",
+            320.0 / 250.0,
         ),
     ] {
         let source = format!(
@@ -388,16 +387,34 @@ fn plots_are_exported_from_the_frozen_org_table_without_image_files() {
         );
         let svg = std::str::from_utf8(&output.files[0]).unwrap();
         let document = roxmltree::Document::parse(svg).unwrap();
-        assert_eq!(
-            document
-                .descendants()
-                .filter(|node| node.is_element()
+        let images = document
+            .descendants()
+            .filter(|node| {
+                node.is_element()
                     && node.tag_name().name() == "image"
-                    && node.attributes().any(|attribute| attribute.name() == "href"
-                        && attribute.value().starts_with("data:image/")))
-                .count(),
+                    && node.attributes().any(|attribute| {
+                        attribute.name() == "href" && attribute.value().starts_with("data:image/")
+                    })
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            images.len(),
             1,
             "a linked chart must replace the image at its source row, without a second attached chart"
+        );
+        let width = images[0]
+            .attribute("width")
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        let height = images[0]
+            .attribute("height")
+            .unwrap()
+            .parse::<f64>()
+            .unwrap();
+        assert!(
+            (width / height - expected_ratio).abs() < 0.0001,
+            "export must preserve the authored canvas proportions"
         );
         assert_eq!(
             std::fs::read_dir(directory.path()).unwrap().count(),
@@ -418,7 +435,6 @@ fn plot_outputs_are_explicit_and_display_fit_preserves_requested_width() {
         output::destination(&target, None).unwrap_err().code,
         "unsaved-output"
     );
-    assert!(output::destination(&target, None).is_err());
     assert_eq!(
         output::destination(&target, Some(std::path::Path::new("plot.org"))).unwrap(),
         Some(std::env::current_dir().unwrap().join("images/chart.svg"))
@@ -436,30 +452,38 @@ fn plot_outputs_are_explicit_and_display_fit_preserves_requested_width() {
     let dimensions = PlotLayout::Cartesian.dimensions();
     let spec = Default::default();
     assert_eq!(
-        plot_image_size(dimensions, None, &spec, &sizing(1200.0, 900.0)),
-        (480.0, 250.0)
+        super::layout::display_size(dimensions, &spec, &sizing(1200.0, 900.0)),
+        (600.0, 312.5)
     );
-    let (width, height) = plot_image_size(dimensions, None, &spec, &sizing(1200.0, 400.0));
-    assert!(height <= 160.01 && width < 480.0);
-    let requested = Some(640.0);
+    let (width, height) = super::layout::display_size(dimensions, &spec, &sizing(1200.0, 400.0));
     assert_eq!(
-        plot_image_size(dimensions, requested, &spec, &sizing(300.0, 900.0)).0,
+        (width, height),
+        (600.0, 312.5),
+        "a shorter viewport must not shrink the plot"
+    );
+    let requested = crate::org_syntax::attributes::ImageAttributeSpec::from_width_px(640.0);
+    assert_eq!(
+        super::layout::display_size(dimensions, &requested, &sizing(300.0, 900.0)).0,
         300.0
     );
     assert_eq!(
-        plot_image_size(dimensions, requested, &spec, &sizing(1000.0, 900.0)).0,
+        super::layout::display_size(dimensions, &requested, &sizing(1000.0, 900.0)).0,
         640.0
     );
     let em = crate::org_syntax::attributes::parse_attr_org_line("#+ATTR_ORG: :width 10em").unwrap();
     assert_eq!(
-        plot_image_size(dimensions, None, &em, &sizing(1200.0, 900.0)).0,
+        super::layout::display_size(dimensions, &em, &sizing(1200.0, 900.0)).0,
         200.0
     );
     let radar = PlotLayout::Radar.dimensions();
     assert_eq!(
-        plot_image_size(radar, None, &spec, &sizing(1200.0, 900.0)),
-        (315.0, 280.0)
+        super::layout::display_size(radar, &spec, &sizing(1200.0, 900.0)),
+        (450.0, 400.0)
     );
-    let (width, height) = plot_image_size(radar, Some(640.0), &spec, &sizing(1000.0, 900.0));
-    assert!((width / height - 9.0 / 8.0).abs() < 1e-5);
+    let (width, height) = super::layout::display_size(radar, &requested, &sizing(1000.0, 900.0));
+    assert_eq!(
+        (width, height),
+        (640.0, 400.0),
+        "chart widths reflow independently of height"
+    );
 }

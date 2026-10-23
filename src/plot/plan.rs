@@ -132,9 +132,9 @@ pub(super) fn build_plan(mut input: PlotInput) -> Result<Option<PreparedPlot>, P
         return Err(range_error());
     }
     let content_key = content_key(&input)?;
-    Ok(Some(PreparedPlot {
+    Ok(Some(PreparedPlot::new(
         content_key,
-        plan: PlotPlan {
+        PlotPlan {
             layout: input.layout,
             kind: input.kind,
             title: input.title,
@@ -164,8 +164,21 @@ pub(super) fn build_plan(mut input: PlotInput) -> Result<Option<PreparedPlot>, P
                 || input.y_axis.max.is_some()
                 || input.kind == PlotKind::HiSteps,
             stacked: stacks.is_some(),
+            time_axis: if matches!(input.x, PlotX::Time(_)) {
+                numeric_axis
+                    .as_ref()
+                    .map(|(min, max, _)| super::PlotTimeAxis {
+                        min: *min,
+                        max: *max,
+                        ticks: input.ticks,
+                    })
+            } else {
+                None
+            },
+            x_minor_ticks: Vec::new(),
+            x_context: Vec::new(),
         },
-    }))
+    )))
 }
 
 fn box_bounds(
@@ -278,9 +291,9 @@ fn radar(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
         })
         .collect();
     let content_key = content_key(&input)?;
-    Ok(Some(PreparedPlot {
+    Ok(Some(PreparedPlot::new(
         content_key,
-        plan: PlotPlan {
+        PlotPlan {
             layout: PlotLayout::Radar,
             kind: input.kind,
             title: input.title,
@@ -302,8 +315,11 @@ fn radar(input: PlotInput) -> Result<Option<PreparedPlot>, PlotDiagnostic> {
             fill_to_zero: false,
             clip: false,
             stacked: false,
+            time_axis: None,
+            x_minor_ticks: Vec::new(),
+            x_context: Vec::new(),
         },
-    }))
+    )))
 }
 
 fn content_key(input: &PlotInput) -> Result<std::sync::Arc<[u8]>, PlotDiagnostic> {

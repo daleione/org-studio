@@ -330,12 +330,22 @@ pub(super) fn paint_frame(
                 }
                 let grip_icon = resize_grip_icon(cx);
                 for handle in &state.image_resize_handles {
+                    for (axis, _, hitbox) in &handle.edges {
+                        if hitbox.is_hovered(window) {
+                            window.set_cursor_style(axis.cursor(), hitbox);
+                        }
+                    }
                     let dragging = host.read(cx).image_resize.is_some_and(|session| {
                         session.plot == handle.plot
                             && (handle.plot.is_some() || session.line_start == handle.line_start)
                     });
                     if handle.hitbox.is_hovered(window) || dragging {
-                        window.set_cursor_style(INLINE_IMAGE_RESIZE_CURSOR, &handle.hitbox);
+                        let cursor = host
+                            .read(cx)
+                            .image_resize
+                            .filter(|session| session.plot == handle.plot)
+                            .map_or(INLINE_IMAGE_RESIZE_CURSOR, |session| session.axis.cursor());
+                        window.set_cursor_style(cursor, &handle.hitbox);
                     }
                     // The icon only appears while the pointer is over the image (or
                     // while dragging it).

@@ -3,10 +3,7 @@ use std::{ops::Range, sync::Arc};
 
 use gpui::{Bounds, Font, Pixels, Point, TextRun, WrappedLine, point, px};
 
-use super::{
-    org_commands::{TableColumns, table_text_width},
-    syntax,
-};
+use super::{org_commands::TableColumns, syntax};
 use crate::document::{DocumentFormat, DocumentSnapshot, LineIndex, TextSnapshot, table};
 use crate::org_syntax::inline::EntityText;
 
@@ -93,7 +90,8 @@ impl TableColumnMetrics {
                 let content = &text[cell.text_range.clone()];
                 let source_padding =
                     if columns.format == DocumentFormat::Org && columns.source_widths.is_some() {
-                        columns.widths[column].saturating_sub(table_text_width(content))
+                        columns.widths[column]
+                            .saturating_sub(table::text_width(content, columns.format))
                     } else {
                         0
                     };

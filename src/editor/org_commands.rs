@@ -1,7 +1,5 @@
 use std::{ops::Range, path::Path};
 
-use unicode_width::UnicodeWidthStr;
-
 mod batch;
 mod edit;
 mod formula;
@@ -333,15 +331,10 @@ fn table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> V
     let mut widths = minimum_table_widths(rows, columns, format);
     for row in rows.iter().filter(|row| !row.separator) {
         for (index, cell) in row.cells.iter().enumerate() {
-            widths[index] = widths[index].max(table_text_width(cell));
+            widths[index] = widths[index].max(source_table::text_width(cell, format));
         }
     }
     widths
-}
-
-pub(super) fn table_text_width(text: &str) -> usize {
-    text.split('\t').map(UnicodeWidthStr::width).sum::<usize>()
-        + text.bytes().filter(|byte| *byte == b'\t').count() * 4
 }
 
 /// Compare display columns, not byte offsets: Chinese text and escaped/literal pipes
@@ -350,7 +343,7 @@ fn source_rows_aligned(rows: &[String], columns: usize, format: DocumentFormat) 
     let positions = |row: &str| {
         source_table::delimiter_offsets(row, format)
             .into_iter()
-            .map(|offset| table_text_width(&row[..offset]))
+            .map(|offset| source_table::text_width(&row[..offset], format))
             .collect::<Vec<_>>()
     };
     let Some(first) = rows.first().map(|row| positions(row)) else {
@@ -397,7 +390,7 @@ fn source_row_widths(text: &str, columns: usize, format: DocumentFormat) -> Opti
     }
     row.cells
         .iter()
-        .map(|cell| table_text_width(&text[cell.raw_range.clone()]).checked_sub(2))
+        .map(|cell| source_table::text_width(&text[cell.raw_range.clone()], format).checked_sub(2))
         .collect()
 }
 
@@ -487,7 +480,7 @@ fn aligned_row(
         for (index, width) in widths.iter().enumerate() {
             output.push(' ');
             let cell = row.cells.get(index).map_or("", String::as_str);
-            let padding = width.saturating_sub(table_text_width(cell));
+            let padding = width.saturating_sub(source_table::text_width(cell, format));
             let right = align_right.is_some_and(|columns| columns[index]);
             if right {
                 output.push_str(&" ".repeat(padding));

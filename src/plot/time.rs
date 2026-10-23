@@ -123,8 +123,8 @@ pub(super) fn axis(
         return calendar_axis(min, max, rough, ticks == Some(0));
     }
     let step = [
-        0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1., 5., 15., 30., 60., 300., 900., 1800., 3600.,
-        10800., 21600., 43200., 86400., 172800., 604800., 1209600., 2592000.,
+        0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1., 5., 15., 30., 60., 300., 900., 1800., 3600., 7200.,
+        10800., 14400., 21600., 43200., 86400., 172800., 604800., 1209600., 2592000.,
     ]
     .into_iter()
     .find(|step| *step >= rough)
@@ -140,7 +140,7 @@ pub(super) fn axis(
     };
     let mut labels = Vec::new();
     let mut value = (min / step).ceil() * step;
-    while ticks != Some(0) && value <= max && labels.len() < 13 {
+    while ticks != Some(0) && value <= max && labels.len() < 49 {
         let stamp = Timestamp::from_millisecond((value * 1000.0).round() as i64).map_err(|_| {
             PlotDiagnostic::new(
                 "invalid-time",
@@ -177,7 +177,7 @@ fn calendar_axis(
     let ordinal = i32::from(start.year()) * 12 + i32::from(start.month()) - 1;
     let mut month = ordinal.div_euclid(months) * months;
     let mut labels = Vec::new();
-    while !hidden && labels.len() < 13 {
+    while !hidden && labels.len() < 49 {
         let Ok(day) = jiff::civil::Date::new(
             month.div_euclid(12) as i16,
             (month.rem_euclid(12) + 1) as i8,
@@ -204,4 +204,95 @@ fn calendar_axis(
         month += months;
     }
     Ok((min, max, labels))
+}
+
+/// Rebuild labels for the canvas, keeping the prepared data coordinates intact.
+pub(super) fn reflow(
+    plan: &mut super::PlotPlan,
+    width: u32,
+    font_size: f32,
+) -> Result<(), PlotDiagnostic> {
+    let Some(domain) = plan.time_axis else {
+        return Ok(());
+    };
+    plan.x_context.clear();
+    plan.x_minor_ticks.clear();
+    let span = domain.max - domain.min;
+    let count = domain.ticks.unwrap_or_else(|| {
+        ((width as f32 - 100.0).max(1.0) / (font_size * 5.0))
+            .floor()
+            .clamp(2.0, 24.0) as usize
+    });
+    let (_, _, mut ticks) = axis(
+        &[domain.min, domain.max],
+        PlotAxisSpec {
+            min: Some(domain.min),
+            max: Some(domain.max),
+        },
+        Some(count),
+    )?;
+    if count == 0 {
+        plan.x_ticks.clear();
+        return Ok(());
+    }
+    // Intraday charts put the date on a second row rather than repeating it.
+    if span < 172800.0 && !(domain.min >= 0.0 && domain.max < 86400.0) {
+        let format = if span >= 3600.0 { "%H:%M" } else { "%H:%M:%S" };
+        let gap = font_size as f64 * 4.5 / (width as f64 - 100.0).max(1.0);
+        ticks.retain(|tick| tick.position >= gap && tick.position <= 1.0 - gap);
+        ticks.insert(
+            0,
+            PlotTick {
+                position: 0.0,
+                label: String::new(),
+            },
+        );
+        ticks.push(PlotTick {
+            position: 1.0,
+            label: String::new(),
+        });
+        for tick in &mut ticks {
+            let value = domain.min + tick.position * span;
+            let stamp = Timestamp::from_millisecond((value * 1000.0).round() as i64).unwrap();
+            tick.label = stamp.strftime(format).to_string();
+            if span < 3600.0
+                && (span / (count as f64) < 1.0
+                    || domain.min.fract() != 0.0
+                    || domain.max.fract() != 0.0)
+            {
+                tick.label
+                    .push_str(&format!(".{:03}", stamp.as_millisecond().rem_euclid(1000)));
+            }
+        }
+        let first = Timestamp::from_second(domain.min.floor() as i64).unwrap();
+        plan.x_context.push(PlotTick {
+            position: 0.0,
+            label: first.strftime("%m-%d").to_string(),
+        });
+        let mut midnight = (domain.min / 86400.0).floor() * 86400.0 + 86400.0;
+        while midnight <= domain.max {
+            let position = (midnight - domain.min) / span;
+            let label = Timestamp::from_second(midnight as i64)
+                .unwrap()
+                .strftime("%m-%d")
+                .to_string();
+            // Keep both dates readable when the first day occupies only a few pixels.
+            if position * (width as f64 - 100.0) < font_size as f64 * 4.0 {
+                plan.x_context[0].label.push_str(&format!(" / {label}"));
+            } else {
+                plan.x_context.push(PlotTick { position, label });
+            }
+            midnight += 86400.0;
+        }
+    }
+    // Minor ticks indicate individual hours without repeating every label.
+    if (7200.0..=172800.0).contains(&span) && (width as f64 - 100.0) / (span / 3600.0) >= 8.0 {
+        let mut value = (domain.min / 3600.0).ceil() * 3600.0;
+        while value <= domain.max {
+            plan.x_minor_ticks.push((value - domain.min) / span);
+            value += 3600.0;
+        }
+    }
+    plan.x_ticks = ticks;
+    Ok(())
 }

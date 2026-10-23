@@ -1,6 +1,7 @@
 use super::{MAX_ARTIFACT_BYTES, PlotArtifact, PlotDiagnostic, PlotRenderRequest};
 use crate::typst_runtime::{OutputFormat, TypstEngine};
 use std::{
+    borrow::Cow,
     collections::BTreeMap,
     sync::{Mutex, OnceLock},
 };
@@ -10,7 +11,7 @@ pub(crate) fn render_plot(
     request: &PlotRenderRequest,
 ) -> Result<PlotArtifact, PlotDiagnostic> {
     let svg = render_file(engine, request, OutputFormat::Svg)?;
-    let (width, height) = request.plot.plan.layout.dimensions();
+    let (width, height) = request.key.size;
     Ok(PlotArtifact {
         key: request.key.clone(),
         svg: svg.into(),
@@ -36,8 +37,12 @@ pub(crate) fn render_file(
             .iter()
             .any(|known| known.eq_ignore_ascii_case(family))
     });
-    let (width, height) = request.plot.plan.layout.dimensions();
-    let input = serde_json::json!({"plan": &request.plot.plan, "style": style, "width": width, "height": height});
+    let (width, height) = request.key.size;
+    let mut plan = Cow::Borrowed(&request.plot.plan);
+    if plan.time_axis.is_some() {
+        super::time::reflow(plan.to_mut(), width, style.font_size_100 as f32 / 100.0)?;
+    }
+    let input = serde_json::json!({"plan": plan.as_ref(), "style": style, "width": width, "height": height});
     let inputs = BTreeMap::from([("chart-json".to_owned(), input.to_string())]);
     let body = match request.plot.plan.layout {
         super::PlotLayout::Cartesian => include_str!("../../assets/typst/plot/cartesian.typ"),

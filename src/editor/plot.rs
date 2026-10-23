@@ -1,7 +1,7 @@
 use super::SemanticEditor;
 use crate::{
     document::{ByteOffset, DocumentSnapshot, TextSnapshot},
-    plot::{PlotDemand, PlotEntry, PlotHost, PlotId, PlotPresentation, PlotStyle, plot_image_size},
+    plot::{PlotDemand, PlotEntry, PlotHost, PlotId, PlotPresentation, PlotStyle},
 };
 use gpui::{App, Bounds, Pixels};
 use std::{
@@ -75,28 +75,15 @@ pub(super) fn prepare(
                 editor.inline_image_line_dimensions.borrow_mut().insert(
                     line.0,
                     super::InlineImageMetrics {
-                        plot: true,
+                        plot: Some(entry.clone()),
                         line_start: link.start.0,
                         source: entry.dimensions(),
-                        spec: entry
-                            .display
-                            .lock()
-                            .unwrap()
-                            .requested_width
-                            .map(crate::org_syntax::attributes::ImageAttributeSpec::from_width_px)
-                            .unwrap_or_else(|| {
-                                editor.inline_image_attribute_spec(snapshot, link.start)
-                            }),
+                        spec: entry.source.image_attributes.clone(),
                     },
                 );
                 editor.apply_inline_image_row_height(line.0, width, f32::from(bounds.size.height));
             }
-            let (_, height) = plot_image_size(
-                entry.dimensions(),
-                entry.display.lock().unwrap().requested_width,
-                &entry.source.image_attributes,
-                &sizing,
-            );
+            let (_, height) = entry.image_size(&sizing);
             if entry.source.image_link.is_none() {
                 trailing.insert(line.0, height + 12.0);
             }

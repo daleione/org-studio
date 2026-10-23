@@ -78,7 +78,7 @@ fn plot_file_output_survives_unrelated_edits_and_discards_obsolete_writes(
     );
     let before = std::fs::read(&path).unwrap();
     document.update(cx, |document, cx| {
-        document.resize(entry.id, Some(600.0), cx)
+        document.resize_canvas(entry.id, Some(600.0), Some(400.0), false, cx)
     });
     cx.run_until_parked();
     assert_eq!(std::fs::read(&path).unwrap(), before);

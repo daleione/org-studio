@@ -1,6 +1,6 @@
 use super::{
-    PlotDemand, PlotDocument, PlotEntry, PlotId, PlotPreparation, PlotRenderRequest,
-    PlotRenderState, PlotService, PlotStyle,
+    PlotDemand, PlotDocument, PlotEntry, PlotId, PlotPreparation, PlotRenderState, PlotService,
+    PlotStyle,
 };
 use crate::components::image_frame::{CONTENT_RADIUS, ImageFrame};
 use crate::document::{ByteRange, Revision, RevisionDelta, RevisionRange, SharedTextSnapshot};
@@ -10,28 +10,6 @@ use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
 };
-
-pub(crate) fn plot_image_size(
-    source: (u32, u32),
-    requested: Option<f32>,
-    attributes: &crate::org_syntax::attributes::ImageAttributeSpec,
-    sizing: &crate::preview::ImageSizing,
-) -> (f32, f32) {
-    let spec = requested.map(crate::org_syntax::attributes::ImageAttributeSpec::from_width_px);
-    let (width, height) = (source.0 as f32, source.1 as f32);
-    let auto_width = width
-        .min(sizing.max_width.max(1.0))
-        .min(280.0 * width / height)
-        .min(sizing.max_height.max(1.0) * 0.2 * width / height);
-    crate::preview::resolve_image_size(
-        source,
-        Some(spec.as_ref().unwrap_or(attributes)),
-        &crate::preview::ImageSizing {
-            auto_width,
-            ..*sizing
-        },
-    )
-}
 
 pub(crate) struct PlotHost {
     pub(crate) document: Entity<PlotDocument>,
@@ -144,24 +122,26 @@ impl PlotHost {
         active: bool,
         cx: &mut App,
     ) -> PlotPresentation {
+        let (width, height) = entry.image_size(&sizing);
         let mut demand = None;
         let mut state = None;
         if active && let PlotPreparation::Ready(plot) = &entry.prepared {
             let lease = self.demands.entry(entry.id).or_default();
-            state = if self.current {
-                let request = PlotRenderRequest::natural(plot.clone(), style.clone());
-                lease.request(request, cx)
+            state = if self.current && !entry.display.lock().unwrap().resizing {
+                lease.request(
+                    super::PlotRenderRequest::for_display(
+                        plot.clone(),
+                        style.clone(),
+                        (width, height),
+                        sizing.font_size,
+                    ),
+                    cx,
+                )
             } else {
                 lease.state()
             };
             demand = Some(lease.clone());
         }
-        let (width, height) = plot_image_size(
-            entry.dimensions(),
-            entry.display.lock().unwrap().requested_width,
-            &entry.source.image_attributes,
-            &sizing,
-        );
         PlotPresentation {
             document: self.document.clone(),
             output_error: self.document.read(cx).output_errors.get(&entry.id).cloned(),

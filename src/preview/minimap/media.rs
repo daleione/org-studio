@@ -87,16 +87,18 @@ pub(super) fn image(
             image, ..
         }) => image.clone().use_render_image(window, cx),
         VisualRowKind::Plot(plot) => {
-            let crate::plot::PlotPreparation::Ready(prepared) = &plot.entry.prepared else {
-                return None;
-            };
-            let state = plot_demand?.request(
-                crate::plot::PlotRenderRequest::natural(
-                    prepared.clone(),
-                    crate::preview::plot::plot_style(style),
-                ),
-                cx,
-            )?;
+            let demand = plot_demand?;
+            let state = if plot.entry.display.lock().unwrap().resizing {
+                demand.state()
+            } else {
+                demand.request(
+                    plot.entry.render_request(
+                        &plot.sizing.lock().unwrap(),
+                        crate::preview::plot::plot_style(style),
+                    )?,
+                    cx,
+                )
+            }?;
             let rendered = state.rendered()?;
             Some(rendered.image.clone())
         }

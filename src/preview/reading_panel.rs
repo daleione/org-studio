@@ -29,7 +29,7 @@ pub(crate) struct ReadingPreviewPanel {
     pub(super) plot_rows: Vec<(usize, crate::plot::PlotId)>,
     plot_visible: Arc<HashSet<crate::plot::PlotId>>,
     pub(super) plot_display_revision: u64,
-    pub(super) plot_resize: Option<super::plot::PlotResize>,
+    pub(super) plot_resize: Option<super::plot::PlotResizeSession>,
     search_ranges: Arc<[crate::document::ByteRange]>,
     search_current: Option<crate::document::ByteRange>,
     search_origin: Option<SearchFoldOrigin>,
@@ -490,6 +490,7 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        self.cancel_plot_resize(cx);
         self.plot_source = None;
         self.plot_signature = None;
         self.plot_rows.clear();

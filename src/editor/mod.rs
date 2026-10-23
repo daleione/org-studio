@@ -659,9 +659,9 @@ impl EventEmitter<EditorOpenFileEvent> for SemanticEditor {}
 
 /// Everything needed to recompute an inline image's painted size without
 /// reading the document again.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct InlineImageMetrics {
-    pub(crate) plot: bool,
+    pub(crate) plot: Option<Arc<crate::plot::PlotEntry>>,
     pub(crate) line_start: u64,
     /// Source dimensions in logical pixels.
     pub(crate) source: (u32, u32),
@@ -677,20 +677,26 @@ pub(crate) struct InlineImageResizeHandle {
     pub(crate) bounds: Bounds<Pixels>,
     pub(crate) line: u64,
     pub(crate) line_start: ByteOffset,
-    /// Painted width the drag starts from.
     pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) axis: crate::plot::PlotResizeAxis,
 }
 
-/// An in-flight drag of an inline image's bottom-right grip.
+/// An in-flight drag of an image grip or a chart edge.
 #[derive(Clone, Copy, Debug)]
 struct ImageResizeSession {
     plot: Option<crate::plot::PlotId>,
     previous_width: Option<f32>,
+    previous_height: Option<f32>,
+    axis: crate::plot::PlotResizeAxis,
     line: u64,
     line_start: ByteOffset,
     start_pointer_x: f32,
+    start_pointer_y: f32,
     start_width: f32,
+    start_height: f32,
     current_width: f32,
+    current_height: f32,
     /// A press without movement must not turn into a document edit.
     moved: bool,
 }
@@ -832,6 +838,10 @@ impl SemanticEditor {
         syntax_service: Arc<syntax::EditorSyntaxService>,
         cx: &mut Context<Self>,
     ) -> Self {
+        cx.on_release(|editor, cx| {
+            editor.cancel_inline_image_resize(cx);
+        })
+        .detach();
         let subscription = cx.subscribe(&session, |this, _, event: &DocumentEvent, cx| {
             let reload_anchor = matches!(event, DocumentEvent::Reloaded { .. }).then(|| {
                 let line = this.animated_line_at_y(this.scroll_y);
@@ -1594,7 +1604,7 @@ impl SemanticEditor {
 
     /// Drops an in-flight drag, e.g. when the document changes underneath it.
     /// Returns whether a drag was cancelled so callers can repaint.
-    pub(super) fn cancel_inline_image_resize(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn cancel_inline_image_resize(&mut self, cx: &mut App) -> bool {
         let Some(session) = self.image_resize.take() else {
             return false;
         };
@@ -1607,7 +1617,13 @@ impl SemanticEditor {
         if let Some(id) = session.plot {
             if let Some(host) = &self.plots.host {
                 host.document.update(cx, |document, cx| {
-                    document.resize(id, session.previous_width, cx)
+                    document.resize_canvas(
+                        id,
+                        session.previous_width,
+                        session.previous_height,
+                        false,
+                        cx,
+                    )
                 });
             }
         } else {
@@ -2214,7 +2230,7 @@ mod tests {
             editor.inline_image_line_dimensions.borrow_mut().insert(
                 1,
                 InlineImageMetrics {
-                    plot: false,
+                    plot: None,
                     line_start: link.start.0,
                     source: (320, 180),
                     spec: Default::default(),
@@ -2225,13 +2241,12 @@ mod tests {
 
             assert_eq!(editor.display_map.line_height_px(1), 192.0);
             assert_eq!(
-                editor.inline_image_line_dimensions.borrow().get(&1),
-                Some(&InlineImageMetrics {
-                    plot: false,
-                    line_start: link.start.0,
-                    source: (320, 180),
-                    spec: Default::default(),
-                })
+                editor
+                    .inline_image_line_dimensions
+                    .borrow()
+                    .get(&1)
+                    .map(|metrics| (metrics.line_start, metrics.source, metrics.spec.clone())),
+                Some((link.start.0, (320, 180), Default::default()))
             );
         });
     }
@@ -2269,7 +2284,7 @@ mod tests {
             editor.inline_image_line_dimensions.borrow_mut().insert(
                 66,
                 InlineImageMetrics {
-                    plot: false,
+                    plot: None,
                     line_start: link.start.0,
                     source: (1200, 800),
                     spec: Default::default(),

@@ -413,12 +413,7 @@ pub(super) fn build_minimap(
             } else {
                 request_layout.line_height_px(line) - tail + 6.0
             };
-        let (_, height) = crate::plot::plot_image_size(
-            entry.dimensions(),
-            entry.display.lock().unwrap().requested_width,
-            &entry.source.image_attributes,
-            &sizing,
-        );
+        let (_, height) = entry.image_size(&sizing);
         if top + height < first_unit as f32 * editor_line_height
             || top > (first_unit as f32 + row_count as f32) * editor_line_height
         {
@@ -426,11 +421,12 @@ pub(super) fn build_minimap(
         }
         requested.insert(entry.id);
         let demand = demands.entry(entry.id).or_default();
-        if current && let crate::plot::PlotPreparation::Ready(plot) = &entry.prepared {
-            plot_requests.push((
-                demand.clone(),
-                crate::plot::PlotRenderRequest::natural(plot.clone(), style.clone()),
-            ));
+        let resizing = entry.display.lock().unwrap().resizing;
+        if current
+            && !resizing
+            && let Some(request) = entry.render_request(&sizing, style.clone())
+        {
+            plot_requests.push((demand.clone(), request));
         }
         if !can_paint_plots {
             continue;

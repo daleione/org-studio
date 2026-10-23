@@ -22,7 +22,7 @@ impl WorkspaceWindow {
             return;
         }
         match action {
-            PreviewAction::ResizeImage { target, width } => {
+            PreviewAction::ResizeImage { target, size } => {
                 let result = self
                     .document_session()
                     .cloned()
@@ -34,10 +34,10 @@ impl WorkspaceWindow {
                                 return Err("Image is no longer present");
                             }
                             let snapshot = session.snapshot();
-                            let Some(edit) = crate::org_syntax::attributes::image_width_edit(
+                            let Some(edit) = crate::org_syntax::attributes::image_size_edit(
                                 &snapshot,
                                 range.start,
-                                width.map(|width| width as f32),
+                                size.map(|(width, height)| (width as f32, height as f32)),
                             ) else {
                                 return Ok(());
                             };
