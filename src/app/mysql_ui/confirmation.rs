@@ -1,4 +1,4 @@
-use super::WorkspaceWindow;
+use crate::app::WorkspaceWindow;
 use crate::{
     babel::mysql::{ConnectionTarget, MySqlRequest},
     components::UiTextExt,

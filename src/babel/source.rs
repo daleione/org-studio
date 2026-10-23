@@ -40,18 +40,7 @@ pub(super) fn source_blocks(snapshot: &DocumentSnapshot, arena: &BlockArena) -> 
             };
             let opening = &text[node.source.start.0 as usize..node.content.start.0 as usize];
             let tokens = tokenize_header(opening);
-            let before = &text[..node.source.start.0 as usize];
-            let previous = before
-                .trim_end_matches(['\r', '\n'])
-                .rsplit('\n')
-                .next()
-                .unwrap_or("")
-                .trim();
-            let name = previous
-                .get(..7)
-                .filter(|prefix| prefix.eq_ignore_ascii_case("#+name:"))
-                .map(|_| previous[7..].trim().to_owned())
-                .filter(|name| !name.is_empty());
+            let name = super::headers::source_name(snapshot, arena, node_index);
             let has_tangle_argument = opening
                 .split_whitespace()
                 .any(|word| word.eq_ignore_ascii_case(":tangle"));

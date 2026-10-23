@@ -479,7 +479,7 @@ impl Render for WorkspaceWindow {
             .font(ui_font("Menlo"))
             .text_size(ui_px(14.0))
             .capture_pinch(cx.listener(|this, event, window, cx| {
-                if this.mysql.confirmation.is_none() {
+                if this.mysql.confirmation.is_none() && this.babel_confirmation.is_none() {
                     this.file_overview_pinch(event, window, cx);
                 }
             }))
@@ -504,6 +504,9 @@ impl Render for WorkspaceWindow {
                 this.locate_cursor(window, cx);
             }))
             .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.code_confirmation_capture_key(event, window, cx) {
+                    return;
+                }
                 if this.mysql_confirmation_capture_key(event, window, cx) {
                     return;
                 }
@@ -860,6 +863,7 @@ impl Render for WorkspaceWindow {
             .children(self.buffer_review_modal(window, cx))
             .children(self.cursor_spotlight.clone())
             .children(self.render_mysql_confirmation(window, cx))
+            .children(self.render_code_confirmation(window, cx))
     }
 }
 

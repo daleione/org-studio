@@ -1,5 +1,5 @@
-//! Source block actions, anchored to the first body line while retaining
-//! the opening declaration's byte offset for execution and copying.
+//! Babel run actions and source copying. Run actions retain their Org entry
+//! offset as their location changes between a code body and the document gutter.
 use gpui::{TextStyle, Window};
 
 use crate::theme::Theme;
@@ -39,8 +39,8 @@ fn block_bounds_for_row(row: &PaintRow, chrome: &BlockChrome) -> Option<Bounds<P
         .map(|quad| quad.bounds)
 }
 
-/// Builds the run glyph in the first body line's number cell. Hovering any
-/// part of the body reveals it; execution feedback remains visible on exit.
+/// The body action appears on hover. CALL and folded-source actions stay
+/// beside the document line number and share the same execution feedback.
 pub(super) fn prepare_run_buttons(
     rows: &[PaintRow],
     chrome: &BlockChrome,
@@ -51,26 +51,81 @@ pub(super) fn prepare_run_buttons(
     window: &mut Window,
 ) -> Vec<SourceRunButtonPaint> {
     rows.iter()
-        .filter(|row| {
-            row.block
-                .as_ref()
-                .is_some_and(syntax::EditorBlockDecoration::is_first_source_body_line)
-        })
         .filter_map(|row| {
-            let source_offset = action_source_offset(row, snapshot)?;
-            let body_bounds = block_bounds_for_row(row, chrome)?.intersect(&chrome.viewport);
+            if row.animation_clip_y.is_some() {
+                return None;
+            }
+            let body = row
+                .block
+                .as_ref()
+                .is_some_and(syntax::EditorBlockDecoration::is_first_source_body_line);
+            let folded_source = row.folded
+                && row.block.as_ref().is_some_and(|block| {
+                    block.kind == syntax::EditorBlockKind::Source
+                        && block.edge == syntax::EditorBlockEdge::Open
+                });
+            let call = row.shape_key.syntax_key == syntax::EditorStyleId::Meta.cache_key()
+                && row.block.is_none()
+                && snapshot
+                    .line_content_range(row.hit.line)
+                    .ok()
+                    .is_some_and(|range| {
+                        syntax::classification_text(snapshot, range)
+                            .trim_start()
+                            .get(..7)
+                            .is_some_and(|prefix| prefix.eq_ignore_ascii_case("#+CALL:"))
+                    });
+            let gutter = folded_source || call;
+            if !body && !gutter {
+                return None;
+            }
+            let source_offset = if gutter {
+                snapshot.line_range(row.hit.line).ok()?.start
+            } else {
+                action_source_offset(row, snapshot)?
+            };
+            if body
+                && rows
+                    .iter()
+                    .any(|candidate| candidate.folded && candidate.hit.range.start == source_offset)
+            {
+                return None;
+            }
+            let body_bounds = if gutter {
+                Bounds::from_corners(
+                    point(
+                        chrome.viewport.left() - px(GUTTER_PADDING),
+                        row.hit.visible_top.max(chrome.viewport.top()),
+                    ),
+                    point(
+                        chrome.viewport.left() - px(1.0),
+                        row.hit.visible_bottom.min(chrome.viewport.bottom()),
+                    ),
+                )
+            } else {
+                block_bounds_for_row(row, chrome)?.intersect(&chrome.viewport)
+            };
             let button_size = SOURCE_RUN_BUTTON_SIZE.min(f32::from(row.hit.line_height) - 2.0);
             if button_size < 10.0 || row.hit.origin_y < chrome.viewport.top() {
                 return None;
             }
-            let button_left = chrome.left
-                + px(editor_block_left_inset(&syntax::EditorBlockKind::Source)
-                    + SOURCE_GUTTER_INSET
-                    + (SOURCE_GUTTER_WIDTH - button_size) / 2.0);
+            let button_width = if gutter {
+                GUTTER_PADDING - 2.0
+            } else {
+                button_size
+            };
+            let button_left = if gutter {
+                chrome.viewport.left() - px(GUTTER_PADDING - 1.0)
+            } else {
+                chrome.left
+                    + px(editor_block_left_inset(&syntax::EditorBlockKind::Source)
+                        + SOURCE_GUTTER_INSET
+                        + (SOURCE_GUTTER_WIDTH - button_size) / 2.0)
+            };
             let button_top = row.hit.origin_y + (row.hit.line_height - px(button_size)) / 2.0;
             let bounds = Bounds::new(
                 point(button_left, button_top),
-                size(px(button_size), px(button_size)),
+                size(px(button_width), px(button_size)),
             );
             let interaction_bounds = Bounds::new(
                 point(
@@ -78,7 +133,7 @@ pub(super) fn prepare_run_buttons(
                     button_top - px(SOURCE_RUN_BUTTON_HIT_SLOP),
                 ),
                 size(
-                    px(button_size + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
+                    px(button_width + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
                     px(button_size + SOURCE_RUN_BUTTON_HIT_SLOP * 2.0),
                 ),
             )
@@ -92,7 +147,8 @@ pub(super) fn prepare_run_buttons(
                 return None;
             }
             let feedback = feedback.filter(|feedback| feedback.source_offset == source_offset);
-            let visible = feedback.is_some() || body_bounds.contains(&window.mouse_position());
+            let visible =
+                gutter || feedback.is_some() || body_bounds.contains(&window.mouse_position());
             let (icon_text, accent) = match feedback.map(|feedback| feedback.phase) {
                 Some(crate::editor::SourceRunPhase::Running) => {
                     window.request_animation_frame();
@@ -119,6 +175,7 @@ pub(super) fn prepare_run_buttons(
             };
             let font_size = style.font_size.to_pixels(window.rem_size());
             Some(SourceRunButtonPaint {
+                gutter,
                 hit: crate::editor::SourceRunButtonHit {
                     source_offset,
                     body_bounds,
@@ -131,7 +188,7 @@ pub(super) fn prepare_run_buttons(
                 accent,
                 icon: window.text_system().shape_line(
                     icon,
-                    px(f32::from(font_size) * SOURCE_RUN_ICON_FONT_SCALE),
+                    px((f32::from(font_size) * SOURCE_RUN_ICON_FONT_SCALE).min(button_width)),
                     &[run],
                     None,
                 ),

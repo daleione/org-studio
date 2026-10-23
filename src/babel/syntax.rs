@@ -3,73 +3,6 @@ use crate::{
     org_syntax::{BlockArena, BlockKind},
 };
 
-pub(super) fn existing_result_range(
-    snapshot: &DocumentSnapshot,
-    blocks: &BlockArena,
-    source_index: usize,
-) -> ByteRange {
-    let source = &blocks.nodes()[source_index];
-    let mut index = source_index + 1;
-    while blocks.nodes().get(index).is_some_and(|candidate| {
-        candidate.parent == source.parent && matches!(candidate.kind, BlockKind::BlankLine)
-    }) {
-        index += 1;
-    }
-    let Some(marker) = blocks.nodes().get(index).filter(|candidate| {
-        candidate.parent == source.parent
-            && matches!(candidate.kind, BlockKind::Keyword)
-            && is_results_marker(&snapshot.copy_range(candidate.content))
-    }) else {
-        return ByteRange::new(source.source.end.0, source.source.end.0);
-    };
-    let mut end = marker.source.end;
-    let mut payload_index = index + 1;
-    // Affiliated keywords such as `#+ATTR_ORG:` sit between the marker and the
-    // image; they belong to the results block so a re-run may rewrite them.
-    while let Some(keyword) = blocks.nodes().get(payload_index).filter(|candidate| {
-        candidate.parent == source.parent
-            && matches!(candidate.kind, BlockKind::Keyword)
-            && candidate.source.start >= end
-            && crate::org_syntax::attributes::is_affiliated_keyword(
-                &snapshot.copy_range(candidate.content),
-            )
-    }) {
-        end = keyword.source.end;
-        payload_index += 1;
-    }
-    if let Some(payload) = blocks
-        .nodes()
-        .get(payload_index)
-        .filter(|candidate| candidate.parent == source.parent && candidate.source.start >= end)
-    {
-        let payload_source = snapshot.copy_range(payload.source);
-        let line = payload_source
-            .split_inclusive('\n')
-            .next()
-            .unwrap_or(&payload_source);
-        let trimmed = line.trim();
-        if trimmed.starts_with("[[file:") && trimmed.ends_with("]]") {
-            end = ByteOffset(payload.source.start.0 + line.len() as u64);
-        } else if matches!(payload.kind, BlockKind::FixedWidth) {
-            // The syntax tree stores each fixed-width result line separately.
-            // Replacing only the first node leaves the remaining stdout behind.
-            for line in blocks.nodes()[payload_index..].iter() {
-                if line.parent != source.parent
-                    || !matches!(line.kind, BlockKind::FixedWidth)
-                    || line.source.start != end
-                {
-                    break;
-                }
-                end = line.source.end;
-            }
-        }
-    }
-    ByteRange {
-        start: source.source.end,
-        end,
-    }
-}
-
 /// Keeps an `#+ATTR_ORG:` line attached to the results image.
 pub(super) fn preserved_result_attributes(existing: &str) -> Option<String> {
     existing
@@ -79,10 +12,11 @@ pub(super) fn preserved_result_attributes(existing: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-pub(super) fn mysql_result_range(
+pub(super) fn result_range(
     snapshot: &DocumentSnapshot,
     blocks: &BlockArena,
     source_index: usize,
+    file_result: bool,
 ) -> Result<(ByteRange, String, Option<String>), String> {
     let source = &blocks.nodes()[source_index];
     let name = super::headers::source_name(snapshot, blocks, source_index);
@@ -130,13 +64,13 @@ pub(super) fn mysql_result_range(
             candidates.push(index);
         } else if adjacent {
             return Err(
-                "The adjacent SQL result has a different name; repair its ownership before running"
+                "The adjacent Babel result has a different name; repair its ownership before running"
                     .into(),
             );
         }
     }
     if candidates.len() > 1 {
-        return Err("Multiple results belong to this SQL block; remove the duplicate results before running".into());
+        return Err("Multiple results belong to this Babel entry; remove the duplicate results before running".into());
     }
     let Some(index) = candidates.first().copied() else {
         return Ok((
@@ -179,6 +113,20 @@ pub(super) fn mysql_result_range(
         end = node.source.end;
         payload += 1;
     }
+    if file_result && let Some(node) = blocks.nodes().get(payload) {
+        let text = snapshot.copy_range(node.source);
+        let first = text.split_inclusive('\n').next().unwrap_or(&text);
+        if first.trim().starts_with("[[file:") && first.trim().ends_with("]]") {
+            return Ok((
+                ByteRange {
+                    start,
+                    end: ByteOffset(node.source.start.0 + first.len() as u64),
+                },
+                attributes,
+                name,
+            ));
+        }
+    }
     if let Some(node) = blocks.nodes().get(payload)
         && node.source.start == end
         && !matches!(
@@ -189,7 +137,7 @@ pub(super) fn mysql_result_range(
                 | BlockKind::Heading { .. }
         )
     {
-        return Err("The existing SQL result is not a table or its boundary is ambiguous; separate the following text with a blank line before running".into());
+        return Err("The existing Babel result is not a table or its boundary is ambiguous; separate the following text with a blank line before running".into());
     }
     while let Some(node) = blocks.nodes().get(payload) {
         if node.source.start != end
@@ -203,7 +151,7 @@ pub(super) fn mysql_result_range(
     Ok((ByteRange { start, end }, attributes, name))
 }
 
-fn is_results_marker(source: &str) -> bool {
+pub(super) fn is_results_marker(source: &str) -> bool {
     let lower = source.trim().to_ascii_lowercase();
     lower.starts_with("#+results:")
         || lower
@@ -219,21 +167,6 @@ pub(super) fn header_argument<'a>(tokens: &'a [String], name: &str) -> Option<&'
     })
 }
 
-pub(super) fn header_values<'a>(tokens: &'a [String], name: &str) -> Vec<&'a str> {
-    let Some(start) = tokens
-        .iter()
-        .position(|token| token.eq_ignore_ascii_case(name))
-    else {
-        return Vec::new();
-    };
-    tokens[start + 1..]
-        .iter()
-        .take_while(|token| !token.starts_with(':'))
-        .map(String::as_str)
-        .collect()
-}
-
 pub(super) fn tokenize_header(source: &str) -> Result<Vec<String>, String> {
     super::headers::tokenize(source)
-        .map(|tokens| tokens.into_iter().map(|token| token.text).collect())
 }

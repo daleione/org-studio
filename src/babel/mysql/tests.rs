@@ -108,6 +108,74 @@ fn rustls_query_preserves_exact_text_nulls_unicode_and_read_only_transaction() {
 }
 
 #[test]
+fn bound_mysql_values_feed_python_without_losing_types_or_publishing_dependency_results() {
+    use crate::{
+        babel::{execute_plan, prepare_execution, value::Value},
+        document::{ByteOffset, DocumentSnapshot, Selection},
+    };
+    let fixture = Fixture::start();
+    let directory = tempfile::tempdir().unwrap();
+    let text = format!(
+        "#+PROPERTY: header-args:sql :dbconnection {}\n#+name: records\n#+begin_src sql :var minimum=12 category=\"' OR 1=1 --\" missing=nil big=18446744073709551615\nSELECT $minimum, '$category', $missing, $big /* BABEL_DATES */;\n#+end_src\n\n#+RESULTS: records\n| previous |\n\n#+name: summary\n#+begin_src python :var rows=records\nfrom decimal import Decimal\nassert rows[0][0] == '00123'\nassert rows[0][1] == 18446744073709551615\nassert rows[0][2] == Decimal('1234567890.123456789012345678')\nassert rows[0][3] is None\nassert rows[0][4] == 'a|b\\n中文'\nassert rows[0][5] == '2026-01-02 03:04:05.123456'\nassert rows[0][6] == '2026-01-02'\nreturn [[rows[0][0], rows[0][1], rows[0][2]]]\n#+end_src\n",
+        fixture.request().headers.get(":dbconnection").unwrap()
+    );
+    let snapshot = DocumentSnapshot::from_utf8(text.as_bytes().to_vec()).unwrap();
+    let plan = prepare_execution(
+        &snapshot,
+        &directory.path().join("analysis.org"),
+        Selection::caret(ByteOffset(text.find("return [[").unwrap() as u64)),
+        Vec::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        plan.requests()
+            .iter()
+            .filter(|(_, r)| r.mysql.is_some())
+            .count(),
+        1
+    );
+    let output = execute_plan(plan).unwrap();
+    assert_eq!(
+        output.data.value,
+        Value::List(vec![Value::List(vec![
+            Value::Text("00123".into()),
+            Value::Integer("18446744073709551615".into()),
+            Value::Decimal("1234567890.123456789012345678".into())
+        ])])
+    );
+    let edit = output.result_edit.unwrap();
+    assert!(edit.range.start.0 >= text.find("#+name: summary").unwrap() as u64);
+    let log = fixture.log();
+    assert!(
+        log.contains("EXECUTE SELECT ?, ?, ?, ? /* BABEL_DATES */;"),
+        "{log}"
+    );
+    assert!(
+        !log.contains("OR 1=1"),
+        "values must not be interpolated into SQL"
+    );
+    let binds = log.lines().find_map(|l| l.strip_prefix("BINDS ")).unwrap();
+    assert!(
+        binds.starts_with("0401"),
+        "third parameter must be SQL NULL: {binds}"
+    );
+    assert!(
+        binds.contains("0c00000000000000"),
+        "first parameter must be integer 12"
+    );
+    let attack = "' OR 1=1 --"
+        .bytes()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    assert!(binds.contains(&attack), "text is sent as data");
+    assert!(
+        binds.ends_with("ffffffffffffffff"),
+        "unsigned 64-bit value stays exact"
+    );
+    assert!(log.contains("QUERY ROLLBACK"));
+}
+
+#[test]
 fn named_connection_replaces_results_above_the_source_without_moving_the_caret_off_sql() {
     use crate::document::{
         ByteOffset, ByteRange, DocumentBuffer, EditTransaction, Selection, TextSnapshot,

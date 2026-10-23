@@ -1,5 +1,7 @@
 //! SQLx MySQL execution using standard Babel headers and connection URLs.
 mod connection;
+mod decode;
+pub(super) mod parameters;
 mod query;
 mod table;
 #[cfg(test)]
@@ -9,18 +11,12 @@ pub(crate) use connection::CONNECTION_HELP;
 pub(super) use query::validate_query;
 pub(crate) use table::QueryTable;
 
-use super::headers::Headers;
+use super::{CancelToken, headers::Headers};
 use futures_util::TryStreamExt;
 use serde::Deserialize;
 use sqlx::mysql::{MySqlColumn, MySqlConnectOptions, MySqlConnection};
-use sqlx::{Column, ConnectOptions, Decode, Executor, Row, TypeInfo, ValueRef};
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant},
-};
+use sqlx::{Column, ConnectOptions, Executor, Row, TypeInfo, ValueRef};
+use std::time::{Duration, Instant};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -50,22 +46,6 @@ impl QueryLimits {
                 .map_err(|_| "Invalid MySQL execution limits configuration".into()),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(_) => Err("Could not read MySQL execution limits".into()),
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-pub(crate) struct CancelToken(Arc<AtomicBool>);
-impl CancelToken {
-    pub(crate) fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
-    }
-    pub(crate) fn cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-    async fn wait(&self) {
-        while !self.cancelled() {
-            tokio::time::sleep(Duration::from_millis(40)).await;
         }
     }
 }
@@ -156,8 +136,19 @@ fn database_error(error: sqlx::Error, password: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub(super) fn execute(request: &MySqlRequest, source: &str) -> Result<QueryTable, String> {
-    validate_query(source)?;
+    execute_with_variables(request, source, &[])
+}
+
+pub(super) fn execute_with_variables(
+    request: &MySqlRequest,
+    source: &str,
+    variables: &[(String, super::value::Value)],
+) -> Result<QueryTable, String> {
+    let (expanded, values) = parameters::preflight(source, variables)?;
+    let _ = parameters::arguments(&values)?;
+    validate_query(&expanded)?;
     let connection = request
         .connection
         .as_ref()
@@ -175,11 +166,12 @@ pub(super) fn execute(request: &MySqlRequest, source: &str) -> Result<QueryTable
                     .map_err(|e| database_error(e, password))?,
             _ = request.cancel.wait() => return Err("MySQL query cancelled before execution".into()),
         };
-        query::validate_query_with_mode(source, &sql_mode)?;
+        let (source, values) = parameters::expand(source, variables, &sql_mode)?;
+        query::validate_query_with_mode(&source, &sql_mode)?;
         let start = Instant::now();
         let timeout = Duration::from_secs(request.limits.query_timeout_seconds.clamp(1, 3600));
         let outcome = tokio::select! {
-            result = run_query(&mut conn, source, &request.limits) => Some(result),
+            result = run_query(&mut conn, &source, &values, &request.limits) => Some(result),
             _ = request.cancel.wait() => None,
             _ = tokio::time::sleep(timeout) => None,
         };
@@ -247,6 +239,7 @@ async fn kill_and_cleanup(
 async fn run_query(
     conn: &mut MySqlConnection,
     source: &str,
+    values: &[super::value::Value],
     limits: &QueryLimits,
 ) -> Result<QueryTable, String> {
     conn.execute("START TRANSACTION READ ONLY")
@@ -262,7 +255,11 @@ async fn run_query(
     let mut table = table_with_columns(description.columns());
     let max_rows = limits.max_rows.clamp(1, 100_000);
     let max_bytes = limits.max_result_bytes.clamp(1024, 64 * 1024 * 1024);
-    let mut stream = (&mut *conn).fetch(source);
+    let mut stream = if values.is_empty() {
+        (&mut *conn).fetch(source)
+    } else {
+        sqlx::query_with(source, parameters::arguments(values)?).fetch(&mut *conn)
+    };
     while let Some(row) = stream.try_next().await.map_err(|e| database_error(e, ""))? {
         if table.rows.is_empty() {
             // MySQL can omit EXPLAIN metadata during PREPARE. Runtime metadata
@@ -283,20 +280,7 @@ async fn run_query(
                 cells.push(None);
                 continue;
             }
-            // All types in the text protocol retain their exact server bytes.
-            let bytes = <&[u8] as Decode<sqlx::MySql>>::decode(value)
-                .map_err(|_| "Could not decode a MySQL cell")?;
-            let text = match std::str::from_utf8(bytes) {
-                Ok(text) if !text.contains('\0') => text.to_owned(),
-                _ => {
-                    let mut text = String::from("0x");
-                    use std::fmt::Write;
-                    for byte in bytes {
-                        let _ = write!(text, "{byte:02X}");
-                    }
-                    text
-                }
-            };
+            let text = decode::cell(value, column.type_info().name(), !values.is_empty())?;
             table.raw_bytes += text.len();
             if table.raw_bytes > max_bytes {
                 return Err(format!(
@@ -312,6 +296,10 @@ async fn run_query(
 
 fn table_with_columns(columns: &[MySqlColumn]) -> QueryTable {
     let mut table = QueryTable::new(columns.iter().map(|c| c.name().to_owned()).collect());
+    table.column_types = columns
+        .iter()
+        .map(|c| c.type_info().name().to_owned())
+        .collect();
     table.numeric_columns = columns
         .iter()
         .map(|column| {

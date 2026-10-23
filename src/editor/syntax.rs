@@ -752,7 +752,7 @@ impl Default for CodeContext {
     }
 }
 
-fn classification_text(snapshot: &DocumentSnapshot, range: ByteRange) -> String {
+pub(super) fn classification_text(snapshot: &DocumentSnapshot, range: ByteRange) -> String {
     let mut end = (range.start.0 + MAX_CLASSIFICATION_BYTES).min(range.end.0);
     while end > range.start.0 && !snapshot.is_char_boundary(ByteOffset(end)) {
         end -= 1;

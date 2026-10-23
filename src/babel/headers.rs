@@ -5,21 +5,16 @@ use crate::{
     org_syntax::{BlockArena, BlockKind},
 };
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(super) struct Headers {
     arguments: BTreeMap<String, Vec<String>>,
     properties: BTreeMap<String, String>,
+    pub(super) variables: Vec<(String, super::expression::Expression)>,
 }
 
-pub(super) struct HeaderToken {
-    pub(super) text: String,
-    pub(super) quoted: bool,
-}
-
-pub(super) fn tokenize(text: &str) -> Result<Vec<HeaderToken>, String> {
+pub(super) fn tokenize(text: &str) -> Result<Vec<String>, String> {
     let mut tokens = Vec::new();
     let mut word = String::new();
-    let mut quoted = false;
     let mut quote = None;
     let mut escaped = false;
     let mut started = false;
@@ -37,17 +32,12 @@ pub(super) fn tokenize(text: &str) -> Result<Vec<HeaderToken>, String> {
                 word.push(c);
             }
         } else if matches!(c, '\'' | '"') {
-            quoted = true;
             started = true;
             quote = Some(c);
         } else if c.is_whitespace() {
             if started {
-                tokens.push(HeaderToken {
-                    text: std::mem::take(&mut word),
-                    quoted,
-                });
+                tokens.push(std::mem::take(&mut word));
                 started = false;
-                quoted = false;
             }
         } else {
             word.push(c);
@@ -61,7 +51,7 @@ pub(super) fn tokenize(text: &str) -> Result<Vec<HeaderToken>, String> {
         word.push('\\');
     }
     if started {
-        tokens.push(HeaderToken { text: word, quoted });
+        tokens.push(word);
     }
     Ok(tokens)
 }
@@ -78,6 +68,13 @@ impl Headers {
             .unwrap_or_default()
     }
 
+    pub(super) fn writes_result(&self) -> bool {
+        !self
+            .values(":results")
+            .iter()
+            .any(|mode| mode.eq_ignore_ascii_case("silent") || mode.eq_ignore_ascii_case("none"))
+    }
+
     pub(super) fn keys(&self) -> impl Iterator<Item = &str> {
         self.arguments.keys().map(String::as_str)
     }
@@ -88,29 +85,79 @@ impl Headers {
             .map(String::as_str)
     }
 
-    fn extend(&mut self, other: Self) {
-        self.arguments.extend(other.arguments);
+    pub(super) fn extend(&mut self, other: Self) {
+        for (name, expression) in other.variables {
+            self.bind(name, expression);
+        }
+        for (key, values) in other.arguments {
+            self.merge(key, values);
+        }
         self.properties.extend(other.properties);
     }
 
+    pub(super) fn bind(&mut self, name: String, expression: super::expression::Expression) {
+        if let Some((_, old)) = self.variables.iter_mut().find(|(key, _)| *key == name) {
+            *old = expression;
+        } else {
+            self.variables.push((name, expression));
+        }
+    }
+
+    fn merge(&mut self, key: String, values: Vec<String>) {
+        if key == ":results" {
+            let current = self.arguments.entry(key).or_default();
+            for value in values {
+                const GROUPS: &[&[&str]] = &[
+                    &["value", "output"],
+                    &["table", "vector", "scalar", "list", "file"],
+                    &["replace", "silent", "none", "append", "prepend"],
+                    &["raw", "org", "html", "latex", "code", "drawer", "verbatim"],
+                ];
+                if let Some(group) = GROUPS.iter().find(|g| g.contains(&value.as_str())) {
+                    current.retain(|v| !group.contains(&v.as_str()));
+                }
+                if !current.contains(&value) {
+                    current.push(value);
+                }
+            }
+        } else {
+            self.arguments.insert(key, values);
+        }
+    }
+
     pub(super) fn parse(&mut self, text: &str) -> Result<(), String> {
-        let mut key = None;
-        for HeaderToken { text: word, quoted } in tokenize(text)? {
-            if !quoted
-                && word.starts_with(':')
-                && word.len() > 1
-                && word[1..]
+        let parts = super::expression::split(text, char::is_whitespace)?;
+        let mut key: Option<&str> = None;
+        let mut group = Vec::new();
+        let flush =
+            |this: &mut Self, key: Option<&str>, group: &mut Vec<&str>| -> Result<(), String> {
+                if let Some(key) = key {
+                    let text = group.join(" ");
+                    if key.eq_ignore_ascii_case(":var") {
+                        for (name, expression) in super::expression::bindings(&text)? {
+                            this.bind(name, expression);
+                        }
+                    } else {
+                        this.merge(key.to_ascii_lowercase(), tokenize(&text)?);
+                    }
+                }
+                group.clear();
+                Ok(())
+            };
+        for part in parts {
+            if part.starts_with(':')
+                && part.len() > 1
+                && part[1..]
                     .chars()
                     .all(|c| c.is_ascii_alphabetic() || c == '-')
             {
-                let name = word.to_ascii_lowercase();
-                self.arguments.insert(name.clone(), Vec::new());
-                key = Some(name);
-            } else if let Some(key) = &key {
-                self.arguments.get_mut(key).unwrap().push(word);
+                flush(self, key, &mut group)?;
+                key = Some(part);
+            } else {
+                group.push(part);
             }
         }
-        Ok(())
+        flush(self, key, &mut group)
     }
 }
 
@@ -119,7 +166,20 @@ pub(super) fn effective_headers(
     arena: &BlockArena,
     source_index: usize,
 ) -> Result<Headers, String> {
+    effective_headers_for(snapshot, arena, source_index, None)
+}
+
+pub(super) fn effective_headers_for(
+    snapshot: &DocumentSnapshot,
+    arena: &BlockArena,
+    source_index: usize,
+    language: Option<&str>,
+) -> Result<Headers, String> {
     let source = &arena.nodes()[source_index];
+    let language = language.unwrap_or_else(|| match &source.kind {
+        BlockKind::SourceBlock { language } => language.as_deref().unwrap_or(""),
+        _ => "",
+    });
     let mut general = Headers::default();
     let mut specific = Headers::default();
     // Only real keyword nodes participate: properties inside examples or source
@@ -134,7 +194,7 @@ pub(super) fn effective_headers(
         };
         if key.eq_ignore_ascii_case("PROPERTY") {
             let (name, args) = value.split_once(char::is_whitespace).unwrap_or((value, ""));
-            apply_property(&mut general, &mut specific, name, args)?;
+            apply_property(&mut general, &mut specific, name, args, language)?;
         }
     }
     let mut frames: Vec<(u16, Headers, Headers)> = Vec::new();
@@ -161,7 +221,13 @@ pub(super) fn effective_headers(
                             value.is_empty() || value.starts_with(char::is_whitespace)
                         })
                     {
-                        apply_property(general, specific, &rest[..end], &rest[end + 1..])?;
+                        apply_property(
+                            general,
+                            specific,
+                            &rest[..end],
+                            &rest[end + 1..],
+                            language,
+                        )?;
                     }
                 }
             }
@@ -174,6 +240,13 @@ pub(super) fn effective_headers(
         headers.extend(general);
         headers.extend(specific);
     }
+    let opening = snapshot.copy_range(ByteRange::new(
+        source.source.start.0,
+        source.content.start.0,
+    ));
+    if matches!(source.kind, BlockKind::SourceBlock { .. }) {
+        headers.parse(&opening)?;
+    }
     let affiliated = affiliated_keywords(snapshot, arena, source_index).collect::<Vec<_>>();
     for text in affiliated.into_iter().rev() {
         if let Some((key, value)) = keyword(&text)
@@ -182,11 +255,6 @@ pub(super) fn effective_headers(
             headers.parse(value)?;
         }
     }
-    let opening = snapshot.copy_range(ByteRange::new(
-        source.source.start.0,
-        source.content.start.0,
-    ));
-    headers.parse(&opening)?;
     Ok(headers)
 }
 
@@ -195,12 +263,17 @@ fn apply_property(
     specific: &mut Headers,
     name: &str,
     args: &str,
+    language: &str,
 ) -> Result<(), String> {
     let append = name.ends_with('+');
     let name = name.trim_end_matches('+');
     let target = if name.eq_ignore_ascii_case("header-args") {
         general
-    } else if name.eq_ignore_ascii_case("header-args:sql") {
+    } else if name
+        .to_ascii_lowercase()
+        .strip_prefix("header-args:")
+        .is_some_and(|l| l.eq_ignore_ascii_case(language))
+    {
         specific
     } else {
         let value = general.properties.entry(name.to_lowercase()).or_default();
@@ -214,6 +287,7 @@ fn apply_property(
     };
     if !append {
         target.arguments.clear();
+        target.variables.clear();
     }
     target.parse(args)
 }

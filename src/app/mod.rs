@@ -40,6 +40,7 @@ pub(crate) mod file_overview;
 pub use file_overview::FileOverview;
 #[cfg(feature = "visual-check")]
 pub use file_overview::benchmark::run_visual_check;
+mod babel_ui;
 mod file_manager;
 mod home;
 mod image_viewer;
@@ -321,6 +322,8 @@ pub struct WorkspaceWindow {
     pub(crate) image_viewer: image_viewer::ImageViewerState,
     pub(crate) pending_surface_anchors: PanePair<Option<SurfaceAnchor>>,
     pub(crate) load_task: Option<Task<()>>,
+    pub(crate) babel_run: Option<babel_ui::BabelRun>,
+    pub(crate) babel_confirmation: Option<babel_ui::CodeConfirmation>,
     pub(crate) babel_task: Option<Task<()>>,
     pub(crate) babel_editor: Option<gpui::Entity<crate::editor::SemanticEditor>>,
     pub(crate) babel_request: u64,

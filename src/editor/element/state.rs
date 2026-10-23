@@ -64,6 +64,7 @@ pub(super) struct InlineImagePaint {
 }
 
 pub(super) struct SourceRunButtonPaint {
+    pub(super) gutter: bool,
     pub(super) hit: SourceRunButtonHit,
     pub(super) line: LineIndex,
     pub(super) bounds: Bounds<Pixels>,

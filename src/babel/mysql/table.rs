@@ -1,10 +1,12 @@
 use std::time::Duration;
 
-use crate::document::{DocumentFormat, table::text_width};
+#[cfg(test)]
+use super::super::result::escape_cell;
 
 #[derive(Debug)]
 pub(crate) struct QueryTable {
     pub(crate) columns: Vec<String>,
+    pub(super) column_types: Vec<String>,
     pub(super) numeric_columns: Vec<bool>,
     pub(crate) rows: Vec<Vec<Option<String>>>,
     pub(crate) elapsed: Duration,
@@ -13,11 +15,55 @@ pub(crate) struct QueryTable {
 impl QueryTable {
     pub(super) fn new(columns: Vec<String>) -> Self {
         Self {
+            column_types: vec![String::new(); columns.len()],
             numeric_columns: vec![false; columns.len()],
             columns,
             rows: Vec::new(),
             elapsed: Duration::ZERO,
             raw_bytes: 0,
+        }
+    }
+    pub(in crate::babel) fn data(&self) -> super::super::value::Data {
+        use super::super::value::{Data, Value};
+        let rows = self
+            .rows
+            .iter()
+            .map(|row| {
+                Value::List(
+                    row.iter()
+                        .enumerate()
+                        .map(|(i, cell)| {
+                            let Some(text) = cell else {
+                                return Value::Nil;
+                            };
+                            let kind = self
+                                .column_types
+                                .get(i)
+                                .map(String::as_str)
+                                .unwrap_or("")
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("");
+                            match kind {
+                                "TINYINT" | "SMALLINT" | "MEDIUMINT" | "INT" | "BIGINT" => {
+                                    Value::Integer(text.clone())
+                                }
+                                "DECIMAL" => Value::Decimal(text.clone()),
+                                "FLOAT" | "DOUBLE" => text
+                                    .parse()
+                                    .map(Value::Float)
+                                    .unwrap_or_else(|_| Value::Text(text.clone())),
+                                _ => Value::Text(text.clone()),
+                            }
+                        })
+                        .collect(),
+                )
+            })
+            .collect();
+        Data {
+            value: Value::List(rows),
+            columns: Some(self.columns.iter().cloned().map(Value::Text).collect()),
+            row_names: Vec::new(),
         }
     }
     pub(crate) fn serialize(
@@ -26,126 +72,15 @@ impl QueryTable {
         newline: &str,
         max_bytes: usize,
     ) -> Result<String, String> {
-        let rows = self
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|v| escape_cell(v.as_deref().unwrap_or("NULL")))
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<_>>();
-        let columns = self
-            .columns
-            .iter()
-            .map(|s| escape_cell(s))
-            .collect::<Vec<_>>();
-        let mut widths = vec![1; columns.len()];
-        for row in rows.iter().chain(names.then_some(&columns)) {
-            for (index, cell) in row.iter().enumerate() {
-                if let Some(width) = widths.get_mut(index) {
-                    *width = (*width).max(text_width(cell, DocumentFormat::Org));
-                }
-            }
-        }
-        let mut output = String::new();
-        let mut emit = |cells: &[String], rule: bool, header: bool| -> Result<(), String> {
-            output.push('|');
-            for (index, width) in widths.iter().enumerate() {
-                if rule {
-                    output.push_str(&"-".repeat(width + 2));
-                    output.push(if index + 1 == widths.len() { '|' } else { '+' });
-                } else {
-                    let cell = cells.get(index).map(String::as_str).unwrap_or("");
-                    output.push(' ');
-                    let numeric =
-                        !header && self.numeric_columns.get(index).copied().unwrap_or(false);
-                    let pad = width.saturating_sub(text_width(cell, DocumentFormat::Org));
-                    if numeric {
-                        output.push_str(&" ".repeat(pad));
-                    }
-                    output.push_str(cell);
-                    if !numeric {
-                        output.push_str(&" ".repeat(pad));
-                    }
-                    output.push_str(" |");
-                }
-            }
-            output.push_str(newline);
-            if output.len() > max_bytes {
-                return Err("MySQL table exceeds the serialized result size limit; previous results were preserved".into());
-            }
-            Ok(())
-        };
-        if names && !columns.is_empty() {
-            emit(&columns, false, true)?;
-            emit(&[], true, true)?;
-        }
-        for row in &rows {
-            emit(row, false, false)?;
-        }
-        Ok(output)
+        super::super::result::serialize_table(
+            &self.columns,
+            &self.rows,
+            &self.numeric_columns,
+            names,
+            newline,
+            max_bytes,
+        )
     }
-}
-fn escape_cell(text: &str) -> String {
-    // Escape table structure and actual inline syntax, not every punctuation
-    // character. The shared Org parser decides which ranges need protection.
-    let parsed = crate::org_syntax::inline::parse(text);
-    let mut syntax = parsed
-        .spans
-        .iter()
-        .filter(|span| {
-            span.kind != crate::org_syntax::inline::InlineKind::Entity
-                || text[span.source.clone()] != parsed.text[span.range.clone()]
-        })
-        .map(|span| span.source.clone())
-        .collect::<Vec<_>>();
-    syntax.sort_by_key(|range| (range.start, std::cmp::Reverse(range.end)));
-    let mut syntax_index = 0;
-    let mut out = String::new();
-    let trimmed_start = text.len() - text.trim_start_matches(' ').len();
-    let trimmed_end = text.trim_end_matches(' ').len();
-    for (index, c) in text.char_indices() {
-        while syntax
-            .get(syntax_index)
-            .is_some_and(|range| range.end <= index)
-        {
-            syntax_index += 1;
-        }
-        let inline = syntax
-            .get(syntax_index)
-            .is_some_and(|range| range.contains(&index));
-        match c {
-            '{' if text[index..].starts_with("{{{") => {
-                out.push(c);
-                out.push_str("\\zwnj{}");
-            }
-            '\\' | '[' | ']' | '{' | '}' if inline => {
-                out.push(c);
-                out.push_str("\\zwnj{}");
-            }
-            ' ' if index < trimmed_start || index >= trimmed_end => out.push_str("\\nbsp{}"),
-            '|' => out.push_str("\\vert{}"),
-            '\n' => out.push('↵'),
-            '\r' => out.push('␍'),
-            '\t' => out.push('⇥'),
-            '*' if inline => out.push_str("\\ast{}"),
-            '_' if inline => out.push_str("\\under{}"),
-            '/' if inline => out.push_str("\\slash{}"),
-            '=' if inline => out.push_str("\\equal{}"),
-            '~' if inline => out.push_str("\\tilde{}"),
-            '+' if inline => out.push_str("\\plus{}"),
-            '<' if inline => out.push_str("\\lt{}"),
-            '>' if inline => out.push_str("\\gt{}"),
-            '^' if inline => out.push_str("\\asciicirc{}"),
-            // Org can recognize math starting at the second dollar in $$.
-            // Escape every dollar so protecting one fragment cannot expose another.
-            '$' => out.push_str("\\dollar{}"),
-            c if c.is_control() => out.push('�'),
-            c => out.push(c),
-        }
-    }
-    out
 }
 
 #[cfg(test)]

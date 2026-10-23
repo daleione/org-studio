@@ -1436,6 +1436,163 @@ fn org_source_block_actions_follow_first_body_line_and_hover(cx: &mut gpui::Test
     });
 }
 
+#[gpui::test]
+fn org_call_run_actions_use_the_line_gutter_and_ignore_literal_calls(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::document::{ByteOffset, ByteRange};
+    use crate::editor::SourceRunPhase;
+
+    cx.update(crate::editor::init);
+    let source = "#+name: calculated\n#+CALL: double(n=6)\n#+call: double(n=7)\n\n#+begin_example\n#+CALL: literal()\n#+end_example\n\n#+begin_src python\ntext = 'example'\n#+CALL: literal()\nreturn text\n#+end_src\n";
+    let offset = ByteOffset(source.find("#+CALL:").unwrap() as u64);
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("run-actions.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(640.), px(800.)));
+    view.run_until_parked();
+    let button = view.read(|cx| {
+        let e = editor.read(cx);
+        assert_eq!(
+            e.source_run_buttons.len(),
+            3,
+            "two real CALLs and one source-body action"
+        );
+        assert_eq!(
+            e.source_copy.buttons.len(),
+            1,
+            "CALL does not introduce a source-copy action"
+        );
+        let row = e.hit_rows.iter().find(|row| row.line.0 == 1).unwrap();
+        let button = *e
+            .source_run_buttons
+            .iter()
+            .find(|b| b.source_offset == offset)
+            .unwrap();
+        assert!(button.visible);
+        assert!(button.bounds.left() >= row.text_origin_x - px(super::GUTTER_PADDING));
+        assert!(button.bounds.right() <= row.text_origin_x);
+        assert!(button.bounds.top() >= row.origin_y);
+        assert!(button.bounds.bottom() <= row.origin_y + row.line_height);
+        button
+    });
+    view.simulate_mouse_move(button.bounds.center(), None, Modifiers::default());
+    view.run_until_parked();
+    view.simulate_click(button.bounds.center(), Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| {
+        let feedback = editor.read(cx).source_run_feedback.unwrap();
+        assert_eq!(feedback.source_offset, offset);
+        assert_eq!(feedback.phase, SourceRunPhase::Running);
+    });
+    view.read(|cx| {
+        assert_eq!(
+            editor
+                .read(cx)
+                .snapshot(cx)
+                .copy_range(ByteRange::new(0, source.len() as u64)),
+            source
+        )
+    });
+
+    let markdown = cx.new(|_| {
+        DocumentSession::from_utf8("run-actions.md".into(), b"#+CALL: literal()\n".to_vec())
+            .unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(markdown, cx));
+    view.run_until_parked();
+    view.read(|cx| assert!(editor.read(cx).source_run_buttons.is_empty()));
+}
+
+#[gpui::test]
+fn folded_source_run_action_moves_to_the_declaration_and_preserves_feedback(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::document::{ByteOffset, ByteRange, Selection};
+    use crate::editor::SourceRunPhase;
+
+    cx.update(crate::editor::init);
+    let source = "#+name: double\n#+begin_src python :var n=2\nvalue = n * 2\nreturn value\n#+end_src\nafter\n";
+    let offset = ByteOffset(source.find("#+begin_src").unwrap() as u64);
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("run-folded.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(640.), px(600.)));
+    view.run_until_parked();
+    editor.update(view, |e, cx| {
+        e.set_selection(Selection::caret(offset), cx);
+        e.show_source_run_feedback(offset, SourceRunPhase::Running, cx);
+    });
+    // Focus the source declaration, then use the same Tab fold command as the editor.
+    let header = view.read(|cx| {
+        let e = editor.read(cx);
+        let row = e.hit_rows.iter().find(|r| r.line.0 == 1).unwrap();
+        gpui::point(
+            row.text_origin_x + px(1.),
+            row.origin_y + row.line_height / 2.,
+        )
+    });
+    view.simulate_click(header, Modifiers::default());
+    view.simulate_keystrokes("tab");
+    view.run_until_parked();
+    editor.update(view, |e, cx| {
+        e.finish_fold_animation();
+        cx.notify();
+    });
+    view.run_until_parked();
+    let button = view.read(|cx| {
+        let e = editor.read(cx);
+        assert!(e.fold_markers.contains(&1));
+        assert_eq!(e.source_run_buttons.len(), 1);
+        assert_eq!(e.source_copy.buttons.len(), 1);
+        let button = e.source_run_buttons[0];
+        let row = e.hit_rows.iter().find(|r| r.line.0 == 1).unwrap();
+        assert!(button.visible);
+        assert_eq!(button.source_offset, offset);
+        assert!(button.bounds.right() <= row.text_origin_x);
+        assert!(button.bounds.top() >= row.origin_y);
+        assert!(button.bounds.bottom() <= row.origin_y + row.line_height);
+        assert_eq!(
+            e.source_run_feedback.unwrap().phase,
+            SourceRunPhase::Running
+        );
+        button
+    });
+    view.simulate_click(button.bounds.center(), Modifiers::default());
+    view.run_until_parked();
+    view.read(|cx| {
+        assert!(
+            editor.read(cx).fold_markers.contains(&1),
+            "run must not expand the block"
+        )
+    });
+    view.simulate_keystrokes("tab");
+    view.run_until_parked();
+    editor.update(view, |e, cx| {
+        e.finish_fold_animation();
+        cx.notify();
+    });
+    view.run_until_parked();
+    view.read(|cx| {
+        let e = editor.read(cx);
+        assert!(!e.fold_markers.contains(&1));
+        assert_eq!(e.source_run_buttons.len(), 1);
+        let row = e.hit_rows.iter().find(|r| r.line.0 == 2).unwrap();
+        let button = e.source_run_buttons[0];
+        assert_eq!(button.source_offset, offset);
+        assert!(button.bounds.left() >= e.hit_rows[0].text_origin_x);
+        assert!(button.bounds.bottom() <= row.origin_y + row.line_height);
+        assert!(button.bounds.top() >= row.origin_y);
+        assert_eq!(
+            e.snapshot(cx)
+                .copy_range(ByteRange::new(0, source.len() as u64)),
+            source
+        );
+    });
+}
+
 #[test]
 fn bottom_stays_pinned_while_measured_document_height_converges() {
     assert!(scroll_is_at_end(800.0, 200.0, 1_000.0));

@@ -10,27 +10,108 @@ use rustix::process::{Pid, Signal, kill_process_group};
 
 use super::execution::BabelExecutor;
 
+use super::{
+    CancelToken,
+    value::{Data, Value},
+};
+
 pub(super) fn execute_external(
     executor: BabelExecutor,
     source: &str,
     root: &Path,
-) -> Result<String, String> {
-    execute_external_with_timeout(executor, source, root, Duration::from_secs(15))
+    variables: &[(String, Value)],
+    value_result: bool,
+    cancel: &CancelToken,
+) -> Result<Data, String> {
+    let reply = (matches!(executor, BabelExecutor::Python) && value_result)
+        .then(tempfile::NamedTempFile::new)
+        .transpose()
+        .map_err(|e| format!("Could not create Python reply: {e}"))?;
+    let (program, args, input) = match executor {
+        BabelExecutor::Python => {
+            let mut args = vec![
+                "-c".into(),
+                include_str!("../../assets/babel/python_runner.py").into(),
+            ];
+            if let Some(reply) = &reply {
+                args.push(reply.path().to_string_lossy().into_owned());
+            }
+            let input = serde_json::to_string(&serde_json::json!({
+                "source": source,
+                "variables": variables,
+                "value_result": value_result,
+            }))
+            .map_err(|e| e.to_string())?;
+            ("python3", args, input)
+        }
+        BabelExecutor::Shell | BabelExecutor::Bash => {
+            if value_result {
+                return Err(
+                    "Shell supports :results output; structured values require Python".into(),
+                );
+            }
+            let mut input = String::new();
+            for (name, value) in variables {
+                super::expression::identifier(name)?;
+                if matches!(value, Value::List(_) | Value::Hline) {
+                    return Err("Shell variables must be scalar values".into());
+                }
+                let value = value.display();
+                if value.contains('\0') {
+                    return Err("Shell variables cannot contain NUL".into());
+                }
+                input.push_str(&format!("{name}='{}'\n", value.replace('\'', "'\"'\"'")));
+            }
+            input.push_str(source);
+            let program = if matches!(executor, BabelExecutor::Bash) {
+                "/bin/bash"
+            } else {
+                "/bin/sh"
+            };
+            (program, Vec::new(), input)
+        }
+        _ => unreachable!("only external languages use a process"),
+    };
+    let stdout = execute_process(
+        program,
+        &args,
+        &input,
+        root,
+        Duration::from_secs(15),
+        cancel,
+    )?;
+    let value = if let Some(reply) = reply {
+        let file = std::fs::File::open(reply.path()).map_err(|e| e.to_string())?;
+        let mut bytes = Vec::new();
+        file.take(1024 * 1024 + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|e| e.to_string())?;
+        if bytes.len() > 1024 * 1024 {
+            return Err("Python return value exceeds 1 MiB".into());
+        }
+        serde_json::from_slice(&bytes)
+            .map_err(|_| "Python did not return a supported Babel value".to_owned())?
+    } else {
+        Value::Text(stdout)
+    };
+    Ok(Data {
+        value,
+        ..Data::default()
+    })
 }
 
-fn execute_external_with_timeout(
-    executor: BabelExecutor,
+fn execute_process(
+    program: &str,
+    args: &[String],
     source: &str,
     root: &Path,
     timeout: Duration,
+    cancel: &CancelToken,
 ) -> Result<String, String> {
     const MAX_OUTPUT: usize = 1024 * 1024;
-    let (program, args): (&str, &[&str]) = match executor {
-        BabelExecutor::Python => ("python3", &["-"]),
-        BabelExecutor::Shell => ("/bin/sh", &[]),
-        BabelExecutor::Bash => ("/bin/bash", &[]),
-        _ => unreachable!("only external languages use a process"),
-    };
+    if cancel.cancelled() {
+        return Err("Babel execution cancelled".into());
+    }
     let mut child = Command::new(program)
         .args(args)
         .current_dir(if root.as_os_str().is_empty() { Path::new(".") } else { root })
@@ -65,7 +146,7 @@ fn execute_external_with_timeout(
         {
             break;
         }
-        if started.elapsed() >= timeout {
+        if cancel.cancelled() || started.elapsed() >= timeout {
             if let Some(group) = i32::try_from(child.id()).ok().and_then(Pid::from_raw) {
                 let _ = kill_process_group(group, Signal::KILL);
             }
@@ -73,10 +154,11 @@ fn execute_external_with_timeout(
                 let _ = child.kill();
                 let _ = child.wait();
             }
-            return Err(format!(
-                "{program} timed out after {} seconds",
-                timeout.as_secs()
-            ));
+            return Err(if cancel.cancelled() {
+                "Babel execution cancelled".into()
+            } else {
+                format!("{program} timed out after {} seconds", timeout.as_secs())
+            });
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -123,11 +205,13 @@ mod tests {
 
     #[test]
     fn timeout_includes_output_pipes_held_by_background_children() {
-        let error = execute_external_with_timeout(
-            BabelExecutor::Shell,
+        let error = execute_process(
+            "/bin/sh",
+            &[],
             "sleep 2 &\n",
             Path::new("."),
             Duration::from_millis(100),
+            &CancelToken::default(),
         )
         .unwrap_err();
         assert!(error.contains("timed out"), "{error}");

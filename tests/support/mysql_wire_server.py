@@ -103,6 +103,10 @@ values = ["00123", "18446744073709551615", "1234567890.123456789012345678",
           None, "a|b\n中文"]
 
 
+def query_columns(query):
+    return columns + [("created", 12, 0), ("day", 10, 0)] if "BABEL_DATES" in query else columns
+
+
 def result(conn, specs, rows, binary=False):
     sequence = 1
     packet(conn, bytes([len(specs)]), sequence)
@@ -114,9 +118,17 @@ def result(conn, specs, rows, binary=False):
     for row in rows:
         sequence += 1
         if binary:
-            payload = b"\x00\x00"
-            for value, (_, kind, _) in zip(row, specs):
-                payload += struct.pack("<Q", int(value)) if kind == 8 else enc(value)
+            bitmap = bytearray((len(specs) + 9) // 8)
+            payload = b""
+            for index, (value, (_, kind, flags)) in enumerate(zip(row, specs)):
+                if value is None:
+                    bitmap[(index + 2) // 8] |= 1 << ((index + 2) % 8)
+                else:
+                    if kind in (10, 12):
+                        payload += value
+                    else:
+                        payload += struct.pack("<Q" if flags & 32 else "<q", int(value)) if kind == 8 else enc(value)
+            payload = b"\x00" + bitmap + payload
         else:
             payload = b"".join(enc(value) for value in row)
         packet(conn, payload, sequence)
@@ -142,6 +154,7 @@ def client(conn):
             log("TLS")
         ok(conn, sequence + 1)
         statement_id = 0
+        statements = {}
         while True:
             data, _ = receive(conn)
             command = data[0]
@@ -156,18 +169,35 @@ def client(conn):
                     error(conn)
                     continue
                 statement_id += 1
-                specs = [("connection_id", 8, 32), ("sql_mode", 253, 0)] if "CONNECTION_ID()" in query else columns
+                statements[statement_id] = query
+                parameter_count = query.count("?")
+                specs = [("connection_id", 8, 32), ("sql_mode", 253, 0)] if "CONNECTION_ID()" in query else query_columns(query)
                 if query.startswith("EXPLAIN"):
                     specs = []
-                packet(conn, b"\x00" + struct.pack("<IHHBH", statement_id, len(specs), 0, 0, 0), 1)
-                for sequence, spec in enumerate(specs, 2):
+                packet(conn, b"\x00" + struct.pack("<IHHBH", statement_id, len(specs), parameter_count, 0, 0), 1)
+                for sequence in range(2, parameter_count + 2):
+                    packet(conn, column("parameter"), sequence)
+                if parameter_count:
+                    eof(conn, parameter_count + 2)
+                base = parameter_count + 1 if parameter_count else 0
+                for sequence, spec in enumerate(specs, 2 + base):
                     packet(conn, column(*spec), sequence)
                 if specs:
-                    eof(conn, len(specs) + 2)
+                    eof(conn, len(specs) + 2 + base)
             elif command == 23:
-                mode = sys.argv[3] if len(sys.argv) > 3 else ""
-                result(conn, [("connection_id", 8, 32), ("sql_mode", 253, 0)],
-                       [[str(connection_id), mode]], binary=True)
+                query = statements[struct.unpack("<I", data[1:5])[0]]
+                if "CONNECTION_ID()" in query:
+                    mode = sys.argv[3] if len(sys.argv) > 3 else ""
+                    result(conn, [("connection_id", 8, 32), ("sql_mode", 253, 0)],
+                           [[str(connection_id), mode]], binary=True)
+                else:
+                    log("EXECUTE " + query)
+                    log("BINDS " + data[10:].hex())
+                    row = values
+                    if "BABEL_DATES" in query:
+                        date = struct.pack("<HBB", 2026, 1, 2)
+                        row = values + [b"\x0b" + date + bytes([3, 4, 5]) + struct.pack("<I", 123456), b"\x04" + date]
+                    result(conn, query_columns(query), [row], binary=True)
             elif command == 25:
                 pass
             elif command == 3:

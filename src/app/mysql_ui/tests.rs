@@ -1,11 +1,14 @@
-use super::*;
 use crate::app::{PanePair, PaneSide, ReadyDocument, WorkspaceLoadState};
 use crate::document::{
     ByteOffset, ByteRange, DocumentCommand, DocumentSession, EditOrigin, EditTransaction,
     Selection, TextEdit,
 };
+use crate::{
+    app::{WorkspaceWindow, echo_area::EchoMessage},
+    babel::CancelToken,
+};
 use gpui::{AppContext, Focusable};
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 #[gpui::test]
 fn cancelling_mysql_document_trust_never_launches_a_query(cx: &mut gpui::TestAppContext) {
@@ -39,10 +42,11 @@ fn cancelling_mysql_document_trust_never_launches_a_query(cx: &mut gpui::TestApp
         });
         cx.update(|window, app| {
             workspace.update(app, |w, cx| {
-                let request = crate::babel::prepare_source_block_execution(
+                let request = crate::babel::prepare_execution(
                     &session.read(cx).snapshot(),
                     session.read(cx).path(),
                     Selection::caret(ByteOffset(0)),
+                    Vec::new(),
                 )
                 .unwrap();
                 w.confirm_source_execution(
@@ -52,7 +56,7 @@ fn cancelling_mysql_document_trust_never_launches_a_query(cx: &mut gpui::TestApp
                     window,
                     cx,
                 );
-                assert!(w.mysql.run.is_none());
+                assert!(w.babel_run.is_none());
             })
         });
         cx.run_until_parked();
@@ -90,7 +94,7 @@ fn cancelling_mysql_document_trust_never_launches_a_query(cx: &mut gpui::TestApp
         assert!(cx.debug_bounds("mysql-query-dialog").is_none());
         workspace.read_with(cx, |w, _| {
             assert!(w.babel_task.is_none());
-            assert!(w.mysql.run.is_none());
+            assert!(w.babel_run.is_none());
             assert!(w.mysql.trusted.is_empty());
         });
         session.read_with(cx, |session, _| {
@@ -109,8 +113,8 @@ fn query_status_stops_the_matching_task_and_restores_the_statusline(cx: &mut gpu
         w.show_editor(cx);
         let session = w.document_session().unwrap().clone();
         w.babel_request = 7;
-        w.start_mysql_run(session.read(cx).id(), ByteOffset(0), cancel.clone(), cx);
-        w.stop_mysql_query(6, cx);
+        w.start_babel_run(session.read(cx).id(), ByteOffset(0), cancel.clone(), cx);
+        w.stop_babel_execution(6, cx);
         session
     });
     assert!(
@@ -145,7 +149,7 @@ fn query_status_stops_the_matching_task_and_restores_the_statusline(cx: &mut gpu
         });
     });
     workspace.update(cx, |w, cx| {
-        w.mysql.run = None;
+        w.babel_run = None;
         w.show_echo_message(EchoMessage::success("Query complete"), cx);
     });
     cx.run_until_parked();

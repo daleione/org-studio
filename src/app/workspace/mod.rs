@@ -139,6 +139,8 @@ impl WorkspaceWindow {
                 right: None,
             },
             load_task: None,
+            babel_run: None,
+            babel_confirmation: None,
             babel_task: None,
             babel_editor: None,
             babel_request: 0,

@@ -116,6 +116,20 @@ pub(super) fn paint_frame(
                 paint(window);
             }
         }
+        window.with_content_mask(
+            Some(ContentMask {
+                bounds: gutter_bounds,
+            }),
+            |window| {
+                for button in state
+                    .source_run_buttons
+                    .iter()
+                    .filter(|button| button.hit.visible && button.gutter)
+                {
+                    paint_run_button(button, window, cx);
+                }
+            },
+        );
         let text_right = if state.minimap.background.is_none() {
             bounds.right()
         } else {
@@ -178,43 +192,9 @@ pub(super) fn paint_frame(
                 for button in state
                     .source_run_buttons
                     .iter()
-                    .filter(|button| button.hit.visible)
+                    .filter(|button| button.hit.visible && !button.gutter)
                 {
-                    let hovered = button.hitbox.is_hovered(window);
-                    if hovered {
-                        window.set_cursor_style(CursorStyle::PointingHand, &button.hitbox);
-                        let radius = px(5.0);
-                        crate::document_preview::quad(
-                            window,
-                            quad(
-                                button.bounds,
-                                Corners {
-                                    top_left: radius,
-                                    top_right: radius,
-                                    bottom_right: radius,
-                                    bottom_left: radius,
-                                },
-                                rgba((button.accent << 8) | 0x1f),
-                                Edges::default(),
-                                rgba(0),
-                                BorderStyle::default(),
-                            ),
-                        );
-                    }
-                    let icon_x = button.bounds.left()
-                        + px(((f32::from(button.bounds.size.width)
-                            - f32::from(button.icon.width()))
-                            / 2.0)
-                            .max(0.0));
-                    let _ = crate::document_preview::paint_shaped(
-                        &button.icon,
-                        point(icon_x, button.bounds.top()),
-                        button.bounds.size.height,
-                        TextAlign::Left,
-                        None,
-                        window,
-                        cx,
-                    );
+                    paint_run_button(button, window, cx);
                 }
                 for row in &state.rows {
                     let run_button_visible = state
@@ -413,6 +393,43 @@ pub(super) fn paint_frame(
             }
         }
     }
+}
+
+fn paint_run_button(button: &SourceRunButtonPaint, window: &mut Window, cx: &mut App) {
+    let hovered = button.hitbox.is_hovered(window);
+    if hovered {
+        window.set_cursor_style(CursorStyle::PointingHand, &button.hitbox);
+        let radius = px(5.0);
+        crate::document_preview::quad(
+            window,
+            quad(
+                button.bounds,
+                Corners {
+                    top_left: radius,
+                    top_right: radius,
+                    bottom_right: radius,
+                    bottom_left: radius,
+                },
+                rgba((button.accent << 8) | 0x1f),
+                Edges::default(),
+                rgba(0),
+                BorderStyle::default(),
+            ),
+        );
+    }
+    let icon_x = button.bounds.left()
+        + px(
+            ((f32::from(button.bounds.size.width) - f32::from(button.icon.width())) / 2.0).max(0.0),
+        );
+    let _ = crate::document_preview::paint_shaped(
+        &button.icon,
+        point(icon_x, button.bounds.top()),
+        button.bounds.size.height,
+        TextAlign::Left,
+        None,
+        window,
+        cx,
+    );
 }
 
 /// Connect all wrapped rows to the center of their source line number.

@@ -62,7 +62,6 @@ fn mysql_respects_effective_eval_and_rejects_unsupported_headers() {
     mysql_request(&allowed).unwrap();
     for args in [
         ":engine postgresql",
-        ":var n=1",
         ":results append",
         ":results raw",
         ":session shared",
@@ -71,6 +70,13 @@ fn mysql_respects_effective_eval_and_rejects_unsupported_headers() {
         let source = format!("#+begin_src sql {args}\nSELECT 1;\n#+end_src\n");
         assert!(mysql_request(&source).is_err(), "{args}");
     }
+    let source = "#+begin_src sql :results none\nSELECT 1;\n#+end_src\n";
+    let request = mysql_request(source).unwrap();
+    assert!(!request.writes_result());
+    assert!(matches!(
+        request.result,
+        RequestedResult::Data { silent: true, .. }
+    ));
 }
 
 #[test]
@@ -86,7 +92,7 @@ fn mysql_result_replacement_consumes_entire_table_and_preserves_prose() {
     let source = "#+name: report\n#+begin_src sql\nSELECT 1;\n#+end_src\n\n\
 Explanation.\n\n#+RESULTS[oldhash]: report\n#+CAPTION: My report\n#+PLOT: ind:1 deps:(2) with:lines\n| a | b |\n|---+---|\n| 1 | 2 |\n| 3 | 4 |\n\nFollowing paragraph.\n* Next\n";
     let request = mysql_request(source).unwrap();
-    let RequestedResult::Table {
+    let RequestedResult::Data {
         range, attributes, ..
     } = request.result
     else {

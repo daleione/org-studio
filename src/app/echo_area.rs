@@ -21,7 +21,7 @@ pub(crate) enum EchoTone {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum EchoAction {
-    StopMySqlQuery { request: u64, enabled: bool },
+    StopBabelExecution { request: u64, enabled: bool },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -139,7 +139,7 @@ impl WorkspaceWindow {
         self.keyboard
             .status()
             .map(EchoMessage::working)
-            .or_else(|| self.mysql_running_message(cx))
+            .or_else(|| self.babel_running_message(cx))
             .or_else(|| self.echo.message.clone())
     }
 }
@@ -255,7 +255,7 @@ fn render_echo_content(
                 ))
             })
             .when_some(message.action, |area, action| {
-                let EchoAction::StopMySqlQuery { request, enabled } = action;
+                let EchoAction::StopBabelExecution { request, enabled } = action;
                 let stop_entity = entity.clone();
                 let accessible_entity = entity.clone();
                 let label = match language {
@@ -289,13 +289,13 @@ fn render_echo_content(
                             cx.stop_propagation();
                             if enabled {
                                 stop_entity
-                                    .update(cx, |this, cx| this.stop_mysql_query(request, cx));
+                                    .update(cx, |this, cx| this.stop_babel_execution(request, cx));
                             }
                         })
                         .on_a11y_action(gpui::AccessibleAction::Click, move |_, _, cx| {
                             if enabled {
                                 accessible_entity
-                                    .update(cx, |this, cx| this.stop_mysql_query(request, cx));
+                                    .update(cx, |this, cx| this.stop_babel_execution(request, cx));
                             }
                         }),
                 )

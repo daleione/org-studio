@@ -5,17 +5,14 @@ use crate::{
         ByteOffset, ByteRange, DocumentId, DocumentSnapshot, Revision, Selection, TextEdit,
         TextSnapshot,
     },
-    org_syntax::{BlockKind, parse},
+    org_syntax::BlockKind,
 };
 
 #[cfg(test)]
 use super::artifact::NEXT_TEMP_OUTPUT;
 use super::artifact::{PendingArtifact, resolve_output_target, write_temporary_output};
 use super::process::execute_external;
-use super::syntax::{
-    existing_result_range, header_argument, header_values, preserved_result_attributes,
-    tokenize_header,
-};
+use super::syntax::preserved_result_attributes;
 
 pub(crate) struct BabelExecutionRequest {
     pub(crate) document_id: DocumentId,
@@ -23,14 +20,19 @@ pub(crate) struct BabelExecutionRequest {
     pub(crate) selection: Selection,
     pub(crate) source_block_start: ByteOffset,
     pub(super) source: String,
-    executor: BabelExecutor,
-    document_root: PathBuf,
+    pub(super) headers: super::headers::Headers,
+    pub(super) variables: Vec<(String, super::value::Value)>,
+    pub(crate) cancel: super::CancelToken,
+    name: Option<String>,
+    pub(super) result_names: Option<super::value::Data>,
+    pub(super) executor: BabelExecutor,
+    pub(super) document_root: PathBuf,
     result: RequestedResult,
     pub(crate) mysql: Option<super::mysql::MySqlRequest>,
 }
 
 enum RequestedResult {
-    Table {
+    Data {
         range: ByteRange,
         existing: String,
         newline: &'static str,
@@ -42,12 +44,6 @@ enum RequestedResult {
         link: String,
         edit: Option<TextEdit>,
     },
-    Text {
-        range: ByteRange,
-        existing: String,
-        newline: &'static str,
-        silent: bool,
-    },
 }
 
 pub(crate) struct PreparedBabelOutput {
@@ -58,6 +54,7 @@ pub(crate) struct PreparedBabelOutput {
     pub(crate) language_name: &'static str,
     pub(crate) result_edit: Option<TextEdit>,
     pub(crate) table: Option<super::mysql::QueryTable>,
+    pub(super) data: super::value::Data,
     kind: PreparedResult,
 }
 
@@ -84,7 +81,7 @@ pub(super) enum BabelExecutor {
 }
 
 impl BabelExecutor {
-    fn language_name(self) -> &'static str {
+    pub(super) fn language_name(self) -> &'static str {
         match self {
             Self::Diagram { language, .. } => language.display_name(),
             Self::Typst(_) => "Typst",
@@ -97,6 +94,82 @@ impl BabelExecutor {
 }
 
 impl BabelExecutionRequest {
+    pub(crate) fn block_name(&self) -> Option<&str> {
+        self.name.as_deref()
+    }
+
+    pub(crate) fn source_preview(&self) -> &str {
+        &self.source
+    }
+
+    pub(crate) fn writes_result(&self) -> bool {
+        self.headers.writes_result()
+    }
+
+    pub(crate) fn headers_eval_query(&self) -> bool {
+        self.headers
+            .get(":eval")
+            .is_some_and(|mode| mode.eq_ignore_ascii_case("query"))
+    }
+    pub(crate) fn execution_directory(&self) -> &Path {
+        &self.document_root
+    }
+
+    pub(super) fn file_result(&self) -> bool {
+        matches!(self.result, RequestedResult::File { .. })
+    }
+
+    pub(super) fn set_result_site(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        blocks: &crate::org_syntax::BlockArena,
+        index: usize,
+        selection: Selection,
+    ) -> Result<(), String> {
+        let (range, attributes, name) =
+            super::syntax::result_range(snapshot, blocks, index, self.file_result())?;
+        let existing = snapshot.copy_range(range);
+        let newline = if snapshot
+            .copy_range(blocks.nodes()[index].source)
+            .contains("\r\n")
+        {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        let silent = !self.writes_result();
+        let marker = name.as_ref().map(|n| format!(" {n}")).unwrap_or_default();
+        self.result = match &self.result {
+            RequestedResult::File { target, link, .. } => RequestedResult::File {
+                target: target.clone(),
+                link: link.clone(),
+                edit: (!silent)
+                    .then(|| {
+                        let replacement = format!(
+                            "{newline}#+RESULTS:{marker}{newline}{attributes}{link}{newline}"
+                        );
+                        (existing != replacement).then(|| TextEdit::new(range, replacement))
+                    })
+                    .flatten(),
+            },
+            RequestedResult::Data { .. } => RequestedResult::Data {
+                range,
+                existing,
+                newline,
+                silent,
+                attributes,
+            },
+        };
+        self.name = name.clone();
+        if let Some(mysql) = &mut self.mysql {
+            mysql.source_name = name;
+        }
+        self.document_id = snapshot.document_id();
+        self.revision = snapshot.revision();
+        self.selection = selection;
+        self.source_block_start = blocks.nodes()[index].source.start;
+        Ok(())
+    }
     pub(crate) fn language_name(&self) -> &'static str {
         self.executor.language_name()
     }
@@ -114,7 +187,7 @@ impl BabelExecutionRequest {
     fn file_target(&self) -> Option<&Path> {
         match &self.result {
             RequestedResult::File { target, .. } => Some(target),
-            RequestedResult::Text { .. } | RequestedResult::Table { .. } => None,
+            RequestedResult::Data { .. } => None,
         }
     }
 
@@ -122,7 +195,7 @@ impl BabelExecutionRequest {
     fn file_edit(&self) -> Option<&TextEdit> {
         match &self.result {
             RequestedResult::File { edit, .. } => edit.as_ref(),
-            RequestedResult::Text { .. } | RequestedResult::Table { .. } => None,
+            RequestedResult::Data { .. } => None,
         }
     }
 }
@@ -162,14 +235,15 @@ impl PreparedBabelOutput {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_source_block_execution(
     snapshot: &DocumentSnapshot,
     document_path: &Path,
     selection: Selection,
 ) -> Result<BabelExecutionRequest, String> {
-    let blocks = parse(snapshot);
+    let blocks = crate::org_syntax::parse(snapshot);
     let caret = selection.head();
-    let (block_index, block) = blocks
+    let (block_index, _) = blocks
         .nodes()
         .iter()
         .enumerate()
@@ -180,12 +254,42 @@ pub(crate) fn prepare_source_block_execution(
                     || caret == block.source.end && block.source.end.0 == snapshot.len_bytes())
         })
         .ok_or_else(|| "Point is not inside an Org source block".to_owned())?;
+    prepare_at(
+        snapshot,
+        document_path,
+        selection,
+        &blocks,
+        block_index,
+        None,
+    )
+}
+
+pub(super) fn prepare_at(
+    snapshot: &DocumentSnapshot,
+    document_path: &Path,
+    selection: Selection,
+    blocks: &crate::org_syntax::BlockArena,
+    block_index: usize,
+    override_headers: Option<super::headers::Headers>,
+) -> Result<BabelExecutionRequest, String> {
+    let block = &blocks.nodes()[block_index];
+    let headers = override_headers
+        .map(Ok)
+        .unwrap_or_else(|| super::headers::effective_headers(snapshot, blocks, block_index))?;
+    validate_headers(&headers)?;
     let BlockKind::SourceBlock { language } = &block.kind else {
         unreachable!("source block was selected above")
     };
     let language = language.as_deref().unwrap_or("");
     if language.eq_ignore_ascii_case("sql") {
-        return prepare_mysql(snapshot, document_path, selection, &blocks, block_index);
+        return prepare_mysql(
+            snapshot,
+            document_path,
+            selection,
+            blocks,
+            block_index,
+            headers,
+        );
     }
     let diagram_language = crate::preview::DiagramLanguage::from_source_language(Some(language));
     let typst_source =
@@ -223,22 +327,9 @@ pub(crate) fn prepare_source_block_execution(
         start: block.source.start,
         end: block.content.start,
     });
-    let tokens = tokenize_header(&opening)?;
-    if header_values(&tokens, ":eval").iter().any(|value| {
-        ["no", "never"]
-            .iter()
-            .any(|prohibited| value.eq_ignore_ascii_case(prohibited))
-    }) {
-        return Err("This source block disables execution with :eval no/never".to_owned());
-    }
-    let document_root = document_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .to_path_buf();
-    let results = header_values(&tokens, ":results");
-    let silent = results
-        .iter()
-        .any(|value| value.eq_ignore_ascii_case("silent"));
+    let document_root = execution_directory(&headers, document_path)?;
+    let results = headers.values(":results");
+    let silent = !headers.writes_result();
     if results
         .iter()
         .any(|value| value.eq_ignore_ascii_case("append") || value.eq_ignore_ascii_case("prepend"))
@@ -252,38 +343,47 @@ pub(crate) fn prepare_source_block_execution(
     } else {
         "\n"
     };
-    let result_range = existing_result_range(snapshot, &blocks, block_index);
+    let (result_range, attributes, name) =
+        super::syntax::result_range(snapshot, blocks, block_index, true)?;
     let existing_result = snapshot.copy_range(result_range);
-    let file = header_argument(&tokens, ":file").filter(|file| !file.is_empty());
+    let file = headers.get(":file").filter(|file| !file.is_empty());
     let (executor, result) = if let Some(executor) = external {
         if file.is_some() {
             return Err(format!(
                 "{executor_name} does not support :file results yet"
             ));
         }
-        if !results.iter().any(|value| {
-            value.eq_ignore_ascii_case("output") || value.eq_ignore_ascii_case("silent")
-        }) {
-            return Err(format!(
-                "{executor_name} requires :results output (or :results silent)"
-            ));
+        if !matches!(executor, BabelExecutor::Python) && results.iter().any(|v| v == "value") {
+            return Err(format!("{executor_name} supports :results output only"));
         }
-        if let Some(unsupported) = results.iter().find(|value| {
-            !["output", "replace", "silent"]
+        if results.iter().any(|v| v == "output")
+            && results
                 .iter()
-                .any(|supported| value.eq_ignore_ascii_case(supported))
-        }) {
-            return Err(format!(
-                "{executor_name} does not support :results {unsupported}"
-            ));
+                .any(|v| matches!(v.as_str(), "table" | "vector"))
+        {
+            return Err(
+                "Structured table results require :results value; output is fixed-width text"
+                    .into(),
+            );
+        }
+        for value in results {
+            if ![
+                "value", "output", "table", "vector", "scalar", "replace", "silent", "none",
+                "verbatim",
+            ]
+            .contains(&value.as_str())
+            {
+                return Err(format!("{executor_name} does not support :results {value}"));
+            }
         }
         (
             executor,
-            RequestedResult::Text {
+            RequestedResult::Data {
                 range: result_range,
                 existing: existing_result,
                 newline,
                 silent,
+                attributes,
             },
         )
     } else {
@@ -332,16 +432,21 @@ pub(crate) fn prepare_source_block_execution(
     };
 
     Ok(BabelExecutionRequest {
+        headers: headers.clone(),
+        variables: literal_variables(&headers),
+        result_names: None,
+        cancel: super::CancelToken::default(),
+        name,
         document_id: snapshot.document_id(),
         revision: snapshot.revision(),
         selection,
         source_block_start: block.source.start,
-        source: if header_values(&tokens, ":noweb").iter().any(|value| {
+        source: if headers.values(":noweb").iter().any(|value| {
             ["yes", "eval"]
                 .iter()
                 .any(|mode| value.eq_ignore_ascii_case(mode))
         }) {
-            super::source::expanded_execution_source(snapshot, &blocks, block_index)?
+            super::source::expanded_execution_source(snapshot, blocks, block_index)?
         } else {
             snapshot.copy_range(block.content)
         },
@@ -355,9 +460,13 @@ pub(crate) fn prepare_source_block_execution(
 pub(crate) fn execute_source_block(
     request: BabelExecutionRequest,
 ) -> Result<PreparedBabelOutput, String> {
+    if request.cancel.cancelled() {
+        return Err("Babel execution cancelled".into());
+    }
     if let Some(mysql) = &request.mysql {
-        let table = super::mysql::execute(mysql, &request.source)?;
-        let RequestedResult::Table {
+        let table =
+            super::mysql::execute_with_variables(mysql, &request.source, &request.variables)?;
+        let RequestedResult::Data {
             range,
             existing,
             newline,
@@ -390,6 +499,13 @@ pub(crate) fn execute_source_block(
             source_block_start: request.source_block_start,
             language_name: "MySQL",
             result_edit,
+            data: {
+                let mut data = table.data();
+                if request.headers.get(":colnames") == Some("no") {
+                    data.columns = None;
+                }
+                data
+            },
             table: Some(table),
             kind: PreparedResult::Text,
         });
@@ -398,21 +514,76 @@ pub(crate) fn execute_source_block(
         request.executor,
         BabelExecutor::Python | BabelExecutor::Shell | BabelExecutor::Bash
     ) {
-        let stdout = execute_external(request.executor, &request.source, &request.document_root)?;
-        let RequestedResult::Text {
+        let mut data = execute_external(
+            request.executor,
+            &request.source,
+            &request.document_root,
+            &request.variables,
+            matches!(request.executor, BabelExecutor::Python)
+                && !request
+                    .headers
+                    .values(":results")
+                    .iter()
+                    .any(|v| v == "output"),
+            &request.cancel,
+        )?;
+        if request.headers.get(":hlines") == Some("yes")
+            && let super::value::Value::List(rows) = &mut data.value
+        {
+            for row in rows {
+                if *row == super::value::Value::Text("hline".into()) {
+                    *row = super::value::Value::Hline;
+                }
+            }
+        }
+        if let Some(names) = &request.result_names {
+            if let super::value::Value::List(rows) = &data.value {
+                let width = rows.first().and_then(|r| {
+                    if let super::value::Value::List(cells) = r {
+                        Some(cells.len())
+                    } else {
+                        None
+                    }
+                });
+                if names.columns.as_ref().is_some_and(|c| {
+                    rows.is_empty()
+                        || Some(c.len())
+                            == width.map(|w| w + usize::from(!names.row_names.is_empty()))
+                }) {
+                    data.columns = names.columns.clone();
+                }
+                if names.row_names.len() == rows.len() {
+                    data.row_names = names.row_names.clone();
+                }
+            }
+        } else if matches!(request.executor, BabelExecutor::Python) {
+            data = data.preprocess(&request.headers)?;
+        }
+        let RequestedResult::Data {
             range,
             existing,
             newline,
             silent,
+            attributes,
         } = request.result
         else {
             unreachable!("external executors produce text")
         };
         let result_edit = (!silent)
             .then(|| {
-                let replacement = format_text_result(&stdout, newline);
-                (existing != replacement).then(|| TextEdit::new(range, replacement))
+                let marker = request
+                    .name
+                    .as_ref()
+                    .map(|n| format!(" {n}"))
+                    .unwrap_or_default();
+                let payload = super::result::payload(&data, &request.headers, newline)?;
+                let replacement =
+                    format!("{newline}#+RESULTS:{marker}{newline}{attributes}{payload}");
+                Ok::<_, String>(
+                    (existing != replacement).then(|| TextEdit::new(range, replacement)),
+                )
             })
+            .transpose()?
             .flatten();
         return Ok(PreparedBabelOutput {
             document_id: request.document_id,
@@ -422,6 +593,7 @@ pub(crate) fn execute_source_block(
             language_name: request.executor.language_name(),
             result_edit,
             table: None,
+            data,
             kind: PreparedResult::Text,
         });
     }
@@ -497,6 +669,7 @@ pub(crate) fn execute_source_block(
         language_name: request.executor.language_name(),
         result_edit: edit,
         table: None,
+        data: super::value::Data::default(),
         kind: PreparedResult::File {
             artifact,
             link,
@@ -511,19 +684,96 @@ fn prepare_mysql(
     selection: Selection,
     blocks: &crate::org_syntax::BlockArena,
     index: usize,
+    headers: super::headers::Headers,
 ) -> Result<BabelExecutionRequest, String> {
-    let headers = super::headers::effective_headers(snapshot, blocks, index)?;
     let engine = headers.get(":engine").unwrap_or("mysql");
     if !engine.eq_ignore_ascii_case("mysql") {
         return Err(format!(
             "SQL engine {engine} is not supported yet; choose :engine mysql"
         ));
     }
+    if headers.get(":file").is_some() {
+        return Err("MySQL does not support :file results yet".into());
+    }
+    for value in headers.values(":results") {
+        if ![
+            "table", "vector", "value", "output", "replace", "silent", "none",
+        ]
+        .contains(&value.to_ascii_lowercase().as_str())
+        {
+            return Err(format!("MySQL does not support :results {value}"));
+        }
+    }
+    let block = &blocks.nodes()[index];
+    let source = if headers
+        .get(":noweb")
+        .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("eval"))
+    {
+        super::source::expanded_execution_source(snapshot, blocks, index)?
+    } else {
+        snapshot.copy_range(block.content)
+    };
+    let parameters = headers
+        .variables
+        .iter()
+        .map(|(n, e)| {
+            (
+                n.clone(),
+                if let super::expression::Expression::Literal(v) = e {
+                    v.clone()
+                } else {
+                    super::value::Value::Nil
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    let (checked, _) = super::mysql::parameters::preflight(&source, &parameters)?;
+    super::mysql::validate_query(&checked)?;
+    let opening = snapshot.copy_range(ByteRange::new(block.source.start.0, block.content.start.0));
+    let newline = if opening.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let (range, attributes, name) = super::syntax::result_range(snapshot, blocks, index, false)?;
+    let silent = !headers.writes_result();
+    let mut mysql = super::mysql::MySqlRequest::from_headers(headers.clone())?;
+    mysql.source_name = name.clone();
+    Ok(BabelExecutionRequest {
+        headers: headers.clone(),
+        variables: literal_variables(&headers),
+        result_names: None,
+        cancel: mysql.cancel.clone(),
+        name,
+        document_id: snapshot.document_id(),
+        revision: snapshot.revision(),
+        selection,
+        source_block_start: block.source.start,
+        source,
+        executor: BabelExecutor::MySql,
+        document_root: execution_directory(&headers, document_path)?,
+        result: RequestedResult::Data {
+            range,
+            existing: snapshot.copy_range(range),
+            newline,
+            silent,
+            attributes,
+        },
+        mysql: Some(mysql),
+    })
+}
+
+pub(super) fn validate_headers(headers: &super::headers::Headers) -> Result<(), String> {
     if headers
         .get(":eval")
-        .is_some_and(|v| ["no", "never"].iter().any(|p| v.eq_ignore_ascii_case(p)))
+        .is_some_and(|v| v.eq_ignore_ascii_case("no") || v.eq_ignore_ascii_case("never"))
     {
         return Err("This source block disables execution with :eval no/never".into());
+    }
+    if headers.get(":cache").is_some_and(|v| v != "no")
+        || headers.get(":session").is_some_and(|v| v != "none")
+    {
+        return Err("Babel :cache and persistent :session are not supported yet".into());
     }
     for key in headers.keys() {
         if ![
@@ -534,8 +784,11 @@ fn prepare_mysql(
             ":dbuser",
             ":dbpassword",
             ":dbconnection",
+            ":file",
             ":results",
             ":colnames",
+            ":rownames",
+            ":hlines",
             ":eval",
             ":exports",
             ":dir",
@@ -548,92 +801,48 @@ fn prepare_mysql(
         ]
         .contains(&key)
         {
-            return Err(format!(
-                "MySQL does not support the {key} header argument yet"
-            ));
+            return Err(format!("Babel does not support {key} yet"));
         }
     }
-    if headers
-        .get(":cache")
-        .is_some_and(|v| !v.eq_ignore_ascii_case("no"))
-        || headers
-            .get(":session")
-            .is_some_and(|v| !v.eq_ignore_ascii_case("none"))
-    {
-        return Err("MySQL :cache and persistent :session are not supported yet".into());
-    }
-    for value in headers.values(":results") {
-        if !["table", "vector", "value", "output", "replace", "silent"]
-            .contains(&value.to_ascii_lowercase().as_str())
-        {
-            return Err(format!("MySQL does not support :results {value}"));
+    for (key, allowed) in [
+        (":colnames", &["nil", "yes", "no"][..]),
+        (":rownames", &["yes", "no"]),
+        (":hlines", &["yes", "no"]),
+    ] {
+        if headers.get(key).is_some_and(|v| !allowed.contains(&v)) {
+            return Err(format!("Invalid {key}; choose {}", allowed.join("/")));
         }
     }
-    if headers
-        .values(":results")
-        .iter()
-        .any(|v| v.eq_ignore_ascii_case("value"))
-        && headers
-            .values(":results")
-            .iter()
-            .any(|v| v.eq_ignore_ascii_case("output"))
-    {
-        return Err("Choose one result collection mode: value or output".into());
-    }
-    let block = &blocks.nodes()[index];
-    let source = if headers
-        .get(":noweb")
-        .is_some_and(|v| v.eq_ignore_ascii_case("yes") || v.eq_ignore_ascii_case("eval"))
-    {
-        super::source::expanded_execution_source(snapshot, blocks, index)?
-    } else {
-        snapshot.copy_range(block.content)
-    };
-    super::mysql::validate_query(&source)?;
-    let opening = snapshot.copy_range(ByteRange::new(block.source.start.0, block.content.start.0));
-    let newline = if opening.contains("\r\n") {
-        "\r\n"
-    } else {
-        "\n"
-    };
-    let (range, attributes, name) = super::syntax::mysql_result_range(snapshot, blocks, index)?;
-    let silent = headers
-        .values(":results")
-        .iter()
-        .any(|v| v.eq_ignore_ascii_case("silent"));
-    let mut mysql = super::mysql::MySqlRequest::from_headers(headers)?;
-    mysql.source_name = name;
-    Ok(BabelExecutionRequest {
-        document_id: snapshot.document_id(),
-        revision: snapshot.revision(),
-        selection,
-        source_block_start: block.source.start,
-        source,
-        executor: BabelExecutor::MySql,
-        document_root: document_path.parent().unwrap_or(Path::new(".")).to_owned(),
-        result: RequestedResult::Table {
-            range,
-            existing: snapshot.copy_range(range),
-            newline,
-            silent,
-            attributes,
-        },
-        mysql: Some(mysql),
-    })
+    Ok(())
 }
 
-fn format_text_result(stdout: &str, newline: &str) -> String {
-    let mut result = format!("{newline}#+RESULTS:{newline}");
-    for line in stdout.lines() {
-        if line.is_empty() {
-            result.push(':');
-        } else {
-            result.push_str(": ");
-            result.push_str(line);
+fn execution_directory(headers: &super::headers::Headers, path: &Path) -> Result<PathBuf, String> {
+    let base = path.parent().unwrap_or(Path::new("."));
+    if let Some(dir) = headers.get(":dir") {
+        let directory = base.join(dir);
+        let directory = std::fs::canonicalize(directory)
+            .map_err(|_| "Babel :dir must name an existing local directory")?;
+        if !directory.is_dir() {
+            return Err("Babel :dir is not a directory".into());
         }
-        result.push_str(newline);
+        Ok(directory)
+    } else {
+        Ok(base.to_owned())
     }
-    result
+}
+
+fn literal_variables(headers: &super::headers::Headers) -> Vec<(String, super::value::Value)> {
+    headers
+        .variables
+        .iter()
+        .filter_map(|(name, expression)| {
+            if let super::expression::Expression::Literal(value) = expression {
+                Some((name.clone(), value.clone()))
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 fn format_typst_error(error: crate::typst_runtime::CompileError, source: &str) -> String {
