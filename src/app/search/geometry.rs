@@ -15,7 +15,7 @@ pub(super) struct BarLayout {
 impl BarLayout {
     pub fn new(available: f32, language: crate::i18n::Language) -> Self {
         let narrow = available < ui_size(420.);
-        Self {
+        let mut layout = Self {
             narrow,
             // Reserve the result slot independently of its current label. Switching
             // from scope to progress or a match count must not resize the input.
@@ -36,7 +36,13 @@ impl BarLayout {
                 (_, false) => 44.,
             }),
             replacement_height: ui_size(if narrow { 76. } else { 41. }),
+        };
+        if narrow {
+            // Keep 40px for the query, plus row padding and gaps.
+            layout.controls_width = (available - layout.mode_width() - ui_size(64.))
+                .clamp(ui_size(128.), layout.controls_width);
         }
+        layout
     }
     pub fn mode_width(&self) -> f32 {
         self.mode_item_width * 2. + 6.

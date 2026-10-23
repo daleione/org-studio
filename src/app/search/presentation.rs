@@ -189,7 +189,7 @@ impl crate::app::WorkspaceWindow {
             return None;
         }
         let viewport = f32::from(window.viewport_size().width);
-        let pane_width = self.document_pane_width(viewport, p.pane);
+        let pane_width = self.status_pane_width(viewport, p.pane, cx);
         let available = (pane_width - 2. * crate::app::status_line::FLOATING_STATUS_INSET).max(1.);
         let target = self.search.session.as_ref().map_or_else(
             || ShellShape::status(available),

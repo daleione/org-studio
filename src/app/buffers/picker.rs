@@ -461,6 +461,7 @@ impl WorkspaceWindow {
     pub(crate) fn buffer_shell_request(
         &mut self,
         window: &Window,
+        cx: &gpui::App,
     ) -> Option<crate::app::status_line::shell::ShellRequest> {
         if self
             .buffers
@@ -478,7 +479,7 @@ impl WorkspaceWindow {
         let pane_width = if !has_document {
             viewport
         } else {
-            self.document_pane_width(viewport, self.buffers.pane)
+            self.status_pane_width(viewport, self.buffers.pane, cx)
         };
         let available = (pane_width - 2. * crate::app::status_line::FLOATING_STATUS_INSET).max(1.);
         self.buffers.available = available;

@@ -14,7 +14,11 @@ const SHELL_BORDER: f32 = 1.;
 const MAX_COMMAND_WIDTH: f32 = 600.;
 
 impl WorkspaceWindow {
-    pub(crate) fn command_shell_request(&mut self, window: &Window) -> Option<ShellRequest> {
+    pub(crate) fn command_shell_request(
+        &mut self,
+        window: &Window,
+        cx: &gpui::App,
+    ) -> Option<ShellRequest> {
         let s = self.command_line.session.as_mut()?;
         s.visible_limit = ((f32::from(window.viewport_size().height) - 252.)
             / ui_size(CANDIDATE_ROW_HEIGHT))
@@ -24,7 +28,7 @@ impl WorkspaceWindow {
         let returning = s.returning;
         let expanded = matches!(s.phase, Phase::Input);
         let rows = s.candidates.len().clamp(1, s.visible_limit);
-        let available = (self.document_pane_width(f32::from(window.viewport_size().width), pane)
+        let available = (self.status_pane_width(f32::from(window.viewport_size().width), pane, cx)
             - 2. * status_line::FLOATING_STATUS_INSET)
             .max(1.);
         let height = if expanded {

@@ -45,6 +45,22 @@ fn preview_snapshot_is_renderable(
     panel_document == session_document && panel_revision <= session_revision
 }
 
+fn status_gutter_offset(
+    ready: &ReadyDocument,
+    workspace: DocumentWorkspaceState,
+    pane: PaneSide,
+    cx: &gpui::App,
+) -> f32 {
+    if workspace.surface(pane) == PaneSurface::Editor {
+        ready.editors.get(pane).as_ref().map_or(0., |editor| {
+            (editor.read(cx).gutter_width(cx) - crate::app::status_line::FLOATING_STATUS_INSET)
+                .max(0.)
+        })
+    } else {
+        0.
+    }
+}
+
 impl Default for WorkspaceWindow {
     fn default() -> Self {
         Self::new()
@@ -887,7 +903,7 @@ impl WorkspaceWindow {
         )
     }
 
-    pub(crate) fn document_pane_width(&self, viewport: f32, pane: PaneSide) -> f32 {
+    pub(crate) fn status_pane_width(&self, viewport: f32, pane: PaneSide, cx: &gpui::App) -> f32 {
         let width = if self.file_manager.sidebar_visible() {
             (viewport
                 - self.rendered_sidebar_width(viewport)
@@ -896,7 +912,7 @@ impl WorkspaceWindow {
         } else {
             viewport
         };
-        if self.document_workspace.is_split() {
+        let width = if self.document_workspace.is_split() {
             let left = self.rendered_left_pane_width(width);
             match pane {
                 PaneSide::Left => left,
@@ -904,7 +920,15 @@ impl WorkspaceWindow {
             }
         } else {
             width
-        }
+        };
+        let offset = if self.content_route == ContentRoute::Document {
+            self.state.ready().map_or(0., |ready| {
+                status_gutter_offset(ready, self.document_workspace, pane, cx)
+            })
+        } else {
+            0.
+        };
+        (width - offset).max(1.)
     }
 
     fn render_pane_content(
@@ -936,8 +960,10 @@ impl WorkspaceWindow {
         else {
             return div().w(px(render.width)).h_full().min_w_0().child(content);
         };
+        let status_offset = status_gutter_offset(ready, render.workspace, pane, render.cx);
+        let status_pane_width = (render.width - status_offset).max(1.);
         let status_width =
-            (render.width - 2.0 * crate::app::status_line::FLOATING_STATUS_INSET).max(1.0);
+            (status_pane_width - 2.0 * crate::app::status_line::FLOATING_STATUS_INSET).max(1.0);
         let buffer_count = self.buffer_sessions().count()
             + usize::from(
                 render.preparing
@@ -1002,7 +1028,7 @@ impl WorkspaceWindow {
                 );
                 self.with_navigation_status(content, pane, entity.clone(), render.cx)
             });
-        div()
+        let pane_view = div()
             .w(px(render.width))
             .h_full()
             .min_w_0()
@@ -1038,24 +1064,28 @@ impl WorkspaceWindow {
                         });
                     })
                     .child(content),
-            )
+            );
+        let overlays = div()
+            .absolute()
+            .inset_0()
+            .left(px(status_offset))
             .child(if command_panel {
                 self.command_bar(
                     pane,
-                    render.width,
+                    status_pane_width,
                     returning_status,
                     render.cx,
                     entity.clone(),
                 )
                 .unwrap()
             } else if prefix_panel {
-                self.prefix_hint_panel(pane, render.width, returning_status, entity.clone())
+                self.prefix_hint_panel(pane, status_pane_width, returning_status, entity.clone())
                     .unwrap()
             } else if buffer_panel {
                 self.buffer_panel(
                     pane,
                     entity.clone(),
-                    render.width,
+                    status_pane_width,
                     returning_status,
                     render.cx,
                 )
@@ -1066,7 +1096,7 @@ impl WorkspaceWindow {
                         self.search_bar(
                             pane,
                             entity.clone(),
-                            render.width,
+                            status_pane_width,
                             render.cx,
                             returning_status,
                         )
@@ -1104,17 +1134,18 @@ impl WorkspaceWindow {
                     self.status.settings(),
                     entity.clone(),
                     self.language,
-                    render.width,
+                    status_pane_width,
                     style_popover_left + crate::app::status_line::FLOATING_STATUS_INSET,
                 ))
             })
             .children(self.search_options_menu(
                 pane,
                 entity,
-                render.width,
+                status_pane_width,
                 render.window,
                 render.cx,
-            ))
+            ));
+        pane_view.child(overlays)
     }
 
     fn render_reading(

@@ -110,6 +110,25 @@ impl EditorElement {
     }
 }
 
+impl SemanticEditor {
+    pub(crate) fn gutter_width(&self, cx: &App) -> f32 {
+        let digits = self.snapshot(cx).len_lines().max(1).ilog10() + 1;
+        let font_id = cx
+            .text_system()
+            .resolve_font(&crate::typography::editor_font());
+        let digit_width = ('0'..='9')
+            .filter_map(|digit| {
+                cx.text_system()
+                    .advance(font_id, px(self.font_size_px()), digit)
+                    .ok()
+            })
+            .map(|advance| f32::from(advance.width))
+            .fold(0.0_f32, f32::max)
+            .max(1.0);
+        digits as f32 * digit_width + GUTTER_PADDING * 2.0
+    }
+}
+
 impl gpui::IntoElement for EditorElement {
     type Element = Self;
 

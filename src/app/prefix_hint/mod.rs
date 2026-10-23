@@ -150,7 +150,7 @@ impl WorkspaceWindow {
         }
         let viewport = f32::from(window.viewport_size().width);
         let width = if p.route == ContentRoute::Document && p.document.is_some() {
-            self.document_pane_width(viewport, p.pane)
+            self.status_pane_width(viewport, p.pane, cx)
         } else {
             viewport
         };

@@ -69,9 +69,9 @@ impl ShellHost {
 impl WorkspaceWindow {
     pub(crate) fn status_shell_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let requests = [
-            self.command_shell_request(window),
+            self.command_shell_request(window, cx),
             self.prefix_shell_request(window, cx),
-            self.buffer_shell_request(window),
+            self.buffer_shell_request(window, cx),
             self.search_shell_request(window, cx),
         ]
         .into_iter()
