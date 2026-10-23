@@ -5,7 +5,10 @@ use std::{
 
 use serde::Serialize;
 
-use crate::{document::ByteRange, org_syntax::BlockId};
+use crate::{
+    document::ByteRange,
+    org_syntax::{BlockId, SyntaxId},
+};
 
 pub(crate) const MAX_SERIES: usize = 8;
 pub(crate) const MAX_POINTS: usize = 10_000;
@@ -53,8 +56,17 @@ pub(crate) type PlotDisplay = Arc<Mutex<PlotDisplayState>>;
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct PlotId(pub(crate) u64);
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum PlotIdentity {
+    Declaration(SyntaxId),
+    NamedTable(Arc<str>),
+    NamedResult(Arc<str>),
+    SourceBlock(SyntaxId),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct PlotCandidate {
+    pub(crate) identity: PlotIdentity,
     pub(crate) declaration: ByteRange,
     pub(crate) table: ByteRange,
     pub(crate) owner: BlockId,

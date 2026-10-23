@@ -2,7 +2,9 @@ use std::collections::BTreeMap;
 
 mod settings;
 
-use super::{PlotCandidate, PlotDiagnostic, PlotKind, PlotLayout, PlotOutputTarget, PlotSpec};
+use super::{
+    PlotCandidate, PlotDiagnostic, PlotIdentity, PlotKind, PlotLayout, PlotOutputTarget, PlotSpec,
+};
 use crate::{
     document::{ByteRange, TextSnapshot},
     org_syntax::{BlockArena, BlockKind},
@@ -38,14 +40,16 @@ pub(crate) fn collect_plots(snapshot: &dyn TextSnapshot, arena: &BlockArena) -> 
                 let text = snapshot.copy_range(node.content);
                 let (name, value) = text.trim().strip_prefix("#+")?.split_once(':')?;
                 name.eq_ignore_ascii_case("PLOT")
-                    .then(|| (node.source, value.trim().to_owned()))
+                    .then(|| (node, value.trim().to_owned()))
             })
             .collect::<Vec<_>>();
         if let (Some(first), Some(last)) = (declarations.first(), declarations.last()) {
             plots.push(PlotCandidate {
+                identity: plot_identity(snapshot, nodes, previous, start)
+                    .unwrap_or(PlotIdentity::Declaration(first.0.syntax_id)),
                 declaration: ByteRange {
-                    start: first.0.start,
-                    end: last.0.end,
+                    start: first.0.source.start,
+                    end: last.0.source.end,
                 },
                 table: ByteRange {
                     start: nodes[start].source.start,
@@ -61,6 +65,46 @@ pub(crate) fn collect_plots(snapshot: &dyn TextSnapshot, arena: &BlockArena) -> 
     }
     bind_images(snapshot, arena, &mut plots, None);
     plots
+}
+
+fn plot_identity(
+    snapshot: &dyn TextSnapshot,
+    nodes: &[crate::org_syntax::BlockNode],
+    start: usize,
+    end: usize,
+) -> Option<PlotIdentity> {
+    for (offset, node) in nodes[start..end].iter().enumerate().rev() {
+        let text = snapshot.copy_range(node.content);
+        let Some((name, value)) = text
+            .trim()
+            .strip_prefix("#+")
+            .and_then(|text| text.split_once(':'))
+        else {
+            continue;
+        };
+        let value = value.trim();
+        if name.eq_ignore_ascii_case("NAME") && !value.is_empty() {
+            return Some(PlotIdentity::NamedTable(value.into()));
+        }
+        if !name
+            .split('[')
+            .next()
+            .is_some_and(|name| name.eq_ignore_ascii_case("RESULTS"))
+        {
+            continue;
+        }
+        if !value.is_empty() {
+            return Some(PlotIdentity::NamedResult(value.into()));
+        }
+        // An anonymous result belongs to the adjacent source block.
+        return nodes[..start + offset]
+            .iter()
+            .rev()
+            .find(|node| !matches!(node.kind, BlockKind::BlankLine | BlockKind::Keyword))
+            .filter(|node| matches!(node.kind, BlockKind::SourceBlock { .. }))
+            .map(|node| PlotIdentity::SourceBlock(node.syntax_id));
+    }
+    None
 }
 
 pub(crate) fn bind_images(

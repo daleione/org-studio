@@ -305,14 +305,17 @@ impl PlotDocument {
         let mut existing = HashMap::new();
         for entry in old.iter() {
             let value = existing
-                .entry(entry.raw.clone())
+                .entry(entry.source.identity.clone())
                 .or_insert((entry.id, 0usize));
             value.1 += 1;
         }
-        let mut counts = HashMap::<Arc<str>, usize>::new();
+        let mut counts = HashMap::new();
         for candidate in &candidates {
-            *counts.entry(candidate.raw.clone()).or_default() += 1;
+            *counts
+                .entry(candidate.source.identity.clone())
+                .or_insert(0usize) += 1;
         }
+        let anchored = mapped_anchors.values().copied().collect::<HashSet<_>>();
         let mut used = HashSet::new();
         let entries = candidates
             .iter()
@@ -322,13 +325,18 @@ impl PlotDocument {
                      raw,
                      prepared,
                  }| {
-                    let reusable = existing
-                        .get(raw)
-                        .filter(|(_, count)| *count == 1 && counts.get(raw) == Some(&1));
+                    let reusable = existing.get(&source.identity).filter(|(_, count)| {
+                        *count == 1 && counts.get(&source.identity) == Some(&1)
+                    });
                     let previous_id = mapped_anchors
                         .get(&source.declaration.start.0)
                         .copied()
-                        .or_else(|| reusable.map(|(id, _)| *id))
+                        // Whole-result replacements invalidate byte anchors, not ownership.
+                        .or_else(|| {
+                            reusable
+                                .map(|(id, _)| *id)
+                                .filter(|id| !anchored.contains(id))
+                        })
                         .filter(|id| used.insert(*id));
                     let id = if let Some(id) = previous_id {
                         id

@@ -546,6 +546,44 @@ fn memory_plot_resize_is_transient_and_survives_source_edits(cx: &mut gpui::Test
                 .contains("ATTR_ORG")
         );
     });
+    let previous = editor.update(cx, |editor, cx| {
+        let plot = editor.plots.lines.values().next().unwrap().clone();
+        let range = crate::document::ByteRange {
+            start: plot.entry.source.declaration.start,
+            end: plot.entry.source.table.end,
+        };
+        let replacement = editor
+            .snapshot(cx)
+            .copy_range(range)
+            .replace("| 1 | 20 |", "| 1 | 40 |\n| 3 | 50 |");
+        editor.set_selection(Selection::new(range.start, range.end), cx);
+        editor.replace_selection(&replacement, EditOrigin::Paste, cx);
+        plot
+    });
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let plot = editor.plots.lines.values().next().unwrap();
+        assert_eq!(
+            plot.entry.id, id,
+            "replacing the result keeps the resized chart"
+        );
+        assert_eq!((plot.width, plot.height), (previous.width, previous.height));
+        let rendered = plot
+            .state
+            .as_ref()
+            .and_then(crate::plot::PlotRenderState::rendered)
+            .unwrap();
+        let previous = previous
+            .state
+            .as_ref()
+            .and_then(crate::plot::PlotRenderState::rendered)
+            .unwrap();
+        assert_eq!(rendered.artifact.key.size, previous.artifact.key.size);
+        assert_ne!(rendered.artifact.key.content, previous.artifact.key.content);
+    });
     let (document, entry, settled_size, dragged_revision) = editor.update(cx, |editor, cx| {
         let plot = editor.plots.lines.values().next().unwrap().clone();
         let settled_size = {
