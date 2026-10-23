@@ -881,7 +881,6 @@ fn render_plot_image(
         return div().child(crate::plot::render_plot_surface(plot, false));
     };
     let panel = interaction.panel.clone();
-    let source_panel = panel.clone();
     let grip_panel = panel.clone();
     let dispatch = interaction.dispatch.clone();
     let entry = plot.entry.clone();
@@ -927,27 +926,6 @@ fn render_plot_image(
                 panel.update(cx, |_, cx| cx.notify());
                 cx.stop_propagation();
             }),
-        )
-        .child(
-            div()
-                .id(("reading-plot-source", plot.entry.id.0))
-                .absolute()
-                .left(px(-22.0))
-                .top(px(4.0))
-                .text_size(px(13.0))
-                .text_color(rgb(plot.style.muted))
-                .cursor_pointer()
-                .child("↗")
-                .on_mouse_down(gpui::MouseButton::Left, {
-                    let declaration = plot.entry.source.declaration.start;
-                    move |_, _, cx| {
-                        source_panel.update(cx, |panel, cx| {
-                            panel.scroll_to_source_offset_with_offset(declaration, px(0.0));
-                            cx.notify();
-                        });
-                        cx.stop_propagation();
-                    }
-                }),
         )
         .children(
             [
