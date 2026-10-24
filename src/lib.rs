@@ -13,6 +13,7 @@ pub mod i18n;
 pub mod input;
 pub mod keymap;
 pub(crate) mod links;
+mod math;
 pub mod minimap;
 mod motion;
 pub mod navigation;

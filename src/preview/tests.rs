@@ -496,6 +496,67 @@ fn loaded_document(path: &str, source: &str) -> super::LoadedDocument {
 }
 
 #[gpui::test]
+fn math_reading_view_renders_visible_formulas_and_copies_latex_source(
+    cx: &mut gpui::TestAppContext,
+) {
+    for (path, source) in [
+        ("math.org", include_str!("../../tests/fixtures/math.org")),
+        ("math.md", include_str!("../../tests/fixtures/math.md")),
+    ] {
+        assert_math_reading_view(path, source, cx);
+    }
+}
+
+fn assert_math_reading_view(path: &str, source: &str, cx: &mut gpui::TestAppContext) {
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.update(|_, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_reading(cx);
+            assert!(workspace.apply_load_result(0, Ok(loaded_document(path, source)), cx));
+        })
+    });
+    cx.run_until_parked();
+    let panel = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .reading_panel_for(crate::app::PaneSide::Left)
+            .unwrap()
+    });
+    let formula_row = cx.read(|cx| {
+        let panel = panel.read(cx);
+        let map = panel.document().display_map.as_ref().unwrap();
+        let style = *super::preview_style(super::PreviewStyleId::Base);
+        let row = (0..map.projection.rows.len())
+            .find(|&row| !map.runs(row).math.is_empty())
+            .unwrap();
+        let formulas = map.runs(row).math.objects(crate::math::MathStyle::new(
+            map.layout(row, style).font_size,
+            style.palette.foreground,
+        ));
+        assert!(
+            !formulas.is_empty(),
+            "actual prepaint must request and display the formulas"
+        );
+        assert!(panel.math_previews_ready());
+        row
+    });
+    cx.update(|_, cx| {
+        panel.update(cx, |panel, _| {
+            let runs = panel
+                .document()
+                .display_map
+                .as_ref()
+                .unwrap()
+                .runs(formula_row);
+            panel.begin_text_selection(formula_row, 0, false);
+            panel.update_text_selection(formula_row, runs.text.len());
+            assert_eq!(panel.selected_text().as_deref(), Some(runs.text.as_ref()));
+            assert!(panel.selected_text().unwrap().contains(r"\frac"));
+        })
+    });
+}
+
+#[gpui::test]
 fn opening_split_from_single_reading_reuses_the_current_snapshot(cx: &mut gpui::TestAppContext) {
     let workspace = cx.new(|_| WorkspaceWindow::with_split_layout(false));
     workspace.update(cx, |workspace, cx| {

@@ -1,0 +1,31 @@
+#+TITLE: Mathematical formulas
+
+* Inline formulas
+For a circle, \(A = \pi r^2\). A fraction \(\frac{a+b}{c+d}\) shares the text baseline.
+An exponent $x^2 + y^2 = z^2$ and a sum \(\sum_{k=1}^{n} k\) remain selectable as source.
+
+* Display formulas
+\[
+\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
+\]
+
+$$
+\begin{pmatrix} a & b \\ c & d \end{pmatrix}
+$$
+
+\begin{align*}
+f(x) &= x^2 + 1 \\
+f'(x) &= 2x
+\end{align*}
+
+* Formulas in a table
+| Name     | Expression          |
+|----------+---------------------|
+| Fraction | \(\frac{a}{b}\)     |
+| Root     | $\sqrt{x^2 + y^2}$  |
+
+* Literal source
+~$x^2$~ and =\(a+b\)= stay literal.
+#+begin_src latex
+\[this is code, not a preview\]
+#+end_src

@@ -1,3 +1,11 @@
+/// One Markdown dialect for reading and export; inline contexts disable block extensions.
+pub(crate) const PARSER_OPTIONS: pulldown_cmark::Options =
+    pulldown_cmark::Options::ENABLE_STRIKETHROUGH
+        .union(pulldown_cmark::Options::ENABLE_TABLES)
+        .union(pulldown_cmark::Options::ENABLE_TASKLISTS)
+        .union(pulldown_cmark::Options::ENABLE_FOOTNOTES)
+        .union(pulldown_cmark::Options::ENABLE_MATH);
+
 pub(crate) fn fence_start(line: &str) -> Option<(char, usize, Option<String>)> {
     let marker = line.chars().next()?;
     if !matches!(marker, '`' | '~') {

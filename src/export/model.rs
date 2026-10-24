@@ -79,6 +79,7 @@ pub enum ExportInline {
     Underline(Vec<ExportInline>),
     Strike(Vec<ExportInline>),
     Code(String),
+    Math(crate::org_syntax::math::Formula),
     Link {
         target: String,
         label: Vec<ExportInline>,
@@ -87,6 +88,17 @@ pub enum ExportInline {
 }
 
 impl ExportBlock {
+    pub(super) fn has_math(&self) -> bool {
+        match self {
+            Self::Heading { content, .. } | Self::Paragraph { content, .. } => {
+                content.iter().any(ExportInline::has_math)
+            }
+            Self::List { items, .. } => items.iter().flatten().any(Self::has_math),
+            Self::Quote { blocks, .. } => blocks.iter().any(Self::has_math),
+            Self::Table { rows, .. } => rows.iter().flatten().flatten().any(ExportInline::has_math),
+            _ => false,
+        }
+    }
     pub fn source(&self) -> &SourceRange {
         match self {
             Self::Heading { source, .. }
@@ -98,6 +110,22 @@ impl ExportBlock {
             | Self::Image { source, .. }
             | Self::GeneratedImage { source, .. }
             | Self::Rule { source } => source,
+        }
+    }
+}
+
+impl ExportInline {
+    fn has_math(&self) -> bool {
+        match self {
+            Self::Math(_) => true,
+            Self::Strong(children)
+            | Self::Emphasis(children)
+            | Self::Underline(children)
+            | Self::Strike(children)
+            | Self::Link {
+                label: children, ..
+            } => children.iter().any(Self::has_math),
+            _ => false,
         }
     }
 }

@@ -1,4 +1,4 @@
-//! Shared GPUI geometry for paragraphs containing code with an independent font size.
+//! Shared GPUI geometry for text, sized inline code and atomic formula objects.
 use std::ops::Range;
 
 use gpui::{
@@ -16,10 +16,14 @@ pub(in crate::preview) struct InlineTextMetrics {
     pub code_font_size: f32,
     pub line_height: f32,
     pub wrap_width: f32,
+    pub foreground: u32,
 }
 
 pub(crate) fn needs_sized_inline(spans: &[InlineSpan], style: PreviewStyle) -> bool {
-    style.typography.inline_code_size.is_some() && spans.iter().any(|span| span.is_code())
+    spans
+        .iter()
+        .any(|span| span.kind == super::InlineKind::Latex)
+        || (style.typography.inline_code_size.is_some() && spans.iter().any(|span| span.is_code()))
 }
 
 /// Turn shaped byte boundaries into contiguous UTF-8 ranges, including an empty text row.
@@ -47,6 +51,7 @@ pub(crate) struct TextFragment {
 
 pub(crate) struct InlineLayout {
     pub(crate) fragments: Vec<TextFragment>,
+    formulas: Vec<FormulaFragment>,
     pub(crate) line_starts: Vec<usize>,
     pub(crate) line_height: Pixels,
     pub(crate) size: Size<Pixels>,
@@ -58,16 +63,35 @@ pub(crate) struct InlineLayout {
     descent: Pixels,
 }
 
+struct FormulaFragment {
+    range: Range<usize>,
+    row: usize,
+    x: Pixels,
+    width: Pixels,
+    height: Pixels,
+    baseline: Pixels,
+    centered: bool,
+    image: std::sync::Arc<gpui::RenderImage>,
+}
+
 /// Shape whole word/style fragments, then split oversized words only at grapheme boundaries.
 /// Both virtual-list measurement and painting use this layout, including its byte coordinates.
 pub(crate) fn shape_inline(
     text: &str,
     runs: &[TextRun],
     spans: &[InlineSpan],
+    math: &super::math::MathRow,
     metrics: InlineTextMetrics,
     text_system: &WindowTextSystem,
 ) -> InlineLayout {
+    let _span = tracing::info_span!("reading.inline_layout").entered();
     let mut builder = InlineLayoutBuilder::new(metrics.wrap_width);
+    let objects = math.objects(crate::math::MathStyle::new(
+        metrics.font_size,
+        metrics.foreground,
+    ));
+    let mut objects = objects.iter().peekable();
+    let mut consumed = 0;
     let mut run_start = 0;
     for run in runs {
         let run_end = (run_start + run.len).min(text.len());
@@ -79,17 +103,34 @@ pub(crate) fn shape_inline(
         } else {
             metrics.font_size
         });
-        for (word_start, word) in text[run_start..run_end].split_word_bound_indices() {
-            let start = run_start + word_start;
-            if word.contains('\n') {
-                builder.new_line(start + word.len());
+        let mut cursor = run_start.max(consumed);
+        while cursor < run_end {
+            if let Some(object) = objects.peek().filter(|object| object.range.start == cursor) {
+                builder.append_formula(object);
+                consumed = object.range.end;
+                cursor = consumed;
+                if object.display && cursor < text.len() && !text[cursor..].starts_with('\n') {
+                    builder.new_line(cursor);
+                }
+                objects.next();
                 continue;
             }
-            let mut word_run = run.clone();
-            word_run.len = word.len();
-            let shaped =
-                text_system.shape_line(word.to_owned().into(), font_size, &[word_run], None);
-            builder.append_word(start, shaped);
+            let end = objects
+                .peek()
+                .map_or(run_end, |object| object.range.start.min(run_end));
+            for (word_start, word) in text[cursor..end].split_word_bound_indices() {
+                let start = cursor + word_start;
+                if word.contains('\n') {
+                    builder.new_line(start + word.len());
+                    continue;
+                }
+                let mut word_run = run.clone();
+                word_run.len = word.len();
+                let shaped =
+                    text_system.shape_line(word.to_owned().into(), font_size, &[word_run], None);
+                builder.append_word(start, shaped);
+            }
+            cursor = end;
         }
         run_start = run_end;
     }
@@ -99,6 +140,7 @@ pub(crate) fn shape_inline(
 /// Wrapping owns the cursor and updates fragment geometry in one place.
 struct InlineLayoutBuilder {
     fragments: Vec<TextFragment>,
+    formulas: Vec<FormulaFragment>,
     line_starts: Vec<usize>,
     wrap_width: Pixels,
     x: Pixels,
@@ -111,6 +153,7 @@ impl InlineLayoutBuilder {
     fn new(wrap_width: f32) -> Self {
         Self {
             fragments: Vec::new(),
+            formulas: Vec::new(),
             line_starts: vec![0],
             wrap_width: px(wrap_width.max(1.0)),
             x: px(0.0),
@@ -158,11 +201,43 @@ impl InlineLayoutBuilder {
         }
     }
 
+    fn append_formula(&mut self, object: &super::math::FormulaObject) {
+        let image = &object.rendered;
+        let scale = (f32::from(self.wrap_width) / image.width.max(1.0)).min(1.0);
+        let width = px(image.width * scale);
+        let height = px(image.height * scale);
+        let baseline = px(image.baseline * scale);
+        if self.x > px(0.0) && (object.display || self.x + width > self.wrap_width) {
+            self.new_line(object.range.start);
+        }
+        self.ascent = self.ascent.max(baseline);
+        self.descent = self.descent.max(height - baseline);
+        self.formulas.push(FormulaFragment {
+            range: object.range.clone(),
+            row: self.line_starts.len() - 1,
+            x: self.x,
+            width,
+            height,
+            baseline,
+            centered: object.display,
+            image: image.image.clone(),
+        });
+        self.x += width;
+        self.max_width = self
+            .max_width
+            .max(if object.display && self.wrap_width < px(f32::MAX) {
+                self.wrap_width
+            } else {
+                self.x
+            });
+    }
+
     fn finish(self, len: usize, configured_line_height: f32) -> InlineLayout {
         let line_height = px(configured_line_height).max(self.ascent + self.descent);
         let row_count = self.line_starts.len();
         InlineLayout {
             fragments: self.fragments,
+            formulas: self.formulas,
             line_starts: self.line_starts,
             line_height,
             size: size(self.max_width.ceil(), line_height * row_count as f32),
@@ -205,6 +280,43 @@ impl TextFragment {
 }
 
 impl InlineLayout {
+    /// A source match inside a rendered formula highlights the whole atomic object.
+    pub(in crate::preview) fn visual_range(&self, mut range: Range<usize>) -> Range<usize> {
+        if range.is_empty() {
+            return range;
+        }
+        let first = self
+            .formulas
+            .partition_point(|formula| formula.range.end <= range.start);
+        let end = self
+            .formulas
+            .partition_point(|formula| formula.range.start < range.end);
+        if first < end {
+            range.start = range.start.min(self.formulas[first].range.start);
+            range.end = range.end.max(self.formulas[end - 1].range.end);
+        }
+        range
+    }
+
+    pub(in crate::preview) fn formula_count(&self, clip: Bounds<Pixels>) -> usize {
+        self.formulas
+            .iter()
+            .filter(|formula| self.formula_bounds(formula).intersects(&clip))
+            .count()
+    }
+
+    pub(in crate::preview) fn visible_range(&self, clip: Bounds<Pixels>) -> Range<usize> {
+        let clip = clip.intersect(&self.bounds);
+        let first = (((clip.top() - self.bounds.top()) / self.line_height)
+            .floor()
+            .max(0.0) as usize)
+            .min(self.line_starts.len() - 1);
+        let end = (((clip.bottom() - self.bounds.top()) / self.line_height)
+            .ceil()
+            .max(0.0) as usize)
+            .min(self.line_starts.len());
+        self.line_starts[first]..self.line_starts.get(end).copied().unwrap_or(self.len)
+    }
     pub(in crate::preview) fn set_alignment(&mut self, align: TextAlign) {
         self.text_align = align;
     }
@@ -214,6 +326,9 @@ impl InlineLayout {
         let mut widths = vec![px(0.0); self.line_starts.len()];
         for fragment in &self.fragments {
             widths[fragment.row] = widths[fragment.row].max(fragment.x + fragment.line.width());
+        }
+        for formula in &self.formulas {
+            widths[formula.row] = widths[formula.row].max(formula.x + formula.width);
         }
         for (offset, width) in self.row_offsets.iter_mut().zip(widths) {
             let free = (bounds.size.width - width).max(px(0.0));
@@ -228,6 +343,36 @@ impl InlineLayout {
     pub(crate) fn position_for_index(&self, index: usize) -> Option<Point<Pixels>> {
         if index > self.len {
             return None;
+        }
+        let formula = self
+            .formulas
+            .iter()
+            .find(|formula| formula.range.contains(&index))
+            .or_else(|| {
+                if self
+                    .fragments
+                    .iter()
+                    .any(|fragment| fragment.range.contains(&index))
+                {
+                    return None;
+                }
+                self.formulas
+                    .iter()
+                    .find(|formula| formula.range.end == index)
+            });
+        if let Some(formula) = formula {
+            let x = if index - formula.range.start <= formula.range.len() / 2 {
+                px(0.0)
+            } else {
+                formula.width
+            };
+            return Some(
+                self.bounds.origin
+                    + point(
+                        self.formula_x(formula) + x,
+                        self.line_height * formula.row as f32,
+                    ),
+            );
         }
         let fragment = self
             .fragments
@@ -255,14 +400,33 @@ impl InlineLayout {
         let row = ((local.y / self.line_height).floor().max(0.0) as usize)
             .min(self.line_starts.len() - 1);
         let x = local.x - self.row_offsets[row];
-        let mut index = self.line_starts[row];
-        for fragment in self.fragments.iter().filter(|fragment| fragment.row == row) {
-            index = fragment.range.end;
-            if x <= fragment.x + fragment.line.width() {
-                index = fragment.range.start + fragment.nearest_index(x - fragment.x);
-                break;
-            }
-        }
+        let text = self
+            .fragments
+            .iter()
+            .filter(|fragment| fragment.row == row)
+            .map(|fragment| {
+                let index = fragment.nearest_index(x - fragment.x);
+                (
+                    (fragment.x + fragment.line.x_for_index(index) - x).abs(),
+                    fragment.range.start + index,
+                )
+            });
+        let formulas = self
+            .formulas
+            .iter()
+            .filter(|formula| formula.row == row)
+            .map(|formula| {
+                let left = self.formula_x(formula);
+                if local.x - left < formula.width / 2.0 {
+                    ((local.x - left).abs(), formula.range.start)
+                } else {
+                    ((local.x - left - formula.width).abs(), formula.range.end)
+                }
+            });
+        let index = text
+            .chain(formulas)
+            .min_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)))
+            .map_or(self.line_starts[row], |(_, index)| index);
         if self.bounds.contains(&position) {
             Ok(index)
         } else {
@@ -272,6 +436,21 @@ impl InlineLayout {
 
     pub(in crate::preview) fn paint(&self, window: &mut Window, cx: &mut App) {
         let baseline = (self.line_height - self.ascent - self.descent) / 2.0 + self.ascent;
+        for formula in &self.formulas {
+            let bounds = self.formula_bounds(formula);
+            if !bounds.intersects(&window.content_mask().bounds) {
+                continue;
+            }
+            let _ = crate::document_preview::image(
+                window,
+                bounds,
+                bounds,
+                gpui::Corners::default(),
+                formula.image.clone(),
+                0,
+                false,
+            );
+        }
         for fragment in &self.fragments {
             let own_baseline = (self.line_height - fragment.line.ascent - fragment.line.descent)
                 / 2.0
@@ -312,5 +491,25 @@ impl InlineLayout {
                     .line
                     .paint(origin, self.line_height, TextAlign::Left, None, window, cx);
         }
+    }
+
+    fn formula_x(&self, formula: &FormulaFragment) -> Pixels {
+        if formula.centered {
+            (self.bounds.size.width - formula.width).max(px(0.0)) / 2.0
+        } else {
+            self.row_offsets[formula.row] + formula.x
+        }
+    }
+
+    fn formula_bounds(&self, formula: &FormulaFragment) -> Bounds<Pixels> {
+        let baseline = (self.line_height - self.ascent - self.descent) / 2.0 + self.ascent;
+        Bounds::new(
+            self.bounds.origin
+                + point(
+                    self.formula_x(formula),
+                    self.line_height * formula.row as f32 + baseline - formula.baseline,
+                ),
+            size(formula.width, formula.height),
+        )
     }
 }

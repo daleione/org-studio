@@ -181,8 +181,15 @@ pub fn parse(source: &str) -> InlineText {
             cursor = end;
             continue;
         }
-        if let Some((end, display)) = latex_at(source, cursor) {
-            push_span(&mut output, InlineKind::Latex, cursor..end, display, None);
+        if let Some(range) = super::math::fragment_at(source, cursor) {
+            let end = range.end;
+            push_span(
+                &mut output,
+                InlineKind::Latex,
+                range.clone(),
+                &source[range],
+                None,
+            );
             cursor = end;
             continue;
         }
@@ -301,22 +308,6 @@ fn push_span(
         range: start..output.text.len(),
         target,
     });
-}
-
-fn latex_at(source: &str, start: usize) -> Option<(usize, &str)> {
-    if source[start..].starts_with("\\(") {
-        let relative = source[start + 2..].find("\\)")?;
-        let end = start + 2 + relative + 2;
-        return Some((end, &source[start..end]));
-    }
-    if source.as_bytes()[start] == b'$'
-        && source.as_bytes().get(start + 1) != Some(&b'$')
-        && let Some(relative) = source[start + 1..].find('$')
-    {
-        let end = start + 1 + relative + 1;
-        return Some((end, &source[start..end]));
-    }
-    None
 }
 
 fn entity_end(source: &str, start: usize) -> Option<usize> {

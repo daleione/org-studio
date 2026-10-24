@@ -1,10 +1,6 @@
 use super::{MAX_ARTIFACT_BYTES, PlotArtifact, PlotDiagnostic, PlotRenderRequest};
 use crate::typst_runtime::{OutputFormat, TypstEngine};
-use std::{
-    borrow::Cow,
-    collections::BTreeMap,
-    sync::{Mutex, OnceLock},
-};
+use std::{borrow::Cow, collections::BTreeMap};
 
 pub(crate) fn render_plot(
     engine: &TypstEngine,
@@ -25,11 +21,6 @@ pub(crate) fn render_file(
     request: &PlotRenderRequest,
     format: OutputFormat,
 ) -> Result<Vec<u8>, PlotDiagnostic> {
-    static COMPILER: OnceLock<Mutex<()>> = OnceLock::new();
-    let _guard = COMPILER
-        .get_or_init(Mutex::default)
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
     let mut style = request.key.style.clone();
     let available = engine.font_families();
     style.fonts.retain(|family| {

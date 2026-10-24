@@ -45,7 +45,7 @@ pub(super) fn parse(
                     ));
                 }
             }
-            BlockKind::Paragraph | BlockKind::FootnoteDefinition => {
+            BlockKind::Paragraph | BlockKind::FootnoteDefinition | BlockKind::LatexFragment => {
                 document.blocks.push(ExportBlock::Paragraph {
                     content: org_prose_inlines(text.trim_end()),
                     source: range,
@@ -221,7 +221,22 @@ fn org_inlines(source: &str) -> Vec<ExportInline> {
 
 fn org_prose_inlines(source: &str) -> Vec<ExportInline> {
     // A single newline in an Org paragraph is a soft wrap, not a forced line break.
-    org_inlines(&source.replace('\n', " "))
+    fn soft_wrap(inline: &mut ExportInline) {
+        match inline {
+            ExportInline::Text(text) => *text = text.replace('\n', " "),
+            ExportInline::Strong(children)
+            | ExportInline::Emphasis(children)
+            | ExportInline::Underline(children)
+            | ExportInline::Strike(children)
+            | ExportInline::Link {
+                label: children, ..
+            } => children.iter_mut().for_each(soft_wrap),
+            _ => {}
+        }
+    }
+    let mut inlines = org_inlines(source);
+    inlines.iter_mut().for_each(soft_wrap);
+    inlines
 }
 
 fn build_inlines(
@@ -268,6 +283,13 @@ fn build_inlines(
                     target: org_link_target(&source[span.source.clone()]),
                     label: children,
                 },
+                InlineKind::Latex => {
+                    crate::org_syntax::math::Formula::from_delimited(&text[span.range.clone()])
+                        .map_or_else(
+                            || ExportInline::Text(text[span.range.clone()].to_owned()),
+                            ExportInline::Math,
+                        )
+                }
                 _ => ExportInline::Text(text[span.range.clone()].to_owned()),
             };
             output.push(inline);

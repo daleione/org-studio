@@ -380,6 +380,49 @@ mod tests {
     use super::*;
 
     #[test]
+    fn math_exports_org_and_markdown_as_vector_formulas() {
+        for (format, path, source) in [
+            (
+                ExportSourceFormat::Org,
+                "math.org",
+                include_str!("../../tests/fixtures/math.org"),
+            ),
+            (
+                ExportSourceFormat::Markdown,
+                "math.md",
+                include_str!("../../tests/fixtures/math.md"),
+            ),
+        ] {
+            let snapshot =
+                crate::document::DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let output = export_snapshot(
+                shared_engine(),
+                &snapshot,
+                format,
+                Path::new(path),
+                &ExportOptions {
+                    format: ExportFormat::Svg,
+                    per_page: true,
+                    ..ExportOptions::default()
+                },
+            )
+            .unwrap();
+            assert!(!output.files.is_empty());
+            assert!(
+                !output
+                    .diagnostics
+                    .iter()
+                    .any(|diagnostic| diagnostic.code == "math-degraded")
+            );
+            for svg in output.files {
+                let svg = std::str::from_utf8(&svg).unwrap();
+                assert!(svg.contains("<svg"));
+                assert!(!svg.contains("<image"), "math must remain vector content");
+            }
+        }
+    }
+
+    #[test]
     fn common_paper_sizes_map_to_typst_names() {
         for (paper, expected) in [
             (PaperSize::A4, "a4"),

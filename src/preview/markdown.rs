@@ -5,7 +5,7 @@ use pulldown_cmark::{Event, Options, Parser, Tag, TagEnd};
 use crate::{
     document::{
         ByteRange, LineCursor, RevisionDelta, RevisionRange, TextSnapshot,
-        markdown::{atx_heading, fence_close, fence_open},
+        markdown::{PARSER_OPTIONS, atx_heading, fence_close, fence_open},
     },
     org_syntax::inline::{InlineKind, InlineSpan, InlineText},
 };
@@ -19,6 +19,7 @@ pub(crate) enum MarkdownKind {
         level: u16,
     },
     Paragraph,
+    Math,
     ListItem,
     Quote,
     Code {
@@ -92,6 +93,11 @@ pub(crate) fn parse_markdown_incremental(
         start: map_delta_boundary(old_source.start, delta, false)?,
         end: map_delta_boundary(old_source.end, delta, true)?,
     };
+    // A newly valid delimiter can pair outside the neutral line region, even if
+    // no complete formula is visible within that region yet.
+    if text.copy_range(new_source).contains('$') {
+        return None;
+    }
     let (replacement_blocks, replacement_rows) =
         parse_markdown_range(text, new_source, old_blocks.start as u32)?;
     if replacement_blocks.len() != old_blocks.len()
@@ -145,6 +151,7 @@ fn parse_markdown_range(
     let mut rows = Vec::new();
     let mut cursor = LineCursor::within(text, range)?;
     let mut fence: Option<(char, usize, Option<String>)> = None;
+    let mut math_ranges = None;
 
     while let Some(line) = cursor.next_line() {
         let logical = line.text.trim_end_matches(['\r', '\n']);
@@ -152,72 +159,107 @@ fn parse_markdown_range(
         let leading = logical.len() - trimmed.len();
         let line_end =
             line.range.start.0 + u64::try_from(logical.len()).expect("line length fits u64");
-        let (kind, content_start, content_end) = if let Some((marker, count, language)) = &fence {
-            let closes = fence_close(logical, *marker, *count);
-            let kind = MarkdownKind::Code {
-                language: language.clone(),
-                role: if closes {
-                    CodeRowRole::Close
-                } else {
-                    CodeRowRole::Body
-                },
+        let (mut kind, content_start, mut content_end) =
+            if let Some((marker, count, language)) = &fence {
+                let closes = fence_close(logical, *marker, *count);
+                let kind = MarkdownKind::Code {
+                    language: language.clone(),
+                    role: if closes {
+                        CodeRowRole::Close
+                    } else {
+                        CodeRowRole::Body
+                    },
+                };
+                if closes {
+                    fence = None;
+                }
+                (kind, line.range.start.0, line_end)
+            } else if let Some((marker, count, language)) = fence_open(logical) {
+                fence = Some((marker, count, language.clone()));
+                (
+                    MarkdownKind::Code {
+                        language,
+                        role: CodeRowRole::Open,
+                    },
+                    line.range.start.0,
+                    line_end,
+                )
+            } else if trimmed.is_empty() {
+                (MarkdownKind::Blank, line.range.start.0, line_end)
+            } else if let Some((level, offset)) = atx_heading(trimmed) {
+                (
+                    MarkdownKind::Heading { level },
+                    line.range.start.0 + leading as u64 + offset as u64,
+                    line_end,
+                )
+            } else if let Some(path) = standalone_image(trimmed) {
+                (MarkdownKind::Image { path }, line.range.start.0, line_end)
+            } else if is_horizontal_rule(trimmed) {
+                (MarkdownKind::HorizontalRule, line.range.start.0, line_end)
+            } else if let Some(offset) = quote_offset(trimmed) {
+                (
+                    MarkdownKind::Quote,
+                    line.range.start.0 + leading as u64 + offset as u64,
+                    line_end,
+                )
+            } else if is_list_item(trimmed) {
+                (
+                    MarkdownKind::ListItem,
+                    line.range.start.0 + leading as u64,
+                    line_end,
+                )
+            } else if trimmed.starts_with('|') && trimmed.ends_with('|') {
+                (
+                    MarkdownKind::TableRow,
+                    line.range.start.0 + leading as u64,
+                    line_end,
+                )
+            } else {
+                (
+                    MarkdownKind::Paragraph,
+                    line.range.start.0 + leading as u64,
+                    line_end,
+                )
             };
-            if closes {
-                fence = None;
+        let mut source_range = line.range;
+        if kind == MarkdownKind::Paragraph && logical.contains('$') {
+            // Let the inline/export parser decide formula boundaries. This avoids
+            // pairing a delimiter with one in a different paragraph or code block.
+            let formulas = math_ranges.get_or_insert_with(|| {
+                let source = text.copy_range(range);
+                Parser::new_ext(&source, PARSER_OPTIONS)
+                    .into_offset_iter()
+                    .filter_map(|(event, source)| {
+                        matches!(event, Event::InlineMath(_) | Event::DisplayMath(_)).then(|| {
+                            ByteRange::new(
+                                range.start.0 + source.start as u64,
+                                range.start.0 + source.end as u64,
+                            )
+                        })
+                    })
+                    .collect::<Vec<_>>()
+            });
+            let mut index = formulas.partition_point(|formula| formula.start < line.range.start);
+            while let Some(formula) = formulas.get(index)
+                && formula.start < source_range.end
+            {
+                while source_range.end < formula.end {
+                    let next = cursor.next_line()?;
+                    source_range.end = next.range.end;
+                    content_end =
+                        next.range.start.0 + next.text.trim_end_matches(['\r', '\n']).len() as u64;
+                }
+                index += 1;
             }
-            (kind, line.range.start.0, line_end)
-        } else if let Some((marker, count, language)) = fence_open(logical) {
-            fence = Some((marker, count, language.clone()));
-            (
-                MarkdownKind::Code {
-                    language,
-                    role: CodeRowRole::Open,
-                },
-                line.range.start.0,
-                line_end,
-            )
-        } else if trimmed.is_empty() {
-            (MarkdownKind::Blank, line.range.start.0, line_end)
-        } else if let Some((level, offset)) = atx_heading(trimmed) {
-            (
-                MarkdownKind::Heading { level },
-                line.range.start.0 + leading as u64 + offset as u64,
-                line_end,
-            )
-        } else if let Some(path) = standalone_image(trimmed) {
-            (MarkdownKind::Image { path }, line.range.start.0, line_end)
-        } else if is_horizontal_rule(trimmed) {
-            (MarkdownKind::HorizontalRule, line.range.start.0, line_end)
-        } else if let Some(offset) = quote_offset(trimmed) {
-            (
-                MarkdownKind::Quote,
-                line.range.start.0 + leading as u64 + offset as u64,
-                line_end,
-            )
-        } else if is_list_item(trimmed) {
-            (
-                MarkdownKind::ListItem,
-                line.range.start.0 + leading as u64,
-                line_end,
-            )
-        } else if trimmed.starts_with('|') && trimmed.ends_with('|') {
-            (
-                MarkdownKind::TableRow,
-                line.range.start.0 + leading as u64,
-                line_end,
-            )
-        } else {
-            (
-                MarkdownKind::Paragraph,
-                line.range.start.0 + leading as u64,
-                line_end,
-            )
-        };
+            if trimmed.starts_with("$$") || source_range.end != line.range.end {
+                kind = MarkdownKind::Math;
+            }
+        }
         let id = block_offset.checked_add(blocks.len().try_into().ok()?)?;
         let blank = matches!(kind, MarkdownKind::Blank);
         blocks.push(MarkdownBlock {
             kind,
-            source: line.range,
+            source: source_range,
         });
         rows.push(PreviewRow {
             block_id: id,
@@ -232,7 +274,10 @@ fn parse_markdown_range(
 fn has_external_dependency(kind: &MarkdownKind) -> bool {
     matches!(
         kind,
-        MarkdownKind::Code { .. } | MarkdownKind::TableRow | MarkdownKind::Image { .. }
+        MarkdownKind::Code { .. }
+            | MarkdownKind::TableRow
+            | MarkdownKind::Image { .. }
+            | MarkdownKind::Math
     )
 }
 
@@ -261,7 +306,7 @@ pub(crate) fn parse_markdown_inline(source: &str) -> InlineText {
     const INLINE_CONTEXT_PREFIX: &str = "p: ";
     type InlineTag = (TagEnd, InlineKind, usize, usize, Option<Arc<str>>);
     let wrapped = format!("{INLINE_CONTEXT_PREFIX}{source}");
-    let options = Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS;
+    let options = PARSER_OPTIONS.difference(Options::ENABLE_TABLES | Options::ENABLE_FOOTNOTES);
     let mut result = InlineText::default();
     let mut stack: Vec<InlineTag> = Vec::new();
     for (event, source_range) in Parser::new_ext(&wrapped, options).into_offset_iter() {
@@ -309,6 +354,16 @@ pub(crate) fn parse_markdown_inline(source: &str) -> InlineText {
                 result.text.push_str(&text);
                 result.spans.push(InlineSpan {
                     kind: InlineKind::Code,
+                    source: source_range,
+                    range: start..result.text.len(),
+                    target: None,
+                });
+            }
+            Event::InlineMath(_) | Event::DisplayMath(_) => {
+                let start = result.text.len();
+                result.text.push_str(&wrapped[source_range.clone()]);
+                result.spans.push(InlineSpan {
+                    kind: InlineKind::Latex,
                     source: source_range,
                     range: start..result.text.len(),
                     target: None,
@@ -389,6 +444,115 @@ mod tests {
     use crate::document::{
         DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit, TextSnapshot,
     };
+
+    #[test]
+    fn markdown_math_keeps_delimiters_and_multiline_display_rows() {
+        let source =
+            "Text $x^2$ and `$literal$`.\n\n$$\n\\frac{a}{b}\n$$\n\n```tex\n$$literal$$\n```\n";
+        let text = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let (blocks, rows) = parse_markdown(&text);
+        let display = blocks
+            .iter()
+            .position(|block| block.kind == MarkdownKind::Math)
+            .unwrap();
+        assert_eq!(
+            text.copy_range(rows[display].content.range),
+            "$$\n\\frac{a}{b}\n$$"
+        );
+        let inline = parse_markdown_inline("Text $x^2$ and `$literal$`.");
+        assert_eq!(inline.text, "Text $x^2$ and $literal$.");
+        assert_eq!(
+            inline
+                .spans
+                .iter()
+                .filter(|span| span.kind == InlineKind::Latex)
+                .count(),
+            1
+        );
+        assert!(inline.spans.iter().any(|span| span.is_code()));
+        let inline = parse_markdown_inline("$$\n\\frac{a}{b}\n$$");
+        assert_eq!(inline.spans.len(), 1);
+        assert_eq!(inline.spans[0].kind, InlineKind::Latex);
+    }
+
+    #[test]
+    fn markdown_math_preserves_separate_formulas_and_block_boundaries() {
+        let source = "$$x$$ and $$y$$";
+        let inline = parse_markdown_inline(source);
+        let formulas = inline
+            .spans
+            .iter()
+            .filter(|span| span.kind == InlineKind::Latex)
+            .map(|span| &inline.text[span.range.clone()])
+            .collect::<Vec<_>>();
+        assert_eq!(formulas, ["$$x$$", "$$y$$"]);
+
+        for source in [
+            "$$\n\n# Heading\n\n$$\n",
+            "$$\n```tex\n$$\n```\n",
+            "$x\n| a | b |\n|---|---|\n| c | d$ |\n",
+        ] {
+            let text = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let (blocks, rows) = parse_markdown(&text);
+            assert_eq!(blocks.len(), rows.len());
+            assert!(
+                blocks.iter().any(|block| matches!(
+                    block.kind,
+                    MarkdownKind::Heading { .. }
+                        | MarkdownKind::Code { .. }
+                        | MarkdownKind::TableRow
+                )),
+                "an unclosed formula cannot swallow another Markdown block: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_math_delimiter_edit_rechecks_distant_closing_delimiters() {
+        for (source, replacement) in [
+            ("start\na +\nb +\nc +\nd\n$$\n", "$$"),
+            ("start\na +\nb$\n", "$x +"),
+        ] {
+            let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let before = buffer.snapshot();
+            let (blocks, rows) = parse_markdown(&before);
+            let delta = buffer
+                .commit(EditTransaction::new(
+                    before.revision(),
+                    vec![TextEdit::new(ByteRange::new(0, 5), replacement)],
+                ))
+                .unwrap();
+            assert!(
+                parse_markdown_incremental(&buffer.snapshot(), &blocks, &rows, &[delta]).is_none()
+            );
+            let (blocks, rows) = parse_markdown(&buffer.snapshot());
+            assert_eq!(blocks.len(), 1);
+            assert_eq!(
+                buffer.snapshot().copy_range(rows[0].content.range),
+                source.replacen("start", replacement, 1).trim_end()
+            );
+        }
+    }
+
+    #[test]
+    fn markdown_math_in_prose_preserves_multiline_inline_and_display_fragments() {
+        let source = "Before $a +\nb$ after, $$c +\nd$$.\n\n# Next\n";
+        let text = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let (blocks, rows) = parse_markdown(&text);
+        assert_eq!(blocks.len(), 3);
+        let content = text.copy_range(rows[0].content.range);
+        assert_eq!(content, "Before $a +\nb$ after, $$c +\nd$$.");
+        let inline = parse_markdown_inline(&content);
+        assert_eq!(
+            inline
+                .spans
+                .iter()
+                .filter(|span| span.kind == InlineKind::Latex)
+                .count(),
+            2
+        );
+        assert!(matches!(blocks[2].kind, MarkdownKind::Heading { .. }));
+    }
 
     #[test]
     fn parses_markdown_blocks_and_inline_markup() {

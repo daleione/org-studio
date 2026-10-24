@@ -4574,6 +4574,7 @@ dependencies = [
  "typst-render",
  "typst-svg",
  "typstuml",
+ "unicode-properties",
  "unicode-script",
  "unicode-segmentation",
  "unicode-width",

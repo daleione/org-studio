@@ -699,6 +699,7 @@ fn raster_window_prefetches_one_tile_before_and_after_visible_rows() {
 #[test]
 fn display_run_slices_rebase_inline_and_syntax_ranges() {
     let runs = DisplayRuns {
+        math: Default::default(),
         source_segments: Arc::from([]),
         text: "0123456789".into(),
         inline_spans: Arc::from([InlineSpan {
@@ -730,6 +731,7 @@ fn display_run_slices_rebase_inline_and_syntax_ranges() {
 
 fn empty_runs(text: &'static str) -> DisplayRuns {
     DisplayRuns {
+        math: Default::default(),
         source_segments: Arc::from([]),
         text: text.into(),
         inline_spans: Arc::from([]),
@@ -1770,6 +1772,7 @@ fn inline_display_runs_cover_the_same_rendered_text() {
         "plain **bold** *italic* and [link](target)",
     );
     let line = DisplayRuns {
+        math: Default::default(),
         source_segments: Arc::from([]),
         text: parsed.text.into(),
         inline_spans: parsed.spans.into(),

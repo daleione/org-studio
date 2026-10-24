@@ -112,10 +112,7 @@ pub(crate) fn render_reading_document(
         ))
         .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
             clear_selection_panel.update(cx, |panel, cx| {
-                if let Some(host) = &panel.plots {
-                    host.document
-                        .update(cx, |document, cx| document.select(None, cx));
-                }
+                panel.select_plot(None, cx);
                 if panel.clear_text_selection_unless_dragging() {
                     cx.notify();
                 }
@@ -645,7 +642,7 @@ fn render_block(
                         .map(|tag| reading_chip(tag, palette.link, style, context.zoom)),
                 )
         }
-        BlockKind::Paragraph => {
+        BlockKind::Paragraph | BlockKind::LatexFragment => {
             let paragraph = div()
                 .text_size(px(row_layout.font_size))
                 .line_height(px(row_layout.line_height))
@@ -735,7 +732,6 @@ fn render_block(
                 render_table_row(
                     &text,
                     projection,
-                    DocumentFormat::Org,
                     &table_layout,
                     context.zoom,
                     display_row,
@@ -912,14 +908,7 @@ fn render_plot_image(
                 crate::i18n::Language::system() == crate::i18n::Language::Chinese,
             )
             .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
-                let document = panel
-                    .read(cx)
-                    .plots
-                    .as_ref()
-                    .map(|host| host.document.clone());
-                if let Some(document) = document {
-                    document.update(cx, |document, cx| document.select(Some(entry.id), cx));
-                }
+                panel.update(cx, |panel, cx| panel.select_plot(Some(entry.id), cx));
                 if let Some(demand) = &demand {
                     demand.retry();
                 }
@@ -1384,13 +1373,13 @@ pub(crate) fn reading_inline(
         display_row,
         selection,
     )
-    .with_inline_fonts(runs, style, zoom)
+    .with_text_offset(text_offset)
+    .with_inline_fonts(runs, style, zoom, 0)
     .with_search_ranges(reading_search_ranges(
         &interaction.search_ranges,
         interaction.search_current,
         runs,
     ))
-    .with_text_offset(text_offset)
     .with_row_text_len(row_text_len)
     .with_row_bounds(interaction.row_bounds.clone());
     if runs.links.is_empty() {

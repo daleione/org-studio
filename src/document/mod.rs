@@ -252,6 +252,7 @@ pub struct TextLine<'a> {
     pub text: std::borrow::Cow<'a, str>,
 }
 
+#[derive(Clone)]
 pub struct LineCursor<'a> {
     snapshot: &'a dyn TextSnapshot,
     offset: u64,

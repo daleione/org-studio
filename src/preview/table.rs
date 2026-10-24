@@ -1,4 +1,8 @@
-use std::{collections::HashMap, ops::Range, sync::Arc};
+use std::{
+    collections::HashMap,
+    ops::Range,
+    sync::{Arc, OnceLock},
+};
 
 use gpui::{AnyElement, Div, FontWeight, ScrollHandle, div, prelude::*, px, rgb};
 use smallvec::SmallVec;
@@ -42,6 +46,7 @@ pub(crate) struct TableRowProjection {
     group_id: BlockId,
     format: DocumentFormat,
     cells: Arc<[TableCell]>,
+    displays: Arc<OnceLock<Vec<super::display_map::DisplayRuns>>>,
     separator: bool,
     header: bool,
     first: bool,
@@ -240,25 +245,30 @@ impl TableRowProjection {
             .collect()
     }
 
-    pub(crate) fn display_cell_runs(&self, source: &str) -> Vec<super::display_map::DisplayRuns> {
-        self.columns()
-            .iter()
-            .enumerate()
-            .map(|(index, _)| {
-                let parsed = self
-                    .cells
-                    .get(index)
-                    .map(|cell| parse_document_inline(self.format, cell.text(source)))
-                    .unwrap_or_default();
-                super::display_map::DisplayRuns {
-                    text: parsed.text.into(),
-                    inline_spans: parsed.spans.into(),
-                    code_spans: Arc::from([]),
-                    links: Arc::from([]),
-                    source_segments: Arc::from([]),
-                }
+    pub(crate) fn display_cell_runs(&self, source: &str) -> &[super::display_map::DisplayRuns] {
+        self.displays
+            .get_or_init(|| {
+                self.columns()
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| {
+                        let parsed = self
+                            .cells
+                            .get(index)
+                            .map(|cell| parse_document_inline(self.format, cell.text(source)))
+                            .unwrap_or_default();
+                        super::display_map::DisplayRuns {
+                            math: super::math::MathRow::new(&parsed.text, &parsed.spans),
+                            text: parsed.text.into(),
+                            inline_spans: parsed.spans.into(),
+                            code_spans: Arc::from([]),
+                            links: Arc::from([]),
+                            source_segments: Arc::from([]),
+                        }
+                    })
+                    .collect()
             })
-            .collect()
+            .as_slice()
     }
 
     pub(crate) fn shaped_display_cells(
@@ -293,7 +303,7 @@ impl TableRowProjection {
             height: line_height,
             ..Default::default()
         };
-        for (display, width) in self.display_cell_runs(source).into_iter().zip(widths) {
+        for (display, width) in self.display_cell_runs(source).iter().zip(widths) {
             let text = &display.text;
             let runs = super::view::styled_text::inline_text_runs(
                 text,
@@ -307,11 +317,13 @@ impl TableRowProjection {
                     text,
                     &runs,
                     &display.inline_spans,
+                    &display.math,
                     super::inline_layout::InlineTextMetrics {
                         font_size,
                         code_font_size: style.typography.inline_code_font_size(font_size, zoom),
                         line_height,
                         wrap_width: width,
+                        foreground: style.palette.foreground,
                     },
                     text_system,
                 );
@@ -476,6 +488,7 @@ pub(crate) fn test_table_projection() -> TableRowProjection {
                 },
             ]),
         }),
+        displays: Arc::default(),
         group_id: 0,
         format: DocumentFormat::Org,
         cells: Arc::from([
@@ -679,6 +692,7 @@ fn build_table_group(
         result.insert(
             index,
             TableRowProjection {
+                displays: Arc::default(),
                 table: table.clone(),
                 group_id,
                 format,
@@ -695,7 +709,6 @@ fn build_table_group(
 pub(crate) fn render_table_row(
     source: &str,
     projection: &TableRowProjection,
-    format: DocumentFormat,
     layout: &ReadingTableLayout,
     zoom: f32,
     row_id: usize,
@@ -715,18 +728,7 @@ pub(crate) fn render_table_row(
                 palette.border
             }));
     }
-    let displays = projection
-        .columns()
-        .iter()
-        .enumerate()
-        .map(|(index, _)| {
-            projection
-                .cells
-                .get(index)
-                .map(|cell| parse_document_inline(format, cell.text(source)))
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>();
+    let displays = projection.display_cell_runs(source);
     let selection_text_len = displays
         .iter()
         .map(|display| display.text.len())
@@ -749,7 +751,7 @@ pub(crate) fn render_table_row(
                 raw,
                 raw,
                 &display.text,
-                &display.spans,
+                &display.inline_spans,
                 row.content.range.start.0 + cell.text_range.start as u64,
             );
             for (source, display) in segments {
@@ -769,16 +771,10 @@ pub(crate) fn render_table_row(
                 }
             }
         }
-        let cell_runs = super::display_map::DisplayRuns {
-            text: display.text.clone().into(),
-            inline_spans: display.spans.clone().into(),
-            code_spans: Arc::from([]),
-            links: Arc::from([]),
-            source_segments: Arc::from([]),
-        };
-        let text: gpui::SharedString = display.text.into();
+        let cell_runs = display.clone();
+        let text = display.text.clone();
         let text_len = text.len();
-        let styled = styled_inline_runs(text, display.spans.into(), style);
+        let styled = styled_inline_runs(text, display.inline_spans.clone(), style);
         let cell_text = if let Some(interaction) = interaction {
             let selection = reading_row_selection(interaction, row_id, selection_text_len)
                 .and_then(|(selection, include_newline)| {
@@ -796,9 +792,9 @@ pub(crate) fn render_table_row(
                 row_id,
                 selection,
             )
-            .with_inline_fonts(&cell_runs, style, zoom)
-            .with_search_ranges(search_ranges)
             .with_text_offset(text_offset)
+            .with_inline_fonts(&cell_runs, style, zoom, index + 1)
+            .with_search_ranges(search_ranges)
             .restrict_drag_to_bounds()
             .into_any_element()
         } else {

@@ -15,21 +15,25 @@ use super::{
     should_eagerly_measure_rows, visible_markdown_row_indices, visible_row_indices,
 };
 
+pub(super) mod math;
+pub(super) mod plot;
+
+type SearchFoldOrigin = (Arc<Vec<usize>>, Arc<HashSet<BlockId>>);
+
 /// Owns all state whose lifetime and invalidation are local to one rendered document.
 ///
 /// The workspace routes commands and owns window-level settings; this entity owns the immutable
 /// derived snapshot plus the virtual-list, fold and minimap presentation state for that snapshot.
-type SearchFoldOrigin = (Arc<Vec<usize>>, Arc<HashSet<BlockId>>);
-
 pub(crate) struct ReadingPreviewPanel {
-    pub(super) plots: Option<crate::plot::PlotHost>,
-    pub(super) plot_source: Option<Arc<PreviewSnapshot>>,
-    pub(super) plot_style: super::PreviewStyleId,
-    pub(super) plot_signature: Option<(crate::document::Revision, bool, Vec<crate::plot::PlotId>)>,
-    pub(super) plot_rows: Vec<(usize, crate::plot::PlotId)>,
+    math: math::MathViewport,
+    plots: Option<crate::plot::PlotHost>,
+    plot_source: Option<Arc<PreviewSnapshot>>,
+    plot_style: super::PreviewStyleId,
+    plot_signature: Option<(crate::document::Revision, bool, Vec<crate::plot::PlotId>)>,
+    plot_rows: Vec<(usize, crate::plot::PlotId)>,
     plot_visible: Arc<HashSet<crate::plot::PlotId>>,
-    pub(super) plot_display_revision: u64,
-    pub(super) plot_resize: Option<super::plot::PlotResizeSession>,
+    plot_display_revision: u64,
+    plot_resize: Option<super::plot::PlotResizeSession>,
     search_ranges: Arc<[crate::document::ByteRange]>,
     search_current: Option<crate::document::ByteRange>,
     search_origin: Option<SearchFoldOrigin>,
@@ -47,7 +51,7 @@ pub(crate) struct ReadingPreviewPanel {
     fold_animation: Option<FoldTransition>,
     geometry_revision: u64,
     content_font_size: crate::typography::ContentFontSize,
-    pub(super) viewport_revision_key: Option<(u32, u32)>,
+    viewport_revision_key: Option<(u32, u32)>,
     minimap_pending_seek: Option<(u64, ListOffset)>,
     minimap_seek_scheduled: bool,
     next_action_id: u64,
@@ -134,7 +138,9 @@ fn table_scroll_handles(
 }
 
 impl ReadingPreviewPanel {
-    pub(crate) fn retain_plot_demands(&mut self) {
+    pub(crate) fn retain_visible_media(&mut self) {
+        self.math
+            .retain(&self.document, &self.list_state, &self.visible_rows);
         let visible = self
             .plot_rows
             .iter()
@@ -159,6 +165,7 @@ impl ReadingPreviewPanel {
         let minimap_state = Arc::new(minimap::MinimapState::new());
         let table_scroll_handles = table_scroll_handles(&document, None);
         Self {
+            math: super::math::MathViewport::default(),
             plots: None,
             plot_resize: None,
             plot_display_revision: 0,
@@ -443,6 +450,22 @@ impl ReadingPreviewPanel {
         }
     }
 
+    pub(super) fn remeasure_math_rows(&mut self, rows: &HashSet<usize>) {
+        let anchor = self.top_source_anchor();
+        if let Some(map) = &self.document.display_map {
+            map.invalidate_image_geometry(rows.iter().copied());
+        }
+        for &row in rows {
+            if let Ok(index) = self.visible_rows.binary_search(&row) {
+                self.list_state.remeasure_items(index..index + 1);
+            }
+        }
+        self.bump_geometry_revision();
+        if let Some((offset, offset_in_item)) = anchor {
+            self.scroll_to_source_offset_with_offset(offset, offset_in_item);
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn fold_markers(&self) -> &HashSet<BlockId> {
         &self.fold_markers
@@ -717,6 +740,7 @@ impl ReadingPreviewPanel {
         if let Some((source, offset)) = mapped {
             self.scroll_to_source_offset_with_offset(source, offset);
         }
+        self.refresh_math(style, cx);
         cx.emit(event);
         cx.notify();
     }

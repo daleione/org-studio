@@ -874,7 +874,7 @@ fn visual_row_style_kind(
                 RowStyleKind::Heading((*level).min(u8::MAX as u16) as u8)
             }
             BlockKind::BlankLine => RowStyleKind::Blank,
-            BlockKind::Paragraph => RowStyleKind::Paragraph,
+            BlockKind::Paragraph | BlockKind::LatexFragment => RowStyleKind::Paragraph,
             BlockKind::ListItem => RowStyleKind::List,
             BlockKind::Keyword => RowStyleKind::Keyword,
             BlockKind::Image { .. } => RowStyleKind::Image,
@@ -899,7 +899,7 @@ fn visual_row_style_kind(
                 RowStyleKind::Heading((*level).min(u8::MAX as u16) as u8)
             }
             MarkdownKind::Blank => RowStyleKind::Blank,
-            MarkdownKind::Paragraph => RowStyleKind::Paragraph,
+            MarkdownKind::Paragraph | MarkdownKind::Math => RowStyleKind::Paragraph,
             MarkdownKind::ListItem => RowStyleKind::List,
             MarkdownKind::Quote => RowStyleKind::CompactQuote,
             MarkdownKind::Code { role, .. } => match role {

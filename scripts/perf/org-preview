@@ -151,8 +151,14 @@ run_cpu() {
 run_incremental() {
     local mib="${1:-$DEFAULT_MIB}"
     require_positive_integer "$mib" "fixture MiB"
-    ensure_fixture "$mib"
-    ORG_STUDIO_READING_FIXTURE="$(fixture_path "$mib")" \
+    # The 99% chunk-reuse assertion is a large-document contract. Keep that
+    # probe at 50 MiB even when the requested GUI fixture is smaller.
+    local probe_mib="$mib"
+    if (( probe_mib < 50 )); then
+        probe_mib=50
+    fi
+    ensure_fixture "$probe_mib"
+    ORG_STUDIO_READING_FIXTURE="$(fixture_path "$probe_mib")" \
         cargo test --release --features benchmarks --lib \
         reading_ -- --nocapture
 }

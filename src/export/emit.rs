@@ -1,3 +1,4 @@
+use crate::typst_runtime::string_literal;
 use std::fmt::Write;
 
 use super::{
@@ -44,6 +45,9 @@ pub(super) fn emit(
         emit_block(&mut output, block, heading_offset);
         output.push_str("\n\n");
     }
+    if document.blocks.iter().any(ExportBlock::has_math) {
+        output.insert_str(0, crate::math::TYPST_IMPORT);
+    }
     if options.byline.unwrap_or(true)
         && (document.meta.author.is_some() || document.meta.date.is_some())
     {
@@ -81,6 +85,7 @@ fn plain_inlines(inlines: &[ExportInline], output: &mut String) {
     for inline in inlines {
         match inline {
             ExportInline::Text(text) | ExportInline::Code(text) => output.push_str(text),
+            ExportInline::Math(formula) => output.push_str(&formula.body),
             ExportInline::Strong(children)
             | ExportInline::Emphasis(children)
             | ExportInline::Underline(children)
@@ -207,6 +212,10 @@ fn emit_inlines(output: &mut String, inlines: &[ExportInline]) {
             ExportInline::Code(text) => {
                 let _ = write!(output, "#inline-code(text({}))", string_literal(text));
             }
+            ExportInline::Math(formula) => {
+                output.push('#');
+                output.push_str(&crate::math::typst_expression(formula));
+            }
             ExportInline::Link { target, label } => {
                 let _ = write!(output, "#link({})[", string_literal(target));
                 emit_inlines(output, label);
@@ -215,23 +224,6 @@ fn emit_inlines(output: &mut String, inlines: &[ExportInline]) {
             ExportInline::LineBreak => output.push_str("#linebreak()"),
         }
     }
-}
-
-fn string_literal(text: &str) -> String {
-    let mut output = String::with_capacity(text.len() + 2);
-    output.push('"');
-    for character in text.chars() {
-        match character {
-            '\\' => output.push_str("\\\\"),
-            '"' => output.push_str("\\\""),
-            '\n' => output.push_str("\\n"),
-            '\r' => output.push_str("\\r"),
-            '\t' => output.push_str("\\t"),
-            character => output.push(character),
-        }
-    }
-    output.push('"');
-    output
 }
 
 #[cfg(test)]

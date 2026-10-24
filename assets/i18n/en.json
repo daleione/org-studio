@@ -1,4 +1,5 @@
 {
+  "math.render_failed": "Formula preview failed; source is preserved.",
   "search.find": "Find",
   "search.replace": "Replace",
   "search.replace_with": "Replace with",

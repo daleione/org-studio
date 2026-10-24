@@ -682,6 +682,11 @@ impl WorkspaceWindow {
             ),
         };
         if self.state.ready().is_some() {
+            let readers = self
+                .visible_panes()
+                .filter(|pane| self.document_workspace.surface(*pane) == PaneSurface::Reading)
+                .filter_map(|pane| self.reading_panel_for(pane))
+                .collect::<Vec<_>>();
             let ready = self.overview_document_is_ready(
                 self.state.ready().unwrap(),
                 self.document_workspace,
@@ -695,7 +700,12 @@ impl WorkspaceWindow {
                     self.file_overview.drawn_frame.clone(),
                     self.file_overview_records_frame(),
                 )
-                .with_ready(ready),
+                .with_ready(ready)
+                .with_media_ready(move |cx| {
+                    readers
+                        .iter()
+                        .all(|panel| panel.read(cx).math_previews_ready())
+                }),
             );
         }
         let Some(snapshot) = self.status_snapshot(cx) else {
@@ -748,6 +758,7 @@ impl WorkspaceWindow {
                     preview.document_id == session.id()
                         && preview.revision == session.revision()
                         && preview.path == session.syntax_path()
+                        && panel.math_previews_ready()
                 }),
             })
     }
@@ -881,22 +892,23 @@ impl WorkspaceWindow {
                         true,
                     )
                     .with_media_ready(move |cx| {
-                        !has_plots
-                            || [PaneSide::Left, PaneSide::Right]
-                                .into_iter()
-                                .filter(|pane| workspace.pane_is_visible(*pane))
-                                .all(|pane| match workspace.surface(pane) {
-                                    PaneSurface::Editor => {
-                                        document.editors.get(pane).as_ref().is_some_and(|editor| {
-                                            editor.read(cx).plot_previews_ready(cx)
-                                        })
-                                    }
-                                    PaneSurface::Reading => {
-                                        document.readers.get(pane).as_ref().is_some_and(|panel| {
-                                            panel.read(cx).plot_previews_ready(cx)
-                                        })
-                                    }
-                                })
+                        [PaneSide::Left, PaneSide::Right]
+                            .into_iter()
+                            .filter(|pane| workspace.pane_is_visible(*pane))
+                            .all(|pane| match workspace.surface(pane) {
+                                PaneSurface::Editor => {
+                                    document.editors.get(pane).as_ref().is_some_and(|editor| {
+                                        !has_plots || editor.read(cx).plot_previews_ready(cx)
+                                    })
+                                }
+                                PaneSurface::Reading => {
+                                    document.readers.get(pane).as_ref().is_some_and(|panel| {
+                                        panel.read(cx).math_previews_ready()
+                                            && (!has_plots
+                                                || panel.read(cx).plot_previews_ready(cx))
+                                    })
+                                }
+                            })
                     }),
                 )
                 .into_any_element(),

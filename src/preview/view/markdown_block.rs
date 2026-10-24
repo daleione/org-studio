@@ -3,8 +3,8 @@ use super::document::{
     selectable_blank_row,
 };
 use super::{
-    Arc, DocumentFormat, FontWeight, PreviewSnapshot, ReadingInteraction, ReadingRowContext, div,
-    img, markdown, px, render_code_row, render_table_row, resolve_image_path, rgb,
+    Arc, FontWeight, PreviewSnapshot, ReadingInteraction, ReadingRowContext, div, img, markdown,
+    px, render_code_row, render_table_row, resolve_image_path, rgb,
 };
 use crate::components::image_frame::{CONTENT_RADIUS, ImageFrame};
 use crate::preview::CodeRowRole;
@@ -104,7 +104,7 @@ pub(super) fn render_markdown_block(
                         }),
                 )
         }
-        MarkdownKind::Paragraph => div()
+        MarkdownKind::Paragraph | MarkdownKind::Math => div()
             .text_size(px(row_layout.font_size))
             .line_height(px(row_layout.line_height))
             .child(inline()),
@@ -190,7 +190,6 @@ pub(super) fn render_markdown_block(
                 render_table_row(
                     &text,
                     projection,
-                    DocumentFormat::Markdown,
                     &table_layout,
                     context.zoom,
                     display_row,

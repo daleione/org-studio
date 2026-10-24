@@ -28,6 +28,7 @@ ropey = "1.6.1"
 roxmltree = "0.21"
 unicode-segmentation = "1.13"
 unicode-script = "0.5"
+unicode-properties = { version = "0.1", default-features = false, features = ["general-category"] }
 unicode-width = "0.2"
 tempfile = "3"
 url = "2"

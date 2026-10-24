@@ -1,17 +1,17 @@
-use super::{DocumentFormat, ReadingPreviewPanel};
 use crate::plot::{PlotEntry, PlotHost, PlotPresentation, PlotStyle};
+use crate::preview::{self, DocumentFormat, ReadingPreviewPanel};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]
 pub(crate) struct PlotProjection {
-    pub(super) entry: Arc<PlotEntry>,
-    pub(crate) sizing: Arc<Mutex<super::ImageSizing>>,
+    pub(in crate::preview) entry: Arc<PlotEntry>,
+    pub(crate) sizing: Arc<Mutex<preview::ImageSizing>>,
 }
 impl PlotProjection {
-    pub(super) fn new(entry: Arc<PlotEntry>) -> Self {
+    pub(in crate::preview) fn new(entry: Arc<PlotEntry>) -> Self {
         Self {
             entry,
-            sizing: Arc::new(Mutex::new(super::ImageSizing {
+            sizing: Arc::new(Mutex::new(preview::ImageSizing {
                 auto_width: 480.0,
                 max_width: 480.0,
                 max_height: 1800.0,
@@ -22,7 +22,17 @@ impl PlotProjection {
 }
 
 impl ReadingPreviewPanel {
-    pub(crate) fn derived_document(&self) -> &Arc<super::PreviewSnapshot> {
+    pub(in crate::preview) fn select_plot(
+        &self,
+        id: Option<crate::plot::PlotId>,
+        cx: &mut gpui::App,
+    ) {
+        if let Some(host) = &self.plots {
+            host.document
+                .update(cx, |document, cx| document.select(id, cx));
+        }
+    }
+    pub(crate) fn derived_document(&self) -> &Arc<preview::PreviewSnapshot> {
         self.plot_source.as_ref().unwrap_or(self.document())
     }
 
@@ -105,7 +115,7 @@ impl ReadingPreviewPanel {
                     .rows
                     .get(*index)
                     .is_some_and(|row| {
-                        matches!(row.kind, super::projection::VisualRowKind::Plot(_))
+                        matches!(row.kind, preview::projection::VisualRowKind::Plot(_))
                     })
             })
         {
@@ -119,23 +129,23 @@ impl ReadingPreviewPanel {
             .map(|(_, height)| f32::from_bits(height))
             .unwrap_or(900.0);
         for (row, _) in &rows {
-            if let Some(super::projection::VisualRow {
-                kind: super::projection::VisualRowKind::Plot(plot),
+            if let Some(preview::projection::VisualRow {
+                kind: preview::projection::VisualRowKind::Plot(plot),
                 ..
             }) = projection.rows.get(*row)
             {
                 let mut sizing = plot.sizing.lock().unwrap();
                 sizing.max_height = viewport_height * 2.0;
                 sizing.font_size =
-                    super::preview_style(self.plot_style).typography.body_size * self.zoom();
+                    preview::preview_style(self.plot_style).typography.body_size * self.zoom();
             }
         }
         document.projection = Arc::new(projection);
-        document.display_map = Some(Arc::new(super::display_map::build_display_map(&document)));
-        document.update = super::DerivedUpdate::Full;
+        document.display_map = Some(Arc::new(preview::display_map::build_display_map(&document)));
+        document.update = preview::DerivedUpdate::Full;
         self.replace_document_with_style(
             Arc::new(document),
-            *super::preview_style(self.plot_style),
+            *preview::preview_style(self.plot_style),
             cx,
         );
         self.plot_source = Some(base);
@@ -144,12 +154,12 @@ impl ReadingPreviewPanel {
         cx.notify();
     }
 
-    pub(super) fn plot_presentation(
+    pub(in crate::preview) fn plot_presentation(
         &mut self,
         projection: &PlotProjection,
         active: bool,
         width: f32,
-        style: super::PreviewStyle,
+        style: preview::PreviewStyle,
         cx: &mut gpui::Context<Self>,
     ) -> Option<PlotPresentation> {
         self.plot_style = style.id;
@@ -177,7 +187,7 @@ impl ReadingPreviewPanel {
     }
 }
 
-pub(super) fn plot_style(style: super::PreviewStyle) -> PlotStyle {
+pub(in crate::preview) fn plot_style(style: preview::PreviewStyle) -> PlotStyle {
     let theme = crate::theme::current_theme();
     let mut plot = PlotStyle::for_theme(theme, 12.0);
     plot.foreground = style.palette.foreground;
@@ -188,16 +198,16 @@ pub(super) fn plot_style(style: super::PreviewStyle) -> PlotStyle {
         style.palette.background
     };
     plot.colors[0] = style.palette.accent;
-    if style.id != super::PreviewStyleId::Base {
+    if style.id != preview::PreviewStyleId::Base {
         plot.fonts.insert(0, style.typography.body_family.into());
     }
     plot
 }
 
-pub(super) struct PlotResizeSession {
+pub(in crate::preview) struct PlotResizeSession {
     document: gpui::Entity<crate::plot::PlotDocument>,
     id: crate::plot::PlotId,
-    target: Option<super::PreviewActionTarget>,
+    target: Option<preview::PreviewActionTarget>,
     pointer: (f32, f32),
     start_size: (f32, f32),
     current_size: (f32, f32),
@@ -214,7 +224,7 @@ impl ReadingPreviewPanel {
         cx.notify();
     }
 
-    pub(super) fn cancel_plot_resize(&mut self, cx: &mut gpui::App) {
+    pub(in crate::preview) fn cancel_plot_resize(&mut self, cx: &mut gpui::App) {
         if let Some(drag) = self.plot_resize.take() {
             drag.document.update(cx, |document, cx| {
                 document.resize_canvas(
@@ -228,12 +238,12 @@ impl ReadingPreviewPanel {
         }
     }
 
-    pub(super) fn start_plot_resize(
+    pub(in crate::preview) fn start_plot_resize(
         &mut self,
         plot: &PlotPresentation,
         pointer: (f32, f32),
         column_width: f32,
-        target: Option<super::PreviewActionTarget>,
+        target: Option<preview::PreviewActionTarget>,
         axis: crate::plot::PlotResizeAxis,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -253,7 +263,11 @@ impl ReadingPreviewPanel {
         });
     }
 
-    pub(super) fn move_plot_resize(&mut self, pointer: (f32, f32), cx: &mut gpui::Context<Self>) {
+    pub(in crate::preview) fn move_plot_resize(
+        &mut self,
+        pointer: (f32, f32),
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(drag) = &mut self.plot_resize else {
             return;
         };
@@ -273,10 +287,10 @@ impl ReadingPreviewPanel {
         });
     }
 
-    pub(super) fn finish_plot_resize(
+    pub(in crate::preview) fn finish_plot_resize(
         &mut self,
         cx: &mut gpui::Context<Self>,
-    ) -> Option<super::PreviewAction> {
+    ) -> Option<preview::PreviewAction> {
         let drag = self.plot_resize.take()?;
         let (width, height) = if drag.moved {
             (Some(drag.current_size.0), Some(drag.current_size.1))
@@ -289,16 +303,17 @@ impl ReadingPreviewPanel {
         if !drag.moved {
             return None;
         }
-        drag.target.map(|target| super::PreviewAction::ResizeImage {
-            target,
-            size: Some((
-                drag.current_size.0.round() as u32,
-                drag.current_size.1.round() as u32,
-            )),
-        })
+        drag.target
+            .map(|target| preview::PreviewAction::ResizeImage {
+                target,
+                size: Some((
+                    drag.current_size.0.round() as u32,
+                    drag.current_size.1.round() as u32,
+                )),
+            })
     }
 
-    pub(super) fn reset_plot_size(
+    pub(in crate::preview) fn reset_plot_size(
         &mut self,
         plot: &PlotPresentation,
         cx: &mut gpui::Context<Self>,

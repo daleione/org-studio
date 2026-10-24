@@ -129,6 +129,13 @@ impl WorkspaceWindow {
                     this.reading_style.as_str(),
                 );
                 crate::perf_tracing::report();
+                #[cfg(feature = "visual-check")]
+                if let Some(path) = std::env::var_os("ORG_STUDIO_BENCH_SCREENSHOT") {
+                    match window.render_to_image().and_then(|image| image.save(&path).map_err(Into::into)) {
+                        Ok(()) => eprintln!("org_preview_screenshot path={}", std::path::Path::new(&path).display()),
+                        Err(error) => eprintln!("org_preview_screenshot_failed error={error}"),
+                    }
+                }
                 this.scroll_benchmark = None;
                 if let Some(panel) = this.reading_panel() {
                     let (at_end, item, offset_px, max_offset_px) =

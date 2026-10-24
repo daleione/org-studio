@@ -14,6 +14,7 @@ pub(crate) mod command;
 pub(crate) mod cookie;
 pub mod inline;
 pub(crate) mod list;
+pub mod math;
 
 pub type BlockId = u32;
 
@@ -40,6 +41,7 @@ pub enum BlockKind {
     BlankLine,
     Heading { level: u16 },
     Paragraph,
+    LatexFragment,
     Image { path: Arc<str> },
     Planning,
     ListItem,
@@ -195,6 +197,7 @@ pub fn parse_range(snapshot: &dyn TextSnapshot, range: ByteRange) -> Option<Bloc
     let mut heading_stack: Vec<(u16, BlockId)> = Vec::new();
     let mut open_block: Option<(BlockId, String)> = None;
     let mut paragraph: Option<BlockId> = None;
+    let mut missing_math_ends = HashSet::new();
 
     while let Some(line) = cursor.next_line() {
         let logical = line.text.trim_end_matches(['\r', '\n']);
@@ -205,6 +208,13 @@ pub fn parse_range(snapshot: &dyn TextSnapshot, range: ByteRange) -> Option<Bloc
             }
             let node = &mut arena.nodes[*block_id as usize];
             node.source.end = line.range.end;
+            if node.kind == BlockKind::LatexFragment {
+                node.content.end = ByteOffset(content_end(&line));
+                if math::closing_end(logical, 0, end_marker).is_some() {
+                    open_block = None;
+                }
+                continue;
+            }
             if logical.trim().eq_ignore_ascii_case(end_marker) {
                 node.content.end = line.range.start;
                 open_block = None;
@@ -262,6 +272,33 @@ pub fn parse_range(snapshot: &dyn TextSnapshot, range: ByteRange) -> Option<Bloc
 
         let parent = heading_stack.last().map(|(_, id)| *id);
         let trimmed = logical.trim_start();
+
+        if let Some(end_marker) = math::display_start(trimmed) {
+            let closes_here = math::fragment_at(trimmed, 0).is_some();
+            let mut lookahead = cursor.clone();
+            if closes_here
+                || (!missing_math_ends.contains(&end_marker)
+                    && std::iter::from_fn(|| lookahead.next_line())
+                        .any(|line| math::closing_end(&line.text, 0, &end_marker).is_some()))
+            {
+                paragraph = None;
+                let id = arena.push(BlockNode {
+                    syntax_id: SyntaxId::default(),
+                    kind: BlockKind::LatexFragment,
+                    source: line.range,
+                    content: ByteRange::new(line.range.start.0, content_end(&line)),
+                    parent,
+                    first_child: None,
+                    next_sibling: None,
+                });
+                if !closes_here {
+                    open_block = Some((id, end_marker));
+                }
+                continue;
+            }
+            // Later openers with the same ending cannot justify another scan to EOF.
+            missing_math_ends.insert(end_marker);
+        }
 
         if let Some((name, content_start)) = drawer_start(trimmed, line.range.end.0) {
             paragraph = None;

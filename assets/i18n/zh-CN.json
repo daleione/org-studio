@@ -1,4 +1,5 @@
 {
+  "math.render_failed": "公式预览失败，已保留源码。",
   "search.find": "搜索",
   "search.replace": "替换",
   "search.replace_with": "替换为",

@@ -10,7 +10,7 @@ fn reading_plot_is_a_zero_source_range_after_the_visible_table(cx: &mut gpui::Te
             .rows
             .iter()
             .find_map(|row| {
-                if let super::super::projection::VisualRowKind::Plot(plot) = &row.kind {
+                if let crate::preview::projection::VisualRowKind::Plot(plot) = &row.kind {
                     Some(plot.entry.clone())
                 } else {
                     None
@@ -23,7 +23,7 @@ fn reading_plot_is_a_zero_source_range_after_the_visible_table(cx: &mut gpui::Te
     let mut buffer =
         crate::document::DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
     let snapshot = buffer.snapshot();
-    let preview = Arc::new(super::super::loading::derive_preview(
+    let preview = Arc::new(crate::preview::loading::derive_preview(
         std::path::PathBuf::from("plot.org"),
         snapshot.clone(),
     ));
@@ -45,14 +45,14 @@ fn reading_plot_is_a_zero_source_range_after_the_visible_table(cx: &mut gpui::Te
             .rows
             .iter()
             .enumerate()
-            .find(|(_, row)| matches!(row.kind, super::super::projection::VisualRowKind::Plot(_)))
+            .find(|(_, row)| matches!(row.kind, crate::preview::projection::VisualRowKind::Plot(_)))
             .unwrap();
         let range = document.projection.source_row(index).unwrap().content.range;
         assert!(range.is_empty());
         assert_eq!(range.start.0, source.find("\n\nAfter").unwrap() as u64 + 1);
         assert!(matches!(
             document.projection.rows.get(index - 1).unwrap().kind,
-            super::super::projection::VisualRowKind::Table(_)
+            crate::preview::projection::VisualRowKind::Table(_)
         ));
         assert_eq!(row.source.revision, snapshot.revision());
         assert_eq!(document.text.len_bytes(), snapshot.len_bytes());
@@ -62,7 +62,7 @@ fn reading_plot_is_a_zero_source_range_after_the_visible_table(cx: &mut gpui::Te
     panel.update(cx, |panel, cx| {
         panel.replace_document_with_style(
             replacement.clone(),
-            *super::super::preview_style(super::super::PreviewStyleId::Base),
+            *crate::preview::preview_style(crate::preview::PreviewStyleId::Base),
             cx,
         );
         panel.attach_plots(None, cx);
@@ -83,7 +83,7 @@ fn reading_plot_is_a_zero_source_range_after_the_visible_table(cx: &mut gpui::Te
             )],
         ))
         .unwrap();
-    let updated = Arc::new(super::super::loading::derive_preview(
+    let updated = Arc::new(crate::preview::loading::derive_preview(
         "plot.org".into(),
         buffer.snapshot(),
     ));
@@ -91,7 +91,7 @@ fn reading_plot_is_a_zero_source_range_after_the_visible_table(cx: &mut gpui::Te
         panel.map_viewport_through_delta(&delta);
         panel.replace_document_with_style(
             updated,
-            *super::super::preview_style(super::super::PreviewStyleId::Base),
+            *crate::preview::preview_style(crate::preview::PreviewStyleId::Base),
             cx,
         );
         panel.attach_plots(None, cx);
@@ -128,7 +128,7 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
 ) {
     let source = "#+PLOT: ind:1 file:\"images/chart.svg\"\n| x | y |\n|---+---|\n| 1 | 2 |\n\n#+ATTR_ORG: :width 320\n[[file:./images/chart.svg]]\n";
     let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
-    let preview = Arc::new(super::super::loading::derive_preview(
+    let preview = Arc::new(crate::preview::loading::derive_preview(
         "plot.org".into(),
         snapshot.clone(),
     ));
@@ -150,9 +150,9 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
             .rows
             .iter()
             .enumerate()
-            .find(|(_, row)| matches!(row.kind, super::super::projection::VisualRowKind::Plot(_)))
+            .find(|(_, row)| matches!(row.kind, crate::preview::projection::VisualRowKind::Plot(_)))
             .unwrap();
-        let super::super::projection::VisualRowKind::Plot(projection) = &visual.kind else {
+        let crate::preview::projection::VisualRowKind::Plot(projection) = &visual.kind else {
             unreachable!()
         };
         let projection = projection.clone();
@@ -160,13 +160,13 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
             snapshot.copy_range(visual.source.range).trim(),
             "[[file:./images/chart.svg]]"
         );
-        let target = super::super::source_action_target(panel.document(), visual);
+        let target = crate::preview::source_action_target(panel.document(), visual);
         let plot = panel
             .plot_presentation(
                 &projection,
                 false,
                 900.0,
-                *super::super::preview_style(super::super::PreviewStyleId::Base),
+                *crate::preview::preview_style(crate::preview::PreviewStyleId::Base),
                 cx,
             )
             .unwrap();
@@ -183,7 +183,7 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
         let action = panel.finish_plot_resize(cx).unwrap();
         assert!(matches!(
             action,
-            super::super::PreviewAction::ResizeImage {
+            crate::preview::PreviewAction::ResizeImage {
                 size: Some((400, height)),
                 ..
             } if height == (plot.height + 80.0).round() as u32
@@ -209,7 +209,7 @@ fn linked_plot_uses_the_real_image_row_and_resizes_through_org_attributes(
                 &projection,
                 false,
                 900.0,
-                *super::super::preview_style(super::super::PreviewStyleId::Base),
+                *crate::preview::preview_style(crate::preview::PreviewStyleId::Base),
                 cx,
             )
             .unwrap();

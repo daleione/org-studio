@@ -2,13 +2,22 @@ mod packages;
 mod render;
 mod world;
 
-use std::{collections::BTreeMap, ops::Range, path::Path, sync::OnceLock};
+use std::{
+    collections::BTreeMap,
+    ops::Range,
+    path::Path,
+    sync::{Mutex, OnceLock},
+};
 
 use typst_layout::PagedDocument;
 
 use world::{OrgStudioWorld, SharedResources};
 
 pub(crate) fn run_with_cache_cleanup<T>(operation: impl FnOnce() -> T) -> T {
+    // comemo is shared by every Typst consumer, including diagrams. Eviction must not
+    // run in the middle of another compilation.
+    static COMPILER: Mutex<()> = Mutex::new(());
+    let _guard = COMPILER.lock().unwrap_or_else(|error| error.into_inner());
     let result = operation();
     ::typst::comemo::evict(0);
     result
@@ -74,6 +83,14 @@ pub struct CompileOutput {
     pub diagnostics: Vec<CompileDiagnostic>,
 }
 
+/// A single auto-sized page. Measurements use Typst points, before rasterization.
+pub(crate) struct CompiledFragment {
+    pub(crate) svg: Vec<u8>,
+    pub(crate) width: f32,
+    pub(crate) height: f32,
+    pub(crate) baseline: f32,
+}
+
 pub struct TypstEngine {
     shared: SharedResources,
 }
@@ -120,6 +137,64 @@ impl TypstEngine {
                 "per-page output is only supported for PNG and SVG".into(),
             ));
         }
+        self.with_document(source, root, inputs, |document, warnings| {
+            validate_requested_paper(document, inputs)?;
+            let pages = render::render(document, format, per_page, png_ppi)?;
+            Ok(CompileOutput {
+                pages,
+                diagnostics: warnings,
+            })
+        })
+    }
+
+    /// Compile several independent fragments in one invocation, each on its own page.
+    /// The caller supplies auto-sized, marginless pages containing one inline box.
+    pub(crate) fn compile_fragments(
+        &self,
+        source: String,
+    ) -> Result<Vec<CompiledFragment>, CompileError> {
+        self.with_document(source, None, &BTreeMap::new(), |document, _| {
+            let pages = render::render(document, OutputFormat::Svg, true, 192.0)?;
+            document
+                .pages()
+                .iter()
+                .zip(pages)
+                .map(|(page, svg)| {
+                    // Pages have no baseline of their own. The paragraph's baseline is
+                    // explicit in its content frame; no SVG/glyph-position guessing.
+                    let baseline = page
+                        .frame
+                        .items()
+                        .find_map(|(position, item)| {
+                            if let ::typst::layout::FrameItem::Group(group) = item
+                                && group.frame.has_baseline()
+                            {
+                                Some(position.y + group.frame.baseline())
+                            } else {
+                                None
+                            }
+                        })
+                        .ok_or_else(|| {
+                            CompileError::Render("fragment has no text baseline".into())
+                        })?;
+                    Ok(CompiledFragment {
+                        svg,
+                        width: page.frame.width().to_pt() as f32,
+                        height: page.frame.height().to_pt() as f32,
+                        baseline: baseline.to_pt() as f32,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn with_document<T>(
+        &self,
+        source: String,
+        root: Option<&Path>,
+        inputs: &BTreeMap<String, String>,
+        consume: impl FnOnce(&PagedDocument, Vec<CompileDiagnostic>) -> Result<T, CompileError>,
+    ) -> Result<T, CompileError> {
         run_with_cache_cleanup(|| {
             let world = OrgStudioWorld::new(&self.shared, source, root, inputs);
             let compiled = ::typst::compile::<PagedDocument>(&world);
@@ -129,14 +204,27 @@ impl TypstEngine {
                 all.extend(warnings.clone());
                 CompileError::Compile(all)
             })?;
-            validate_requested_paper(&document, inputs)?;
-            let pages = render::render(&document, format, per_page, png_ppi)?;
-            Ok(CompileOutput {
-                pages,
-                diagnostics: warnings,
-            })
+            consume(&document, warnings)
         })
     }
+}
+
+/// Typst string escaping, shared by generated formula, chart and document sources.
+pub(crate) fn string_literal(text: &str) -> String {
+    let mut output = String::with_capacity(text.len() + 2);
+    output.push('"');
+    for character in text.chars() {
+        match character {
+            '\\' => output.push_str("\\\\"),
+            '"' => output.push_str("\\\""),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character => output.push(character),
+        }
+    }
+    output.push('"');
+    output
 }
 
 fn validate_requested_paper(

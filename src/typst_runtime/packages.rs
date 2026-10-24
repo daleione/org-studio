@@ -10,6 +10,7 @@ pub(super) fn lookup(id: FileId) -> Option<&'static [u8]> {
     let files = match (package.name.as_str(), package.version.to_string().as_str()) {
         ("cetz", "0.5.2") => CETZ,
         ("oxifmt", "1.0.0") => OXIFMT,
+        ("mitex", "0.2.7") => MITEX,
         _ => return None,
     };
     let path = id.get().vpath().get_without_slash();
@@ -18,6 +19,42 @@ pub(super) fn lookup(id: FileId) -> Option<&'static [u8]> {
         .find(|(name, _)| *name == path)
         .map(|(_, bytes)| *bytes)
 }
+
+// Official preview package, pinned for reproducible offline rendering.
+const MITEX: &[(&str, &[u8])] = &[
+    (
+        "LICENSE",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/LICENSE"),
+    ),
+    (
+        "typst.toml",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/typst.toml"),
+    ),
+    (
+        "lib.typ",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/lib.typ"),
+    ),
+    (
+        "mitex.typ",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/mitex.typ"),
+    ),
+    (
+        "mitex.wasm",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/mitex.wasm"),
+    ),
+    (
+        "specs/mod.typ",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/specs/mod.typ"),
+    ),
+    (
+        "specs/prelude.typ",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/specs/prelude.typ"),
+    ),
+    (
+        "specs/latex/standard.typ",
+        include_bytes!("../../assets/typst/packages/mitex-0.2.7/specs/latex/standard.typ"),
+    ),
+];
 
 const CETZ: &[(&str, &[u8])] = &[
     (

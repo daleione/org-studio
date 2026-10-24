@@ -34,6 +34,12 @@ pub(in crate::preview) enum ReadingTextLayout {
 }
 
 impl ReadingTextLayout {
+    pub(super) fn visual_range(&self, range: std::ops::Range<usize>) -> std::ops::Range<usize> {
+        match self {
+            Self::Uniform(_) => range,
+            Self::Sized(layout) => layout.read().visual_range(range),
+        }
+    }
     pub(in crate::preview) fn index_for_position(
         &self,
         position: Point<Pixels>,
@@ -75,6 +81,12 @@ pub(in crate::preview) struct ReadingText {
     layout: ReadingTextLayout,
 }
 
+type MathTarget = (
+    gpui::Entity<crate::preview::ReadingPreviewPanel>,
+    usize,
+    usize,
+);
+
 impl ReadingText {
     pub(in crate::preview) fn uniform(text: crate::document_preview::RecordedText) -> Self {
         let layout = ReadingTextLayout::Uniform(text.layout().clone());
@@ -91,21 +103,52 @@ impl ReadingText {
         zoom: f32,
     ) -> Self {
         if needs_sized_inline(&runs.inline_spans, style) {
-            Self::sized(runs, style, zoom)
+            Self::sized(runs, style, zoom, None)
         } else {
             Self::uniform(text)
         }
     }
 
-    pub(super) fn sized(runs: &DisplayRuns, style: PreviewStyle, zoom: f32) -> Self {
+    pub(super) fn sized(
+        runs: &DisplayRuns,
+        style: PreviewStyle,
+        zoom: f32,
+        math_owner: Option<MathTarget>,
+    ) -> Self {
         let layout = InlineLayoutHandle::default();
+        let errors = runs.math.errors();
+        let error_id = math_owner
+            .as_ref()
+            .filter(|_| !errors.is_empty())
+            .map(|(_, row, slot)| gpui::SharedString::from(format!("formula-error-{row}-{slot}")));
         let element = SizedInlineText {
             runs: runs.clone(),
             style,
             zoom,
             layout: layout.clone(),
+            math_owner,
         }
         .into_any_element();
+        let element = if let Some(error_id) = error_id {
+            use gpui::prelude::*;
+            let hint = format!(
+                "{}\n{}",
+                crate::i18n::Language::system().text("math.render_failed"),
+                errors
+                    .iter()
+                    .map(|s| s.as_ref())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            gpui::div()
+                .id(error_id)
+                .w_full()
+                .child(element)
+                .tooltip(move |_, cx| cx.new(|_| FormulaErrorHint(hint.clone())).into())
+                .into_any_element()
+        } else {
+            element
+        };
         Self {
             element,
             layout: ReadingTextLayout::Sized(layout),
@@ -114,6 +157,25 @@ impl ReadingText {
 
     pub(super) fn layout(&self) -> &ReadingTextLayout {
         &self.layout
+    }
+}
+
+struct FormulaErrorHint(String);
+impl gpui::Render for FormulaErrorHint {
+    fn render(&mut self, _: &mut Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
+        use crate::components::UiTextExt;
+        use gpui::prelude::*;
+        let theme = crate::theme::current_theme();
+        gpui::div()
+            .max_w(px(480.0))
+            .p_2()
+            .rounded_md()
+            .bg(gpui::rgb(theme.background))
+            .border_1()
+            .border_color(gpui::rgb(theme.border))
+            .text_color(gpui::rgb(theme.foreground))
+            .text_size(crate::typography::ui_px(12.0))
+            .child_text(self.0.clone())
     }
 }
 
@@ -132,10 +194,11 @@ struct SizedInlineText {
     style: PreviewStyle,
     zoom: f32,
     layout: InlineLayoutHandle,
+    math_owner: Option<MathTarget>,
 }
 
 impl Element for SizedInlineText {
-    type RequestLayoutState = ();
+    type RequestLayoutState = crate::math::MathStyle;
     type PrepaintState = ();
     fn id(&self) -> Option<ElementId> {
         None
@@ -149,7 +212,7 @@ impl Element for SizedInlineText {
         _: Option<&InspectorElementId>,
         window: &mut Window,
         _: &mut App,
-    ) -> (LayoutId, ()) {
+    ) -> (LayoutId, Self::RequestLayoutState) {
         let text_style = window.text_style();
         let text_align = text_style.text_align;
         let font_size = f32::from(text_style.font_size.to_pixels(window.rem_size()));
@@ -170,6 +233,7 @@ impl Element for SizedInlineText {
             .typography
             .inline_code_font_size(font_size, self.zoom);
         let layout = self.layout.clone();
+        let foreground = self.style.palette.foreground;
         let id =
             window.request_measured_layout(Style::default(), move |known, available, window, _| {
                 let width = known
@@ -183,11 +247,13 @@ impl Element for SizedInlineText {
                     &display.text,
                     &runs,
                     &display.inline_spans,
+                    &display.math,
                     InlineTextMetrics {
                         font_size,
                         code_font_size,
                         line_height,
                         wrap_width: width,
+                        foreground,
                     },
                     window.text_system(),
                 );
@@ -196,16 +262,16 @@ impl Element for SizedInlineText {
                 layout.0.replace(Some(shaped));
                 size
             });
-        (id, ())
+        (id, crate::math::MathStyle::new(font_size, foreground))
     }
     fn prepaint(
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         bounds: Bounds<Pixels>,
-        _: &mut (),
-        _: &mut Window,
-        _: &mut App,
+        math_style: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
     ) {
         self.layout
             .0
@@ -213,18 +279,35 @@ impl Element for SizedInlineText {
             .as_mut()
             .unwrap()
             .set_bounds(bounds);
+        if bounds.intersects(&window.content_mask().bounds)
+            && let Some((panel, row, slot)) = &self.math_owner
+            && !self.runs.math.is_empty()
+        {
+            let visible = self
+                .layout
+                .read()
+                .visible_range(window.content_mask().bounds);
+            panel.update(cx, |panel, cx| {
+                panel.request_math(*row, *slot, self.runs.math.slice(visible), *math_style, cx)
+            });
+        }
     }
     fn paint(
         &mut self,
         _: Option<&GlobalElementId>,
         _: Option<&InspectorElementId>,
         _: Bounds<Pixels>,
-        _: &mut (),
+        math_style: &mut Self::RequestLayoutState,
         _: &mut (),
         window: &mut Window,
         cx: &mut App,
     ) {
-        self.layout.read().paint(window, cx);
+        let layout = self.layout.read();
+        layout.paint(window, cx);
+        self.runs.math.trace_paint(
+            *math_style,
+            layout.formula_count(window.content_mask().bounds),
+        );
     }
 }
 
@@ -279,6 +362,7 @@ mod tests {
                         style,
                         zoom: 1.0,
                         layout: painted.clone(),
+                        math_owner: None,
                     })
                     .into_any_element()
             },
@@ -353,11 +437,13 @@ mod tests {
                     ..Default::default()
                 }],
                 &spans,
+                &crate::preview::math::MathRow::default(),
                 InlineTextMetrics {
                     font_size: 14.0,
                     code_font_size: 28.0,
                     line_height: 22.0,
                     wrap_width: 1.0,
+                    foreground: 0x202020,
                 },
                 window.text_system(),
             )
@@ -407,11 +493,13 @@ mod tests {
                     text,
                     &runs,
                     &spans,
+                    &crate::preview::math::MathRow::default(),
                     InlineTextMetrics {
                         font_size: body_size,
                         code_font_size: style.typography.inline_code_font_size(body_size, zoom),
                         line_height,
                         wrap_width: 400.0,
+                        foreground: style.palette.foreground,
                     },
                     window.text_system(),
                 )

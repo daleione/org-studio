@@ -1,6 +1,8 @@
 use std::{iter::Peekable, ops::Range, path::PathBuf};
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+
+use crate::document::markdown::PARSER_OPTIONS;
 
 use super::{
     ExportDiagnostic,
@@ -12,11 +14,7 @@ type Events<'a> = Peekable<std::vec::IntoIter<OwnedEvent<'a>>>;
 
 pub(super) fn parse(source: &str) -> (Result<ExportDocument, String>, Vec<ExportDiagnostic>) {
     let (body, meta) = frontmatter(source);
-    let options = Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_TABLES
-        | Options::ENABLE_TASKLISTS
-        | Options::ENABLE_FOOTNOTES;
-    let events = Parser::new_ext(body, options)
+    let events = Parser::new_ext(body, PARSER_OPTIONS)
         .into_offset_iter()
         .collect::<Vec<_>>();
     let mut events = events.into_iter().peekable();
@@ -160,6 +158,12 @@ fn parse_blocks<'a>(
                 blocks.push(parse_table(events, range, diagnostics));
             }
             Event::Rule => blocks.push(ExportBlock::Rule { source: range }),
+            Event::InlineMath(_) | Event::DisplayMath(_) => {
+                blocks.push(ExportBlock::Paragraph {
+                    content: vec![math_inline(event)],
+                    source: range,
+                });
+            }
             Event::Start(Tag::Image {
                 dest_url, title, ..
             }) => {
@@ -269,13 +273,7 @@ fn parse_inlines<'a>(
                     "inline image was exported as a link",
                 ));
             }
-            Event::InlineMath(math) | Event::DisplayMath(math) => {
-                inlines.push(ExportInline::Code(math.to_string()));
-                diagnostics.push(ExportDiagnostic::warning(
-                    "math-degraded",
-                    "math was exported as code",
-                ));
-            }
+            Event::InlineMath(_) | Event::DisplayMath(_) => inlines.push(math_inline(event)),
             Event::Html(_) | Event::InlineHtml(_) => diagnostics.push(ExportDiagnostic::warning(
                 "markdown-raw-html",
                 "raw HTML was omitted from export",
@@ -297,10 +295,21 @@ fn heading_level(level: HeadingLevel) -> u8 {
     }
 }
 
+fn math_inline(event: Event<'_>) -> ExportInline {
+    use crate::org_syntax::math::{Formula, MathMode};
+    let (body, mode) = match event {
+        Event::InlineMath(body) => (body, MathMode::Inline),
+        Event::DisplayMath(body) => (body, MathMode::Display),
+        _ => unreachable!("only math events produce formulas"),
+    };
+    ExportInline::Math(Formula::new(body.as_ref(), mode))
+}
+
 fn plain_inline_text(inlines: Vec<ExportInline>) -> String {
     fn append(out: &mut String, inline: ExportInline) {
         match inline {
             ExportInline::Text(text) | ExportInline::Code(text) => out.push_str(&text),
+            ExportInline::Math(formula) => out.push_str(&formula.body),
             ExportInline::Strong(children)
             | ExportInline::Emphasis(children)
             | ExportInline::Underline(children)
@@ -327,6 +336,36 @@ fn plain_inline_text(inlines: Vec<ExportInline>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn math_in_tight_list_items_is_exported() {
+        let (document, diagnostics) = parse("- $x^2$\n- $$y^2$$\n");
+        assert!(diagnostics.is_empty());
+        let document = document.unwrap();
+        let ExportBlock::List { items, .. } = &document.blocks[0] else {
+            panic!("expected a list");
+        };
+        for (item, expected) in items.iter().zip(["x^2", "y^2"]) {
+            assert!(
+                item.iter().any(|block| matches!(block,
+                    ExportBlock::Paragraph { content, .. }
+                        if content.iter().any(|inline| matches!(inline,
+                            ExportInline::Math(formula) if formula.body.as_ref() == expected
+                        ))
+                )),
+                "missing formula {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn math_blocks_are_not_dropped_and_code_is_not_converted() {
+        let (document, diagnostics) = parse("$$\n\\frac{a}{b}\n$$\n\n`$x$`\n");
+        let document = document.unwrap();
+        assert!(diagnostics.is_empty());
+        assert!(document.blocks.iter().any(|block| matches!(block, ExportBlock::Paragraph { content, .. } if content.iter().any(|inline| matches!(inline, ExportInline::Math(formula) if formula.mode == crate::org_syntax::math::MathMode::Display)))));
+        assert!(document.blocks.iter().any(|block| matches!(block, ExportBlock::Paragraph { content, .. } if content.iter().any(|inline| matches!(inline, ExportInline::Code(code) if code == "$x$")))));
+    }
 
     #[test]
     fn parses_structured_markdown() {

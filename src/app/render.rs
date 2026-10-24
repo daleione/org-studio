@@ -321,7 +321,7 @@ impl Render for WorkspaceWindow {
             .filter_map(|pane| self.reading_panel_for(pane))
         {
             viewport_changed |= panel.update(cx, |panel, _| {
-                panel.retain_plot_demands();
+                panel.retain_visible_media();
                 panel.note_viewport(viewport_key)
             });
         }

@@ -154,9 +154,15 @@ impl SelectableReadingText {
         runs: &crate::preview::display_map::DisplayRuns,
         style: crate::preview::PreviewStyle,
         zoom: f32,
+        math_slot: usize,
     ) -> Self {
         if crate::preview::inline_layout::needs_sized_inline(&runs.inline_spans, style) {
-            self.text = ReadingText::sized(runs, style, zoom);
+            self.text = ReadingText::sized(
+                runs,
+                style,
+                zoom,
+                Some((self.panel.clone(), self.row, math_slot)),
+            );
         }
         self
     }
@@ -435,6 +441,7 @@ fn paint_selection(
     include_newline: bool,
     window: &mut Window,
 ) {
+    let range = layout.visual_range(range);
     if range.start > range.end || range.end > layout.len() {
         return;
     }
@@ -504,6 +511,7 @@ fn paint_search(
     window: &mut Window,
     current: bool,
 ) {
+    let range = layout.visual_range(range);
     if range.start > range.end || range.end > layout.len() {
         return;
     }

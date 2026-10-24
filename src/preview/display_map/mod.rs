@@ -85,6 +85,7 @@ impl RowLayout {
 
 #[derive(Clone, Debug)]
 pub(crate) struct DisplayRuns {
+    pub(super) math: super::math::MathRow,
     pub(crate) source_segments: Arc<[(crate::document::ByteRange, Range<usize>)]>,
     pub(crate) text: SharedString,
     pub(crate) inline_spans: Arc<[InlineSpan]>,
@@ -395,6 +396,7 @@ impl PreviewDisplayMap {
                 &display.text,
                 &text_runs,
                 &display.inline_spans,
+                &display.math,
                 super::inline_layout::InlineTextMetrics {
                     font_size: layout.font_size,
                     code_font_size: style
@@ -402,6 +404,7 @@ impl PreviewDisplayMap {
                         .inline_code_font_size(layout.font_size, zoom),
                     line_height: layout.line_height,
                     wrap_width,
+                    foreground: style.palette.foreground,
                 },
                 text_system,
             );
@@ -779,6 +782,7 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
         line.content.range.start.0,
     );
     DisplayRuns {
+        math: super::math::MathRow::new(&text, &inline_spans),
         source_segments: source_segments.into(),
         text,
         inline_spans,
@@ -858,6 +862,7 @@ pub(crate) fn slice_display_runs(runs: &DisplayRuns, range: Range<usize>) -> Dis
     let start = range.start.min(runs.text.len());
     let end = range.end.min(runs.text.len()).max(start);
     DisplayRuns {
+        math: runs.math.slice(start..end),
         source_segments: runs
             .source_segments
             .iter()
