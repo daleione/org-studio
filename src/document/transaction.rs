@@ -3,8 +3,8 @@ use std::sync::{Arc, OnceLock};
 use ropey::Rope;
 
 use super::{
-    ByteRange, CoordinateCheckpoint, DocumentId, DocumentSnapshot, EditLog, EditLogError, Revision,
-    RevisionDelta, TextEditSummary,
+    ByteOffset, ByteRange, CoordinateCheckpoint, DocumentId, DocumentSnapshot, EditLog,
+    EditLogError, Revision, RevisionDelta, TextEditSummary,
 };
 
 const DEFAULT_EDIT_LOG_CAPACITY: usize = 256;
@@ -21,6 +21,38 @@ impl TextEdit {
             range,
             replacement: replacement.into(),
         }
+    }
+
+    /// Replaces `current` at `start`, retaining unchanged UTF-8 prefixes and
+    /// suffixes so their source anchors and measured layout remain valid.
+    /// Equal inputs produce an empty edit at the end of `current`.
+    pub fn between(start: ByteOffset, current: &str, replacement: &str) -> Self {
+        let mut prefix = current
+            .bytes()
+            .zip(replacement.bytes())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !current.is_char_boundary(prefix) || !replacement.is_char_boundary(prefix) {
+            prefix -= 1;
+        }
+        let mut suffix = current[prefix..]
+            .bytes()
+            .rev()
+            .zip(replacement[prefix..].bytes().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        while !current.is_char_boundary(current.len() - suffix)
+            || !replacement.is_char_boundary(replacement.len() - suffix)
+        {
+            suffix -= 1;
+        }
+        Self::new(
+            ByteRange::new(
+                start.0 + prefix as u64,
+                start.0 + (current.len() - suffix) as u64,
+            ),
+            &replacement[prefix..replacement.len() - suffix],
+        )
     }
 }
 
@@ -399,6 +431,30 @@ mod tests {
 
     fn text(snapshot: &DocumentSnapshot) -> String {
         snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes()))
+    }
+
+    #[test]
+    fn replacement_between_texts_preserves_unchanged_utf8_anchors() {
+        for (current, replacement, changed, inserted) in [
+            ("value: 2\r\n", "value: 8\r\n", "2", "8"),
+            ("éx", "êx", "é", "ê"),
+            ("xé", "y©", "xé", "y©"),
+            ("ab", "a中b", "", "中"),
+            ("a中b", "ab", "中", ""),
+            ("", "中", "", "中"),
+            ("中", "", "中", ""),
+            ("same", "same", "", ""),
+            ("", "", "", ""),
+        ] {
+            let prefix = "before\n";
+            let source = format!("{prefix}{current}\nafter");
+            let edit = TextEdit::between(ByteOffset(prefix.len() as u64), current, replacement);
+            assert_eq!(&source[edit.range.as_usize()], changed);
+            assert_eq!(edit.replacement, inserted);
+            let mut applied = source;
+            applied.replace_range(edit.range.as_usize(), &edit.replacement);
+            assert_eq!(applied, format!("{prefix}{replacement}\nafter"));
+        }
     }
 
     #[test]

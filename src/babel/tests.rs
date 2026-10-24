@@ -128,6 +128,103 @@ fn mysql_rejects_ambiguous_names_and_results_before_connecting() {
 }
 
 #[gpui::test]
+fn sql_result_refresh_keeps_the_visible_caret_in_place(cx: &mut gpui::TestAppContext) {
+    use crate::document::{DocumentCommand, DocumentSession, EditOrigin, EditTransaction};
+    use gpui::AppContext;
+
+    cx.update(crate::editor::init);
+    let payload = "| Date       | Value |\n|------------+-------|\n| 2025-01-01 |     2 |\n| 2025-01-02 |     4 |\n| 2025-01-03 |     6 |\n";
+    for at_end in [false, true] {
+        let prefix = "Introductory text\n".repeat(80);
+        let suffix = if at_end {
+            String::new()
+        } else {
+            format!("\nAfter the chart\n{}", "Following text\n".repeat(80))
+        };
+        let source = format!(
+            "{prefix}#+NAME: measurements_query\n#+begin_src sql :results table replace\nSELECT measured_on, value FROM measurements;\n#+end_src\n\n#+RESULTS: measurements_query\n#+NAME: measurements_data\n#+PLOT: title:\"Measurements\" ind:1 deps:(2) timeind:1 timefmt:\"%Y-%m-%d\" with:linespoints\n{payload}{suffix}"
+        );
+        let sql = ByteOffset(source.find("SELECT ").unwrap() as u64);
+        let caret = if at_end {
+            sql
+        } else {
+            ByteOffset(source.find("After the chart").unwrap() as u64)
+        };
+        let session = cx.new(|_| {
+            DocumentSession::from_utf8("measurements.org".into(), source.into_bytes()).unwrap()
+        });
+        let (editor, view) =
+            cx.add_window_view(|_, cx| crate::editor::SemanticEditor::new(session.clone(), cx));
+        view.simulate_resize(gpui::size(gpui::px(1100.0), gpui::px(650.0)));
+        view.run_until_parked();
+        view.executor()
+            .advance_clock(std::time::Duration::from_millis(81));
+        view.run_until_parked();
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(caret), cx);
+            let target = if at_end {
+                ByteOffset(session.read(cx).snapshot().len_bytes())
+            } else {
+                sql
+            };
+            assert!(editor.scroll_to_source_offset(target, cx));
+        });
+        view.run_until_parked();
+        let before = editor.read_with(view, |editor, cx| {
+            (
+                editor.painted_caret().unwrap().bounds,
+                editor.top_source_anchor(&session.read(cx).snapshot()),
+            )
+        });
+        for value in [8, 9, 2] {
+            let snapshot = session.read_with(view, |session, _| session.snapshot());
+            let request = prepare_source_block_execution(
+                &snapshot,
+                Path::new("/tmp/measurements.org"),
+                Selection::caret(sql),
+            )
+            .unwrap();
+            let edit = request
+                .data_result_edit(&payload.replace("     2", &format!("     {value}")))
+                .unwrap();
+            session.update(view, |session, cx| {
+                session
+                    .edit(
+                        DocumentCommand::new(
+                            EditTransaction::new(snapshot.revision(), vec![edit]),
+                            Selection::caret(caret),
+                            Selection::caret(caret),
+                            EditOrigin::Other,
+                        ),
+                        cx,
+                    )
+                    .unwrap();
+            });
+            for indexed in [false, true] {
+                if indexed {
+                    view.executor()
+                        .advance_clock(std::time::Duration::from_millis(81));
+                }
+                view.run_until_parked();
+                editor.read_with(view, |editor, cx| {
+                    assert_eq!(editor.selection(), Selection::caret(caret));
+                    assert_eq!(
+                        editor.painted_caret().unwrap().bounds,
+                        before.0,
+                        "the visible caret must not move, at_end={at_end}, indexed={indexed}"
+                    );
+                    assert_eq!(
+                        editor.top_source_anchor(&session.read(cx).snapshot()),
+                        before.1,
+                        "the viewport must not move while SQL results refresh"
+                    );
+                });
+            }
+        }
+    }
+}
+
+#[gpui::test]
 fn sql_result_refresh_preserves_the_plot_and_independent_summary(cx: &mut gpui::TestAppContext) {
     use crate::document::{DocumentCommand, DocumentSession, EditOrigin, EditTransaction};
     use gpui::AppContext;
@@ -733,8 +830,9 @@ fn shell_stdout_replaces_previous_fixed_width_result() {
     assert_eq!(request.external_program(), Some("/bin/sh"));
     let output = execute_source_block(request).unwrap().publish().unwrap();
     let edit = output.result_edit.as_ref().unwrap();
-    assert_eq!(&source[edit.range.as_usize()], "\n#+RESULTS:\n: old\n");
-    assert_eq!(edit.replacement, "\n#+RESULTS:\n: new\n");
+    let mut updated = source.to_owned();
+    updated.replace_range(edit.range.as_usize(), &edit.replacement);
+    assert_eq!(updated, source.replace(": old\n", ": new\n"));
     assert!(output.file().is_none());
 }
 

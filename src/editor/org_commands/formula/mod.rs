@@ -845,28 +845,7 @@ pub(in crate::editor) fn recalculate_buffer_tables(
     if !converged {
         return Err("TBLFM buffer iteration did not converge after 100 passes".into());
     }
-    let mut prefix = original
-        .bytes()
-        .zip(source.bytes())
-        .take_while(|(a, b)| a == b)
-        .count();
-    while !original.is_char_boundary(prefix) || !source.is_char_boundary(prefix) {
-        prefix -= 1;
-    }
-    let mut suffix = original
-        .as_bytes()
-        .iter()
-        .rev()
-        .zip(source.as_bytes().iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count()
-        .min(original.len() - prefix)
-        .min(source.len() - prefix);
-    while !original.is_char_boundary(original.len() - suffix)
-        || !source.is_char_boundary(source.len() - suffix)
-    {
-        suffix -= 1;
-    }
+    let edit = crate::document::TextEdit::between(ByteOffset(0), &original, &source);
     let line = snapshot
         .line_index_at(caret)
         .map_err(|error| error.to_string())?;
@@ -885,8 +864,8 @@ pub(in crate::editor) fn recalculate_buffer_tables(
     }
     let caret = ByteOffset(new_caret as u64);
     Ok(Some(TableAlignment {
-        range: ByteRange::new(prefix as u64, (original.len() - suffix) as u64),
-        replacement: source[prefix..source.len() - suffix].to_owned(),
+        range: edit.range,
+        replacement: edit.replacement,
         caret,
     }))
 }

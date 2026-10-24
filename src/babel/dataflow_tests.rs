@@ -107,13 +107,13 @@ fn each_source_reference_executes_and_only_the_root_result_is_replaced() {
         Value::List(vec![Value::Integer("1".into()), Value::Integer("2".into())])
     );
     let edit = output.result_edit.unwrap();
-    assert!(edit.replacement.contains("#+RESULTS: pair\n#+PLOT:"));
     let after = format!(
         "{}{}{}",
         &text[..edit.range.start.0 as usize],
         edit.replacement,
         &text[edit.range.end.0 as usize..]
     );
+    assert!(after.contains("#+RESULTS: pair\n#+PLOT:"));
     assert!(after.contains("#+RESULTS: next-number\n: 999"));
     assert!(after.ends_with("\nFollowing text\n"));
 }

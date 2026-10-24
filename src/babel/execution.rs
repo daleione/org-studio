@@ -200,7 +200,7 @@ impl BabelExecutionRequest {
             .map(|name| format!(" {name}"))
             .unwrap_or_default();
         let replacement = format!("{newline}#+RESULTS:{marker}{newline}{attributes}{payload}");
-        (*existing != replacement).then(|| TextEdit::new(*range, replacement))
+        (*existing != replacement).then(|| TextEdit::between(range.start, existing, &replacement))
     }
 
     #[cfg(test)]

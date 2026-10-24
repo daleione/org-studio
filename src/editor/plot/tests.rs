@@ -3,6 +3,119 @@ use crate::document::{ByteOffset, DocumentSession, EditOrigin, Selection};
 use gpui::AppContext;
 
 #[gpui::test]
+fn result_row_changes_keep_the_existing_plot_and_bottom_scroll_anchor(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::document::{DocumentCommand, EditTransaction, TextEdit};
+
+    cx.update(super::super::init);
+    let result = |rows: &str| {
+        format!(
+            "#+RESULTS: measurements\n#+NAME: measurements_data\n#+PLOT: ind:1 deps:(2) with:linespoints\n| x | y |\n|---+---|\n{rows}"
+        )
+    };
+    let initial_rows = "| 1 | 2 |\n| 2 | 4 |\n| 3 | 6 |\n";
+    let source = format!(
+        "{}#+NAME: measurements\n#+begin_src sql\nSELECT x, y FROM measurements;\n#+end_src\n\n{}",
+        "Introductory text\n".repeat(80),
+        result(initial_rows)
+    );
+    let caret = ByteOffset(source.find("SELECT ").unwrap() as u64);
+    let start = source.find("#+RESULTS:").unwrap();
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("measurements.org".into(), source.into_bytes()).unwrap()
+    });
+    let (editor, cx) = cx.add_window_view(|_, cx| SemanticEditor::new(session.clone(), cx));
+    cx.simulate_resize(gpui::size(gpui::px(1100.0), gpui::px(650.0)));
+    cx.run_until_parked();
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    cx.run_until_parked();
+    editor.update(cx, |editor, cx| {
+        editor.set_selection(Selection::caret(caret), cx);
+        let end = ByteOffset(editor.snapshot(cx).len_bytes());
+        editor.scroll_to_source_offset(end, cx);
+    });
+    cx.run_until_parked();
+    for rows in [
+        "| 1 | 8 |\n| 2 | 5 |\n| 3 | 7 |\n| 4 | 9 |\n| 5 | 3 |\n",
+        initial_rows,
+    ] {
+        let (previous, trailing_height) = editor.read_with(cx, |editor, _| {
+            let (&line, plot) = editor.plots.lines.iter().next().unwrap();
+            assert_eq!(editor.plots.lines.len(), 1);
+            (plot.clone(), editor.display_map.trailing_height(line))
+        });
+        let snapshot = session.read_with(cx, |session, _| session.snapshot());
+        let current = snapshot.copy_range(crate::document::ByteRange::new(
+            start as u64,
+            snapshot.len_bytes(),
+        ));
+        let edit = TextEdit::between(ByteOffset(start as u64), &current, &result(rows));
+        session.update(cx, |session, cx| {
+            session
+                .edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(snapshot.revision(), vec![edit]),
+                        Selection::caret(caret),
+                        Selection::caret(caret),
+                        EditOrigin::Other,
+                    ),
+                    cx,
+                )
+                .unwrap();
+        });
+        for indexed in [false, true] {
+            if indexed {
+                cx.executor()
+                    .advance_clock(std::time::Duration::from_millis(81));
+            }
+            cx.run_until_parked();
+            editor.read_with(cx, |editor, _| {
+                assert_eq!(editor.plots.lines.len(), 1);
+                let (&line, plot) = editor.plots.lines.iter().next().unwrap();
+                assert_eq!(plot.entry.id, previous.entry.id);
+                assert_eq!(editor.display_map.trailing_height(line), trailing_height);
+                let rendered = plot
+                    .state
+                    .as_ref()
+                    .and_then(crate::plot::PlotRenderState::rendered)
+                    .expect("the existing chart remains visible during refresh");
+                if !indexed {
+                    let previous = previous.state.as_ref().unwrap().rendered().unwrap();
+                    assert!(std::sync::Arc::ptr_eq(rendered, previous));
+                }
+                let viewport_height = f32::from(editor.viewport.unwrap().size.height);
+                let max_scroll = (editor.display_map.total_height() - viewport_height).max(0.0);
+                assert!((editor.scroll_y - max_scroll).abs() < 0.5);
+                assert!(
+                    editor.scroll_at_end,
+                    "layout must retain the user's bottom anchor"
+                );
+                assert_eq!(editor.selection, Selection::caret(caret));
+            });
+        }
+    }
+    let (document, id) = editor.read_with(cx, |editor, _| {
+        let plot = editor.plots.lines.values().next().unwrap();
+        (plot.document.clone(), plot.entry.id)
+    });
+    document.update(cx, |document, cx| {
+        document.resize_canvas(id, None, Some(450.0), false, cx);
+    });
+    cx.run_until_parked();
+    editor.read_with(cx, |editor, _| {
+        let viewport_height = f32::from(editor.viewport.unwrap().size.height);
+        let max_scroll = (editor.display_map.total_height() - viewport_height).max(0.0);
+        assert!((editor.scroll_y - max_scroll).abs() < 0.5);
+        assert!(
+            editor.scroll_at_end,
+            "resizing the chart keeps the viewport pinned"
+        );
+    });
+}
+
+#[gpui::test]
 fn vertical_navigation_crosses_a_memory_plot(cx: &mut gpui::TestAppContext) {
     cx.update(super::super::init);
     let source = "#+PLOT: ind:1\n| month | orders |\n|---+---|\n| July | 120 |\n| August | 180 |\n\nAfter the chart\n";

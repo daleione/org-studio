@@ -1074,38 +1074,13 @@ impl SemanticEditor {
             cx.notify();
             return true;
         }
-        // Keep unchanged source anchors and measured rows outside the actual edit.
-        let replacement = alignment.replacement;
-        let mut prefix = current
-            .bytes()
-            .zip(replacement.bytes())
-            .take_while(|(a, b)| a == b)
-            .count();
-        while !current.is_char_boundary(prefix) || !replacement.is_char_boundary(prefix) {
-            prefix -= 1;
-        }
-        let mut suffix = current[prefix..]
-            .bytes()
-            .rev()
-            .zip(replacement[prefix..].bytes().rev())
-            .take_while(|(a, b)| a == b)
-            .count();
-        while !current.is_char_boundary(current.len() - suffix)
-            || !replacement.is_char_boundary(replacement.len() - suffix)
-        {
-            suffix -= 1;
-        }
-        let range = ByteRange::new(
-            alignment.range.start.0 + prefix as u64,
-            alignment.range.end.0 - suffix as u64,
-        );
-        let replacement = replacement[prefix..replacement.len() - suffix].to_owned();
+        let edit = TextEdit::between(alignment.range.start, &current, &alignment.replacement);
         if self
             .session
             .update(cx, |session, cx| {
                 session.edit(
                     DocumentCommand::new(
-                        EditTransaction::new(revision, vec![TextEdit::new(range, replacement)]),
+                        EditTransaction::new(revision, vec![edit]),
                         before,
                         after,
                         EditOrigin::Other,

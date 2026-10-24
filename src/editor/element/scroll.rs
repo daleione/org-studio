@@ -2,11 +2,15 @@
 
 use super::*;
 
-pub(super) fn scroll_is_at_end(scroll_y: f32, viewport_height: f32, document_height: f32) -> bool {
+pub(in crate::editor) fn scroll_is_at_end(
+    scroll_y: f32,
+    viewport_height: f32,
+    document_height: f32,
+) -> bool {
     scroll_y + viewport_height + 0.5 >= document_height
 }
 
-pub(super) fn stabilized_scroll_y(
+pub(in crate::editor) fn stabilized_scroll_y(
     was_at_end: bool,
     anchored: f32,
     viewport_height: f32,

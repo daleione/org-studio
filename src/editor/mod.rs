@@ -1033,6 +1033,7 @@ impl SemanticEditor {
                 let projection = this.folds.projection(&path, &snapshot);
                 this.fold_markers = Arc::new(projection.marker_lines);
                 this.display_map.set_hidden_ranges(projection.hidden_ranges);
+                this.sync_plot_layout(&snapshot, wrap_width, viewport_height, cx);
                 let anchor_line = mapped_anchor
                     .and_then(|offset| snapshot.line_index_at(offset).ok())
                     .map_or(anchor_line, |line| line.0)

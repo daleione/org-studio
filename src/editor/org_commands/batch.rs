@@ -48,29 +48,7 @@ impl TableAlignmentPlan {
         if old == new {
             return;
         }
-        // Preserve unchanged prefixes/suffixes so viewport anchors survive the edit.
-        let mut prefix = old
-            .bytes()
-            .zip(new.bytes())
-            .take_while(|(a, b)| a == b)
-            .count();
-        while !old.is_char_boundary(prefix) || !new.is_char_boundary(prefix) {
-            prefix -= 1;
-        }
-        let mut suffix = old[prefix..]
-            .bytes()
-            .rev()
-            .zip(new[prefix..].bytes().rev())
-            .take_while(|(a, b)| a == b)
-            .count();
-        while !old.is_char_boundary(old.len() - suffix) || !new.is_char_boundary(new.len() - suffix)
-        {
-            suffix -= 1;
-        }
-        self.edits.push(TextEdit::new(
-            ByteRange::new(range.start.0 + prefix as u64, range.end.0 - suffix as u64),
-            &new[prefix..new.len() - suffix],
-        ));
+        self.edits.push(TextEdit::between(range.start, &old, &new));
         self.rows.push((range, old, new));
     }
 }

@@ -1,4 +1,7 @@
-use super::SemanticEditor;
+use super::{
+    SemanticEditor,
+    element::{scroll_is_at_end, stabilized_scroll_y},
+};
 use crate::{
     document::{DocumentSnapshot, TextSnapshot},
     plot::{PlotDemand, PlotEntry, PlotHost, PlotId, PlotPresentation, PlotStyle},
@@ -38,23 +41,89 @@ pub(super) fn prepare(
     cx: &mut App,
 ) {
     host.update(cx, |editor, cx| {
-        let Some(mut plots) = editor.plots.host.take() else {
+        let Some(plots) = editor.plots.host.as_ref() else {
             return;
         };
         let file_path = editor.session.read(cx).file_path().map(ToOwned::to_owned);
         plots
             .document
             .update(cx, |document, _| document.set_file_path(file_path));
-        let entries = plots.entries(snapshot.revision(), cx);
+        let viewport_height = f32::from(bounds.size.height);
+        let was_at_end = editor.scroll_at_end
+            || scroll_is_at_end(
+                editor.scroll_y,
+                viewport_height,
+                editor.animated_document_height(),
+            );
+        let anchor = editor.animated_line_at_y(editor.scroll_y);
+        let offset = editor.scroll_y - editor.animated_line_start_y(anchor);
+        if editor.sync_plot_layout(snapshot, width, viewport_height, cx) {
+            editor.scroll_y = stabilized_scroll_y(
+                was_at_end,
+                editor.animated_line_start_y(anchor) + offset,
+                viewport_height,
+                editor.animated_document_height(),
+            );
+            editor.scroll_at_end = was_at_end;
+            editor.minimap.cancel_layout_preparation();
+            editor.minimap.note_layout_changed();
+        }
+        let Some(mut plots) = editor.plots.host.take() else {
+            return;
+        };
         let style = PlotStyle::for_theme(crate::theme::current_theme(), 12.0);
-        let sizing = super::inline_image::image_sizing(
-            width,
-            f32::from(bounds.size.height),
-            editor.font_size_px(),
-        );
+        let sizing =
+            super::inline_image::image_sizing(width, viewport_height, editor.font_size_px());
         let mut lines = HashMap::new();
+        for (&line, entry) in &editor.plots.sources {
+            let (_, height) = entry.image_size(&sizing);
+            let y = editor.animated_line_start_y(line);
+            if y + editor.display_map.line_height_px(line) < editor.scroll_y - height
+                || y > editor.scroll_y + f32::from(bounds.size.height) + height
+            {
+                continue;
+            }
+            let presentation = plots.present(entry.clone(), sizing, style.clone(), true, cx);
+            lines.insert(line, presentation);
+        }
+        let visible = lines
+            .values()
+            .map(|plot| plot.entry.id)
+            .collect::<HashSet<PlotId>>();
+        plots.retain(&visible);
+        editor.plots.lines = lines;
+        editor.plots.host = Some(plots);
+    });
+}
+
+impl EditorPlots {
+    pub(super) fn new(host: Option<PlotHost>) -> Self {
+        Self {
+            host,
+            ..Self::default()
+        }
+    }
+}
+
+impl SemanticEditor {
+    /// Restores plot geometry after a source-line splice, before its caller
+    /// clamps the viewport to the new document height. Also used by prepaint
+    /// when a completed plot index or a canvas resize changes that geometry.
+    pub(super) fn sync_plot_layout(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        width: f32,
+        viewport_height: f32,
+        cx: &mut App,
+    ) -> bool {
+        let Some(plots) = self.plots.host.as_mut() else {
+            return false;
+        };
+        let entries = plots.entries(snapshot.revision(), cx);
+        let sizing = super::inline_image::image_sizing(width, viewport_height, self.font_size_px());
         let mut sources = HashMap::new();
         let mut trailing = BTreeMap::new();
+        let mut linked_changed = false;
         for entry in entries.iter() {
             let end = entry
                 .source
@@ -72,15 +141,15 @@ pub(super) fn prepare(
             {
                 line.0 -= 1;
             }
-            if editor.display_map.is_hidden(line.0) {
+            if self.display_map.is_hidden(line.0) {
                 continue;
             }
             sources.insert(line.0, entry.clone());
             if let Some(link) = entry.source.image_link
                 && matches!(entry.prepared, crate::plot::PlotPreparation::Ready(_))
-                && editor.previews_inline_image_at(link.start)
+                && self.previews_inline_image_at(link.start)
             {
-                editor.inline_image_line_dimensions.borrow_mut().insert(
+                self.inline_image_line_dimensions.borrow_mut().insert(
                     line.0,
                     super::InlineImageMetrics {
                         plot: Some(entry.clone()),
@@ -89,50 +158,17 @@ pub(super) fn prepare(
                         spec: entry.source.image_attributes.clone(),
                     },
                 );
-                editor.apply_inline_image_row_height(line.0, width, f32::from(bounds.size.height));
+                linked_changed |=
+                    self.apply_inline_image_row_height(line.0, width, viewport_height);
             }
-            let (_, height) = entry.image_size(&sizing);
             if entry.source.image_link.is_none() {
-                trailing.insert(line.0, height + 12.0);
+                trailing.insert(line.0, entry.image_size(&sizing).1 + 12.0);
             }
-            let y = editor.animated_line_start_y(line.0);
-            if y + editor.display_map.line_height_px(line.0) < editor.scroll_y - height
-                || y > editor.scroll_y + f32::from(bounds.size.height) + height
-            {
-                continue;
-            }
-            let presentation = plots.present(entry.clone(), sizing, style.clone(), true, cx);
-            lines.insert(line.0, presentation);
         }
-        let visible = lines
-            .values()
-            .map(|plot| plot.entry.id)
-            .collect::<HashSet<PlotId>>();
-        plots.retain(&visible);
-        let anchor = editor.animated_line_at_y(editor.scroll_y);
-        let offset = editor.scroll_y - editor.animated_line_start_y(anchor);
-        if editor.display_map.set_trailing_heights(trailing) {
-            editor.scroll_y = editor.animated_line_start_y(anchor) + offset;
-            editor.scroll_at_end = false;
-            editor.minimap.cancel_layout_preparation();
-            editor.minimap.note_layout_changed();
-        }
-        editor.plots.lines = lines;
-        editor.plots.sources = sources;
-        editor.plots.host = Some(plots);
-    });
-}
-
-impl EditorPlots {
-    pub(super) fn new(host: Option<PlotHost>) -> Self {
-        Self {
-            host,
-            ..Self::default()
-        }
+        self.plots.sources = sources;
+        self.display_map.set_trailing_heights(trailing) || linked_changed
     }
-}
 
-impl SemanticEditor {
     pub(crate) fn plot_previews_ready(&self, cx: &App) -> bool {
         self.plots
             .host
