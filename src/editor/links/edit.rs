@@ -104,6 +104,7 @@ impl SemanticEditor {
         self.dismiss_todo(cx);
         self.dismiss_timestamp(cx);
         self.dismiss_table_actions(cx);
+        self.hovered_link = None;
         let picker = cx.new(|cx| LinkPicker::new(value, self.ui_language, cx));
         let subscription = cx.subscribe(&picker, |this, _, event, cx| match event {
             LinkPickerEvent::Applied(source) => this.apply_link_edit(source, cx),

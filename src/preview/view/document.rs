@@ -37,7 +37,7 @@ pub(crate) fn render_reading_document(
     state: ReadingRenderState,
     panel_entity: gpui::Entity<ReadingPreviewPanel>,
     options: ReadingRenderOptions,
-) -> gpui::Div {
+) -> gpui::Stateful<gpui::Div> {
     let ReadingRenderState {
         plot_visible,
         document,
@@ -101,6 +101,7 @@ pub(crate) fn render_reading_document(
     let drag_dispatch = interaction.dispatch.clone();
     let outside_panel = panel_entity.clone();
     let outside_dispatch = interaction.dispatch.clone();
+    let hover_panel = panel_entity.clone();
     div()
         .size_full()
         .flex()
@@ -110,6 +111,12 @@ pub(crate) fn render_reading_document(
             style.typography.body_family,
             style.typography.body_fallbacks,
         ))
+        .id(("reading-document", panel_entity.entity_id()))
+        .on_hover(move |hovered, _, cx| {
+            if !hovered {
+                hover_panel.update(cx, |panel, cx| panel.hover_link(None, cx));
+            }
+        })
         .on_mouse_down(gpui::MouseButton::Left, move |_, _, cx| {
             clear_selection_panel.update(cx, |panel, cx| {
                 panel.select_plot(None, cx);
@@ -120,6 +127,8 @@ pub(crate) fn render_reading_document(
         })
         .on_mouse_move(move |event, _, cx| {
             drag_panel.update(cx, |panel, cx| {
+                // Link text handles its move event before it reaches the document.
+                panel.hover_link(None, cx);
                 panel.move_plot_resize(
                     (f32::from(event.position.x), f32::from(event.position.y)),
                     cx,
@@ -1366,7 +1375,7 @@ pub(crate) fn reading_inline(
         row_text_len,
         text_offset..row_text_len,
     );
-    let selectable = super::SelectableReadingText::new(
+    super::SelectableReadingText::new(
         ("reading-inline", display_row),
         styled,
         interaction.panel.clone(),
@@ -1381,35 +1390,9 @@ pub(crate) fn reading_inline(
         runs,
     ))
     .with_row_text_len(row_text_len)
-    .with_row_bounds(interaction.row_bounds.clone());
-    if runs.links.is_empty() {
-        return selectable.into_any_element();
-    }
-    let Some(row) = document.projection.rows.get(display_row) else {
-        return selectable.into_any_element();
-    };
-    let target = crate::preview::source_action_target(document, row);
-    let ranges = runs
-        .links
-        .iter()
-        .map(|link| link.range.clone())
-        .collect::<Vec<_>>();
-    let actions = runs
-        .links
-        .iter()
-        .map(|link| crate::preview::PreviewAction::OpenLink {
-            target: target.clone(),
-            destination: link.destination.clone(),
-        })
-        .collect::<Vec<_>>();
-    selectable
-        .on_double_click(ranges, move |index, window, cx| {
-            let Some(action) = actions.get(index).cloned() else {
-                return;
-            };
-            (interaction.dispatch)(action, interaction.panel.clone(), window, cx);
-        })
-        .into_any_element()
+    .with_row_bounds(interaction.row_bounds.clone())
+    .with_links(runs.inline_spans.clone(), &interaction)
+    .into_any_element()
 }
 
 pub(in crate::preview) fn reading_row_selection(

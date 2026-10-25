@@ -88,18 +88,14 @@ impl WorkspaceWindow {
         ready: &super::super::ReadyDocument,
         cx: &gpui::App,
     ) -> Option<StatusLineSnapshot> {
-        let status = ready.editors.get(pane_side).as_ref()?.read(cx).status(cx);
+        let editor = ready.editors.get(pane_side).as_ref()?.read(cx);
+        let status = editor.status(cx);
         let document_statistics = DocumentStatistics {
             characters: status.characters,
             lines: status.total_lines,
             bytes: status.bytes,
         };
-        let outline = ready
-            .editors
-            .get(pane_side)
-            .as_ref()?
-            .read(cx)
-            .current_outline(status.caret_offset, cx);
+        let outline = editor.current_outline(status.caret_offset, cx);
         Some(StatusLineSnapshot {
             pane,
             language: self.language,
@@ -108,6 +104,7 @@ impl WorkspaceWindow {
             dirty: ready.session.read(cx).is_dirty(),
             reading_style: None,
             outline,
+            link_target: editor.hovered_link_target(),
             position: Some(StatusPosition::EditorCaret {
                 line: status.caret_line,
                 column: status.caret_column,
@@ -176,6 +173,7 @@ impl WorkspaceWindow {
                 .is_some_and(|session| session.read(cx).is_dirty()),
             reading_style: Some(self.reading_style),
             outline: current_outline(document, source_index),
+            link_target: panel.hovered_link_target(),
             position: Some(StatusPosition::ReadingSource {
                 line,
                 total_lines: document.statistics.lines,
@@ -210,6 +208,7 @@ impl WorkspaceWindow {
             dirty: false,
             reading_style: None,
             outline: Some(directory.into()),
+            link_target: None,
             position: Some(StatusPosition::DiredSelection { selected, total }),
             progress: None,
             statistics: Some(

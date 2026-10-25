@@ -262,7 +262,6 @@ impl TableRowProjection {
                             text: parsed.text.into(),
                             inline_spans: parsed.spans.into(),
                             code_spans: Arc::from([]),
-                            links: Arc::from([]),
                             source_segments: Arc::from([]),
                         }
                     })
@@ -796,6 +795,7 @@ pub(crate) fn render_table_row(
             .with_inline_fonts(&cell_runs, style, zoom, index + 1)
             .with_search_ranges(search_ranges)
             .restrict_drag_to_bounds()
+            .with_links(cell_runs.inline_spans.clone(), interaction)
             .into_any_element()
         } else {
             super::view::inline_text::ReadingText::inline(styled, &cell_runs, style, zoom)

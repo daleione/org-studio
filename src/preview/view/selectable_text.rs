@@ -1,4 +1,4 @@
-use std::{cell::Cell, ops::Range, rc::Rc};
+use std::{cell::Cell, ops::Range, rc::Rc, sync::Arc};
 
 use gpui::{
     AnyElement, App, Bounds, CursorStyle, DispatchPhase, Element, ElementId, GlobalElementId,
@@ -7,9 +7,12 @@ use gpui::{
 };
 
 use super::inline_text::{ReadingText, ReadingTextLayout};
-use crate::preview::ReadingPreviewPanel;
+use crate::{
+    org_syntax::inline::{InlineKind, InlineSpan},
+    preview::ReadingPreviewPanel,
+};
 
-type ClickListener = Box<dyn Fn(usize, &mut Window, &mut App)>;
+type ClickListener = Box<dyn Fn(Arc<str>, &mut Window, &mut App)>;
 
 #[derive(Clone, Default)]
 pub(in crate::preview) struct ReadingRowBounds(Rc<Cell<Option<LayoutId>>>);
@@ -112,7 +115,7 @@ pub(in crate::preview) struct SelectableReadingText {
     minimum_height: Option<f32>,
     selection: Option<(Range<usize>, bool)>,
     search_ranges: Vec<(Range<usize>, bool)>,
-    clickable_ranges: Vec<Range<usize>>,
+    inline_spans: Option<Arc<[InlineSpan]>>,
     click_listener: Option<ClickListener>,
 }
 
@@ -136,7 +139,7 @@ impl SelectableReadingText {
             minimum_height: None,
             selection,
             search_ranges: Vec::new(),
-            clickable_ranges: Vec::new(),
+            inline_spans: None,
             click_listener: None,
         }
     }
@@ -192,12 +195,38 @@ impl SelectableReadingText {
         self
     }
 
-    pub(super) fn on_double_click(
-        mut self,
-        ranges: Vec<Range<usize>>,
-        listener: impl Fn(usize, &mut Window, &mut App) + 'static,
+    pub(in crate::preview) fn with_links(
+        self,
+        spans: Arc<[InlineSpan]>,
+        interaction: &super::ReadingInteraction,
     ) -> Self {
-        self.clickable_ranges = ranges;
+        if !spans.iter().any(|span| span.kind == InlineKind::Link) {
+            return self;
+        }
+        let Some(row) = interaction.document.projection.rows.get(self.row) else {
+            return self;
+        };
+        let target = crate::preview::source_action_target(&interaction.document, row);
+        let interaction = interaction.clone();
+        self.on_double_click(spans, move |destination, window, cx| {
+            (interaction.dispatch)(
+                crate::preview::PreviewAction::OpenLink {
+                    target: target.clone(),
+                    destination,
+                },
+                interaction.panel.clone(),
+                window,
+                cx,
+            );
+        })
+    }
+
+    fn on_double_click(
+        mut self,
+        spans: Arc<[InlineSpan]>,
+        listener: impl Fn(Arc<str>, &mut Window, &mut App) + 'static,
+    ) -> Self {
+        self.inline_spans = Some(spans);
         self.click_listener = Some(Box::new(listener));
         self
     }
@@ -284,13 +313,13 @@ impl Element for SelectableReadingText {
         let hitbox = &state.hitbox;
         let text_bounds = state.text_bounds;
 
-        let hovered_index = layout.index_for_position(window.mouse_position()).ok();
         if hitbox.is_hovered(window)
-            && hovered_index.is_some_and(|index| {
-                self.clickable_ranges
-                    .iter()
-                    .any(|range| range.contains(&index))
-            })
+            && link_at_position(
+                &layout,
+                self.inline_spans.as_deref().unwrap_or_default(),
+                window.mouse_position(),
+            )
+            .is_some()
         {
             window.set_cursor_style(CursorStyle::PointingHand, hitbox);
         } else {
@@ -322,9 +351,26 @@ impl Element for SelectableReadingText {
 
         let move_panel = self.panel.clone();
         let move_layout = layout.clone();
-        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
-            if phase != DispatchPhase::Bubble
-                || !event.dragging()
+        let move_hitbox = hitbox.clone();
+        let spans = self.inline_spans.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            if !event.dragging()
+                && move_hitbox.is_hovered(window)
+                && let Some(target) = link_at_position(
+                    &move_layout,
+                    spans.as_deref().unwrap_or_default(),
+                    event.position,
+                )
+            {
+                move_panel.update(cx, |panel, cx| {
+                    panel.hover_link(Some(target.clone()), cx);
+                });
+                cx.stop_propagation();
+            }
+            if !event.dragging()
                 || event.position.y < interaction_bounds.top()
                 || event.position.y > interaction_bounds.bottom()
                 || (restrict_drag_to_bounds && !bounds.contains(&event.position))
@@ -343,7 +389,7 @@ impl Element for SelectableReadingText {
         let up_panel = self.panel.clone();
         let up_layout = layout.clone();
         let up_hitbox = hitbox.clone();
-        let ranges = std::mem::take(&mut self.clickable_ranges);
+        let spans = self.inline_spans.clone();
         let listener = self.click_listener.take();
         window.on_mouse_event(move |event: &MouseUpEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble
@@ -370,14 +416,14 @@ impl Element for SelectableReadingText {
             if event.click_count != 2 || suppress_click || !up_hitbox.is_hovered(window) {
                 return;
             }
-            let local_offset = offset.saturating_sub(text_offset);
-            if let Some(index) = ranges
-                .iter()
-                .position(|range| range.contains(&local_offset))
-                && let Some(listener) = listener.as_ref()
+            if let Some(target) = link_at_position(
+                &up_layout,
+                spans.as_deref().unwrap_or_default(),
+                event.position,
+            ) && let Some(listener) = listener.as_ref()
             {
                 cx.stop_propagation();
-                listener(index, window, cx);
+                listener(target.clone(), window, cx);
             }
         });
 
@@ -416,6 +462,47 @@ fn nearest_index(layout: &ReadingTextLayout, position: gpui::Point<Pixels>) -> u
     match layout.index_for_position(position) {
         Ok(index) | Err(index) => index.min(layout.len()),
     }
+}
+
+fn link_at_position<'a>(
+    layout: &ReadingTextLayout,
+    spans: &'a [InlineSpan],
+    position: gpui::Point<Pixels>,
+) -> Option<&'a Arc<str>> {
+    let bounds = layout.bounds();
+    if !bounds.contains(&position) {
+        return None;
+    }
+    let line_height = f32::from(layout.line_height());
+    let line_at = |y: Pixels| (f32::from(y - bounds.top()) / line_height).floor() as usize;
+    let line = line_at(position.y);
+    spans
+        .iter()
+        .find(|link| {
+            if link.kind != InlineKind::Link {
+                return false;
+            }
+            let Some(start) = layout.position_for_index(link.range.start) else {
+                return false;
+            };
+            let Some(end) = layout.position_for_index(link.range.end) else {
+                return false;
+            };
+            let first_line = line_at(start.y);
+            let last_line = line_at(end.y);
+            let left = if line == first_line {
+                start.x
+            } else {
+                bounds.left()
+            };
+            let right = if line == last_line {
+                end.x
+            } else {
+                bounds.right()
+            };
+            first_line <= line && line <= last_line && position.x >= left && position.x < right
+        })
+        .and_then(|span| span.target.as_ref())
 }
 
 fn nearest_document_index(
@@ -590,6 +677,59 @@ mod tests {
     use crate::{document::DocumentSnapshot, preview::ReadingPreviewPanel};
 
     use super::{ReadingRowBounds, ReadingRowScope, SelectableReadingText};
+
+    #[gpui::test]
+    fn wrapped_reading_link_hit_testing_includes_the_last_half_of_each_glyph(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let caption = "Reference 文档 with a caption that wraps across several lines";
+        let text = crate::document_preview::RecordedText::new(format!("{caption} tail"));
+        let layout = super::ReadingTextLayout::Uniform(text.layout().clone());
+        let links = [super::InlineSpan {
+            kind: super::InlineKind::Link,
+            source: 0..caption.len(),
+            range: 0..caption.len(),
+            target: Some("https://example.org/reference".into()),
+        }];
+        let view = cx.add_empty_window();
+        view.draw(
+            point(px(30.0), px(40.0)),
+            size(px(140.0), px(300.0)),
+            move |_, _| {
+                div()
+                    .w(px(140.0))
+                    .text_size(px(14.0))
+                    .line_height(px(23.8))
+                    .child(text)
+                    .into_any_element()
+            },
+        );
+        for (index, character) in caption.char_indices() {
+            if character.is_whitespace() {
+                continue;
+            }
+            let start = layout.position_for_index(index).unwrap();
+            let end = layout
+                .position_for_index(index + character.len_utf8())
+                .unwrap();
+            let x = if start.y == end.y {
+                start.x + (end.x - start.x) * 0.9
+            } else {
+                start.x + px(1.0)
+            };
+            let point = point(x, start.y + layout.line_height() * 0.5);
+            assert_eq!(
+                super::link_at_position(&layout, &links, point).map(|target| target.as_ref()),
+                Some("https://example.org/reference"),
+                "missing glyph {character:?} at {point:?}"
+            );
+        }
+        let end = layout.position_for_index(caption.len()).unwrap();
+        assert!(
+            super::link_at_position(&layout, &links, point(end.x + px(2.0), end.y + px(5.0)))
+                .is_none()
+        );
+    }
 
     #[gpui::test]
     fn drag_selects_rendered_text(cx: &mut gpui::TestAppContext) {
@@ -1004,7 +1144,12 @@ mod tests {
                             None,
                         )
                         .on_double_click(
-                            std::iter::once(0..6).collect(),
+                            Arc::from([super::InlineSpan {
+                                kind: super::InlineKind::Link,
+                                source: 0..6,
+                                range: 0..6,
+                                target: Some("https://example.org/".into()),
+                            }]),
                             {
                                 let clicked = render_clicked.clone();
                                 move |_, _, _| clicked.set(true)

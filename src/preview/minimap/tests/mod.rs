@@ -705,12 +705,8 @@ fn display_run_slices_rebase_inline_and_syntax_ranges() {
         inline_spans: Arc::from([InlineSpan {
             source: 2..8,
             range: 2..8,
-            kind: InlineKind::Bold,
-            target: None,
-        }]),
-        links: Arc::from([super::super::display_map::InlineLink {
-            range: 2..8,
-            destination: "target".into(),
+            kind: InlineKind::Link,
+            target: Some("target".into()),
         }]),
         code_spans: Arc::from([CodeHighlightSpan {
             start: 4,
@@ -721,8 +717,7 @@ fn display_run_slices_rebase_inline_and_syntax_ranges() {
     let sliced = slice_display_runs(&runs, 5..9);
     assert_eq!(sliced.text.as_ref(), "5678");
     assert_eq!(sliced.inline_spans[0].range, 0..3);
-    assert_eq!(sliced.links[0].range, 0..3);
-    assert_eq!(sliced.links[0].destination.as_ref(), "target");
+    assert_eq!(sliced.inline_spans[0].target.as_deref(), Some("target"));
     assert_eq!(
         (sliced.code_spans[0].start, sliced.code_spans[0].end),
         (0, 4)
@@ -735,7 +730,6 @@ fn empty_runs(text: &'static str) -> DisplayRuns {
         source_segments: Arc::from([]),
         text: text.into(),
         inline_spans: Arc::from([]),
-        links: Arc::from([]),
         code_spans: Arc::from([]),
     }
 }
@@ -1776,7 +1770,6 @@ fn inline_display_runs_cover_the_same_rendered_text() {
         source_segments: Arc::from([]),
         text: parsed.text.into(),
         inline_spans: parsed.spans.into(),
-        links: Arc::from([]),
         code_spans: Arc::from([]),
     };
     let mut base_font = font("Menlo");

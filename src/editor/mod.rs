@@ -853,6 +853,7 @@ impl SemanticEditor {
                     | DocumentEvent::Reloaded { .. }
                     | DocumentEvent::PathChanged { .. }
             ) {
+                this.hovered_link = None;
                 this.cancel_table_resize(cx);
                 this.dismiss_link_editor(cx);
                 let snapshot = Arc::new(this.session.read(cx).snapshot());

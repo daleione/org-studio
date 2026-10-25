@@ -1726,11 +1726,12 @@ impl SemanticEditor {
             self.source_run_hover = source_run_hover;
             cx.notify();
         }
-        let hovered_link = self
-            .link_at_position(event.position)
+        let hovered_link = (!event.dragging())
+            .then(|| self.link_at_position(event.position))
+            .flatten()
             .and_then(|index| self.link_hits.get(index))
             .map(|hit| (hit.line, hit.display_range.clone()));
-        if hovered_link.as_ref() != self.hovered_link.as_ref() {
+        if self.hovered_link != hovered_link {
             self.hovered_link = hovered_link;
             cx.notify();
         }
@@ -2021,6 +2022,7 @@ impl SemanticEditor {
     }
 
     pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
+        self.hovered_link = None;
         self.dismiss_table_actions(cx);
         self.dismiss_inline(cx);
         self.dismiss_todo(cx);
@@ -2383,6 +2385,9 @@ impl Render for SemanticEditor {
             }))
             .on_hover(cx.listener(|this, hovered: &bool, window, cx| {
                 if !hovered {
+                    if this.hovered_link.take().is_some() {
+                        cx.notify();
+                    }
                     if this.source_run_hover.take().is_some() {
                         cx.notify();
                     }

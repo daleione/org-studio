@@ -21,6 +21,14 @@ enum InternalLinkMode {
 }
 
 impl SemanticEditor {
+    pub(crate) fn hovered_link_target(&self) -> Option<Arc<str>> {
+        let (line, range) = self.hovered_link.as_ref()?;
+        self.link_hits
+            .iter()
+            .find(|hit| hit.line == *line && hit.display_range == *range)
+            .map(|hit| hit.meta.raw.clone())
+    }
+
     /// `C-c C-o` / `org-open-at-point` equivalent: opens the link under the caret.
     pub(crate) fn open_link_at_caret(&mut self, cx: &mut Context<Self>) {
         let Some(link) = self
@@ -365,6 +373,61 @@ mod link_tests {
         view.executor().advance_clock(Duration::from_millis(400));
         view.run_until_parked();
         view.read(|cx| assert!(editor.read(cx).inline_actions.popup.is_none()));
+    }
+
+    #[gpui::test]
+    fn editor_link_hover_updates_status_without_changing_source(cx: &mut TestAppContext) {
+        cx.update(init);
+        let directory = tempfile::tempdir().unwrap();
+        for (name, source, expected) in [
+            (
+                "guide.org",
+                "[[file:reference.org::*Overview][Reference]]\n",
+                "file:reference.org::*Overview",
+            ),
+            (
+                "guide.md",
+                "[Reference](reference.md#overview \"A title\")\n",
+                "reference.md#overview",
+            ),
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, source).unwrap();
+            let loaded = crate::preview::load_workspace_document(path, false).unwrap();
+            let (workspace, view) =
+                cx.add_window_view(|_, _| crate::app::WorkspaceWindow::with_split_layout(false));
+            workspace.update(view, |workspace, cx| {
+                workspace.generation = 1;
+                assert!(workspace.apply_load_result(1, Ok(loaded), cx));
+                cx.notify();
+            });
+            view.update(|window, cx| window.simulate_next_frame(cx));
+            view.run_until_parked();
+            let editor = view.read(|cx| {
+                workspace
+                    .read(cx)
+                    .editor(crate::app::PaneSide::Left)
+                    .unwrap()
+            });
+            let selection = view.read(|cx| editor.read(cx).selection);
+            let position = link_position(&editor, 0, 2, view);
+            view.simulate_mouse_move(position, None, Modifiers::default());
+            view.run_until_parked();
+            view.read(|cx| {
+                let status = workspace.read(cx).status_snapshot(cx).unwrap();
+                assert_eq!(status.link_target.as_deref(), Some(expected), "{name}");
+                assert_eq!(editor.read(cx).selection, selection);
+                let snapshot = editor.read(cx).snapshot(cx);
+                assert_eq!(
+                    snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+                    source
+                );
+            });
+            assert!(view.debug_bounds("status-1-link-target").is_some());
+            view.simulate_mouse_move(gpui::point(px(2.0), px(2.0)), None, Modifiers::default());
+            view.run_until_parked();
+            assert!(view.debug_bounds("status-1-link-target").is_none());
+        }
     }
 
     #[gpui::test]

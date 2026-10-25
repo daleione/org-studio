@@ -24,6 +24,8 @@ mod host;
 mod icons;
 pub(crate) mod shell;
 use icons::{StatusIcon, status_icon};
+#[cfg(test)]
+mod link_tests;
 mod model;
 mod popover;
 #[cfg(test)]
@@ -820,6 +822,10 @@ pub(crate) fn render_status_line_content(
 ) -> gpui::AnyElement {
     let theme = current_theme();
     let pane_id = snapshot.pane.0;
+    let link_target = snapshot
+        .link_target
+        .as_deref()
+        .filter(|_| snapshot.transient.is_none() && echo.is_none());
     let mode_colors = mode_colors(snapshot.dirty);
     let mode = status_button(entity.clone(), pane_id, StatusSegment::Mode)
         .mx(px(8.0))
@@ -899,7 +905,7 @@ pub(crate) fn render_status_line_content(
             )
         })
         .when(
-            layout.outline != Variant::Hidden && echo.is_none(),
+            layout.outline != Variant::Hidden && echo.is_none() && link_target.is_none(),
             |left| {
                 let outline = snapshot
                     .outline
@@ -947,11 +953,24 @@ pub(crate) fn render_status_line_content(
         .px(px(5.0))
         .flex()
         .items_center()
-        .justify_center()
+        .when(link_target.is_none(), |center| center.justify_center())
         .overflow_hidden()
         .whitespace_nowrap()
         .text_ellipsis()
         .text_color(rgb(center_color))
+        .when_some(link_target, |center, target| {
+            center.child(
+                div()
+                    .debug_selector(move || format!("status-{pane_id}-link-target"))
+                    .min_w_0()
+                    .w_full()
+                    .overflow_hidden()
+                    .whitespace_nowrap()
+                    .text_ellipsis_middle()
+                    .text_color(rgb(status_colors().foreground))
+                    .child_text(target.to_owned()),
+            )
+        })
         .when_some(snapshot.transient.as_ref(), |center, message| {
             center
                 .gap(px(7.0))
@@ -1321,6 +1340,7 @@ impl WorkspaceWindow {
             dirty: false,
             reading_style: None,
             outline: Some(self.agenda.mode_name().into()),
+            link_target: None,
             position: Some(StatusPosition::AgendaSelection { selected, total }),
             progress: (progress < 100).then_some(progress),
             statistics: Some(
@@ -1659,7 +1679,7 @@ fn info_text(
 mod tests {
     use super::*;
 
-    fn snapshot() -> StatusLineSnapshot {
+    pub(super) fn snapshot() -> StatusLineSnapshot {
         StatusLineSnapshot {
             pane: PaneId(7),
             language: Language::Chinese,
@@ -1668,6 +1688,7 @@ mod tests {
             dirty: false,
             reading_style: Some(crate::preview::PreviewStyleId::Base),
             outline: Some("性能优化 / Minimap".into()),
+            link_target: None,
             position: Some(StatusPosition::ReadingSource {
                 line: 259,
                 total_lines: 9_842,

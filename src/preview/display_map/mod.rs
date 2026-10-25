@@ -89,14 +89,7 @@ pub(crate) struct DisplayRuns {
     pub(crate) source_segments: Arc<[(crate::document::ByteRange, Range<usize>)]>,
     pub(crate) text: SharedString,
     pub(crate) inline_spans: Arc<[InlineSpan]>,
-    pub(crate) links: Arc<[InlineLink]>,
     pub(crate) code_spans: Arc<[CodeHighlightSpan]>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct InlineLink {
-    pub(crate) range: Range<usize>,
-    pub(crate) destination: Arc<str>,
 }
 
 pub(crate) struct PreviewDisplayMap {
@@ -744,28 +737,12 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
             | PreviewLineKind::Quote
     );
     let mapping_source = source.clone();
-    let (text, inline_spans, links): (SharedString, Arc<[InlineSpan]>, Arc<[InlineLink]>) =
-        if parse_inline {
-            let parsed = parse_document_inline(model.format, &source);
-            let links = parsed
-                .spans
-                .iter()
-                .filter(|span| span.kind == InlineKind::Link)
-                .filter_map(|span| {
-                    source
-                        .get(span.source.clone())
-                        .and_then(|raw| link_destination(model.format, raw))
-                        .map(|destination| InlineLink {
-                            range: span.range.clone(),
-                            destination: destination.into(),
-                        })
-                })
-                .collect::<Vec<_>>()
-                .into();
-            (parsed.text.into(), parsed.spans.into(), links)
-        } else {
-            (source.into(), Arc::from([]), Arc::from([]))
-        };
+    let (text, inline_spans): (SharedString, Arc<[InlineSpan]>) = if parse_inline {
+        let parsed = parse_document_inline(model.format, &source);
+        (parsed.text.into(), parsed.spans.into())
+    } else {
+        (source.into(), Arc::from([]))
+    };
     let code_spans = model
         .projection
         .rows
@@ -786,26 +763,8 @@ pub(crate) fn materialize_runs(model: &PreviewDisplayMap, row: usize) -> Display
         source_segments: source_segments.into(),
         text,
         inline_spans,
-        links,
         code_spans,
     }
-}
-
-fn link_destination(format: DocumentFormat, raw: &str) -> Option<&str> {
-    match format {
-        DocumentFormat::Org => {
-            let inside = raw.strip_prefix("[[")?.strip_suffix("]]")?;
-            Some(inside.split_once("][").map_or(inside, |(target, _)| target))
-        }
-        DocumentFormat::Markdown => {
-            if let Some(destination) = raw.strip_prefix('<').and_then(|raw| raw.strip_suffix('>')) {
-                return (!destination.is_empty()).then_some(destination);
-            }
-            let (_, destination) = raw.rsplit_once("](")?;
-            destination.strip_suffix(')')
-        }
-    }
-    .filter(|destination| !destination.is_empty())
 }
 
 #[cfg(test)]
@@ -890,16 +849,6 @@ pub(crate) fn slice_display_runs(runs: &DisplayRuns, range: Range<usize>) -> Dis
                 let mut span = span.clone();
                 span.range = span.range.start.max(start) - start..span.range.end.min(end) - start;
                 span
-            })
-            .collect::<Vec<_>>()
-            .into(),
-        links: runs
-            .links
-            .iter()
-            .filter(|link| link.range.start < end && link.range.end > start)
-            .map(|link| InlineLink {
-                range: link.range.start.max(start) - start..link.range.end.min(end) - start,
-                destination: link.destination.clone(),
             })
             .collect::<Vec<_>>()
             .into(),
@@ -1022,27 +971,6 @@ pub(crate) fn minimap_text_runs(
         runs,
         &crate::typography::font_overrides(&line.text, role, &overrides),
     )
-}
-
-#[cfg(test)]
-mod link_tests {
-    use super::*;
-
-    #[test]
-    fn extracts_org_markdown_and_autolink_destinations() {
-        assert_eq!(
-            link_destination(DocumentFormat::Org, "[[file:notes.org][Notes]]"),
-            Some("file:notes.org")
-        );
-        assert_eq!(
-            link_destination(DocumentFormat::Markdown, "[Notes](notes.md#part)"),
-            Some("notes.md#part")
-        );
-        assert_eq!(
-            link_destination(DocumentFormat::Markdown, "<https://example.com>"),
-            Some("https://example.com")
-        );
-    }
 }
 
 /// Only unchanged text receives an exact mapping. Ambiguous/transformed segments stay unmapped.

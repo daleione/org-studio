@@ -47,6 +47,7 @@ pub(crate) struct StatusLineSnapshot {
     pub(crate) dirty: bool,
     pub(crate) reading_style: Option<PreviewStyleId>,
     pub(crate) outline: Option<Arc<str>>,
+    pub(crate) link_target: Option<Arc<str>>,
     pub(crate) position: Option<StatusPosition>,
     pub(crate) progress: Option<u8>,
     pub(crate) statistics: Option<Arc<str>>,

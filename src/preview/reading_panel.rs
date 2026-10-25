@@ -61,6 +61,8 @@ pub(crate) struct ReadingPreviewPanel {
     copy_feedback_request: u64,
     copy_feedback_task: Option<gpui::Task<()>>,
     text_selection: ReadingTextSelection,
+    // A pointer target is valid only in the viewport where it was hit.
+    hovered_link: Option<(Arc<str>, ListOffset)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -201,6 +203,7 @@ impl ReadingPreviewPanel {
             search_current: None,
             search_origin: None,
             text_selection: ReadingTextSelection::default(),
+            hovered_link: None,
         }
     }
 
@@ -276,6 +279,28 @@ impl ReadingPreviewPanel {
 
     pub(crate) fn selected_text(&self) -> Option<String> {
         selected_reading_text(&self.document, &self.visible_rows, self.text_selection)
+    }
+
+    pub(crate) fn hovered_link_target(&self) -> Option<Arc<str>> {
+        let (target, hovered_scroll) = self.hovered_link.as_ref()?;
+        let scroll = self.list_state.logical_scroll_top();
+        (scroll.item_ix == hovered_scroll.item_ix
+            && scroll.offset_in_item == hovered_scroll.offset_in_item)
+            .then(|| target.clone())
+    }
+
+    pub(in crate::preview) fn hover_link(
+        &mut self,
+        target: Option<Arc<str>>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.hovered_link.as_ref().map(|(target, _)| target) == target.as_ref()
+            && self.hovered_link_target().as_ref() == target.as_ref()
+        {
+            return;
+        }
+        self.hovered_link = target.map(|target| (target, self.list_state.logical_scroll_top()));
+        cx.notify();
     }
 
     pub(crate) fn change_style(
@@ -489,6 +514,7 @@ impl ReadingPreviewPanel {
     }
 
     pub(crate) fn bump_geometry_revision(&mut self) {
+        self.hovered_link = None;
         self.geometry_revision = self.geometry_revision.wrapping_add(1);
     }
 
@@ -513,6 +539,7 @@ impl ReadingPreviewPanel {
         style: super::PreviewStyle,
         cx: &mut Context<Self>,
     ) {
+        self.hover_link(None, cx);
         self.cancel_plot_resize(cx);
         self.plot_source = None;
         self.plot_signature = None;
