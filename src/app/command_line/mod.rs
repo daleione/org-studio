@@ -11,7 +11,7 @@ use crate::{
     },
     document::{DocumentId, Revision, Selection},
 };
-use catalog::Entry;
+use catalog::{Candidate, Entry};
 use gpui::{AppContext, Context, Entity, KeyDownEvent, Modifiers, Subscription, Task, Window};
 use std::time::{Duration, Instant};
 
@@ -51,7 +51,7 @@ struct Session {
     _subscription: Subscription,
     query: String,
     all: Vec<Entry>,
-    candidates: Vec<Entry>,
+    candidates: Vec<Candidate>,
     selected: usize,
     scroll_remainder: f32,
     visible_limit: usize,
@@ -84,7 +84,7 @@ impl Session {
     }
 
     fn complete(&mut self, index: usize, history: &[String], cx: &mut gpui::App) {
-        if let Some(entry) = self.candidates.get(index) {
+        if let Some(Candidate { entry, .. }) = self.candidates.get(index) {
             let value = if entry.input == "goto-line" {
                 "goto-line ".to_owned()
             } else {
@@ -224,7 +224,8 @@ impl WorkspaceWindow {
                 InputEvent::Command { key, modifiers } => {
                     this.command_input_key(key, *modifiers, cx)
                 }
-                InputEvent::MetricsChanged => cx.notify(),
+                // The command shell has a fixed width; text metrics do not change its layout.
+                InputEvent::MetricsChanged => {}
             }
         });
         self.command_line.next_id = self.command_line.next_id.wrapping_add(1);
@@ -380,19 +381,7 @@ impl WorkspaceWindow {
             return false;
         }
         if self.command_line_is_open() {
-            if m.control
-                && !m.alt
-                && !m.platform
-                && !m.shift
-                && let Ok(number @ 1..=9) = key.parse::<usize>()
-            {
-                if let Some(s) = self.command_line.session.as_ref()
-                    && number <= s.visible_limit
-                {
-                    self.activate_command_candidate(s.visible_start() + number - 1, cx);
-                }
-                cx.stop_propagation();
-            } else if (m.platform && key == "f") || (m.control && matches!(key, "s" | "r")) {
+            if (m.platform && key == "f") || (m.control && matches!(key, "s" | "r")) {
                 self.open_search(m.control, key == "r", false, cx);
                 cx.stop_propagation();
             } else if key == "escape" || (m.control && key == "g") {

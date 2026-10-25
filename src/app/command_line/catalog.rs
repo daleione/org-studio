@@ -1,9 +1,15 @@
 use crate::{
-    command::{CommandKey, CommandRegistry, TABLE_COMMANDS, TableEdit, TableScope},
+    command::{
+        CommandDescriptor, CommandKey, CommandRegistry, TABLE_COMMANDS, TableEdit, TableScope,
+    },
     document::DocumentFormat,
     i18n::Language,
     preview::*,
 };
+use std::ops::Range;
+
+#[cfg(test)]
+mod tests;
 
 #[derive(Clone, Debug)]
 pub(super) struct Entry {
@@ -11,7 +17,127 @@ pub(super) struct Entry {
     pub input: String,
     pub description: String,
     pub scope: Option<TableScope>,
-    words: String,
+    names: Vec<String>,
+    qualified_input: String,
+}
+
+impl Entry {
+    fn new<'a>(
+        command: &'a CommandDescriptor,
+        input: &str,
+        description: impl Into<String>,
+        scope: Option<TableScope>,
+        labels: [&str; 2],
+        extra_aliases: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        // An alias keeps this entry's arguments so scoped invocations remain distinct.
+        let arguments = input.find(char::is_whitespace).map_or("", |i| &input[i..]);
+        let names = labels
+            .into_iter()
+            .map(str::to_owned)
+            .chain(
+                command
+                    .aliases
+                    .iter()
+                    .map(|alias| alias.as_str())
+                    .chain(extra_aliases)
+                    .map(|alias| format!("{alias}{arguments}")),
+            )
+            .filter(|name| name != input)
+            .collect();
+        Self {
+            key: command.key,
+            input: input.into(),
+            description: description.into(),
+            scope,
+            names,
+            qualified_input: format!("{}{arguments}", command.name.as_str()),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct Candidate {
+    pub entry: Entry,
+    pub input_match: Option<Range<usize>>,
+    pub alternative_match: Option<TextMatch>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct TextMatch {
+    pub text: String,
+    pub range: Range<usize>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchKind {
+    Exact,
+    Prefix,
+    Substring,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum MatchSource {
+    Input,
+    Name,
+    Identifier,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct MatchRank {
+    kind: MatchKind,
+    source: MatchSource,
+    start: usize,
+}
+
+fn match_text(text: &str, query: &str, source: MatchSource) -> Option<(MatchRank, Range<usize>)> {
+    // ASCII folding preserves UTF-8 byte offsets for the displayed text, including Chinese.
+    let start = text.to_ascii_lowercase().find(query)?;
+    let kind = if text.len() == query.len() {
+        MatchKind::Exact
+    } else if start == 0 {
+        MatchKind::Prefix
+    } else {
+        MatchKind::Substring
+    };
+    Some((
+        MatchRank {
+            kind,
+            source,
+            start,
+        },
+        start..start + query.len(),
+    ))
+}
+
+fn match_entry(entry: &Entry, query: &str) -> Option<(MatchRank, Candidate)> {
+    let input_match = match_text(&entry.input, query, MatchSource::Input);
+    let alternatives = entry.names.iter().filter_map(|text| {
+        match_text(text, query, MatchSource::Name).map(|(rank, range)| (rank, text, range))
+    });
+    // Internal identifiers remain executable, but namespace fragments are not search names.
+    let identifier = (query.split_whitespace().next()
+        == entry.qualified_input.split_whitespace().next())
+    .then(|| match_text(&entry.qualified_input, query, MatchSource::Identifier))
+    .flatten()
+    .map(|(rank, range)| (rank, &entry.qualified_input, range));
+    let (rank, text, range) = input_match
+        .iter()
+        .map(|(rank, range)| (*rank, &entry.input, range.clone()))
+        .chain(alternatives)
+        .chain(identifier)
+        .min_by_key(|(rank, _, _)| *rank)?;
+    Some((
+        rank,
+        Candidate {
+            entry: entry.clone(),
+            input_match: input_match.map(|(_, range)| range),
+            alternative_match: (rank.source != MatchSource::Input).then(|| TextMatch {
+                text: text.clone(),
+                range,
+            }),
+        },
+    ))
 }
 
 pub(super) struct CatalogContext {
@@ -167,19 +293,14 @@ pub(super) fn entries(commands: &CommandRegistry, context: CatalogContext) -> Ve
             None => descriptor.description.as_ref(),
         }
         .to_owned();
-        let aliases = descriptor
-            .aliases
-            .iter()
-            .map(|a| a.as_str())
-            .collect::<Vec<_>>()
-            .join(" ");
-        Some(Entry {
-            key: descriptor.key,
-            input: input.into(),
+        Some(Entry::new(
+            descriptor,
+            input,
             description,
             scope,
-            words: format!("{input} {zh} {en} {id} {aliases}").to_lowercase(),
-        })
+            if chinese { [zh, en] } else { [en, zh] },
+            (input == "save").then_some("w"),
+        ))
     });
     let org = crate::command::ORG_EDITOR_COMMANDS
         .iter()
@@ -187,21 +308,25 @@ pub(super) fn entries(commands: &CommandRegistry, context: CatalogContext) -> Ve
             format == Some(DocumentFormat::Org) && editing && (!read_only || !spec.edits_source())
         })
         .filter_map(|spec| {
+            let descriptor = commands.descriptor(commands.key(spec.name)?)?;
             let input = spec.aliases[0];
             let description = language.text(spec.label).to_owned();
-            Some(Entry {
-                key: commands.key(spec.name)?,
-                input: input.to_owned(),
+            Some(Entry::new(
+                descriptor,
+                input,
                 description,
-                scope: None,
-                words: format!(
-                    "{input} {} {} {}",
-                    spec.name,
-                    Language::Chinese.text(spec.label),
-                    Language::English.text(spec.label)
-                )
-                .to_lowercase(),
-            })
+                None,
+                [
+                    language.text(spec.label),
+                    if chinese {
+                        Language::English
+                    } else {
+                        Language::Chinese
+                    }
+                    .text(spec.label),
+                ],
+                [],
+            ))
         });
     standard.chain(org).collect()
 }
@@ -219,92 +344,106 @@ pub(super) fn table_entries(
         .iter()
         .filter(|spec| available.contains(&spec.edit))
         .filter_map(|spec| {
-            Some(Entry {
-                key: commands.key(spec.name)?,
-                input: spec.alias.into(),
-                description: if language == Language::Chinese {
+            let descriptor = commands.descriptor(commands.key(spec.name)?)?;
+            Some(Entry::new(
+                descriptor,
+                spec.alias,
+                if language == Language::Chinese {
                     spec.zh
                 } else {
                     spec.en
-                }
-                .into(),
-                scope: None,
-                words: format!("{} {} {} {}", spec.name, spec.alias, spec.zh, spec.en)
-                    .to_lowercase(),
-            })
+                },
+                None,
+                if language == Language::Chinese {
+                    [spec.zh, spec.en]
+                } else {
+                    [spec.en, spec.zh]
+                },
+                [],
+            ))
         })
         .collect()
 }
 
-pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<Entry> {
-    let query = normalize(query).to_lowercase();
-    let query = if let Some(spec) = TABLE_COMMANDS
-        .iter()
-        .find(|spec| query.split_whitespace().next() == Some(spec.name))
-    {
-        format!("{}{}", spec.alias, &query[spec.name.len()..])
-    } else {
-        query
+pub(super) fn candidates(all: &[Entry], query: &str, history: &[String]) -> Vec<Candidate> {
+    profiling::scope!("CommandPalette::filter");
+    let query = normalize(query).to_ascii_lowercase();
+    let history_position = |entry: &Entry| {
+        history
+            .iter()
+            .position(|h| {
+                h == &entry.input || (entry.input == "goto-line" && h.starts_with("goto-line "))
+            })
+            .unwrap_or(usize::MAX)
     };
-    let query = if let Some(arguments) = query.strip_prefix("org-studio.table.align") {
-        format!("table-align{arguments}")
-    } else if let Some(arguments) = query.strip_prefix("org-studio.document.goto-line") {
-        format!("goto-line{arguments}")
-    } else if query == "w" {
-        "save".to_owned()
-    } else {
-        query
-    };
-    // Preserve arguments when completing or selecting a parameterized command.
+    if query.is_empty() {
+        let mut entries = all.iter().collect::<Vec<_>>();
+        entries.sort_by_key(|entry| history_position(entry));
+        return entries
+            .into_iter()
+            .map(|entry| Candidate {
+                entry: entry.clone(),
+                input_match: None,
+                alternative_match: None,
+            })
+            .collect();
+    }
     let command = query.split_whitespace().next().unwrap_or("");
-    if matches!(command, "goto-line" | "table-sort") {
+    let canonical = all
+        .iter()
+        .find(|entry| entry.qualified_input.split_whitespace().next() == Some(command))
+        .and_then(|entry| entry.input.split_whitespace().next())
+        .or_else(|| {
+            TABLE_COMMANDS
+                .iter()
+                .find(|spec| command == spec.name)
+                .map(|spec| spec.alias)
+        })
+        .unwrap_or(command);
+    // Preserve arguments when completing or selecting a parameterized command.
+    if matches!(canonical, "goto-line" | "table-sort") {
         return all
             .iter()
-            .filter(|entry| entry.input == command)
+            .filter(|entry| entry.input == canonical)
             .cloned()
             .map(|mut entry| {
-                entry.input = query.clone();
-                entry
+                entry.input = format!("{canonical}{}", &query[command.len()..]);
+                Candidate {
+                    input_match: (command == canonical).then_some(0..entry.input.len()),
+                    alternative_match: (command != canonical).then(|| TextMatch {
+                        text: query.clone(),
+                        range: 0..query.len(),
+                    }),
+                    entry,
+                }
             })
             .collect();
     }
     // An unavailable current-table command must not fall back to formatting the whole document.
-    if (query == "table-align" || TABLE_COMMANDS.iter().any(|spec| spec.alias == query))
-        && !all.iter().any(|entry| entry.input == query)
+    if query == command
+        && (canonical == "table-align" || TABLE_COMMANDS.iter().any(|spec| spec.alias == canonical))
+        && !all.iter().any(|entry| entry.input == canonical)
     {
         return Vec::new();
     }
     let mut found = all
         .iter()
-        .filter(|entry| {
-            query
-                .split_whitespace()
-                .all(|word| entry.words.contains(word))
-        })
-        .cloned()
+        .filter_map(|entry| match_entry(entry, &query))
         .collect::<Vec<_>>();
-    found.sort_by_key(|entry| {
+    found.sort_by_key(|(rank, candidate)| {
         (
-            entry.input != query,
-            if query.is_empty() {
-                history
-                    .iter()
-                    .position(|h| {
-                        h == &entry.input
-                            || (entry.input == "goto-line" && h.starts_with("goto-line "))
-                    })
-                    .unwrap_or(usize::MAX)
-            } else {
-                0
-            },
+            *rank,
+            candidate.entry.input.len(),
+            history_position(&candidate.entry),
         )
     });
-    found
+    found.into_iter().map(|(_, candidate)| candidate).collect()
 }
 
-/// Flags are syntax once a command is named. Never execute a fuzzy fallback for an invalid flag.
+/// Flags are syntax once a command is named. Invalid flags cannot fall back to another command.
 pub(super) fn validate(query: &str) -> Result<(), &'static str> {
-    let mut words = normalize(query).split_whitespace();
+    let query = normalize(query).to_ascii_lowercase();
+    let mut words = query.split_whitespace();
     let Some(command) = words.next() else {
         return Ok(());
     };
@@ -314,7 +453,7 @@ pub(super) fn validate(query: &str) -> Result<(), &'static str> {
             return Err("table-align [--all | --selection]");
         }
     } else if matches!(command, "table-sort" | "org-table-sort-lines") {
-        sort_edit(query)?;
+        sort_edit(&query)?;
     } else if (TABLE_COMMANDS
         .iter()
         .any(|spec| command == spec.name || command == spec.alias)
@@ -335,7 +474,11 @@ pub(super) fn validate(query: &str) -> Result<(), &'static str> {
 pub(super) fn sort_edit(input: &str) -> Result<TableEdit, &'static str> {
     let mut numeric = false;
     let mut reverse = false;
-    for flag in normalize(input).split_whitespace().skip(1) {
+    for flag in normalize(input)
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .skip(1)
+    {
         match flag {
             "--numeric" if !numeric => numeric = true,
             "--reverse" if !reverse => reverse = true,

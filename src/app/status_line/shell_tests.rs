@@ -6,6 +6,7 @@ fn request(kind: ShellKind, width: f32, height: f32) -> ShellRequest {
         pane: PaneSide::Left,
         available: 1000.,
         returning: false,
+        resize: ResizePolicy::Animated,
         target: ShellShape {
             width,
             height,
@@ -14,10 +15,45 @@ fn request(kind: ShellKind, width: f32, height: f32) -> ShellRequest {
         },
     }
 }
+
 fn returning(mut request: ShellRequest) -> ShellRequest {
     request.returning = true;
     request.target = ShellShape::status(request.available);
     request
+}
+
+#[test]
+fn live_content_resizes_immediately_while_opening_and_closing_still_animate() {
+    let start = Instant::now();
+    let mut shell = ShellHost::default();
+    let panel = ShellRequest {
+        resize: ResizePolicy::Immediate,
+        ..request(ShellKind::Command, 600., 280.)
+    };
+    assert!(shell.update(&[panel], start, true));
+    let typing = start + Duration::from_millis(80);
+    let before = shell.motion.sample(1000., typing).0;
+    assert!(shell.update(&[panel], typing, true));
+    assert_eq!(shell.motion.sample(1000., typing).0, before);
+    let filtered = ShellRequest {
+        target: ShellShape {
+            height: 120.,
+            expansion_height: 78.,
+            ..panel.target
+        },
+        ..panel
+    };
+    assert!(!shell.update(&[filtered], typing, true));
+    assert_eq!(shell.motion.sample(1000., typing).0, filtered.target);
+    let close = typing + Duration::from_millis(30);
+    assert!(shell.update(&[returning(filtered)], close, true));
+    assert_eq!(shell.motion.sample(1000., close).0, filtered.target);
+    assert!(!shell.update(
+        &[returning(filtered)],
+        close + Duration::from_millis(400),
+        true
+    ));
+    assert_eq!(shell.owner, None);
 }
 
 #[test]

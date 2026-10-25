@@ -55,13 +55,14 @@ fn table_command_aliases_flags_and_unavailable_exact_matches() {
     for query in [
         "table-sort --numeric --reverse",
         "org-table-sort-lines --numeric --reverse",
+        "org-studio.table.sort --numeric --reverse",
     ] {
         assert_eq!(catalog::validate(query), Ok(()));
         let found = catalog::candidates(&entries, query, &[]);
         assert_eq!(found.len(), 1);
-        assert_eq!(found[0].input, "table-sort --numeric --reverse");
+        assert_eq!(found[0].entry.input, "table-sort --numeric --reverse");
         assert_eq!(
-            catalog::sort_edit(&found[0].input),
+            catalog::sort_edit(&found[0].entry.input),
             Ok(TableEdit::Sort {
                 numeric: true,
                 reverse: true
@@ -83,6 +84,7 @@ fn table_command_aliases_flags_and_unavailable_exact_matches() {
     );
     assert!(catalog::candidates(&entries, "table-insert-row", &[]).is_empty());
     assert!(catalog::candidates(&entries, "org-table-insert-row", &[]).is_empty());
+    assert!(catalog::candidates(&entries, "org-studio.table.insert-row", &[]).is_empty());
 }
 
 #[gpui::test]
@@ -275,8 +277,8 @@ fn command_line_goto_line_arguments_and_read_only_availability() {
     for query in [":goto-line 123", "org-studio.document.goto-line 123"] {
         let candidates = catalog::candidates(&entries, query, &[]);
         assert_eq!(candidates.len(), 1);
-        assert_eq!(candidates[0].input, "goto-line 123");
-        assert_eq!(catalog::line_number(&candidates[0].input), Ok(123));
+        assert_eq!(candidates[0].entry.input, "goto-line 123");
+        assert_eq!(catalog::line_number(&candidates[0].entry.input), Ok(123));
     }
     for query in [
         "goto-line",
@@ -291,11 +293,13 @@ fn command_line_goto_line_arguments_and_read_only_availability() {
         assert!(catalog::line_number(query).is_err(), "{query}");
     }
     assert_eq!(
-        catalog::candidates(&entries, "行号", &[])[0].input,
+        catalog::candidates(&entries, "行号", &[])[0].entry.input,
         "goto-line"
     );
     assert_eq!(
-        catalog::candidates(&entries, "", &["goto-line 123".into()])[0].input,
+        catalog::candidates(&entries, "", &["goto-line 123".into()])[0]
+            .entry
+            .input,
         "goto-line"
     );
 }
@@ -312,7 +316,6 @@ fn command_line_goto_completion_waits_for_required_argument(cx: &mut gpui::TestA
         ("goto-line", "enter"),
         ("行号", "enter"),
         ("goto", "tab"),
-        ("goto", "ctrl-1"),
         ("goto", "click"),
     ] {
         cx.simulate_keystrokes("alt-x");
@@ -408,11 +411,11 @@ fn command_line_goto_line_moves_caret_and_rejects_invalid_input(cx: &mut gpui::T
             );
         });
     }
-    // The final empty line and first line are valid; numbered execution keeps arguments.
+    // The final empty line and first line are valid; execution keeps arguments.
     for (input, expected_line) in [("goto-line 152", 151), ("goto-line 1", 0)] {
         cx.simulate_keystrokes("cmd-a");
         cx.simulate_input(input);
-        cx.simulate_keystrokes("ctrl-1");
+        cx.simulate_keystrokes("enter");
         cx.run_until_parked();
         w.update(cx, |w, cx| {
             assert!(!w.command_line_is_open());
@@ -488,9 +491,7 @@ fn command_line_goto_line_reveals_preview_in_active_pane(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
-fn command_line_number_shortcuts_follow_visible_rows_and_preserve_digit_input(
-    cx: &mut gpui::TestAppContext,
-) {
+fn command_line_digits_are_text_and_control_digits_do_not_execute(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     cx.update(|cx| cx.set_reduce_motion(true));
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
@@ -504,31 +505,14 @@ fn command_line_number_shortcuts_follow_visible_rows_and_preserve_digit_input(
         assert_eq!(w.command_line.session.as_ref().unwrap().query, "123");
         assert_eq!(source(doc.read(cx)), original);
     });
-    cx.simulate_keystrokes("cmd-a backspace ctrl-9");
+    cx.simulate_keystrokes("cmd-a backspace ctrl-1 ctrl-9");
     cx.run_until_parked();
     w.update(cx, |w, cx| {
-        let s = w.command_line.session.as_mut().unwrap();
+        let s = w.command_line.session.as_ref().unwrap();
         assert!(s.query.is_empty());
         assert!(!s.execute_pending);
-        // Scroll the first candidate out of view: visible row 1 now means current table.
-        s.selected = s.visible_limit;
-        assert_eq!(s.candidates[s.visible_start()].input, "table-align");
-        cx.notify();
-    });
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("command-candidate-0").is_none());
-    assert!(cx.debug_bounds("command-candidate-number-1").is_some());
-    cx.simulate_keystrokes("ctrl-1");
-    cx.run_until_parked();
-    w.update(cx, |w, cx| {
-        assert_eq!(
-            source(doc.read(cx)),
-            "| a    | long |\n| wide | x    |\n\n|second|x|\n"
-        );
-        assert!(matches!(
-            w.command_line.session.as_ref().unwrap().phase,
-            Phase::Result { .. }
-        ));
+        assert!(matches!(s.phase, Phase::Input));
+        assert_eq!(source(doc.read(cx)), original);
     });
 }
 
@@ -682,7 +666,9 @@ fn command_line_align_all_is_one_undo_and_keeps_caret(cx: &mut gpui::TestAppCont
     cx.run_until_parked();
     w.update(cx, |w, _| {
         assert_eq!(
-            w.command_line.session.as_ref().unwrap().candidates[0].input,
+            w.command_line.session.as_ref().unwrap().candidates[0]
+                .entry
+                .input,
             "table-align --all"
         )
     });
@@ -798,13 +784,17 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
             crate::command::TableScope::Current,
         ),
     ] {
-        assert_eq!(catalog::candidates(&all, query, &[])[0].scope, Some(scope));
+        assert_eq!(
+            catalog::candidates(&all, query, &[])[0].entry.scope,
+            Some(scope)
+        );
     }
-    assert_eq!(catalog::candidates(&all, "w", &[])[0].input, "save");
+    assert_eq!(catalog::candidates(&all, "w", &[])[0].entry.input, "save");
     assert_eq!(
-        catalog::candidates(&all, "对齐 所有", &[])[0].input,
+        catalog::candidates(&all, "对齐所有", &[])[0].entry.input,
         "table-align --all"
     );
+    assert!(catalog::candidates(&all, "对齐 所有", &[]).is_empty());
     assert!(catalog::candidates(&all, "--selection", &[]).is_empty());
     let selected = catalog::entries(
         &commands,
@@ -817,7 +807,9 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
         },
     );
     assert_eq!(
-        catalog::candidates(&selected, "--selection", &[])[0].input,
+        catalog::candidates(&selected, "--selection", &[])[0]
+            .entry
+            .input,
         "table-align --selection"
     );
     let reading = catalog::entries(
@@ -856,7 +848,7 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
     assert!(
         catalog::candidates(&read_only, "", &["save".into()])
             .iter()
-            .all(|entry| entry.input != "save")
+            .all(|candidate| candidate.entry.input != "save")
     );
     assert!(catalog::validate("table-align --all --selection").is_err());
     assert!(catalog::validate("save --all").is_err());

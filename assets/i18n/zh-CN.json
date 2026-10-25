@@ -1,4 +1,5 @@
 {
+  "command.navigation_hint": "↑↓ 选择 · Tab 补全",
   "status.statistics.title": "文档统计",
   "status.statistics.characters_short": "字符",
   "status.statistics.characters": "字符数",

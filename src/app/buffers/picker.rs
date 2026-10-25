@@ -509,6 +509,7 @@ impl WorkspaceWindow {
             target,
             available,
             returning: self.buffers.returning,
+            resize: crate::app::status_line::shell::ResizePolicy::Animated,
         })
     }
 

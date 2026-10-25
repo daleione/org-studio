@@ -25,7 +25,7 @@ impl WorkspaceWindow {
             cx.notify();
             return;
         }
-        let Some(entry) = s.candidates.get(s.selected).cloned() else {
+        let Some(Candidate { entry, .. }) = s.candidates.get(s.selected).cloned() else {
             s.error = Some(no_match);
             cx.notify();
             return;

@@ -1,11 +1,11 @@
 use super::*;
 use crate::app::status_line::{
     self,
-    shell::{ShellKind, ShellRequest, ShellShape},
+    shell::{ResizePolicy, ShellKind, ShellRequest, ShellShape},
 };
 use crate::components::UiTextExt;
-use crate::typography::{ui_family, ui_px, ui_size};
-use gpui::{AnyElement, MouseButton, div, prelude::*, px, rgb};
+use crate::typography::{FontRole, styled_text, ui_family, ui_px, ui_size};
+use gpui::{AnyElement, HighlightStyle, MouseButton, div, prelude::*, px, rgb};
 
 const INPUT_HEIGHT: f32 = 46.;
 const DETAIL_HEIGHT: f32 = 26.;
@@ -45,6 +45,11 @@ impl WorkspaceWindow {
             pane,
             available,
             returning,
+            resize: if expanded {
+                ResizePolicy::Immediate
+            } else {
+                ResizePolicy::Animated
+            },
             target: if returning {
                 ShellShape::status(available)
             } else {
@@ -228,7 +233,7 @@ impl WorkspaceWindow {
             .or_else(|| {
                 s.candidates
                     .get(s.selected)
-                    .map(|entry| entry.description.clone())
+                    .map(|candidate| candidate.entry.description.clone())
             })
             .unwrap_or_else(|| {
                 self.command_text("没有匹配的命令", "No matching command")
@@ -308,10 +313,7 @@ impl WorkspaceWindow {
                             div()
                                 .text_size(ui_px(10.))
                                 .text_color(rgb(theme.foreground_dim))
-                                .child_text(format!(
-                                    "⌃1–{} · Tab",
-                                    s.candidates.len().min(s.visible_limit).max(1)
-                                )),
+                                .child_text(self.language.text("command.navigation_hint")),
                         )
                     })
                     .child(
@@ -345,11 +347,10 @@ impl WorkspaceWindow {
 fn candidate_row(
     s: &Session,
     index: usize,
-    entry: &Entry,
+    candidate: &Candidate,
     entity: Entity<WorkspaceWindow>,
 ) -> impl IntoElement {
     let theme = crate::theme::current_theme();
-    let begin = s.visible_start();
     let chosen = index == s.selected;
     let select = entity;
     div()
@@ -369,29 +370,51 @@ fn candidate_row(
         .hover(move |style| style.bg(rgb(if chosen { theme.selected } else { theme.hover })))
         .child(
             div()
-                .debug_selector(move || format!("command-candidate-number-{}", index - begin + 1))
-                .w(px(18.))
-                .flex_none()
-                .font_family(ui_family("Menlo"))
-                .text_size(ui_px(12.))
-                .text_color(rgb(theme.accent))
-                .child_text((index - begin + 1).to_string()),
-        )
-        .child(
-            div()
                 .flex_1()
                 .min_w_0()
                 .font_family(ui_family("Menlo"))
                 .text_size(ui_px(13.))
                 .text_ellipsis()
-                .child_text(entry.input.clone()),
+                .child(matched_text(
+                    &candidate.entry.input,
+                    candidate.input_match.as_ref(),
+                )),
         )
+        .when_some(candidate.alternative_match.as_ref(), |row, matched| {
+            row.child(
+                div()
+                    .debug_selector(move || format!("command-candidate-alternative-{index}"))
+                    .max_w(gpui::relative(0.45))
+                    .min_w_0()
+                    .text_size(ui_px(11.))
+                    .text_color(rgb(theme.foreground_dim))
+                    .text_ellipsis()
+                    .child(matched_text(&matched.text, Some(&matched.range))),
+            )
+        })
         .on_mouse_down(MouseButton::Left, move |_, _, cx| {
             cx.stop_propagation();
             select.update(cx, |w, cx| {
                 w.activate_command_candidate(index, cx);
             });
         })
+}
+
+fn matched_text(text: &str, range: Option<&std::ops::Range<usize>>) -> impl IntoElement {
+    let theme = crate::theme::current_theme();
+    styled_text(
+        text.to_owned().into(),
+        FontRole::Ui,
+        range.map(|range| {
+            (
+                range.clone(),
+                HighlightStyle {
+                    color: Some(rgb(theme.accent).into()),
+                    ..Default::default()
+                },
+            )
+        }),
+    )
 }
 
 fn close_button(entity: Entity<WorkspaceWindow>) -> impl IntoElement {

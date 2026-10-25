@@ -5,7 +5,7 @@ use gpui::{Context, Task, Window};
 
 use super::{
     ContentRoute, PaneSide, WorkspaceWindow,
-    status_line::shell::{ShellKind, ShellRequest, ShellShape},
+    status_line::shell::{ResizePolicy, ShellKind, ShellRequest, ShellShape},
 };
 use crate::{document::DocumentId, input::WhichKeyCandidate};
 
@@ -175,6 +175,7 @@ impl WorkspaceWindow {
             target,
             available,
             returning: p.returning,
+            resize: ResizePolicy::Animated,
         })
     }
 

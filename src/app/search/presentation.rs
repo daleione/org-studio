@@ -2,7 +2,7 @@ use super::{
     geometry::{BarLayout, ShellShape},
     session::Session,
 };
-use crate::app::status_line::shell::{ShellKind, ShellRequest};
+use crate::app::status_line::shell::{ResizePolicy, ShellKind, ShellRequest};
 use crate::typography::ui_size;
 use crate::{
     app::{PaneSide, PaneSurface},
@@ -211,6 +211,7 @@ impl crate::app::WorkspaceWindow {
             target,
             available,
             returning: p.returning(),
+            resize: ResizePolicy::Animated,
         })
     }
 }

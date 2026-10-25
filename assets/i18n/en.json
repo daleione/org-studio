@@ -1,4 +1,5 @@
 {
+  "command.navigation_hint": "↑↓ Select · Tab Complete",
   "status.statistics.title": "Document statistics",
   "status.statistics.characters_short": "chars",
   "status.statistics.characters": "Characters",

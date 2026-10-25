@@ -19,12 +19,19 @@ pub(crate) enum ShellKind {
 }
 
 #[derive(Clone, Copy)]
+pub(crate) enum ResizePolicy {
+    Animated,
+    Immediate,
+}
+
+#[derive(Clone, Copy)]
 pub(crate) struct ShellRequest {
     pub kind: ShellKind,
     pub pane: PaneSide,
     pub target: ShellShape,
     pub available: f32,
     pub returning: bool,
+    pub resize: ResizePolicy,
 }
 
 /// The statusline owns the animation; features only describe the content they need.
@@ -51,13 +58,23 @@ impl ShellHost {
             *self = Self::default();
             return false;
         };
+        let immediate_resize = matches!(request.resize, ResizePolicy::Immediate)
+            && !request.returning
+            && self.owns(request.kind, request.pane)
+            && self.motion.target.is_some_and(|target| {
+                target != request.target && target.content_opacity == request.target.content_opacity
+            });
         if self.pane.is_some_and(|pane| pane != request.pane) {
             self.motion = ShellMotion::default();
         }
         self.pane = Some(request.pane);
         self.owner = Some(request.kind);
-        self.motion
-            .update(request.target, request.available, now, animate);
+        self.motion.update(
+            request.target,
+            request.available,
+            now,
+            animate && !immediate_resize,
+        );
         let active = self.motion.sample(request.available, now).1;
         if request.returning && !active {
             self.owner = None;
