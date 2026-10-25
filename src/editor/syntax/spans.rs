@@ -97,6 +97,7 @@ impl EditorColorToken {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::editor) enum EditorSemanticWeight {
     #[default]
+    Inherit,
     Normal,
     Semibold,
     Bold,
@@ -160,11 +161,12 @@ pub(in crate::editor) fn runs_from_spans(
     // Apply the block face before inline overrides.
     match line_style.id {
         EditorStyleId::Heading(level) => {
-            base.font.weight = FontWeight::BOLD;
+            base.font.weight = line_style.metrics.font_weight;
             // JetBrains Mono substitutes `***` with a staggered asterism ligature.
             // Source headings must keep their level markers individually legible.
             base.font.features = gpui::FontFeatures::disable_ligatures();
-            base.color = rgb(theme.heading[(level.saturating_sub(1) as usize).min(3)]).into();
+            base.color =
+                rgb(theme.heading[level.saturating_sub(1) as usize % theme.heading.len()]).into();
         }
         EditorStyleId::CodeBoundary => {
             base.color = rgb(theme.meta).into();
@@ -214,7 +216,8 @@ pub(in crate::editor) fn runs_from_spans(
                     };
                 }
                 run.font.weight = match span.weight {
-                    EditorSemanticWeight::Normal => run.font.weight,
+                    EditorSemanticWeight::Inherit => run.font.weight,
+                    EditorSemanticWeight::Normal => FontWeight::NORMAL,
                     EditorSemanticWeight::Semibold => FontWeight::SEMIBOLD,
                     EditorSemanticWeight::Bold => FontWeight::BOLD,
                 };
@@ -295,17 +298,7 @@ pub(in crate::editor) fn semantic_spans(
     let document_language = language(path);
     let mut opaque_inline_ranges = Vec::new();
     if !verbatim {
-        // Heading markers are block syntax, not inline emphasis delimiters.
-        let inline_start = if matches!(line_style.id, EditorStyleId::Heading(_)) {
-            let trimmed = text.trim_start();
-            let marker = match document_language {
-                Language::Org => b'*',
-                Language::Markdown => b'#',
-            };
-            text.len() - trimmed.len() + trimmed.bytes().take_while(|byte| *byte == marker).count()
-        } else {
-            0
-        };
+        let inline_start = line_style.inline_start(path, text);
         let table_cells = if line_style.id == EditorStyleId::Table {
             let format = match document_language {
                 Language::Org => crate::document::DocumentFormat::Org,
@@ -504,7 +497,8 @@ pub(in crate::editor) fn semantic_spans(
             weight: match style.weight {
                 Some(FontWeight::BOLD) => EditorSemanticWeight::Bold,
                 Some(FontWeight::SEMIBOLD) => EditorSemanticWeight::Semibold,
-                _ => EditorSemanticWeight::Normal,
+                Some(FontWeight::NORMAL) => EditorSemanticWeight::Normal,
+                _ => EditorSemanticWeight::Inherit,
             },
             italic: style.font_style == Some(FontStyle::Italic),
             underline: style.underline,

@@ -113,15 +113,27 @@ fn hidden_spans_keep_transparency_and_text_when_styles_are_degraded() {
 #[test]
 fn rich_text_segments_preserve_color_emphasis_and_utf8_boundaries() {
     let text = "甲😀b";
-    let spans = [TextSpan {
-        bytes: 3..7,
-        color: Some(cosmic_text::Color::rgb(0x12, 0x34, 0x56)),
-        weight: TextWeight::Bold,
-        italic: true,
-        underline: true,
-        strikethrough: true,
-    }];
-    let base = cosmic_text::Attrs::new().family(cosmic_text::Family::Monospace);
+    let spans = [
+        TextSpan {
+            bytes: 3..7,
+            color: Some(cosmic_text::Color::rgb(0x12, 0x34, 0x56)),
+            weight: Some(TextWeight::Bold),
+            italic: true,
+            underline: true,
+            strikethrough: true,
+        },
+        TextSpan {
+            bytes: 7..8,
+            color: None,
+            weight: Some(TextWeight::Normal),
+            italic: false,
+            underline: false,
+            strikethrough: false,
+        },
+    ];
+    let base = cosmic_text::Attrs::new()
+        .family(cosmic_text::Family::Monospace)
+        .weight(cosmic_text::Weight::BOLD);
     let segments = rich_text_segments(text, &spans, &base, None);
 
     assert_eq!(
@@ -129,6 +141,8 @@ fn rich_text_segments_preserve_color_emphasis_and_utf8_boundaries() {
         text
     );
     assert_eq!(segments.len(), 3);
+    assert_eq!(segments[0].1.weight, cosmic_text::Weight::BOLD);
+    assert_eq!(segments[2].1.weight, cosmic_text::Weight::NORMAL);
     assert_eq!(segments[1].0, "😀");
     assert_eq!(
         segments[1].1.color_opt,

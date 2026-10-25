@@ -4,7 +4,9 @@ use std::{ops::Range, path::Path};
 
 use crate::{
     document::{DocumentFormat, TextProjection},
-    org_semantic::display::{InlineDisplayContext, OrgDisplayOptions, project_inline},
+    org_semantic::display::{
+        InlineDisplayContext, OrgDisplayOptions, OrgHeadingStyle, project_inline,
+    },
 };
 
 use super::syntax::{EditorLineStyle, EditorSemanticSpan, EditorStyleId};
@@ -12,7 +14,7 @@ use super::syntax::{EditorLineStyle, EditorSemanticSpan, EditorStyleId};
 #[derive(Clone, Copy, Debug, Default)]
 pub(super) struct DisplayOverrides {
     pub(super) descriptive_links: Option<bool>,
-    pub(super) hide_leading_stars: Option<bool>,
+    pub(super) heading_style: Option<OrgHeadingStyle>,
     pub(super) hide_emphasis_markers: Option<bool>,
     pub(super) pretty_entities: Option<bool>,
 }
@@ -20,9 +22,7 @@ pub(super) struct DisplayOverrides {
 impl DisplayOverrides {
     pub(super) fn apply(self, mut options: OrgDisplayOptions) -> OrgDisplayOptions {
         options.descriptive_links = self.descriptive_links.unwrap_or(options.descriptive_links);
-        options.hide_leading_stars = self
-            .hide_leading_stars
-            .unwrap_or(options.hide_leading_stars);
+        options.heading_style = self.heading_style.unwrap_or(options.heading_style);
         options.hide_emphasis_markers = self
             .hide_emphasis_markers
             .unwrap_or(options.hide_emphasis_markers);
@@ -58,7 +58,16 @@ impl super::SemanticEditor {
                 self.display_overrides.descriptive_links = Some(!options.descriptive_links)
             }
             OrgDisplayFeature::LeadingStars => {
-                self.display_overrides.hide_leading_stars = Some(!options.hide_leading_stars)
+                self.display_overrides.heading_style = Some(match options.heading_style {
+                    OrgHeadingStyle::Source => OrgHeadingStyle::HiddenStars,
+                    _ => OrgHeadingStyle::Source,
+                })
+            }
+            OrgDisplayFeature::HeadingBullets => {
+                self.display_overrides.heading_style = Some(match options.heading_style {
+                    OrgHeadingStyle::Bullets => OrgHeadingStyle::Source,
+                    _ => OrgHeadingStyle::Bullets,
+                })
             }
             OrgDisplayFeature::EmphasisMarkers => {
                 self.display_overrides.hide_emphasis_markers = Some(!options.hide_emphasis_markers)
@@ -223,14 +232,6 @@ pub(super) fn local_reveals(
         .collect()
 }
 
-pub(super) fn inline_start(text: &str, style: &EditorLineStyle) -> usize {
-    if matches!(style.id, EditorStyleId::Heading(_)) {
-        text.bytes().take_while(|byte| *byte == b'*').count()
-    } else {
-        0
-    }
-}
-
 pub(super) fn project_line(
     path: &Path,
     text: &str,
@@ -251,15 +252,51 @@ pub(super) fn project_line(
     if style.id == EditorStyleId::Comment {
         options.hide_emphasis_markers = false;
     }
-    project_inline(
+    let projection = project_inline(
         text,
         options,
         InlineDisplayContext {
-            start: inline_start(text, style),
+            start: style.inline_start(path, text),
             reveal,
             ..Default::default()
         },
-    )
+    );
+    let count = pretty_heading_marker_count(text, style, options, reveal);
+    if count == 0 {
+        return projection;
+    }
+    const BULLETS: [&str; 4] = ["◉", "○", "✸", "✿"];
+    // Preserve one visible character per source star, as org-superstar does.
+    // Each position remains independently editable while the prefix is composed.
+    let mut edits = (0..count - 1)
+        .map(|index| (index..index + 1, "․".to_owned()))
+        .collect::<Vec<_>>();
+    edits.push((
+        count - 1..count,
+        BULLETS[(count - 1) % BULLETS.len()].into(),
+    ));
+    projection.replace(edits)
+}
+
+fn pretty_heading_marker_count(
+    text: &str,
+    style: &EditorLineStyle,
+    options: OrgDisplayOptions,
+    reveal: &[Range<usize>],
+) -> usize {
+    if options.heading_style != OrgHeadingStyle::Bullets
+        || !matches!(style.id, EditorStyleId::Heading(_))
+    {
+        return 0;
+    }
+    let count = text.bytes().take_while(|byte| *byte == b'*').count();
+    if reveal
+        .iter()
+        .any(|range| range.start < count && range.end > 0)
+    {
+        return 0;
+    }
+    count
 }
 
 pub(super) fn project_spans(spans: &mut Vec<EditorSemanticSpan>, projection: &TextProjection) {
@@ -269,21 +306,41 @@ pub(super) fn project_spans(spans: &mut Vec<EditorSemanticSpan>, projection: &Te
     spans.retain(|span| !span.bytes.is_empty());
 }
 
-pub(super) fn mask_heading_stars(
+pub(super) fn style_heading_markers(
     spans: &mut Vec<EditorSemanticSpan>,
     text: &str,
     style: &EditorLineStyle,
     options: OrgDisplayOptions,
 ) {
-    if options.hide_leading_stars && matches!(style.id, EditorStyleId::Heading(_)) {
-        let count = text.bytes().take_while(|byte| *byte == b'*').count();
-        if count > 1 {
-            spans.push(EditorSemanticSpan {
-                bytes: 0..count - 1,
-                color: Some(super::syntax::EditorColorToken::Hidden),
-                ..Default::default()
-            });
-        }
+    if !matches!(style.id, EditorStyleId::Heading(_)) {
+        return;
+    }
+    let (end, color, weight) = match options.heading_style {
+        OrgHeadingStyle::HiddenStars => (
+            text.bytes()
+                .take_while(|byte| *byte == b'*')
+                .count()
+                .saturating_sub(1),
+            super::syntax::EditorColorToken::Hidden,
+            super::syntax::EditorSemanticWeight::Inherit,
+        ),
+        OrgHeadingStyle::Bullets => (
+            text.chars()
+                .take_while(|character| *character == '․')
+                .count()
+                * '․'.len_utf8(),
+            super::syntax::EditorColorToken::InlineDelimiter,
+            super::syntax::EditorSemanticWeight::Normal,
+        ),
+        OrgHeadingStyle::Source => return,
+    };
+    if end > 0 {
+        spans.push(EditorSemanticSpan {
+            bytes: 0..end,
+            color: Some(color),
+            weight,
+            ..Default::default()
+        });
     }
 }
 

@@ -94,7 +94,7 @@ fn table_inline_syntax_cannot_cross_cell_boundaries() {
         assert!(
             spans
                 .iter()
-                .all(|span| span.weight == EditorSemanticWeight::Normal)
+                .all(|span| span.weight == EditorSemanticWeight::Inherit)
         );
         assert!(
             spans
@@ -279,7 +279,7 @@ fn hex_literals_are_swatched_inside_code_verbatim_and_source_blocks() {
         code_language: Some(Arc::from("rust")),
         block: None,
         todo: None,
-        metrics: metrics_for(EditorStyleId::Code),
+        metrics: metrics_for(Language::Org, EditorStyleId::Code),
     };
     let spans = semantic_spans(Path::new("code.org"), text, &style);
     assert!(spans.iter().any(|span| span.swatch == Some(0xff0000ff)));
@@ -326,7 +326,7 @@ fn semantic_spans_are_shared_tokens_with_valid_complex_utf8_ranges() {
         code_language: None,
         block: None,
         todo: None,
-        metrics: metrics_for(EditorStyleId::Plain),
+        metrics: metrics_for(Language::Org, EditorStyleId::Plain),
     };
     let spans = semantic_spans(Path::new("unicode.org"), text, &style);
 

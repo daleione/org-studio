@@ -8,10 +8,18 @@ use crate::document::{
 };
 use crate::org_syntax::inline::{BracketLink, InlineKind, parse};
 
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(crate) enum OrgHeadingStyle {
+    Source,
+    HiddenStars,
+    #[default]
+    Bullets,
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct OrgDisplayOptions {
     pub(crate) descriptive_links: bool,
-    pub(crate) hide_leading_stars: bool,
+    pub(crate) heading_style: OrgHeadingStyle,
     pub(crate) hide_emphasis_markers: bool,
     /// None preserves the existing product default: pretty table data, literal prose entities.
     pub(crate) pretty_entities: Option<bool>,
@@ -21,7 +29,7 @@ impl Default for OrgDisplayOptions {
     fn default() -> Self {
         Self {
             descriptive_links: true,
-            hide_leading_stars: false,
+            heading_style: OrgHeadingStyle::default(),
             hide_emphasis_markers: true,
             pretty_entities: None,
         }
@@ -34,8 +42,8 @@ impl OrgDisplayOptions {
             match word.to_ascii_lowercase().as_str() {
                 "descriptivelinks" => self.descriptive_links = true,
                 "literallinks" => self.descriptive_links = false,
-                "hidestars" => self.hide_leading_stars = true,
-                "showstars" => self.hide_leading_stars = false,
+                "hidestars" => self.heading_style = OrgHeadingStyle::HiddenStars,
+                "showstars" => self.heading_style = OrgHeadingStyle::Source,
                 "entitiespretty" => self.pretty_entities = Some(true),
                 "entitiesplain" => self.pretty_entities = Some(false),
                 _ => {}
@@ -414,7 +422,7 @@ mod tests {
         let mut options = OrgDisplayOptions::default();
         options.apply_startup("LITERALLINKS entitiesplain hidestars");
         assert!(!options.descriptive_links);
-        assert!(options.hide_leading_stars);
+        assert_eq!(options.heading_style, OrgHeadingStyle::HiddenStars);
         assert_eq!(options.pretty_entities, Some(false));
         assert_eq!(
             project_inline(source, options, Default::default()).text,

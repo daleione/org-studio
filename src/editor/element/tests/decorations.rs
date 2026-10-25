@@ -202,7 +202,7 @@ fn swatch_quads_follow_the_literal_glyph_box(cx: &mut gpui::TestAppContext) {
         crate::editor::syntax::EditorSemanticSpan {
             bytes,
             color: None,
-            weight: crate::editor::syntax::EditorSemanticWeight::Normal,
+            weight: crate::editor::syntax::EditorSemanticWeight::Inherit,
             italic: false,
             underline: false,
             strikethrough: false,

@@ -377,6 +377,7 @@ impl EditorStyleId {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct BlockMetrics {
     pub(super) font_scale: f32,
+    pub(super) font_weight: gpui::FontWeight,
     pub(super) line_height: f32,
     pub(super) before: f32,
     pub(super) after: f32,
@@ -386,6 +387,7 @@ impl Default for BlockMetrics {
     fn default() -> Self {
         Self {
             font_scale: 1.0,
+            font_weight: gpui::FontWeight::NORMAL,
             line_height: super::LINE_HEIGHT,
             before: 0.0,
             after: 0.0,
@@ -397,6 +399,7 @@ impl BlockMetrics {
     pub(super) fn scaled(self, scale: f32) -> Self {
         Self {
             font_scale: self.font_scale,
+            font_weight: self.font_weight,
             line_height: self.line_height * scale,
             before: self.before * scale,
             after: self.after * scale,
@@ -415,6 +418,23 @@ pub(super) struct EditorLineStyle {
 }
 
 impl EditorLineStyle {
+    /// Heading prefixes, including a star-only draft, are block syntax. Keep
+    /// them outside inline emphasis until a separator completes the heading.
+    pub(super) fn inline_start(&self, path: &Path, text: &str) -> usize {
+        if language(path) == Language::Org && text.bytes().all(|byte| byte == b'*') {
+            return text.len();
+        }
+        if !matches!(self.id, EditorStyleId::Heading(_)) {
+            return 0;
+        }
+        let trimmed = text.trim_start();
+        let marker = match language(path) {
+            Language::Org => b'*',
+            Language::Markdown => b'#',
+        };
+        text.len() - trimmed.len() + trimmed.bytes().take_while(|byte| *byte == marker).count()
+    }
+
     pub(super) fn pending_fallback(source_range: ByteRange) -> Self {
         Self {
             source_range,
@@ -487,7 +507,7 @@ impl EditorStyleSnapshot {
                         code.block_body_line,
                     ),
                     todo,
-                    metrics: metrics_for(id),
+                    metrics: metrics_for(language, id),
                 })
             })
             .collect::<Vec<_>>();
@@ -688,7 +708,7 @@ fn append_styles(
                     code.block_body_line,
                 ),
                 todo,
-                metrics: metrics_for(id),
+                metrics: metrics_for(language, id),
             },
         );
     }
@@ -788,7 +808,10 @@ fn classify_line(language: Language, text: &str, code: &mut CodeContext) -> Edit
     match language {
         Language::Org => {
             let stars = trimmed.bytes().take_while(|byte| *byte == b'*').count();
-            if stars > 0 && trimmed.as_bytes().get(stars) == Some(&b' ') {
+            if stars > 0
+                && trimmed.len() == text.len()
+                && trimmed.as_bytes().get(stars) == Some(&b' ')
+            {
                 return EditorStyleId::Heading(stars.min(u8::MAX as usize) as u8);
             }
             if trimmed.starts_with("#+") {
@@ -1009,28 +1032,54 @@ fn heading_todo_span(language: Language, text: &str, context: &CodeContext) -> O
     })
 }
 
-fn metrics_for(style: EditorStyleId) -> BlockMetrics {
+fn metrics_for(language: Language, style: EditorStyleId) -> BlockMetrics {
+    if language == Language::Org
+        && let EditorStyleId::Heading(level) = style
+    {
+        // Spacemacs uses compact rows, enlarged bold faces for the first two
+        // levels, and normal weight from level three onward.
+        let font_scale = match level {
+            1 => 1.3,
+            2 => 1.2,
+            3 => 1.1,
+            _ => 1.0,
+        };
+        return BlockMetrics {
+            font_scale,
+            font_weight: if level <= 2 {
+                gpui::FontWeight::BOLD
+            } else {
+                gpui::FontWeight::NORMAL
+            },
+            line_height: super::LINE_HEIGHT * font_scale,
+            ..Default::default()
+        };
+    }
     match style {
         EditorStyleId::Heading(1) => BlockMetrics {
             font_scale: 1.50,
+            font_weight: gpui::FontWeight::BOLD,
             line_height: 34.0,
             before: 12.0,
             after: 5.0,
         },
         EditorStyleId::Heading(2) => BlockMetrics {
             font_scale: 1.34,
+            font_weight: gpui::FontWeight::BOLD,
             line_height: 30.0,
             before: 10.0,
             after: 4.0,
         },
         EditorStyleId::Heading(3) => BlockMetrics {
             font_scale: 1.20,
+            font_weight: gpui::FontWeight::BOLD,
             line_height: 27.0,
             before: 8.0,
             after: 3.0,
         },
         EditorStyleId::Heading(_) => BlockMetrics {
             font_scale: 1.08,
+            font_weight: gpui::FontWeight::BOLD,
             line_height: 24.0,
             before: 5.0,
             after: 2.0,
@@ -1042,6 +1091,7 @@ fn metrics_for(style: EditorStyleId) -> BlockMetrics {
 fn is_list_line(text: &str) -> bool {
     text.starts_with("- ")
         || text.starts_with("+ ")
+        || text.starts_with("* ")
         || text.split_once(['.', ')']).is_some_and(|(prefix, tail)| {
             !prefix.is_empty()
                 && prefix.bytes().all(|byte| byte.is_ascii_digit())

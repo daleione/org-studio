@@ -217,6 +217,7 @@
   "link.source_changed": "The link changed. Open the editor again to edit it.",
   "display.links": "Toggle descriptive links",
   "display.stars": "Toggle leading heading stars",
+  "display.heading_bullets": "Toggle heading bullets",
   "display.emphasis": "Toggle emphasis markers",
   "display.entities": "Toggle pretty entities",
   "timestamp.time": "Time",

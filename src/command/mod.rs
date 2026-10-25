@@ -59,6 +59,7 @@ impl CommandKey {
 pub enum OrgDisplayFeature {
     DescriptiveLinks,
     LeadingStars,
+    HeadingBullets,
     EmphasisMarkers,
     Entities,
 }

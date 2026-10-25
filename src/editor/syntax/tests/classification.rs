@@ -1,6 +1,29 @@
 use super::*;
 
 #[test]
+fn org_asterisk_list_items_are_not_headings() {
+    let mut context = CodeContext::default();
+    for source in [" * item", "  * item", "\t* item"] {
+        assert_eq!(
+            classify_line(Language::Org, source, &mut context),
+            EditorStyleId::List
+        );
+    }
+    assert_eq!(
+        classify_line(Language::Org, "*** Chapter", &mut context),
+        EditorStyleId::Heading(3)
+    );
+    assert_eq!(
+        classify_line(Language::Org, "  ** text", &mut context),
+        EditorStyleId::Plain
+    );
+    assert_eq!(
+        classify_line(Language::Markdown, "* item", &mut context),
+        EditorStyleId::List
+    );
+}
+
+#[test]
 fn markdown_pipe_rows_have_table_source_style_outside_fences() {
     let mut context = CodeContext::default();
     assert_eq!(

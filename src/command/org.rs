@@ -33,6 +33,12 @@ pub(crate) const ORG_EDITOR_COMMANDS: &[OrgEditorCommand] = &[
         command: BuiltinCommand::ToggleOrgDisplay(OrgDisplayFeature::LeadingStars),
     },
     OrgEditorCommand {
+        name: "org-studio.org.toggle-heading-bullets",
+        aliases: &["org-toggle-heading-bullets"],
+        label: "display.heading_bullets",
+        command: BuiltinCommand::ToggleOrgDisplay(OrgDisplayFeature::HeadingBullets),
+    },
+    OrgEditorCommand {
         name: "org-studio.org.toggle-emphasis-markers",
         aliases: &["org-toggle-emphasis-markers"],
         label: "display.emphasis",

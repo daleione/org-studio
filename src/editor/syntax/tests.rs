@@ -61,6 +61,6 @@ fn line_style(text: &str, context: &mut CodeContext) -> EditorLineStyle {
             context.block_body_line,
         ),
         todo,
-        metrics: metrics_for(id),
+        metrics: metrics_for(Language::Org, id),
     }
 }

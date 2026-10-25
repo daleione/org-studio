@@ -230,7 +230,7 @@ pub(super) fn schedule_minimap_layout_preparation(
                     crate::editor::presentation::project_spans(&mut spans, &projection);
                     display = display.then(projection);
                     if format == crate::document::DocumentFormat::Org {
-                        crate::editor::presentation::mask_heading_stars(
+                        crate::editor::presentation::style_heading_markers(
                             &mut spans,
                             &display.text,
                             line_style,

@@ -70,7 +70,7 @@ pub(in crate::editor) enum TextWeight {
 pub(in crate::editor) struct TextSpan {
     pub(in crate::editor) bytes: std::ops::Range<usize>,
     pub(in crate::editor) color: Option<cosmic_text::Color>,
-    pub(in crate::editor) weight: TextWeight,
+    pub(in crate::editor) weight: Option<TextWeight>,
     pub(in crate::editor) italic: bool,
     pub(in crate::editor) underline: bool,
     pub(in crate::editor) strikethrough: bool,
@@ -137,9 +137,12 @@ impl RichSpanBudget {
                     }
                 }),
                 weight: match span.weight {
-                    crate::editor::syntax::EditorSemanticWeight::Normal => TextWeight::Normal,
-                    crate::editor::syntax::EditorSemanticWeight::Semibold => TextWeight::Semibold,
-                    crate::editor::syntax::EditorSemanticWeight::Bold => TextWeight::Bold,
+                    crate::editor::syntax::EditorSemanticWeight::Inherit => None,
+                    crate::editor::syntax::EditorSemanticWeight::Normal => Some(TextWeight::Normal),
+                    crate::editor::syntax::EditorSemanticWeight::Semibold => {
+                        Some(TextWeight::Semibold)
+                    }
+                    crate::editor::syntax::EditorSemanticWeight::Bold => Some(TextWeight::Bold),
                 },
                 italic: span.italic,
                 underline: span.underline,
@@ -498,8 +501,8 @@ fn rich_text_segments<'a>(
                 if let Some(color) = span.color {
                     attrs = attrs.color(color);
                 }
-                if span.weight != TextWeight::Normal {
-                    attrs = attrs.weight(cosmic_weight(span.weight));
+                if let Some(weight) = span.weight {
+                    attrs = attrs.weight(cosmic_weight(weight));
                 }
                 if span.italic {
                     attrs = attrs.style(Style::Italic);

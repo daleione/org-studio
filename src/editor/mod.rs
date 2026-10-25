@@ -3140,7 +3140,7 @@ mod tests {
             cx.run_until_parked();
             let (point, expected) = cx.read(|cx| {
                 let e = editor.read(cx);
-                for (line, scale) in [(0, 1.50), (1, 1.34), (2, 1.0), (3, 1.20), (4, 1.08)] {
+                for (line, scale) in [(0, 1.3), (1, 1.2), (2, 1.0), (3, 1.1), (4, 1.0)] {
                     let row = e.hit_rows.iter().find(|r| r.line.0 == line).unwrap();
                     assert!((f32::from(row.layout.font_size()) - size as f32 * scale).abs() < 0.01);
                 }

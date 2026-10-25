@@ -95,23 +95,32 @@ fn org_markup_uses_semantic_theme_colors() {
 fn heading_runs_preserve_semantic_colors_metrics_and_source_bytes() {
     let theme = current_theme();
     for (text, title, level, scale) in [
-        ("* Headline", "Headline", 1, 1.50),
-        ("** Sub-headline :tag:", "Sub", 2, 1.34),
-        ("*** Third", "Third", 3, 1.20),
-        ("**** Fourth", "Fourth", 4, 1.08),
-        ("***** Fifth", "Fifth", 4, 1.08),
-        ("** TODO 标题 *bold* [[target]] :tag:", "标题", 2, 1.34),
+        ("* Headline", "Headline", 1, 1.3),
+        ("** Sub-headline :tag:", "Sub", 2, 1.2),
+        ("*** Third", "Third", 3, 1.1),
+        ("**** Fourth", "Fourth", 4, 1.0),
+        ("***** Fifth", "Fifth", 5, 1.0),
+        ("** TODO 标题 *bold* [[target]] :tag:", "标题", 2, 1.2),
     ] {
         let style = line_style(text, &mut CodeContext::default());
         let spans = semantic_spans(Path::new("a.org"), text, &style);
         let runs = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
-        let expected: gpui::Hsla = rgb(theme.heading[level - 1]).into();
+        let expected: gpui::Hsla = rgb(theme.heading[(level - 1) % theme.heading.len()]).into();
         assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), text.len());
         assert_eq!(run_at(&runs, 0).color, expected);
         assert_eq!(run_at(&runs, text.find(title).unwrap()).color, expected);
-        assert_eq!(run_at(&runs, 0).font.weight, FontWeight::BOLD);
+        assert_eq!(
+            run_at(&runs, text.find(title).unwrap()).font.weight,
+            if level <= 2 {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            }
+        );
         assert_eq!(style.metrics.font_scale, scale);
         assert!(style.metrics.line_height >= 15.0 * scale);
+        assert_eq!(style.metrics.before, 0.0);
+        assert_eq!(style.metrics.after, 0.0);
         if let Some(todo) = text.find("TODO") {
             assert_eq!(run_at(&runs, todo).color, rgb(theme.todo).into());
         }
@@ -251,7 +260,7 @@ fn org_code_content_does_not_receive_org_inline_semantics() {
         code_language: None,
         block: None,
         todo: None,
-        metrics: metrics_for(EditorStyleId::Code),
+        metrics: metrics_for(Language::Org, EditorStyleId::Code),
     };
     let runs = runs(
         Path::new("a.org"),
@@ -348,7 +357,7 @@ fn supported_code_language_produces_neutral_highlight_tokens() {
         code_language: Some(Arc::from("rust")),
         block: None,
         todo: None,
-        metrics: metrics_for(EditorStyleId::Code),
+        metrics: metrics_for(Language::Org, EditorStyleId::Code),
     };
     let spans = semantic_spans(Path::new("code.org"), text, &style);
 
@@ -378,7 +387,7 @@ fn unsupported_code_languages_keep_only_the_code_base_style() {
             code_language: Some(Arc::from(language)),
             block: None,
             todo: None,
-            metrics: metrics_for(EditorStyleId::Code),
+            metrics: metrics_for(Language::Org, EditorStyleId::Code),
         };
 
         assert!(semantic_spans(Path::new("code.org"), text, &style).is_empty());
@@ -394,7 +403,7 @@ fn long_code_line_highlights_without_invalid_or_truncated_semantic_ranges() {
         code_language: Some(Arc::from("rust")),
         block: None,
         todo: None,
-        metrics: metrics_for(EditorStyleId::Code),
+        metrics: metrics_for(Language::Org, EditorStyleId::Code),
     };
     let spans = semantic_spans(Path::new("long.org"), &text, &style);
 

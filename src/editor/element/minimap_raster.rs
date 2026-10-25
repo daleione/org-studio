@@ -242,7 +242,7 @@ pub(super) fn schedule_minimap_raster(
                     crate::editor::presentation::project_spans(&mut spans, &projection);
                     display = display.then(projection);
                     if document_format == crate::document::DocumentFormat::Org {
-                        crate::editor::presentation::mask_heading_stars(
+                        crate::editor::presentation::style_heading_markers(
                             &mut spans,
                             &display.text,
                             style,
@@ -429,7 +429,7 @@ pub(super) fn bounded_minimap_text(
 pub(super) fn minimap_text_color(kind: syntax::EditorStyleId, theme: &crate::theme::Theme) -> u32 {
     match kind {
         syntax::EditorStyleId::Heading(level) => {
-            theme.heading[(level.saturating_sub(1) as usize).min(3)]
+            theme.heading[level.saturating_sub(1) as usize % theme.heading.len()]
         }
         syntax::EditorStyleId::CodeBoundary | syntax::EditorStyleId::Meta => theme.meta,
         syntax::EditorStyleId::Code => theme.code_foreground,
@@ -459,11 +459,14 @@ pub(super) fn minimap_text_row(
         color: line_style.map_or(theme.foreground, |style| {
             minimap_text_color(style.id, theme)
         }),
-        weight: if matches!(
-            line_style.map(|style| style.id),
-            Some(syntax::EditorStyleId::Heading(_))
-        ) {
-            crate::editor::minimap::TextWeight::Bold
+        weight: if let Some(style) =
+            line_style.filter(|style| matches!(style.id, syntax::EditorStyleId::Heading(_)))
+        {
+            if style.metrics.font_weight == gpui::FontWeight::BOLD {
+                crate::editor::minimap::TextWeight::Bold
+            } else {
+                crate::editor::minimap::TextWeight::Normal
+            }
         } else {
             crate::editor::minimap::TextWeight::Semibold
         },

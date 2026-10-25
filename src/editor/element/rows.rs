@@ -186,6 +186,17 @@ impl RowShaping<'_> {
         } else {
             None
         };
+        let font = if is_table {
+            crate::typography::table_font()
+        } else {
+            self.style.font()
+        };
+        let mut metrics = line_style.metrics.scaled(self.editor.typography_scale());
+        let reveal = crate::editor::presentation::local_reveals(
+            &display,
+            content_range,
+            self.editor.source_reveals(),
+        );
         let text_inset = editor_block_text_inset(line_style.block.as_ref());
         let row_background_width =
             editor_block_content_width(self.wrap_width, line_style.block.as_ref());
@@ -196,7 +207,6 @@ impl RowShaping<'_> {
             .soft_wrap()
             .then_some(px(row_wrap_width));
         let row_text_origin_x = self.text_origin_x + px(text_inset);
-        let mut metrics = line_style.metrics.scaled(self.editor.typography_scale());
         let display_text = folded_display_text(display.text.clone(), folded);
         let inline_image_source = (!folded)
             .then(|| self.inline_images.get(&line_number).cloned())
@@ -207,11 +217,6 @@ impl RowShaping<'_> {
             metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
         }
         let mut text: gpui::SharedString = display_text.into();
-        let font = if is_table {
-            crate::typography::table_font()
-        } else {
-            self.style.font()
-        };
         let mut base_run = TextRun {
             len: text.len(),
             font: font.clone(),
@@ -222,11 +227,6 @@ impl RowShaping<'_> {
         };
         let mut marked_display = local_marked(self.marked, content_range, &display);
         let mut projected_source = None;
-        let reveal = crate::editor::presentation::local_reveals(
-            &display,
-            content_range,
-            self.editor.source_reveals(),
-        );
         let mut semantic_row = Vec::new();
         let mut active_inline_code = None;
         let runs = if let Some(highlights) = self.editor.generated_highlights.as_ref() {
@@ -270,7 +270,7 @@ impl RowShaping<'_> {
                 marked_display = local_marked(self.marked, content_range, &display);
             }
             if self.document_format == DocumentFormat::Org {
-                crate::editor::presentation::mask_heading_stars(
+                crate::editor::presentation::style_heading_markers(
                     &mut semantic_row,
                     &display.text,
                     line_style,

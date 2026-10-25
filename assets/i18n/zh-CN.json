@@ -217,6 +217,7 @@
   "link.source_changed": "链接已发生变化，请重新打开组件后编辑。",
   "display.links": "切换链接描述显示",
   "display.stars": "切换标题前导星号",
+  "display.heading_bullets": "切换标题符号美化",
   "display.emphasis": "切换强调标记显示",
   "display.entities": "切换实体美化显示",
   "timestamp.time": "时间",
