@@ -123,6 +123,24 @@ fn mixed_width_fixture<'a>(
 }
 
 #[gpui::test]
+fn display_changes_cancel_drag_without_committing_stale_widths(cx: &mut TestAppContext) {
+    cx.update(init);
+    let (editor, view) = fixture(cx, "org");
+    let original = text(&editor, view);
+    let start = boundary(&editor, view, 0, 0);
+    start_drag(view, start, -40.);
+    assert!(editor.read_with(view, |editor, _| editor.table_resize_is_dragging()));
+    editor.update(view, |editor, cx| {
+        editor.toggle_org_display(crate::command::OrgDisplayFeature::EmphasisMarkers, cx)
+    });
+    view.run_until_parked();
+    assert!(!editor.read_with(view, |editor, _| editor.table_resize_is_dragging()));
+    view.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+    view.run_until_parked();
+    assert_eq!(text(&editor, view), original);
+}
+
+#[gpui::test]
 fn markdown_tab_fits_mixed_width_columns_to_visible_content(cx: &mut TestAppContext) {
     cx.update(init);
     let (editor, view) = mixed_width_fixture(cx, "md");

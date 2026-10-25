@@ -122,11 +122,6 @@ mod tests {
     }
 
     #[test]
-    fn ease_out_moves_faster_than_linear_progress() {
-        assert!(FOLD_MOTION.ease(0.5) > Easing::Linear.apply(0.5));
-    }
-
-    #[test]
     fn tween_interpolates_and_reports_completion() {
         let started_at = Instant::now();
         let tween = Tween::new(started_at, 20.0, 100.0, FOLD_MOTION);

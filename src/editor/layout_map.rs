@@ -9,72 +9,24 @@ const DEFAULT_TAB_SIZE: usize = 4;
 const CHUNK_LINES: u64 = 256;
 const PIXEL_SCALE: f32 = 64.0;
 
-#[derive(Clone, Copy, Debug)]
-struct TabExpansion {
-    source: usize,
-    display: usize,
-    display_len: usize,
-}
+pub(crate) use crate::document::TextProjection as DisplayLineText;
 
-#[derive(Clone, Debug)]
-pub(crate) struct DisplayLineText {
-    pub(super) text: String,
-    tabs: Vec<TabExpansion>,
-}
-
-impl DisplayLineText {
-    fn new(source: String, tab_size: usize) -> Self {
-        if !source.contains('\t') {
-            return Self {
-                text: source,
-                tabs: Vec::new(),
-            };
-        }
-        let mut text = String::with_capacity(source.len());
-        let mut tabs = Vec::new();
-        let mut column = 0usize;
-        for (source_index, ch) in source.char_indices() {
-            if ch == '\t' {
-                let display = text.len();
-                let display_len = tab_size - column % tab_size;
-                text.extend(std::iter::repeat_n(' ', display_len));
-                tabs.push(TabExpansion {
-                    source: source_index,
-                    display,
-                    display_len,
-                });
-                column += display_len;
-            } else {
-                text.push(ch);
-                column += ch.width().unwrap_or(0);
-            }
-        }
-        Self { text, tabs }
+pub(super) fn expand_tabs(source: String, tab_size: usize) -> DisplayLineText {
+    if !source.contains('\t') {
+        return DisplayLineText::new(source);
     }
-
-    pub(super) fn source_to_display(&self, source: usize) -> usize {
-        let adjustment = self
-            .tabs
-            .iter()
-            .take_while(|tab| source > tab.source)
-            .map(|tab| tab.display_len - 1)
-            .sum::<usize>();
-        source + adjustment
-    }
-
-    pub(super) fn display_to_source(&self, display: usize) -> usize {
-        let mut adjustment = 0usize;
-        for tab in &self.tabs {
-            if display <= tab.display {
-                break;
-            }
-            if display < tab.display + tab.display_len {
-                return tab.source + usize::from(display - tab.display > tab.display_len / 2);
-            }
-            adjustment += tab.display_len - 1;
+    let mut column = 0usize;
+    let mut edits = Vec::new();
+    for (offset, ch) in source.char_indices() {
+        if ch == '\t' {
+            let width = tab_size - column % tab_size;
+            edits.push((offset..offset + 1, " ".repeat(width)));
+            column += width;
+        } else {
+            column += ch.width().unwrap_or(0);
         }
-        display.saturating_sub(adjustment)
     }
+    DisplayLineText::new(source).replace(edits)
 }
 
 pub(super) struct VisibleSourceLine {
@@ -667,7 +619,7 @@ impl EditorLayoutMap {
             visible_end -= 1;
         }
         let visible_range = ByteRange::new(visible_start, visible_end);
-        let display = DisplayLineText::new(snapshot.copy_range(visible_range), self.tab_size);
+        let display = expand_tabs(snapshot.copy_range(visible_range), self.tab_size);
         Some(VisibleSourceLine {
             source_range,
             visible_range,
@@ -868,7 +820,7 @@ mod tests {
 
     #[test]
     fn tab_expansion_round_trips_source_boundaries() {
-        let display = DisplayLineText::new("a\tb".to_owned(), 4);
+        let display = expand_tabs("a\tb".to_owned(), 4);
         assert_eq!(display.text, "a   b");
         assert_eq!(display.source_to_display(2), 4);
         assert_eq!(display.display_to_source(4), 2);

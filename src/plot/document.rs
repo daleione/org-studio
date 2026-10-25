@@ -252,7 +252,9 @@ impl PlotDocument {
         {
             return;
         }
-        if let Some(delta) = delta {
+        if let Some(delta) =
+            delta.filter(|delta| delta.before == self.target_revision && delta.after == revision)
+        {
             self.deltas.push(delta);
         } else if revision != self.target_revision {
             self.deltas.clear();

@@ -22,7 +22,7 @@ pub struct InlineSpan {
     pub kind: InlineKind,
     pub source: Range<usize>,
     pub range: Range<usize>,
-    /// Raw link target: the `[[…]]` inner for Org links, the `dest_url` for
+    /// Unescaped link target for Org links, the `dest_url` for
     /// Markdown links, the footnote name for footnote references, and the
     /// target text for dedicated/radio targets. `None` for plain emphasis.
     pub target: Option<Arc<str>>,
@@ -32,6 +32,21 @@ impl InlineSpan {
     pub fn is_code(&self) -> bool {
         matches!(self.kind, InlineKind::Code | InlineKind::Verbatim)
     }
+
+    pub(crate) fn entity_replacement(
+        &self,
+        source: &str,
+        rendered: &str,
+        caret: Option<usize>,
+    ) -> Option<String> {
+        if self.kind != InlineKind::Entity
+            || caret.is_some_and(|caret| self.source.start < caret && caret < self.source.end)
+        {
+            return None;
+        }
+        let value = &rendered[self.range.clone()];
+        (value != &source[self.source.clone()]).then(|| value.to_owned())
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -40,86 +55,39 @@ pub struct InlineText {
     pub spans: Vec<InlineSpan>,
 }
 
-/// Entity presentation keeps the source table structure and markup intact.
-/// Only entities recognized by the inline parser are substituted; rendered
-/// characters are never parsed again as links, emphasis, or table delimiters.
+/// Entity-only presentation is also used by source-table width calculations and Babel data.
+/// It shares the coordinate engine with the editor without introducing editor display policy
+/// into the document or syntax layers.
 #[derive(Clone, Debug)]
-pub(crate) struct EntityText {
-    pub(crate) text: String,
-    replacements: Vec<(Range<usize>, Range<usize>)>,
-}
+pub(crate) struct EntityText(crate::document::TextProjection);
 
 impl EntityText {
     pub(crate) fn new(source: &str, caret: Option<usize>) -> Self {
         let parsed = parse(source);
-        let mut text = String::with_capacity(source.len());
-        let mut replacements = Vec::new();
-        let mut cursor = 0;
-        for span in parsed
-            .spans
-            .iter()
-            .filter(|span| span.kind == InlineKind::Entity)
-        {
-            let value = &parsed.text[span.range.clone()];
-            if value == &source[span.source.clone()]
-                || caret.is_some_and(|caret| span.source.start < caret && caret < span.source.end)
-            {
-                continue;
-            }
-            text.push_str(&source[cursor..span.source.start]);
-            let start = text.len();
-            text.push_str(value);
-            replacements.push((span.source.clone(), start..text.len()));
-            cursor = span.source.end;
-        }
-        text.push_str(&source[cursor..]);
-        Self { text, replacements }
-    }
-
-    pub(crate) fn has_replacements(&self) -> bool {
-        !self.replacements.is_empty()
-    }
-
-    pub(crate) fn source_to_display(&self, source: usize) -> usize {
-        let (mut source_end, mut display_end) = (0, 0);
-        for (raw, display) in &self.replacements {
-            if source < raw.start {
-                break;
-            }
-            if source < raw.end {
-                return if source - raw.start <= raw.len() / 2 {
-                    display.start
-                } else {
-                    display.end
-                };
-            }
-            source_end = raw.end;
-            display_end = display.end;
-        }
-        display_end + source.saturating_sub(source_end)
-    }
-
-    pub(crate) fn display_to_source(&self, display: usize) -> usize {
-        let (mut source_end, mut display_end) = (0, 0);
-        for (raw, visible) in &self.replacements {
-            if display < visible.start {
-                break;
-            }
-            if display < visible.end {
-                return if display - visible.start <= visible.len() / 2 {
-                    raw.start
-                } else {
-                    raw.end
-                };
-            }
-            source_end = raw.end;
-            display_end = visible.end;
-        }
-        source_end + display.saturating_sub(display_end)
+        let edits = parsed.spans.iter().filter_map(|span| {
+            span.entity_replacement(source, &parsed.text, caret)
+                .map(|value| (span.source.clone(), value))
+        });
+        Self(crate::document::TextProjection::new(source).replace(edits))
     }
 }
 
+impl std::ops::Deref for EntityText {
+    type Target = crate::document::TextProjection;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+mod link;
+pub(crate) use link::{BracketLink, LinkValue, unescape_link_target};
+
 pub fn parse(source: &str) -> InlineText {
+    parse_within(source, &[])
+}
+
+fn parse_within(source: &str, active_markers: &[u8]) -> InlineText {
     let mut output = InlineText::default();
     let mut cursor = 0;
     while cursor < source.len() {
@@ -145,27 +113,15 @@ pub fn parse(source: &str) -> InlineText {
             cursor = end;
             continue;
         }
-        if source[cursor..].starts_with("[[")
-            && let Some(close) = source[cursor + 2..].find("]]")
-        {
-            let inside_end = cursor + 2 + close;
-            let inside = &source[cursor + 2..inside_end];
-            let display = inside
-                .split_once("][")
-                .map(|(_, text)| text)
-                .unwrap_or(inside);
-            let target = inside
-                .split_once("][")
-                .map(|(target, _)| target)
-                .unwrap_or(inside);
+        if let Some(link) = BracketLink::at(source, cursor) {
             push_span(
                 &mut output,
                 InlineKind::Link,
-                cursor..inside_end + 2,
-                display,
-                Some(Arc::from(target)),
+                link.source.clone(),
+                &source[link.visible],
+                Some(Arc::from(unescape_link_target(&source[link.target]))),
             );
-            cursor = inside_end + 2;
+            cursor = link.source.end;
             continue;
         }
         if matches!(source.as_bytes()[cursor], b'<' | b'[')
@@ -202,6 +158,7 @@ pub fn parse(source: &str) -> InlineText {
         }
         let marker = source.as_bytes()[cursor];
         if let Some(kind) = marker_kind(marker)
+            && !active_markers.contains(&marker)
             && delimiter_can_open(source, cursor)
             && let Some(close) = find_closing_marker(source, cursor + 1, marker)
         {
@@ -210,7 +167,16 @@ pub fn parse(source: &str) -> InlineText {
                 if matches!(kind, InlineKind::Code | InlineKind::Verbatim) {
                     push_span(&mut output, kind, cursor..close + 1, content, None);
                 } else {
-                    push_nested_span(&mut output, kind, cursor..close + 1, content, cursor + 1);
+                    let mut nested_markers = active_markers.to_vec();
+                    nested_markers.push(marker);
+                    push_nested_span(
+                        &mut output,
+                        kind,
+                        cursor..close + 1,
+                        content,
+                        cursor + 1,
+                        &nested_markers,
+                    );
                 }
                 cursor = close + 1;
                 continue;
@@ -232,8 +198,11 @@ fn push_nested_span(
     source: Range<usize>,
     content: &str,
     source_offset: usize,
+    active_markers: &[u8],
 ) {
-    let parsed = parse(content);
+    // A repeated delimiter inside its own emphasis is literal. Distinct active
+    // markers also bound recursion by the grammar, even for very long input.
+    let parsed = parse_within(content, active_markers);
     let start = output.text.len();
     output.text.push_str(&parsed.text);
     let end = output.text.len();
@@ -439,47 +408,7 @@ fn timestamp_at(source: &str, start: usize) -> Option<(usize, &str)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{EntityText, InlineKind, parse};
-
-    #[test]
-    fn table_entities_preserve_literal_markup_and_source_boundaries() {
-        let source = r"中文 a\vert{}b \nbsp{}padded\nbsp{} \ast{}粗体\ast{} \under{}下划线\under{} \equal{}原样\equal{} \tilde{}代码\tilde{} C:\\zwnj{}Users\\zwnj{}demo [\zwnj{}[file:demo][链接形态]] {\zwnj{}{{macro}}}";
-        let visible = EntityText::new(source, None);
-        assert_eq!(
-            visible.text.replace('\u{200c}', "").replace('\u{a0}', " "),
-            r"中文 a|b  padded  *粗体* _下划线_ =原样= ~代码~ C:\Users\demo [[file:demo][链接形态]] {{{macro}}}"
-        );
-        for offset in source
-            .char_indices()
-            .map(|(offset, _)| offset)
-            .chain([source.len()])
-        {
-            if visible
-                .replacements
-                .iter()
-                .any(|(raw, _)| raw.start < offset && offset < raw.end)
-            {
-                continue;
-            }
-            let display = visible.source_to_display(offset);
-            assert!(visible.text.is_char_boundary(display));
-            assert_eq!(visible.display_to_source(display), offset);
-        }
-    }
-
-    #[test]
-    fn table_entities_respect_verbatim_unknown_names_and_editing_at_point() {
-        let source = r"=\alpha{}= \unknown{} a\vert{}b \nbsp{}end";
-        let caret = source.find("vert").unwrap() + 2;
-        let visible = EntityText::new(source, Some(caret));
-        assert_eq!(visible.text, "=\\alpha{}= \\unknown{} a\\vert{}b \u{a0}end");
-        assert_eq!(
-            visible.display_to_source(visible.source_to_display(caret)),
-            caret
-        );
-        let visible = EntityText::new(source, None);
-        assert_eq!(visible.text, "=\\alpha{}= \\unknown{} a|b \u{a0}end");
-    }
+    use super::{BracketLink, InlineKind, parse};
 
     #[test]
     fn removes_markup_and_preserves_unicode() {
@@ -495,6 +424,42 @@ mod tests {
         assert_eq!(parsed.text, "See the notes <2026-08-24 Mon>.");
         assert_eq!(parsed.spans[0].kind, InlineKind::Link);
         assert_eq!(parsed.spans[1].kind, InlineKind::Timestamp);
+    }
+
+    #[test]
+    fn bracket_link_ranges_follow_org_escaping_and_complete_syntax() {
+        for (source, visible, target) in [
+            (r"\[[file:notes.org][Notes]]", r"\Notes", "file:notes.org"),
+            (r"[[file:a\[b\]][Notes]]", "Notes", "file:a[b]"),
+            (r"[[file:a\\\[b\]][Notes]]", "Notes", r"file:a\[b]"),
+            (
+                "[[file:notes.org][Two\nlines]]",
+                "Two\nlines",
+                "file:notes.org",
+            ),
+        ] {
+            let parsed = parse(source);
+            assert_eq!(parsed.text, visible);
+            let span = parsed
+                .spans
+                .iter()
+                .find(|span| span.kind == InlineKind::Link)
+                .unwrap();
+            assert_eq!(span.target.as_deref(), Some(target));
+            assert_eq!(
+                &parsed.text[span.range.clone()],
+                visible.trim_start_matches('\\')
+            );
+        }
+        for source in [
+            "[[][Empty]]",
+            "[[file:a][]]",
+            "[[file:a][Broken]",
+            "[[a\n\nb]]",
+            "[[a][two\n \nparagraphs]]",
+        ] {
+            assert!(BracketLink::at(source, 0).is_none(), "{source}");
+        }
     }
 
     #[test]
@@ -540,6 +505,20 @@ mod tests {
                 .iter()
                 .any(|span| span.kind == InlineKind::Bold)
         );
+    }
+
+    #[test]
+    fn repeated_emphasis_delimiters_remain_literal_inside_their_own_span() {
+        for marker in ['*', '/', '_', '+', '~', '='] {
+            let source = format!("{marker}{marker}value{marker}{marker}");
+            let parsed = parse(&source);
+            assert_eq!(parsed.text, format!("{marker}value{marker}"));
+            assert_eq!(parsed.spans.len(), 1);
+        }
+        let source = "*".repeat(100_000);
+        let parsed = parse(&source);
+        assert_eq!(parsed.text.len(), source.len() - 2);
+        assert_eq!(parsed.spans.len(), 1);
     }
 
     #[test]

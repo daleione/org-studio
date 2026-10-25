@@ -59,6 +59,8 @@ pub(super) fn shape_key(
     code_language: Option<Arc<str>>,
 ) -> ShapeKey {
     ShapeKey {
+        projected_source: None,
+        display_options: None,
         generated_line: None,
         active_inline_code: None,
         text: text.clone(),

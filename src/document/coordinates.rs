@@ -37,20 +37,6 @@ impl std::fmt::Display for CoordinateError {
 impl std::error::Error for CoordinateError {}
 
 impl DocumentSnapshot {
-    pub fn is_char_boundary(&self, offset: ByteOffset) -> bool {
-        let Ok(offset) = usize::try_from(offset.0) else {
-            return false;
-        };
-        if offset == self.rope.len_bytes() {
-            return true;
-        }
-        if offset > self.rope.len_bytes() {
-            return false;
-        }
-        let (chunk, chunk_start, _, _) = self.rope.chunk_at_byte(offset);
-        chunk.is_char_boundary(offset - chunk_start)
-    }
-
     pub fn checked_byte_offset(&self, offset: ByteOffset) -> Result<ByteOffset, CoordinateError> {
         if offset.0 > self.len_bytes() {
             return Err(CoordinateError::ByteOutOfBounds(offset));

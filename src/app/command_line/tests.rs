@@ -264,10 +264,13 @@ fn command_line_goto_line_arguments_and_read_only_availability() {
     let (commands, _, _) = crate::preview::document_input();
     let entries = catalog::entries(
         &commands,
-        crate::i18n::Language::Chinese,
-        true,
-        false,
-        false,
+        catalog::CatalogContext {
+            language: crate::i18n::Language::Chinese,
+            format: Some(crate::document::DocumentFormat::Org),
+            read_only: true,
+            editing: false,
+            selection: false,
+        },
     );
     for query in [":goto-line 123", "org-studio.document.goto-line 123"] {
         let candidates = catalog::candidates(&entries, query, &[]);
@@ -779,10 +782,13 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
     let (commands, _, _) = crate::preview::document_input();
     let all = catalog::entries(
         &commands,
-        crate::i18n::Language::Chinese,
-        false,
-        true,
-        false,
+        catalog::CatalogContext {
+            language: crate::i18n::Language::Chinese,
+            format: Some(crate::document::DocumentFormat::Org),
+            read_only: false,
+            editing: true,
+            selection: false,
+        },
     );
     for (query, scope) in [
         ("table-align", crate::command::TableScope::Current),
@@ -800,17 +806,29 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
         "table-align --all"
     );
     assert!(catalog::candidates(&all, "--selection", &[]).is_empty());
-    let selected = catalog::entries(&commands, crate::i18n::Language::Chinese, false, true, true);
+    let selected = catalog::entries(
+        &commands,
+        catalog::CatalogContext {
+            language: crate::i18n::Language::Chinese,
+            format: Some(crate::document::DocumentFormat::Org),
+            read_only: false,
+            editing: true,
+            selection: true,
+        },
+    );
     assert_eq!(
         catalog::candidates(&selected, "--selection", &[])[0].input,
         "table-align --selection"
     );
     let reading = catalog::entries(
         &commands,
-        crate::i18n::Language::Chinese,
-        false,
-        false,
-        false,
+        catalog::CatalogContext {
+            language: crate::i18n::Language::Chinese,
+            format: Some(crate::document::DocumentFormat::Org),
+            read_only: false,
+            editing: false,
+            selection: false,
+        },
     );
     assert!(!reading.iter().any(|entry| matches!(
         entry.scope,
@@ -823,7 +841,16 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
     );
     // Typing the unavailable current-table command must not execute a wider scope.
     assert!(catalog::candidates(&reading, "table-align", &[]).is_empty());
-    let read_only = catalog::entries(&commands, crate::i18n::Language::Chinese, true, true, true);
+    let read_only = catalog::entries(
+        &commands,
+        catalog::CatalogContext {
+            language: crate::i18n::Language::Chinese,
+            format: Some(crate::document::DocumentFormat::Org),
+            read_only: true,
+            editing: true,
+            selection: true,
+        },
+    );
     assert!(read_only.iter().all(|entry| entry.scope.is_none()
         && !matches!(entry.input.as_str(), "save" | "reload" | "undo" | "redo")));
     assert!(
@@ -833,6 +860,90 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
     );
     assert!(catalog::validate("table-align --all --selection").is_err());
     assert!(catalog::validate("save --all").is_err());
+}
+
+#[gpui::test]
+fn org_display_commands_and_link_shortcut_work_from_workspace(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    let (workspace, view) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let original = "[[file:notes.org][Notes]]\n";
+    let doc = workspace.update(view, |workspace, cx| install(workspace, original, cx));
+    view.run_until_parked();
+    let revision = view.read(|cx| doc.read(cx).revision());
+    for spec in crate::command::ORG_EDITOR_COMMANDS
+        .iter()
+        .filter(|spec| !spec.edits_source())
+    {
+        workspace.update(view, |workspace, cx| workspace.open_command_line(cx));
+        view.run_until_parked();
+        view.simulate_input(spec.aliases[0]);
+        view.simulate_keystrokes("enter");
+        view.run_until_parked();
+        view.read(|cx| {
+            assert_eq!(doc.read(cx).revision(), revision);
+            assert_eq!(source(doc.read(cx)), original);
+        });
+    }
+    view.simulate_keystrokes("ctrl-c ctrl-l");
+    view.run_until_parked();
+    assert!(view.debug_bounds("link-picker").is_some());
+    view.simulate_input("file:revised.org");
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    assert!(view.debug_bounds("link-picker").is_none());
+    view.read(|cx| assert_eq!(source(doc.read(cx)), "[[file:revised.org][Notes]]\n"));
+    view.simulate_keystrokes("cmd-z");
+    view.run_until_parked();
+    view.read(|cx| assert_eq!(source(doc.read(cx)), original));
+    workspace.update(view, |workspace, cx| workspace.open_command_line(cx));
+    view.run_until_parked();
+    view.simulate_input("org-insert-link");
+    view.simulate_keystrokes("enter");
+    view.run_until_parked();
+    assert!(view.debug_bounds("link-picker").is_some());
+    view.simulate_input("file:cancelled.org");
+    view.simulate_keystrokes("escape");
+    view.run_until_parked();
+    assert!(view.debug_bounds("link-picker").is_none());
+    view.read(|cx| assert_eq!(source(doc.read(cx)), original));
+}
+
+#[test]
+fn org_commands_only_appear_in_org_editors_and_respect_read_only_sessions() {
+    use crate::document::DocumentFormat;
+    let (commands, _, _) = crate::preview::document_input();
+    for format in [
+        Some(DocumentFormat::Org),
+        Some(DocumentFormat::Markdown),
+        None,
+    ] {
+        for editing in [false, true] {
+            for read_only in [false, true] {
+                let entries = catalog::entries(
+                    &commands,
+                    catalog::CatalogContext {
+                        language: crate::i18n::Language::English,
+                        format,
+                        read_only,
+                        editing,
+                        selection: false,
+                    },
+                );
+                for command in crate::command::ORG_EDITOR_COMMANDS {
+                    assert_eq!(
+                        entries
+                            .iter()
+                            .any(|entry| entry.input == command.aliases[0]),
+                        format == Some(DocumentFormat::Org)
+                            && editing
+                            && (!read_only || !command.edits_source()),
+                        "{}: {format:?}, editing={editing}, read_only={read_only}",
+                        command.aliases[0]
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[gpui::test]

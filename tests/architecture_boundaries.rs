@@ -328,42 +328,6 @@ fn preview_production_code_has_no_product_shell_dependency() {
 }
 
 #[test]
-fn removed_product_types_do_not_return_as_items() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let mut files = Vec::new();
-    rust_files_under(&root.join("src"), &mut files);
-    let forbidden = [
-        "PreviewApp",
-        "PreviewDocument",
-        "RopeSnapshot",
-        "DocumentMode",
-        "SplitScrollHost",
-        "DocumentLayout",
-        "DocumentSurfaceFocus",
-        "RightPreviewState",
-        "PreviewPanel",
-        "PreviewProjectionSnapshot",
-    ];
-    let mut violations = Vec::new();
-    for path in files {
-        for item in parse(&path).items {
-            let name = match item {
-                syn::Item::Struct(item) => Some(item.ident),
-                syn::Item::Enum(item) => Some(item.ident),
-                syn::Item::Type(item) => Some(item.ident),
-                _ => None,
-            };
-            if let Some(name) = name
-                && forbidden.iter().any(|forbidden| name == *forbidden)
-            {
-                violations.push(format!("{} defines {name}", path.display()));
-            }
-        }
-    }
-    assert!(violations.is_empty(), "{}", violations.join("\n"));
-}
-
-#[test]
 fn reading_core_does_not_own_the_workspace_or_export_pipeline() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let mut files = [

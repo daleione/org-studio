@@ -108,6 +108,7 @@ pub(super) struct RowShaping<'a> {
     pub(super) styles_pending: bool,
     pub(super) style_snapshot: &'a syntax::SparseEditorStyleSnapshot,
     pub(super) document_format: DocumentFormat,
+    pub(super) display_options: crate::org_semantic::display::OrgDisplayOptions,
     pub(super) editor_focused: bool,
     pub(super) selection: Selection,
     pub(super) marked: Option<ByteRange>,
@@ -156,7 +157,7 @@ impl RowShaping<'_> {
         };
         let source_content_range = source_line.source_range;
         let content_range = source_line.visible_range;
-        let display = source_line.display;
+        let mut display = source_line.display;
         let folded = self.editor.fold_markers.contains(&line_number);
         let line_animation_scale = if self
             .fold_ranges
@@ -205,13 +206,13 @@ impl RowShaping<'_> {
             metrics.line_height = image.height;
             metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
         }
-        let text: gpui::SharedString = display_text.into();
+        let mut text: gpui::SharedString = display_text.into();
         let font = if is_table {
             crate::typography::table_font()
         } else {
             self.style.font()
         };
-        let base_run = TextRun {
+        let mut base_run = TextRun {
             len: text.len(),
             font: font.clone(),
             color: gpui::rgb(self.theme.foreground).into(),
@@ -219,7 +220,13 @@ impl RowShaping<'_> {
             underline: None,
             strikethrough: None,
         };
-        let marked_display = local_marked(self.marked, content_range, &display);
+        let mut marked_display = local_marked(self.marked, content_range, &display);
+        let mut projected_source = None;
+        let reveal = crate::editor::presentation::local_reveals(
+            &display,
+            content_range,
+            self.editor.source_reveals(),
+        );
         let mut semantic_row = Vec::new();
         let mut active_inline_code = None;
         let runs = if let Some(highlights) = self.editor.generated_highlights.as_ref() {
@@ -245,6 +252,31 @@ impl RowShaping<'_> {
                     display.source_to_display((offset.0 - content_range.start.0) as usize)
                 });
             active_inline_code = syntax::emphasize_inline_delimiters(&mut semantic_row, caret);
+            let projection = crate::editor::presentation::project_line(
+                self.editor.session.read(self.cx).syntax_path(),
+                &display.text,
+                line_style,
+                self.display_options,
+                &reveal,
+            );
+            if projection.has_replacements() {
+                projected_source = Some(text.clone());
+                crate::editor::presentation::project_spans(&mut semantic_row, &projection);
+                active_inline_code =
+                    active_inline_code.map(|range| projection.display_range(range));
+                display = display.then(projection);
+                text = folded_display_text(display.text.clone(), folded).into();
+                base_run.len = text.len();
+                marked_display = local_marked(self.marked, content_range, &display);
+            }
+            if self.document_format == DocumentFormat::Org {
+                crate::editor::presentation::mask_heading_stars(
+                    &mut semantic_row,
+                    &display.text,
+                    line_style,
+                    self.display_options,
+                );
+            }
             let mut runs = syntax::runs_from_spans(
                 &semantic_row,
                 base_run,
@@ -264,21 +296,27 @@ impl RowShaping<'_> {
                 font.clone(),
                 shaped_font_size,
                 self.window.text_system(),
+                self.display_options,
             );
             TableVisualLayout::shape(
                 &text,
                 &runs,
                 columns,
                 &metrics,
-                effective_wrap_width,
-                self.editor
-                    .preferred_table_widths(columns.source_range.start.0),
-                anchor
-                    .filter(|_| self.editor_focused && self.selection.is_empty())
-                    .map(|offset| {
-                        display.source_to_display((offset.0 - content_range.start.0) as usize)
-                    }),
                 self.window.text_system(),
+                crate::editor::table_layout::TableLayoutOptions {
+                    wrap_width: effective_wrap_width,
+                    preferred_widths_em: self
+                        .editor
+                        .preferred_table_widths(columns.source_range.start.0),
+                    caret: anchor
+                        .filter(|_| self.editor_focused && self.selection.is_empty())
+                        .map(|offset| {
+                            display.source_to_display((offset.0 - content_range.start.0) as usize)
+                        }),
+                    display_options: self.display_options,
+                    reveal: &reveal,
+                },
             )
         });
         let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
@@ -297,6 +335,9 @@ impl RowShaping<'_> {
         );
         // Equal text can carry different faces on different agenda dates.
         shape_key.generated_line = self.generated.then_some(line_number);
+        shape_key.projected_source = projected_source;
+        shape_key.display_options =
+            (self.document_format == DocumentFormat::Org).then_some(self.display_options);
         shape_key.active_inline_code = active_inline_code.map(|range| (range.start, range.end));
         let layout = self
             .editor
@@ -617,10 +658,10 @@ impl RowShaping<'_> {
         {
             let source_local_start = selected_start
                 .saturating_sub(content_range.start.0)
-                .min(hit.layout.len() as u64) as usize;
+                .min(content_range.len()) as usize;
             let source_local_end = selected_end
                 .saturating_sub(content_range.start.0)
-                .min(hit.layout.len() as u64) as usize;
+                .min(content_range.len()) as usize;
             let local_start = hit.display.source_to_display(source_local_start);
             let local_end = hit.display.source_to_display(source_local_end);
             push_selection_quads(
@@ -667,7 +708,7 @@ impl RowShaping<'_> {
                 .head()
                 .0
                 .saturating_sub(content_range.start.0)
-                .min(hit.layout.len() as u64) as usize;
+                .min(content_range.len()) as usize;
             let local = hit.display.source_to_display(source_local);
             let position = hit.position_for_display_index(local).unwrap_or_default();
             self.caret = Some(

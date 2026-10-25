@@ -31,21 +31,19 @@ impl SemanticEditor {
         if self.search_fold_origin.is_none() {
             self.search_fold_origin = Some(base.clone());
         }
-        let changed = self.search_current != current;
+        let previous = self.search_current;
         self.search_ranges = ranges;
         self.search_current = current;
-        if changed {
-            let reveal = current.map(|range| {
-                snapshot.line_of_byte(range.start)..snapshot.line_of_byte(range.end) + 1
-            });
-            let projection = self.folds.projection_revealing(&path, &snapshot, reveal);
-            self.finish_fold_animation();
-            self.display_map.set_hidden_ranges(projection.hidden_ranges);
-            self.fold_markers = Arc::new(projection.marker_lines);
-            if let Some(range) = current {
-                self.scroll_to_source_offset(range.start, cx);
-                self.pending_search_reveal = true;
-            }
+        self.invalidate_search_display(&snapshot, previous.into_iter().chain(current));
+        let reveal = current
+            .map(|range| snapshot.line_of_byte(range.start)..snapshot.line_of_byte(range.end) + 1);
+        let projection = self.folds.projection_revealing(&path, &snapshot, reveal);
+        self.finish_fold_animation();
+        self.display_map.set_hidden_ranges(projection.hidden_ranges);
+        self.fold_markers = Arc::new(projection.marker_lines);
+        if let Some(range) = current {
+            self.scroll_to_source_offset(range.start, cx);
+            self.pending_search_reveal = true;
         }
         cx.notify();
     }
@@ -53,15 +51,36 @@ impl SemanticEditor {
         self.set_bottom_overlay_clearance(crate::app::status_line::FLOATING_STATUS_CLEARANCE);
         self.pending_search_reveal = false;
         self.search_ranges = Arc::from([]);
-        self.search_current = None;
+        let current = self.search_current.take();
+        let snapshot = self.snapshot(cx);
+        self.invalidate_search_display(&snapshot, current);
         if self.search_fold_origin.take().is_some() && cancel {
-            let snapshot = self.snapshot(cx);
             let path = self.session.read(cx).path().to_owned();
             let projection = self.folds.projection(&path, &snapshot);
             self.display_map.set_hidden_ranges(projection.hidden_ranges);
             self.fold_markers = Arc::new(projection.marker_lines);
         }
         cx.notify();
+    }
+
+    fn invalidate_search_display(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        ranges: impl IntoIterator<Item = ByteRange>,
+    ) {
+        let mut changed = false;
+        for range in ranges {
+            let first = snapshot.line_of_byte(ByteOffset(range.start.0.min(snapshot.len_bytes())));
+            let last = snapshot.line_of_byte(ByteOffset(range.end.0.min(snapshot.len_bytes())));
+            for line in first..=last {
+                self.display_map.invalidate_line_layout(line);
+            }
+            changed = true;
+        }
+        if changed {
+            self.minimap.invalidate_raster();
+            self.layout_reflow_pending = true;
+        }
     }
 
     pub(super) fn reveal_pending_search(&mut self, snapshot: &DocumentSnapshot) -> bool {

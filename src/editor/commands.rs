@@ -242,6 +242,10 @@ impl SemanticEditor {
             }
         } else if let Some(target) = inline_image_edge.flatten() {
             target
+        } else if let Some(target) =
+            self.visible_horizontal_target(&snapshot, self.selection.head(), forward, by_word, cx)
+        {
+            target
         } else if by_word {
             word_boundary(&snapshot, self.selection.head(), forward)
         } else if forward {
@@ -1472,6 +1476,7 @@ impl SemanticEditor {
     }
 
     fn keyboard_quit(&mut self, _: &KeyboardQuit, _: &mut Window, cx: &mut Context<Self>) {
+        self.dismiss_link_editor(cx);
         if self.cancel_table_resize(cx) {
             return;
         }
@@ -1694,6 +1699,9 @@ impl SemanticEditor {
     }
 
     fn on_mouse_move(&mut self, event: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.link_editor.is_some() {
+            return;
+        }
         if self.table_resize_move(event.position, cx) {
             return;
         }
@@ -2274,13 +2282,16 @@ impl Render for SemanticEditor {
         let entity = cx.entity();
         let scroll_entity = entity.clone();
         let timestamp_overlay = self.timestamp_overlay(cx);
+        let link_editor_overlay = self.link_editor_overlay(cx);
         let todo_overlay = self.todo_overlay(window, cx);
         let inline_overlay = self.inline_overlay(window, cx);
         let table_overlays = self.table_overlays(window, cx);
         let source_copy_tooltip = self.source_copy_tooltip(window);
         div()
             .id("semantic-editor")
-            .key_context(if self.table_resize_is_dragging() {
+            .key_context(if self.link_editor.is_some() {
+                "LinkPicker"
+            } else if self.table_resize_is_dragging() {
                 "TableResize"
             } else if self.table_menu_is_open() {
                 "TableMenu"
@@ -2407,6 +2418,7 @@ impl Render for SemanticEditor {
             })
             .child(EditorElement::new(entity))
             .children(timestamp_overlay)
+            .children(link_editor_overlay)
             .children(todo_overlay)
             .children(inline_overlay)
             .children(table_overlays)

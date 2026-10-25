@@ -126,6 +126,7 @@ impl SemanticEditor {
                     crate::typography::table_font(),
                     px(self.font_size_px()),
                     &text_system,
+                    self.display_options(self.session.read(cx).syntax_path(), &snapshot),
                 )
             },
             |layout| layout.metrics.clone(),

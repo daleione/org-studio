@@ -71,6 +71,26 @@ fn choose(editor: &Entity<SemanticEditor>, action: MenuAction, cx: &mut VisualTe
 }
 
 #[gpui::test]
+fn display_changes_dismiss_menus_with_obsolete_geometry(cx: &mut TestAppContext) {
+    cx.update(init);
+    let original = "| Label | Count |\n|-------+-------|\n| Item | 3 |\n";
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("menu.org".into(), original.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.run_until_parked();
+    hover(&editor, 2, 0, view);
+    click_button(view);
+    assert!(editor.read_with(view, |editor, _| editor.table_menu_is_open()));
+    editor.update(view, |editor, cx| {
+        editor.toggle_org_display(crate::command::OrgDisplayFeature::DescriptiveLinks, cx)
+    });
+    view.run_until_parked();
+    assert!(!editor.read_with(view, |editor, _| editor.table_menu_is_open()));
+    assert_eq!(source(&editor, view), original);
+}
+
+#[gpui::test]
 fn table_menu_hover_and_open_preserve_selection_and_edit_the_clicked_cell(cx: &mut TestAppContext) {
     cx.update(init);
     let original =

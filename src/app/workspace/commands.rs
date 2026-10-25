@@ -43,7 +43,10 @@ impl WorkspaceWindow {
                 || workspace.command_line_is_open()
                 || workspace
                     .editor(workspace.document_workspace.active_pane)
-                    .is_some_and(|editor| editor.read(cx).table_menu_is_open())
+                    .is_some_and(|editor| {
+                        editor.read(cx).table_menu_is_open()
+                            || editor.read(cx).link_editor_is_open()
+                    })
                 || workspace.buffers.panel.is_some()
                 || workspace.keyboard.pending_keys().is_some()
         }) {
@@ -322,6 +325,16 @@ impl WorkspaceWindow {
             }
             CommandImplementation::Builtin(BuiltinCommand::ToggleInlineImagePreviews) => {
                 window.dispatch_action(Box::new(crate::editor::ToggleInlineImagePreviews), cx);
+            }
+            CommandImplementation::Builtin(BuiltinCommand::EditLinkAt) => {
+                if let Some(editor) = self.editor(self.document_workspace.active_pane) {
+                    editor.update(cx, |editor, cx| editor.edit_link_at_caret(cx));
+                }
+            }
+            CommandImplementation::Builtin(BuiltinCommand::ToggleOrgDisplay(feature)) => {
+                if let Some(editor) = self.editor(self.document_workspace.active_pane) {
+                    editor.update(cx, |editor, cx| editor.toggle_org_display(feature, cx));
+                }
             }
             CommandImplementation::Builtin(BuiltinCommand::UndoDocument) => {
                 if self.generated_command_disposition(crate::editor::GeneratedCommand::Undo)

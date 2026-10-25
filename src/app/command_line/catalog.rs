@@ -1,5 +1,6 @@
 use crate::{
     command::{CommandKey, CommandRegistry, TABLE_COMMANDS, TableEdit, TableScope},
+    document::DocumentFormat,
     i18n::Language,
     preview::*,
 };
@@ -13,13 +14,22 @@ pub(super) struct Entry {
     words: String,
 }
 
-pub(super) fn entries(
-    commands: &CommandRegistry,
-    language: Language,
-    read_only: bool,
-    editing: bool,
-    selection: bool,
-) -> Vec<Entry> {
+pub(super) struct CatalogContext {
+    pub language: Language,
+    pub format: Option<DocumentFormat>,
+    pub read_only: bool,
+    pub editing: bool,
+    pub selection: bool,
+}
+
+pub(super) fn entries(commands: &CommandRegistry, context: CatalogContext) -> Vec<Entry> {
+    let CatalogContext {
+        language,
+        format,
+        read_only,
+        editing,
+        selection,
+    } = context;
     let chinese = language == Language::Chinese;
     let specs = [
         (
@@ -117,64 +127,83 @@ pub(super) fn entries(
             None,
         ),
     ];
-    specs
-        .into_iter()
-        .filter_map(|(id, input, zh, en, scope)| {
-            let descriptor = commands.descriptor(commands.key(id)?)?;
-            if (read_only
-                && (scope.is_some() || matches!(input, "save" | "reload" | "undo" | "redo")))
-                || (scope == Some(TableScope::Selection) && (!editing || !selection))
-                || (scope == Some(TableScope::Current) && !editing)
-            {
-                return None;
+    let standard = specs.into_iter().filter_map(|(id, input, zh, en, scope)| {
+        let descriptor = commands.descriptor(commands.key(id)?)?;
+        if (read_only && (scope.is_some() || matches!(input, "save" | "reload" | "undo" | "redo")))
+            || (scope == Some(TableScope::Selection) && (!editing || !selection))
+            || (scope == Some(TableScope::Current) && !editing)
+        {
+            return None;
+        }
+        let description = match scope {
+            Some(TableScope::Document) => {
+                if chinese {
+                    "当前文档 · 包含折叠表格 · 一次撤销"
+                } else {
+                    "Current document · includes folded tables · one undo"
+                }
             }
-            let description = match scope {
-                Some(TableScope::Document) => {
-                    if chinese {
-                        "当前文档 · 包含折叠表格 · 一次撤销"
-                    } else {
-                        "Current document · includes folded tables · one undo"
-                    }
+            Some(TableScope::Selection) => {
+                if chinese {
+                    "对齐选区涉及的完整表格"
+                } else {
+                    "Align whole tables touched by the selection"
                 }
-                Some(TableScope::Selection) => {
-                    if chinese {
-                        "对齐选区涉及的完整表格"
-                    } else {
-                        "Align whole tables touched by the selection"
-                    }
-                }
-                Some(TableScope::Current) => {
-                    if chinese {
-                        "对齐光标所在表格"
-                    } else {
-                        "Align the table at the caret"
-                    }
-                }
-                None if input == "goto-line" => {
-                    if chinese {
-                        "goto-line <行号> · 源文件行号从 1 开始"
-                    } else {
-                        "goto-line <line> · source line numbers start at 1"
-                    }
-                }
-                None => descriptor.description.as_ref(),
             }
-            .to_owned();
-            let aliases = descriptor
-                .aliases
-                .iter()
-                .map(|a| a.as_str())
-                .collect::<Vec<_>>()
-                .join(" ");
-            Some(Entry {
-                key: descriptor.key,
-                input: input.into(),
-                description,
-                scope,
-                words: format!("{input} {zh} {en} {id} {aliases}").to_lowercase(),
-            })
+            Some(TableScope::Current) => {
+                if chinese {
+                    "对齐光标所在表格"
+                } else {
+                    "Align the table at the caret"
+                }
+            }
+            None if input == "goto-line" => {
+                if chinese {
+                    "goto-line <行号> · 源文件行号从 1 开始"
+                } else {
+                    "goto-line <line> · source line numbers start at 1"
+                }
+            }
+            None => descriptor.description.as_ref(),
+        }
+        .to_owned();
+        let aliases = descriptor
+            .aliases
+            .iter()
+            .map(|a| a.as_str())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some(Entry {
+            key: descriptor.key,
+            input: input.into(),
+            description,
+            scope,
+            words: format!("{input} {zh} {en} {id} {aliases}").to_lowercase(),
         })
-        .collect()
+    });
+    let org = crate::command::ORG_EDITOR_COMMANDS
+        .iter()
+        .filter(|spec| {
+            format == Some(DocumentFormat::Org) && editing && (!read_only || !spec.edits_source())
+        })
+        .filter_map(|spec| {
+            let input = spec.aliases[0];
+            let description = language.text(spec.label).to_owned();
+            Some(Entry {
+                key: commands.key(spec.name)?,
+                input: input.to_owned(),
+                description,
+                scope: None,
+                words: format!(
+                    "{input} {} {} {}",
+                    spec.name,
+                    Language::Chinese.text(spec.label),
+                    Language::English.text(spec.label)
+                )
+                .to_lowercase(),
+            })
+        });
+    standard.chain(org).collect()
 }
 
 pub(super) fn normalize(query: &str) -> &str {
@@ -289,6 +318,9 @@ pub(super) fn validate(query: &str) -> Result<(), &'static str> {
     } else if (TABLE_COMMANDS
         .iter()
         .any(|spec| command == spec.name || command == spec.alias)
+        || crate::command::ORG_EDITOR_COMMANDS
+            .iter()
+            .any(|spec| command == spec.name || spec.aliases.contains(&command))
         || matches!(
             command,
             "save" | "w" | "reload" | "preview" | "edit" | "split" | "export" | "undo" | "redo"

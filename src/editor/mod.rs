@@ -12,6 +12,7 @@ mod minimap;
 mod minimap_media;
 mod org_commands;
 mod plot;
+mod presentation;
 pub(crate) use org_commands::{TableAlignmentPlan, plan_table_alignment};
 mod read_only;
 mod search;
@@ -456,6 +457,8 @@ impl EditorFoldAnimation {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ShapeKey {
+    pub(super) projected_source: Option<SharedString>,
+    pub(super) display_options: Option<crate::org_semantic::display::OrgDisplayOptions>,
     pub(super) generated_line: Option<u64>,
     pub(super) active_inline_code: Option<(usize, usize)>,
     pub(super) text: SharedString,
@@ -630,6 +633,9 @@ pub struct SemanticEditor {
     source_run_feedback_generation: u64,
     source_run_feedback_task: Option<Task<()>>,
     inline_image_previews: bool,
+    display_overrides: presentation::DisplayOverrides,
+    applied_display_options: Option<crate::org_semantic::display::OrgDisplayOptions>,
+    link_editor: Option<links::LinkEditor>,
     inline_image_preview_overrides: HashMap<u64, bool>,
     inline_image_cache: RefCell<InlineImageCache>,
     inline_image_line_dimensions: RefCell<HashMap<u64, InlineImageMetrics>>,
@@ -865,6 +871,7 @@ impl SemanticEditor {
                     | DocumentEvent::PathChanged { .. }
             ) {
                 this.cancel_table_resize(cx);
+                this.dismiss_link_editor(cx);
                 let snapshot = Arc::new(this.session.read(cx).snapshot());
                 let delta = match event {
                     DocumentEvent::Edited { delta, .. } => Some(delta.clone()),
@@ -1001,6 +1008,7 @@ impl SemanticEditor {
                     snapshot.revision(),
                     first_line,
                 );
+                this.syntax_service.update_display_config(&snapshot, delta);
                 let wrap_width = this.display_map.wrap_width();
                 if previous_line_count != snapshot.len_lines() && delta.edits.len() == 1 {
                     let new_count = last_line.saturating_sub(first_line).saturating_add(1);
@@ -1208,6 +1216,9 @@ impl SemanticEditor {
             source_run_feedback_generation: 0,
             source_run_feedback_task: None,
             inline_image_previews: true,
+            display_overrides: presentation::DisplayOverrides::default(),
+            applied_display_options: None,
+            link_editor: None,
             inline_image_preview_overrides: HashMap::new(),
             inline_image_cache: RefCell::new(InlineImageCache::default()),
             inline_image_line_dimensions: RefCell::new(HashMap::new()),
@@ -1321,6 +1332,7 @@ impl SemanticEditor {
         font: gpui::Font,
         font_size: Pixels,
         text_system: &gpui::WindowTextSystem,
+        display_options: crate::org_semantic::display::OrgDisplayOptions,
     ) -> Arc<TableColumnMetrics> {
         let mut cache = self.table_geometry_cache.borrow_mut();
         let entry = cache
@@ -1328,7 +1340,10 @@ impl SemanticEditor {
             .entry((columns.source_range.start.0, columns.format));
         if let std::collections::hash_map::Entry::Occupied(entry) = &entry {
             let metrics = entry.get();
-            if metrics.font == font && metrics.font_size == font_size {
+            if metrics.font == font
+                && metrics.font_size == font_size
+                && metrics.display_options == display_options
+            {
                 return metrics.clone();
             }
         }
@@ -1338,6 +1353,7 @@ impl SemanticEditor {
             font,
             font_size,
             text_system,
+            display_options,
         ));
         entry.insert_entry(metrics.clone());
         metrics

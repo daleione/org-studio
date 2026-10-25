@@ -4,17 +4,6 @@ use crate::document::{ByteRange, DocumentSnapshot, LineIndex, TextEdit, TextSnap
 
 use super::list::{CheckboxState, parse_list_line};
 
-/// Returns the exact checkbox token edit for one Org line.
-///
-/// This is the single checkbox state machine used by both Editor commands and Reading actions.
-/// The caller remains responsible for revision mapping and committing the returned edit through
-/// `DocumentCommand`.
-#[cfg(test)]
-pub(crate) fn cycle_checkbox(text: &str) -> Option<(Range<usize>, &'static str)> {
-    let (range, current) = checkbox_token(text)?;
-    Some((range, CheckboxState::from_token(current)?.toggled().token()))
-}
-
 pub(crate) fn checkbox_token(text: &str) -> Option<(Range<usize>, &str)> {
     super::list::checkbox_token(text)
 }
@@ -312,11 +301,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checkbox_cycle_and_token_are_one_shared_spec() {
-        assert_eq!(cycle_checkbox("- [ ] item"), Some((2..5, "[X]")));
-        assert_eq!(cycle_checkbox("- [X] item"), Some((2..5, "[ ]")));
-        assert_eq!(cycle_checkbox("- [-] item"), Some((2..5, "[ ]")));
-        assert_eq!(checkbox_token("  - [x] item"), Some((4..7, "[x]")));
+    fn checkbox_transaction_cycles_each_state() {
+        for (current, next) in [
+            ("[ ]", "[X]"),
+            ("[X]", "[ ]"),
+            ("[x]", "[ ]"),
+            ("[-]", "[ ]"),
+        ] {
+            let buffer = crate::document::DocumentBuffer::from_utf8(
+                format!("  - {current} item\n").into_bytes(),
+            )
+            .unwrap();
+            let target = ByteRange::new(4, 7);
+            assert_eq!(
+                checkbox_transaction(&buffer.snapshot(), target).unwrap(),
+                vec![TextEdit::new(target, next)]
+            );
+        }
     }
 
     #[test]

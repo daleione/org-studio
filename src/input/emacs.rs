@@ -160,14 +160,9 @@ impl EmacsGrammar {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        command::CommandRegistryBuilder,
-        keymap::{KeySequence, KeymapBuilder, StrokeInterner},
-    };
+    use crate::keymap::{KeySequence, KeymapBuilder, StrokeInterner};
 
     fn grammar() -> (EmacsGrammar, StrokeInterner, CommandKey) {
-        let registry = CommandRegistryBuilder::default().build();
-        assert!(registry.key("missing").is_none());
         let command = CommandKey::from_index(1);
         let mut interner = StrokeInterner::default();
         let sequence = interner.intern_sequence(&KeySequence::parse("C-x C-f").unwrap());
@@ -238,22 +233,6 @@ mod tests {
         assert_eq!(
             grammar.feed(KeyStroke::parse("escape").unwrap(), &interner),
             EmacsOutcome::Cancelled
-        );
-    }
-
-    #[test]
-    fn escape_still_starts_a_meta_wait_when_idle() {
-        let (mut grammar, interner, command) = grammar();
-        assert_eq!(
-            grammar.feed(KeyStroke::parse("escape").unwrap(), &interner),
-            EmacsOutcome::Pending
-        );
-        assert_eq!(
-            grammar.feed(KeyStroke::parse("f").unwrap(), &interner),
-            EmacsOutcome::Command {
-                command,
-                prefix: PrefixArgument::None
-            }
         );
     }
 

@@ -4,6 +4,7 @@
 //! dependency. Agenda, the editor, and reading mode must consume the same
 //! interpretation of file-local Org configuration and headings.
 
+pub(crate) mod display;
 mod extract;
 mod file_config;
 mod model;

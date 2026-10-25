@@ -21,7 +21,8 @@ pub(super) fn build_frame(
     #[cfg(feature = "benchmarks")]
     let started_at = Instant::now();
     let snapshot = host.read(cx).snapshot(cx);
-    host.update(cx, |editor, _| {
+    host.update(cx, |editor, cx| {
+        editor.sync_display_layout(&snapshot, cx);
         editor.minimap.update_snapshot(&snapshot);
         editor.minimap.scale_factor = window.scale_factor().max(1.0);
         if editor.minimap.settle_layout_raster_invalidation() {
@@ -55,6 +56,8 @@ pub(super) fn build_frame(
     let inline_images = resolve_inline_images(host, &snapshot, bounds, wrap_width, window, cx);
     let editor = host.read(cx);
     let editor_focused = editor.focus_handle.is_focused(window);
+    let editor_path = editor.session.read(cx).syntax_path().to_path_buf();
+    let display_options = editor.display_options(&editor_path, &snapshot);
     let selection = editor.selection;
     let marked = editor.marked.as_ref().map(|range| range.bytes);
     let scroll_y = editor.scroll_y;
@@ -68,7 +71,6 @@ pub(super) fn build_frame(
         .map(|animation| (animation.changed_ranges.clone(), animation.scale()))
         .unwrap_or_else(|| (Arc::from([]), 1.0));
     let paint_lines = animated_paint_lines(&editor.display_map, visible_lines, &fold_ranges);
-    let editor_path = editor.session.read(cx).syntax_path().to_path_buf();
     let document_format = crate::document::DocumentFormat::from_path(&editor_path);
     let style_query = syntax::SparseEditorStyleSnapshot::query_lines(
         &editor_path,
@@ -139,6 +141,7 @@ pub(super) fn build_frame(
             styles_pending,
             style_snapshot: &style_snapshot,
             document_format,
+            display_options,
             editor_focused,
             selection,
             marked,

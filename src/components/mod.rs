@@ -8,5 +8,6 @@ pub(crate) mod timestamp_picker;
 pub(crate) mod todo_picker;
 
 pub(crate) mod inline_picker;
+pub(crate) mod link_picker;
 
 pub(crate) use text::UiTextExt;

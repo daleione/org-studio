@@ -889,18 +889,10 @@ mod tests {
     }
 
     #[test]
-    fn todo_and_checkbox_cycles_are_explicit_line_edits() {
+    fn todo_cycles_are_explicit_line_edits() {
         assert_eq!(cycle_todo("* Heading"), Some((2..2, "TODO ")));
         assert_eq!(cycle_todo("* TODO Heading"), Some((2..6, "DONE")));
         assert_eq!(cycle_todo("* DONE Heading"), Some((2..7, "")));
-        assert_eq!(
-            crate::org_syntax::command::cycle_checkbox("- [ ] item"),
-            Some((2..5, "[X]"))
-        );
-        assert_eq!(
-            crate::org_syntax::command::cycle_checkbox("- [X] item"),
-            Some((2..5, "[ ]"))
-        );
     }
 
     #[test]

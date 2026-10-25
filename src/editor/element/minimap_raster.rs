@@ -19,6 +19,8 @@ use crate::editor::inline_image::{
 };
 
 pub(super) struct MinimapRasterRequest {
+    pub(super) source_reveals: Arc<[ByteRange]>,
+    pub(super) display_options: crate::org_semantic::display::OrgDisplayOptions,
     pub(super) key: crate::editor::minimap::RasterKey,
     pub(super) layout: Arc<EditorLayoutMap>,
     pub(super) path: std::path::PathBuf,
@@ -211,23 +213,74 @@ pub(super) fn schedule_minimap_raster(
                     .ok()
                     .map(|range| bounded_minimap_text(&request.snapshot, range, 1_024))
                     .unwrap_or_default();
+                let line_style = semantics.snapshot.line(line);
+                let raw_len = text.len();
+                let mut display = crate::editor::layout_map::expand_tabs(text.clone(), 4);
+                let reveal = request
+                    .snapshot
+                    .line_content_range(LineIndex(line))
+                    .ok()
+                    .map(|range| {
+                        crate::editor::presentation::local_reveals(
+                            &display,
+                            range,
+                            request.source_reveals.iter().copied(),
+                        )
+                    })
+                    .unwrap_or_default();
+                let mut spans = line_style
+                    .map(|style| syntax::semantic_spans(&request.path, &display.text, style))
+                    .unwrap_or_default();
+                if let Some(style) = line_style {
+                    let projection = crate::editor::presentation::project_line(
+                        &request.path,
+                        &display.text,
+                        style,
+                        request.display_options,
+                        &reveal,
+                    );
+                    crate::editor::presentation::project_spans(&mut spans, &projection);
+                    display = display.then(projection);
+                    if document_format == crate::document::DocumentFormat::Org {
+                        crate::editor::presentation::mask_heading_stars(
+                            &mut spans,
+                            &display.text,
+                            style,
+                            request.display_options,
+                        );
+                    }
+                }
+                text = display.text.clone();
                 if image_lines.contains(&line) {
                     text.clear();
+                    spans.clear();
                 } else if let Some((start, end)) = source.text_range {
-                    let start = start as usize;
-                    let end = end.map_or(text.len(), |end| end as usize).min(text.len());
+                    let range = display.display_range(
+                        start as usize..end.map_or(raw_len, |end| end as usize).min(raw_len),
+                    );
+                    let start = range.start;
+                    let end = range.end;
                     if start < end && text.is_char_boundary(start) && text.is_char_boundary(end) {
                         text = text[start..end].to_owned();
+                        spans = spans
+                            .into_iter()
+                            .filter_map(|mut span| {
+                                let a = span.bytes.start.max(start);
+                                let b = span.bytes.end.min(end);
+                                (a < b).then(|| {
+                                    span.bytes = a - start..b - start;
+                                    span
+                                })
+                            })
+                            .collect();
                     } else {
                         text.clear();
+                        spans.clear();
                     }
                 } else {
                     text.clear();
+                    spans.clear();
                 }
-                let line_style = semantics.snapshot.line(line);
-                let spans = line_style
-                    .map(|style| syntax::semantic_spans(&request.path, &text, style))
-                    .unwrap_or_default();
                 let mut row = minimap_text_row(
                     text,
                     line_style,
@@ -235,6 +288,10 @@ pub(super) fn schedule_minimap_raster(
                     &mut rich_span_budget,
                     &request.theme,
                 );
+                row.display_options = request.display_options;
+                if complete_source_line {
+                    row.reveal_ranges = reveal;
+                }
                 row.table = if complete_source_line {
                     line_style
                         .filter(|style| style.id == syntax::EditorStyleId::Table)
@@ -394,6 +451,8 @@ pub(super) fn minimap_text_row(
     let block = line_style.and_then(|style| style.block.as_ref());
     let rich_spans = rich_span_budget.adapt(&text, spans, theme);
     crate::editor::minimap::TextRow {
+        reveal_ranges: Vec::new(),
+        display_options: Default::default(),
         font_role: line_style.map_or(crate::typography::FontRole::Editor, |style| {
             style.id.font_role()
         }),

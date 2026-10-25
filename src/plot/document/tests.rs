@@ -7,6 +7,69 @@ use crate::{
 };
 
 #[gpui::test]
+fn coalesced_edit_notifications_keep_duplicate_plots_and_their_sizes(
+    cx: &mut gpui::TestAppContext,
+) {
+    let plot = "#+PLOT: ind:1 with:lines\n| x | y |\n|---+---|\n| 1 | 2 |\n";
+    let mut buffer =
+        DocumentBuffer::from_utf8(format!("前言\n{plot}\n{plot}\n末尾").into_bytes()).unwrap();
+    let document = cx.update(|cx| PlotDocument::shared(Arc::new(buffer.snapshot()), cx));
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(81));
+    cx.run_until_parked();
+    let previous = document.read_with(cx, |document, _| document.entries.clone());
+    assert_eq!(previous.len(), 2);
+    for (index, entry) in previous.iter().enumerate() {
+        document.update(cx, |document, cx| {
+            document.resize_canvas(
+                entry.id,
+                Some(500.0 + index as f32 * 100.0),
+                None,
+                false,
+                cx,
+            );
+        });
+    }
+    let mut deltas = Vec::new();
+    for text in ["x", "😀"] {
+        deltas.push(
+            buffer
+                .commit(EditTransaction::new(
+                    buffer.revision(),
+                    vec![TextEdit::new(ByteRange::new(0, 0), text)],
+                ))
+                .unwrap(),
+        );
+    }
+    let snapshot = Arc::new(buffer.snapshot());
+    // Deferred notifications can all observe the same, already newer snapshot.
+    for delta in deltas {
+        document.update(cx, |document, cx| {
+            document.refresh(snapshot.clone(), Some(delta), cx)
+        });
+    }
+    cx.run_until_parked();
+    cx.executor().advance_clock(Duration::from_millis(81));
+    cx.run_until_parked();
+    document.read_with(cx, |document, _| {
+        assert!(document.is_current(snapshot.revision()));
+        assert_eq!(document.entries.len(), previous.len());
+        for (index, (actual, previous)) in document.entries.iter().zip(previous.iter()).enumerate()
+        {
+            assert_eq!(actual.id, previous.id);
+            assert_eq!(
+                actual.display.lock().unwrap().requested_width,
+                Some(500.0 + index as f32 * 100.0)
+            );
+            assert_eq!(
+                snapshot.copy_range(actual.source.table),
+                "| x | y |\n|---+---|\n| 1 | 2 |\n"
+            );
+        }
+    });
+}
+
+#[gpui::test]
 fn resized_plots_keep_their_sizes_when_sql_results_are_replaced(cx: &mut gpui::TestAppContext) {
     for (named, with_delta) in [(true, true), (true, false), (false, true), (false, false)] {
         let result = |name: &str, hash: &str, rows: &str| {

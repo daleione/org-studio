@@ -1,6 +1,8 @@
 use std::{borrow::Borrow, collections::HashMap, fmt, sync::Arc};
 
+mod org;
 mod table;
+pub(crate) use org::ORG_EDITOR_COMMANDS;
 pub use table::{TABLE_COMMANDS, TableEdit};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -54,6 +56,14 @@ impl CommandKey {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OrgDisplayFeature {
+    DescriptiveLinks,
+    LeadingStars,
+    EmphasisMarkers,
+    Entities,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinCommand {
     ExecuteCommand,
     AlignTables,
@@ -85,6 +95,8 @@ pub enum BuiltinCommand {
     ExecuteSourceBlock,
     TangleDocument,
     OpenLinkAt,
+    EditLinkAt,
+    ToggleOrgDisplay(OrgDisplayFeature),
     ToggleInlineImagePreviews,
     UndoDocument,
     RedoDocument,

@@ -258,6 +258,8 @@ pub(super) fn build_minimap(
             .telemetry
             .note_request(snapshot.revision(), &source_lines);
         raster_request = Some(MinimapRasterRequest {
+            source_reveals: editor.source_reveals().collect::<Vec<_>>().into(),
+            display_options: editor.display_options(path, snapshot),
             key,
             layout: request_layout.clone(),
             path: path.to_path_buf(),

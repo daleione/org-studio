@@ -124,7 +124,21 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             BuiltinCommand::GotoLine,
             UndoPolicy::None,
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(crate::command::ORG_EDITOR_COMMANDS.iter().map(|spec| {
+        (
+            spec.name,
+            spec.aliases,
+            crate::i18n::Language::English.text(spec.label),
+            spec.command,
+            if spec.edits_source() {
+                UndoPolicy::Transaction
+            } else {
+                UndoPolicy::StateOnly
+            },
+        )
+    })) {
         builder
             .register_builtin(BuiltinCommandSpec {
                 name: name.into(),
@@ -831,6 +845,10 @@ pub(crate) fn source_bindings() -> Vec<BindingSpec<'static>> {
     bindings.push(BindingSpec {
         keys: "C-c C-o",
         behavior: BindingBehavior::Command(OPEN_LINK_AT_COMMAND),
+    });
+    bindings.push(BindingSpec {
+        keys: "C-c C-l",
+        behavior: BindingBehavior::Command("org-studio.org.edit-link"),
     });
     bindings.extend([
         BindingSpec {

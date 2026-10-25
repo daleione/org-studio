@@ -54,6 +54,8 @@ pub(super) fn prepare_minimap_layout_request(
         .collect::<Vec<_>>();
     inline_image_overrides.sort_unstable_by_key(|entry| entry.0);
     let key = crate::editor::minimap::PreparedLayoutKey {
+        source_reveals: editor.source_reveals().collect::<Vec<_>>().into(),
+        display_options: editor.display_options(path, snapshot),
         revision: snapshot.revision(),
         path: path.to_path_buf(),
         line_count: snapshot.len_lines(),
@@ -210,7 +212,31 @@ pub(super) fn schedule_minimap_layout_preparation(
                     metrics.after = INLINE_IMAGE_VERTICAL_PADDING;
                     (1, Vec::new())
                 } else {
-                    let display = source_line.display;
+                    let mut display = source_line.display;
+                    let reveal = crate::editor::presentation::local_reveals(
+                        &display,
+                        source_line.visible_range,
+                        request.key.source_reveals.iter().copied(),
+                    );
+                    let mut spans =
+                        syntax::semantic_spans(&request.key.path, &display.text, line_style);
+                    let projection = crate::editor::presentation::project_line(
+                        &request.key.path,
+                        &display.text,
+                        line_style,
+                        request.key.display_options,
+                        &reveal,
+                    );
+                    crate::editor::presentation::project_spans(&mut spans, &projection);
+                    display = display.then(projection);
+                    if format == crate::document::DocumentFormat::Org {
+                        crate::editor::presentation::mask_heading_stars(
+                            &mut spans,
+                            &display.text,
+                            line_style,
+                            request.key.display_options,
+                        );
+                    }
                     let text: gpui::SharedString =
                         folded_display_text(display.text.clone(), folded).into();
                     let is_table = line_style.id == syntax::EditorStyleId::Table;
@@ -219,9 +245,8 @@ pub(super) fn schedule_minimap_layout_preparation(
                     } else {
                         request.font.clone()
                     };
-                    let runs = syntax::runs(
-                        &request.key.path,
-                        &text,
+                    let runs = syntax::runs_from_spans(
+                        &spans,
                         TextRun {
                             len: text.len(),
                             font: font.clone(),
@@ -258,6 +283,7 @@ pub(super) fn schedule_minimap_layout_preparation(
                                         font,
                                         shaped_font_size,
                                         &text_system,
+                                        request.key.display_options,
                                     ));
                                     Some((columns, metrics))
                                 })
@@ -272,10 +298,13 @@ pub(super) fn schedule_minimap_layout_preparation(
                             &runs,
                             columns,
                             metrics,
-                            effective_wrap_width,
-                            None,
-                            None,
                             &text_system,
+                            crate::editor::table_layout::TableLayoutOptions {
+                                wrap_width: effective_wrap_width,
+                                display_options: request.key.display_options,
+                                reveal: &reveal,
+                                ..Default::default()
+                            },
                         )
                     });
                     let wrapped = text_system

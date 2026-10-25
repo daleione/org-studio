@@ -14,6 +14,7 @@ mod format;
 mod headings;
 pub(crate) mod markdown;
 mod outline;
+mod projection;
 mod revision;
 mod selection;
 mod session;
@@ -33,6 +34,7 @@ pub(crate) use outline::{
     GlobalVisibility, LocalVisibility, OutlineCycleProjection, OutlineHeading,
     cycle_outline_visibility, global_outline_visibility, next_local_visibility,
 };
+pub(crate) use projection::TextProjection;
 pub use revision::{
     EditLog, EditLogError, RangeMapError, Revision, RevisionDelta, RevisionRange, TextEditSummary,
 };
@@ -111,6 +113,17 @@ pub trait TextSnapshot: Send + Sync {
     fn line_of_byte(&self, offset: ByteOffset) -> u64;
     fn chunk_at(&self, offset: ByteOffset) -> Option<TextChunk<'_>>;
     fn copy_range(&self, range: ByteRange) -> String;
+
+    fn is_char_boundary(&self, offset: ByteOffset) -> bool {
+        if offset.0 >= self.len_bytes() {
+            return offset.0 == self.len_bytes();
+        }
+        self.chunk_at(offset).is_some_and(|chunk| {
+            chunk
+                .text
+                .is_char_boundary((offset.0 - chunk.start.0) as usize)
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -269,7 +282,10 @@ impl<'a> LineCursor<'a> {
     }
 
     pub fn within(snapshot: &'a dyn TextSnapshot, range: ByteRange) -> Option<Self> {
-        if range.start > range.end || range.end.0 > snapshot.len_bytes() {
+        if range.start > range.end
+            || !snapshot.is_char_boundary(range.start)
+            || !snapshot.is_char_boundary(range.end)
+        {
             return None;
         }
         Some(Self {
@@ -331,8 +347,8 @@ impl<'a> LineCursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ByteRange, DocumentBuffer, DocumentSnapshot, EditTransaction, TextEdit, TextSnapshot,
-        TextStatistics,
+        ByteRange, DocumentBuffer, DocumentSnapshot, EditTransaction, LineCursor, TextEdit,
+        TextSnapshot, TextStatistics,
     };
 
     #[test]
@@ -372,5 +388,42 @@ mod tests {
                 lines: 3,
             }
         );
+    }
+
+    #[test]
+    fn line_cursor_rejects_ranges_inside_utf8_characters() {
+        let source = "é示例😀\n";
+        let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        for offset in 0..=source.len() {
+            for range in [
+                ByteRange::new(0, offset as u64),
+                ByteRange::new(offset as u64, source.len() as u64),
+                ByteRange::new(offset as u64, offset as u64),
+            ] {
+                assert_eq!(
+                    LineCursor::within(&snapshot, range).is_some(),
+                    source.is_char_boundary(offset),
+                    "{range:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn line_cursor_preserves_unicode_lines_across_rope_chunks() {
+        let source = format!("intro\r\n{}\r\nlast😀", "正文".repeat(2_000));
+        let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let mut cursor = LineCursor::new(&snapshot);
+        let mut offset = 0;
+        for expected in source.split_inclusive('\n') {
+            let line = cursor.next_line().unwrap();
+            assert_eq!(line.text, expected);
+            assert_eq!(
+                line.range,
+                ByteRange::new(offset, offset + expected.len() as u64)
+            );
+            offset = line.range.end.0;
+        }
+        assert!(cursor.next_line().is_none());
     }
 }

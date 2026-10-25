@@ -169,10 +169,13 @@ impl WorkspaceWindow {
             .is_some_and(|e| !e.read(cx).selection().is_empty());
         let mut all = catalog::entries(
             &self.commands,
-            self.language,
-            doc.read(cx).is_read_only(),
-            editing,
-            selected,
+            catalog::CatalogContext {
+                language: self.language,
+                format: crate::document::DocumentFormat::detect(doc.read(cx).syntax_path()),
+                read_only: doc.read(cx).is_read_only(),
+                editing,
+                selection: selected,
+            },
         );
         all.retain(|entry| match entry.input.as_str() {
             "navigate-back" => self.navigation_can_go(false, cx),

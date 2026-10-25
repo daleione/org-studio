@@ -4,6 +4,9 @@
 use super::*;
 use crate::document::{ByteOffset, LineIndex};
 
+mod edit;
+pub(super) use edit::LinkEditor;
+
 /// Which in-document construct an internal link targets (Org Manual 4.2).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InternalLinkMode {

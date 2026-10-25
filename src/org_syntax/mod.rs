@@ -5,7 +5,8 @@ use std::{
 };
 
 use crate::document::{
-    ByteOffset, ByteRange, LineCursor, RevisionDelta, RevisionRange, TextSnapshot,
+    ByteOffset, ByteRange, DocumentId, LineCursor, Revision, RevisionDelta, RevisionRange,
+    TextSnapshot,
 };
 
 pub(crate) mod attributes;
@@ -80,6 +81,8 @@ pub struct BlockArena {
     last_child: Vec<Option<BlockId>>,
     checkpoints: Arc<[SyntaxCheckpoint]>,
     syntax_index: Arc<HashMap<SyntaxId, BlockId>>,
+    document_id: Option<DocumentId>,
+    revision: Revision,
     source_len: u64,
 }
 
@@ -113,6 +116,8 @@ impl BlockArena {
         ensure_unique_syntax_ids(&mut self.nodes);
         self.finish_checkpoints();
         self.finish_syntax_index();
+        self.document_id = Some(snapshot.document_id());
+        self.revision = snapshot.revision();
         self.source_len = snapshot.len_bytes();
     }
 
@@ -373,9 +378,12 @@ pub fn parse_incremental(
     deltas: &[RevisionDelta],
 ) -> Option<(BlockArena, SyntaxPatch)> {
     let first = deltas.first()?;
-    if deltas
-        .windows(2)
-        .any(|pair| pair[0].after != pair[1].before)
+    if previous.document_id != Some(snapshot.document_id())
+        || previous.revision != first.before
+        || deltas.last()?.after != snapshot.revision()
+        || deltas
+            .windows(2)
+            .any(|pair| pair[0].after != pair[1].before)
     {
         return None;
     }
@@ -454,6 +462,8 @@ pub fn parse_incremental(
         last_child: Vec::new(),
         checkpoints: Arc::from([]),
         syntax_index: Arc::new(HashMap::new()),
+        document_id: Some(snapshot.document_id()),
+        revision: snapshot.revision(),
         source_len: snapshot.len_bytes(),
     };
     if !preserves_all_ids {
@@ -886,6 +896,62 @@ mod tests {
                 .all(|(next, old)| next.syntax_id == old.syntax_id)
         );
         assert_eq!(incremental.checkpoints(), full.checkpoints());
+    }
+
+    #[test]
+    fn incremental_parse_rejects_mismatched_snapshot_and_edit_history() {
+        let source = "* 章节甲\n/正文/\n* 章节乙\n段落\n* 章节丙\n段落\n* 章节丁\n段落\n";
+        let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let previous = parse(&buffer.snapshot());
+        let offset = source.find("正文").unwrap() as u64;
+        let first = buffer
+            .commit(EditTransaction::new(
+                buffer.revision(),
+                vec![TextEdit::new(ByteRange::new(offset, offset), "x")],
+            ))
+            .unwrap();
+        let intermediate = buffer.snapshot();
+        let second = buffer
+            .commit(EditTransaction::new(
+                buffer.revision(),
+                vec![TextEdit::new(ByteRange::new(0, 0), "xyz")],
+            ))
+            .unwrap();
+        let latest = buffer.snapshot();
+
+        // These offsets end inside a Chinese character in the older snapshot.
+        assert!(
+            parse_incremental(&intermediate, &previous, &[first.clone(), second.clone()]).is_none()
+        );
+        assert!(parse_incremental(&latest, &previous, std::slice::from_ref(&first)).is_none());
+        assert!(
+            parse_incremental(
+                &intermediate,
+                &parse(&intermediate),
+                std::slice::from_ref(&first)
+            )
+            .is_none()
+        );
+
+        let mut other = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+        other
+            .commit(EditTransaction::new(
+                other.revision(),
+                vec![TextEdit::new(ByteRange::new(offset, offset), "x")],
+            ))
+            .unwrap();
+        assert!(
+            parse_incremental(&other.snapshot(), &previous, std::slice::from_ref(&first)).is_none()
+        );
+
+        let (incremental, _) = parse_incremental(&latest, &previous, &[first, second]).unwrap();
+        let full = parse(&latest);
+        assert_eq!(incremental.nodes().len(), full.nodes().len());
+        for (actual, expected) in incremental.nodes().iter().zip(full.nodes()) {
+            assert_eq!(actual.kind, expected.kind);
+            assert_eq!(actual.source, expected.source);
+            assert_eq!(actual.content, expected.content);
+        }
     }
 
     #[test]

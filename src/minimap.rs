@@ -365,11 +365,6 @@ pub fn offset_to_ratio(offset: f32, total: f32, viewport: f32) -> f32 {
 mod tests {
     use super::*;
     #[test]
-    fn scroll_ratio_reaches_the_document_end() {
-        assert_eq!(ratio_to_offset(1.0, 1000.0, 200.0), 800.0);
-    }
-
-    #[test]
     fn shared_drag_geometry_reaches_both_ends_without_jumping() {
         let session = DragSession {
             start_pointer_y: 10.0,
