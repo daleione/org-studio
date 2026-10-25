@@ -449,7 +449,7 @@ fn keyboard_close_reviews_before_discard_and_window_close_checks_hidden_edits(
     w.update(cx, |w, _| {
         assert_eq!(w.buffers.review().unwrap().entries.len(), 1)
     });
-    cx.simulate_keystrokes("shift-tab space");
+    cx.simulate_keystrokes("tab space");
     cx.run_until_parked();
     w.update(cx, |w, cx| {
         assert_eq!(w.buffer_sessions().count(), 1);
@@ -469,6 +469,295 @@ fn keyboard_close_reviews_before_discard_and_window_close_checks_hidden_edits(
     cx.run_until_parked();
     w.update(cx, |w, cx| {
         assert!(w.buffer_sessions().next().unwrap().read(cx).is_dirty())
+    });
+}
+
+#[gpui::test]
+fn exiting_skips_clean_files_and_empty_drafts_but_reviews_cleared_saved_files(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("notes.org");
+    std::fs::write(&path, "saved text").unwrap();
+    let loaded = crate::preview::load_document(path.clone()).unwrap();
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.run_until_parked();
+    assert!(cx.simulate_close());
+    let saved = w.update(cx, |w, cx| {
+        assert!(w.apply_load_result(w.generation, Ok(loaded), cx));
+        w.document_session().unwrap().clone()
+    });
+    let draft = w.update(cx, |w, cx| {
+        w.create_buffer("draft.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&draft, "temporary text", cx);
+    edit(&draft, "", cx);
+    assert!(draft.read_with(cx, |s, _| s.is_dirty()));
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.activate_buffer(saved.read(cx).id(), cx);
+            w.request_quit(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    assert!(w.read_with(cx, |w, _| w.buffers.review().is_none()));
+    assert!(cx.simulate_close());
+
+    edit(&saved, "", cx);
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.show_home_now(cx);
+            w.request_quit(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        let review = w.buffers.review().unwrap();
+        assert_eq!(review.kind, ReviewKind::Quit);
+        assert_eq!(review.entries.len(), 1);
+        assert_eq!(review.entries[0].id, saved.read(cx).id());
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!cx.simulate_close());
+    w.read_with(cx, |w, cx| {
+        let review = w.buffers.review().unwrap();
+        assert_eq!(review.kind, ReviewKind::Window);
+        assert_eq!(review.entries.len(), 1);
+        assert_eq!(review.entries[0].id, saved.read(cx).id());
+    });
+    assert_eq!(std::fs::read_to_string(path).unwrap(), "saved text");
+}
+
+#[gpui::test]
+fn an_empty_draft_with_a_pending_save_still_blocks_exit(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let directory = tempfile::tempdir().unwrap();
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let draft = w.update(cx, |w, cx| {
+        w.create_buffer("blank.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    let request = draft.update(cx, |s, _| {
+        s.begin_save(Some(directory.path().join("blank.org")))
+            .unwrap()
+    });
+    assert!(!draft.read_with(cx, |s, _| s.is_dirty()));
+    cx.update(|window, app| w.update(app, |w, cx| w.request_quit(window, cx)));
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        let review = w.buffers.review().unwrap();
+        assert_eq!(review.kind, ReviewKind::Quit);
+        assert_eq!(review.entries.len(), 1);
+        assert_eq!(review.entries[0].id, draft.read(cx).id());
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(!cx.simulate_close());
+    assert_eq!(
+        w.read_with(cx, |w, _| w.buffers.review().unwrap().kind),
+        ReviewKind::Window
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    draft.update(cx, |s, _| s.cancel_save(request.revision()));
+    assert!(cx.simulate_close());
+}
+
+#[gpui::test]
+fn quit_review_is_compact_and_tab_cycles_only_visible_buttons(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(680.)));
+    let session = w.update(cx, |w, cx| {
+        w.create_buffer("notes.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&session, "work in progress", cx);
+    w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Quit, cx));
+    cx.run_until_parked();
+    let shell = cx.debug_bounds("floating-status-line").unwrap();
+    assert!(shell.size.height < crate::typography::ui_px(250.));
+    assert!(cx.debug_bounds("buffer-review-modal").is_none());
+    assert!(cx.debug_bounds("buffer-review-cancel").is_none());
+    let buttons = ["buffer-review-discard-all", "buffer-review-submit"];
+    let before = buttons.map(|id| cx.debug_bounds(id).unwrap());
+    assert!(before[0].right() <= before[1].left());
+    assert!(before[0].left() >= shell.left() && before[1].right() <= shell.right());
+    cx.update(|window, app| {
+        assert!(
+            w.read(app)
+                .buffers
+                .review()
+                .unwrap()
+                .focus(ReviewControl::Submit)
+                .is_focused(window)
+        );
+    });
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        assert!(
+            w.read(app)
+                .buffers
+                .review()
+                .unwrap()
+                .focus(ReviewControl::Discard)
+                .is_focused(window)
+        );
+    });
+    assert_eq!(before, buttons.map(|id| cx.debug_bounds(id).unwrap()));
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        assert!(
+            w.read(app)
+                .buffers
+                .review()
+                .unwrap()
+                .focus(ReviewControl::Submit)
+                .is_focused(window)
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(w.read_with(cx, |w, _| w.buffers.review().is_none()));
+    assert_eq!(text(&session, cx), "work in progress");
+    assert!(session.read_with(cx, |s, _| s.is_dirty()));
+}
+
+#[gpui::test]
+fn batch_review_choices_and_file_links_do_not_discard_edits(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    cx.simulate_resize(gpui::size(gpui::px(900.), gpui::px(680.)));
+    for index in 0..8 {
+        let session = w.update(cx, |w, cx| {
+            w.create_buffer(format!("document-{index}.org"), None, cx);
+            w.document_session().unwrap().clone()
+        });
+        edit(&session, &format!("draft {index}"), cx);
+    }
+    w.update(cx, |w, cx| {
+        w.buffers
+            .scroll
+            .set_offset(gpui::point(gpui::px(0.), gpui::px(-200.)));
+        w.begin_buffer_review(ReviewKind::Quit, cx);
+    });
+    cx.run_until_parked();
+    let shell = cx.debug_bounds("floating-status-line").unwrap();
+    let list = cx.debug_bounds("buffer-review-list").unwrap();
+    assert!(cx.debug_bounds("buffer-review-row-0").unwrap().top() >= list.top());
+    let submit = cx.debug_bounds("buffer-review-submit").unwrap();
+    assert!(shell.size.height < gpui::px(600.));
+    assert!(list.bottom() <= submit.top());
+    assert!(cx.debug_bounds("buffer-review-discard-all").is_none());
+    assert!(cx.debug_bounds("buffer-review-cancel").is_none());
+    cx.simulate_keystrokes("tab space");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let review = w.read(app).buffers.review().unwrap();
+        assert!(review.entries.iter().all(|e| !e.save));
+        assert!(review.focus(ReviewControl::All).is_focused(window));
+    });
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        assert!(w.buffers.review().unwrap().entries.iter().all(|e| e.save));
+        assert!(w.buffer_sessions().all(|s| s.read(cx).is_dirty()));
+        assert!(w.save.task.is_none() && w.save.dialog_task.is_none());
+    });
+    cx.simulate_keystrokes("ctrl-g");
+    cx.run_until_parked();
+    assert!(w.read_with(cx, |w, _| w.buffers.review().is_none()));
+
+    w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Quit, cx));
+    cx.run_until_parked();
+    let target = w.read_with(cx, |w, _| w.buffers.review().unwrap().entries[1].id);
+    let choice = cx.debug_bounds("buffer-review-choice-1").unwrap();
+    cx.simulate_click(choice.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    assert!(w.read_with(cx, |w, _| !w.buffers.review().unwrap().entries[1].save));
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        assert!(w.buffers.review().is_none());
+        assert_eq!(w.document_session().unwrap().read(cx).id(), target);
+        assert!(w.buffer_sessions().all(|s| s.read(cx).is_dirty()));
+        assert!(w.save.task.is_none() && w.save.dialog_task.is_none());
+    });
+
+    w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Quit, cx));
+    cx.run_until_parked();
+    let target = w.read_with(cx, |w, _| w.buffers.review().unwrap().entries[2].id);
+    let file = cx.debug_bounds("buffer-review-document-2").unwrap();
+    cx.simulate_click(file.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    w.read_with(cx, |w, cx| {
+        assert!(w.buffers.review().is_none());
+        assert_eq!(w.document_session().unwrap().read(cx).id(), target);
+        assert!(w.buffer_sessions().all(|s| s.read(cx).is_dirty()));
+    });
+    cx.simulate_resize(gpui::size(gpui::px(390.), gpui::px(360.)));
+    w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Quit, cx));
+    cx.run_until_parked();
+    let shell = cx.debug_bounds("floating-status-line").unwrap();
+    let list = cx.debug_bounds("buffer-review-list").unwrap();
+    let button = cx.debug_bounds("buffer-review-submit").unwrap();
+    assert!(button.left() >= shell.left() && button.right() <= shell.right());
+    assert!(button.bottom() <= shell.bottom());
+    assert!(list.bottom() <= button.top());
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+}
+
+#[gpui::test]
+fn review_morph_retains_content_until_the_status_line_returns(cx: &mut gpui::TestAppContext) {
+    use crate::app::status_line::shell::{ResizePolicy, ShellKind, ShellShape};
+    use std::time::Instant;
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let session = w.update(cx, |w, cx| {
+        w.create_buffer("draft.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&session, "pending changes", cx);
+    cx.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.begin_buffer_review(ReviewKind::Quit, cx);
+            let open = w.buffer_shell_request(window, cx).unwrap();
+            assert_eq!(open.kind, ShellKind::Buffers);
+            assert!(matches!(open.resize, ResizePolicy::Animated));
+            w.status_shell_tick(window, cx);
+            let opening = w.status.sample_shell(open.available, Instant::now());
+            assert!(opening.height < open.target.height);
+            assert!(opening.content_opacity < 1.);
+            w.status
+                .set_shell_shape_for_test(open.target, open.available, Instant::now(), false);
+            w.cancel_buffer_panel(cx);
+            assert!(w.buffers.review().is_none());
+            assert!(matches!(w.buffers.outgoing, Some(OutgoingPanel::Review(_))));
+            let close = w.buffer_shell_request(window, cx).unwrap();
+            assert!(close.returning);
+            w.status_shell_tick(window, cx);
+            let closing = w.status.sample_shell(close.available, Instant::now());
+            assert!(closing.height > close.target.height);
+            assert!(closing.content_opacity > 0.);
+            w.status.set_shell_shape_for_test(
+                ShellShape::status(close.available),
+                close.available,
+                Instant::now(),
+                false,
+            );
+            w.status_shell_tick(window, cx);
+            assert!(!w.buffers.returning());
+        })
     });
 }
 
@@ -701,15 +990,14 @@ fn single_close_keyboard_cancel_and_batch_skip_keep_edits(cx: &mut gpui::TestApp
         w.begin_buffer_review(ReviewKind::Close(session.read(cx).id()), cx)
     });
     cx.run_until_parked();
-    // Save has initial focus; Tab moves to Cancel, which must keep the document.
-    cx.simulate_keystrokes("tab space");
+    cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     assert!(w.read_with(cx, |w, _| w.buffers.review().is_none()));
     assert_eq!(text(&session, cx), "keep until confirmed");
 
     w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Save, cx));
     cx.run_until_parked();
-    let skip = cx.debug_bounds("buffer-review-discard-0").unwrap().center();
+    let skip = cx.debug_bounds("buffer-review-choice-0").unwrap().center();
     cx.simulate_click(skip, gpui::Modifiers::default());
     cx.run_until_parked();
     let submit = cx.debug_bounds("buffer-review-submit").unwrap().center();
@@ -754,6 +1042,8 @@ fn quit_without_saving_includes_hidden_drafts_and_never_prompts(cx: &mut gpui::T
 
 #[gpui::test]
 fn discard_review_rejects_new_revisions_and_new_dirty_buffers(cx: &mut gpui::TestAppContext) {
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
     let clean = w.update(cx, |w, cx| {
         w.create_buffer("clean".into(), None, cx);
@@ -774,10 +1064,24 @@ fn discard_review_rejects_new_revisions_and_new_dirty_buffers(cx: &mut gpui::Tes
                 w.save.interaction,
                 crate::app::save::SaveInteraction::Idle
             ));
-            w.cancel_buffer_panel(cx);
-            w.begin_buffer_review(ReviewKind::Quit, cx);
         })
     });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("tab");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        assert!(
+            w.read(app)
+                .buffers
+                .review()
+                .unwrap()
+                .focus(ReviewControl::Discard)
+                .is_focused(window)
+        );
+    });
+    cx.simulate_keystrokes("ctrl-g");
+    cx.run_until_parked();
+    w.update(cx, |w, cx| w.begin_buffer_review(ReviewKind::Quit, cx));
     edit(&clean, "new unreviewed edits", cx);
     cx.update(|window, app| {
         w.update(app, |w, cx| {

@@ -100,7 +100,7 @@ impl WorkspaceWindow {
         self.status.dismiss_popover();
         self.buffers.cycle.clear();
         self.buffers.pane = self.document_workspace.active_pane;
-        self.buffers.returning = false;
+        self.buffers.outgoing = None;
         let placeholder = self.buffer_text("筛选文件名…", "Filter documents…");
         let input = cx.new(|cx| {
             NativeInput::new(
@@ -397,8 +397,15 @@ impl WorkspaceWindow {
         self.buffers.file_task = None;
         self.buffers.file_request = self.buffers.file_request.wrapping_add(1);
         self.buffers.file_candidates.clear();
-        if self.buffers.panel.take().is_some() {
-            self.buffers.returning = true;
+        if let Some(panel) = self.buffers.panel.take() {
+            self.buffers.outgoing = match panel {
+                Panel::Review(review) if !matches!(review.kind, ReviewKind::Close(_)) => {
+                    Some(OutgoingPanel::Review(Box::new(review)))
+                }
+                // Drop the input subscription immediately; only review content is retained.
+                Panel::Picker(_) => Some(OutgoingPanel::Picker),
+                Panel::Review(_) => None,
+            };
             self.buffers.focus_pending = false;
             cx.notify();
         }
@@ -419,6 +426,14 @@ impl WorkspaceWindow {
     pub(crate) fn buffer_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_navigation_location(cx);
         self.ensure_buffer_watch(cx);
+        if self
+            .buffers
+            .review()
+            .is_some_and(|r| !matches!(r.kind, ReviewKind::Close(_)))
+            && self.file_overview_is_open()
+        {
+            self.close_file_overview_now(window, cx);
+        }
         let placeholder = match &self.buffers.panel {
             Some(Panel::Picker(p)) if p.intent == PickerIntent::File => {
                 self.buffer_text("文件路径…", "File path…")
@@ -445,12 +460,8 @@ impl WorkspaceWindow {
             if let Some(Panel::Picker(p)) = &self.buffers.panel {
                 p.input.read(cx).focus.clone().focus(window, cx);
             } else if let Some(review) = self.buffers.review() {
-                if let Some(focuses) = &review.close_focus {
-                    if !review.inline || self.file_overview_is_open() {
-                        focuses.last().unwrap().focus(window, cx);
-                    }
-                } else if let Some(focus) = &self.focus_handle {
-                    focus.focus(window, cx);
+                if !review.inline || self.file_overview_is_open() {
+                    review.focus(review.default_control()).focus(window, cx);
                 }
             } else if let Some(focus) = &self.focus_handle {
                 focus.focus(window, cx);
@@ -470,7 +481,7 @@ impl WorkspaceWindow {
         {
             return None;
         }
-        if self.buffers.panel.is_none() && !self.buffers.returning {
+        if self.buffers.panel.is_none() && !self.buffers.returning() {
             return None;
         }
         let viewport = f32::from(window.viewport_size().width);
@@ -492,6 +503,13 @@ impl WorkspaceWindow {
                 Some(Panel::Picker(p)) if p.intent == PickerIntent::Switch => {
                     (760., self.buffers.height.min(310.))
                 }
+                Some(Panel::Review(review)) => review.panel_size(
+                    available,
+                    (f32::from(window.viewport_size().height)
+                        - crate::app::TITLEBAR_HEIGHT
+                        - 2. * crate::app::status_line::FLOATING_STATUS_BOTTOM)
+                        .max(1.),
+                ),
                 _ => (650., self.buffers.height),
             };
             crate::app::status_line::shell::ShellShape {
@@ -508,7 +526,7 @@ impl WorkspaceWindow {
             pane: self.buffers.pane,
             target,
             available,
-            returning: self.buffers.returning,
+            returning: self.buffers.returning(),
             resize: crate::app::status_line::shell::ResizePolicy::Animated,
         })
     }

@@ -105,7 +105,7 @@ impl WorkspaceWindow {
         self.finish_search_return(self.status.shell.owner == Some(ShellKind::Search));
         self.finish_command_return(self.status.shell.owner == Some(ShellKind::Command));
         if self.status.shell.owner != Some(ShellKind::Buffers) {
-            self.buffers.returning = false;
+            self.buffers.finish_return();
         }
     }
 }

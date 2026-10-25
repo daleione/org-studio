@@ -772,7 +772,7 @@ impl Render for WorkspaceWindow {
                     || self.state.ready().is_none())
                     && (self.prefix_hint_visible()
                         || self.buffers.panel.is_some()
-                        || self.buffers.returning),
+                        || self.buffers.returning()),
                 |view| {
                     if self.prefix_hint_visible() {
                         view.children(self.prefix_hint_panel(

@@ -1,6 +1,16 @@
 use super::*;
-use crate::document::TextSnapshot;
+use crate::document::{SaveState, TextSnapshot};
 use gpui::Window;
+
+impl SaveReview {
+    pub(crate) fn required_for(document: &DocumentSession) -> bool {
+        if document.is_generated() {
+            return false;
+        }
+        let empty_draft = document.is_draft() && document.snapshot().len_bytes() == 0;
+        document.is_dirty() && !empty_draft || !matches!(document.save_state(), SaveState::Idle)
+    }
+}
 
 impl WorkspaceWindow {
     pub(crate) fn buffer_review_capture_key(
@@ -17,9 +27,9 @@ impl WorkspaceWindow {
         if review.inline {
             if !self.file_overview_is_open()
                 || !review
-                    .close_focus
-                    .as_ref()
-                    .is_some_and(|focuses| focuses.iter().any(|focus| focus.is_focused(window)))
+                    .controls()
+                    .iter()
+                    .any(|&control| review.focus(control).is_focused(window))
             {
                 return false;
             }
@@ -35,7 +45,9 @@ impl WorkspaceWindow {
         }
         if !review.running {
             self.buffer_review_key(event, window, cx);
-        } else if !matches!(review.kind, ReviewKind::Close(_)) && modifiers.control && key == "g" {
+        } else if !matches!(review.kind, ReviewKind::Close(_))
+            && (key == "escape" || modifiers.control && key == "g")
+        {
             self.cancel_buffer_panel(cx);
         }
         cx.stop_propagation();
@@ -50,38 +62,40 @@ impl WorkspaceWindow {
     ) {
         let key = event.keystroke.key.as_str();
         let m = event.keystroke.modifiers;
-        if let Some(focuses) = self.buffers.review().and_then(|r| r.close_focus.as_ref()) {
-            let index = focuses
-                .iter()
-                .position(|f| f.is_focused(window))
-                .unwrap_or(focuses.len() - 1);
-            if key == "escape" || m.control && key == "g" {
-                self.close_review_action(CloseAction::Cancel, window, cx);
-            } else if key == "tab" {
-                let step = if m.shift { focuses.len() - 1 } else { 1 };
-                window.focus(&focuses[(index + step) % focuses.len()], cx);
-            } else if matches!(key, "enter" | "space") {
-                self.close_review_action(CloseAction::ALL[index], window, cx);
-            }
-            return;
-        }
         if key == "escape" || m.control && key == "g" {
             self.cancel_buffer_panel(cx);
-        } else if key == "enter" {
-            self.process_buffer_review(window, cx);
-        } else if let Some(r) = self.buffers.review_mut()
+            return;
+        }
+        let Some(review) = self.buffers.review() else {
+            return;
+        };
+        let control = review.focused_control(window);
+        if key == "tab" {
+            let controls = review.controls();
+            let index = controls.iter().position(|&c| c == control).unwrap();
+            let step = if m.shift { controls.len() - 1 } else { 1 };
+            review
+                .focus(controls[(index + step) % controls.len()])
+                .focus(window, cx);
+            cx.notify();
+        } else if matches!(key, "enter" | "space") {
+            if control == ReviewControl::List && key == "space" {
+                if let Some(entry) = review.entries.get(review.selected) {
+                    self.set_buffer_review_choice(entry.id, !entry.save, cx);
+                }
+            } else {
+                self.buffer_review_action(control, window, cx);
+            }
+        } else if control == ReviewControl::List
+            && let Some(r) = self.buffers.review_mut()
             && !r.entries.is_empty()
         {
             let len = r.entries.len();
             match key {
                 "up" => r.selected = (r.selected + len - 1) % len,
-                "tab" if m.shift => r.selected = (r.selected + len - 1) % len,
-                "down" | "tab" => r.selected = (r.selected + 1) % len,
+                "down" => r.selected = (r.selected + 1) % len,
                 "p" if m.control => r.selected = (r.selected + len - 1) % len,
                 "n" if m.control => r.selected = (r.selected + 1) % len,
-                "space" if !r.entries[r.selected].done => {
-                    r.entries[r.selected].save = !r.entries[r.selected].save
-                }
                 _ => {}
             }
             let selected = r.selected;
@@ -97,10 +111,7 @@ impl WorkspaceWindow {
             return;
         };
         let document = session.read(cx);
-        let empty_draft = document.is_draft() && document.snapshot().len_bytes() == 0;
-        if document.is_dirty() && !empty_draft
-            || !matches!(document.save_state(), crate::document::SaveState::Idle)
-        {
+        if SaveReview::required_for(document) {
             self.begin_buffer_review(ReviewKind::Close(id), cx);
         } else {
             self.remove_buffer(id, cx);
@@ -116,6 +127,7 @@ impl WorkspaceWindow {
         if self.buffers.review().is_some() {
             return;
         }
+        self.close_command_line(cx);
         self.end_prefix(cx);
         self.close_search(false, cx);
         self.dismiss_buffer_panel(cx);
@@ -125,7 +137,7 @@ impl WorkspaceWindow {
             .filter_map(|s| {
                 let s = s.read(cx);
                 if matches!(kind, ReviewKind::Close(id) if id != s.id())
-                    || !s.is_dirty() && matches!(s.save_state(), crate::document::SaveState::Idle)
+                    || !SaveReview::required_for(s)
                 {
                     return None;
                 }
@@ -144,25 +156,22 @@ impl WorkspaceWindow {
             error: None,
             selected: 0,
             inline: matches!(kind, ReviewKind::Close(_)) && self.file_overview_is_open(),
-            close_focus: matches!(kind, ReviewKind::Close(_))
-                .then(|| std::array::from_fn(|_| cx.focus_handle())),
+            focus: std::array::from_fn(|_| cx.focus_handle()),
         }));
         self.buffers.pane = self.document_workspace.active_pane;
-        self.buffers.returning = false;
+        self.buffers.outgoing = None;
+        self.buffers.scroll = gpui::ScrollHandle::default();
         self.buffers.focus_pending = true;
         cx.notify();
     }
 
-    pub(super) fn close_review_action(
+    pub(super) fn buffer_review_action(
         &mut self,
-        action: CloseAction,
+        control: ReviewControl,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let Some(review) = self.buffers.review() else {
-            return;
-        };
-        let ReviewKind::Close(id) = review.kind else {
             return;
         };
         if review.running
@@ -173,12 +182,21 @@ impl WorkspaceWindow {
         {
             return;
         }
-        match action {
-            CloseAction::Discard => self.discard_buffer_review(window, cx),
-            CloseAction::Cancel => self.cancel_buffer_panel(cx),
-            CloseAction::Save => {
-                self.set_buffer_review_choice(id, true, cx);
+        review.focus(control).focus(window, cx);
+        match control {
+            ReviewControl::Discard => self.discard_buffer_review(window, cx),
+            ReviewControl::Submit => {
+                if review.single_confirmation() {
+                    let id = review.entries[0].id;
+                    self.set_buffer_review_choice(id, true, cx);
+                }
                 self.process_buffer_review(window, cx);
+            }
+            ReviewControl::All => self.toggle_buffer_review_all(cx),
+            ReviewControl::List => {
+                if let Some(entry) = review.entries.get(review.selected) {
+                    self.view_buffer_review_document(entry.id, window, cx);
+                }
             }
         }
     }
@@ -199,8 +217,51 @@ impl WorkspaceWindow {
         {
             entry.save = save;
             review.selected = index;
+            if review.destructive_submit() {
+                self.buffers.focus_pending = true;
+            }
             cx.notify();
         }
+    }
+
+    fn toggle_buffer_review_all(&mut self, cx: &mut Context<Self>) {
+        let Some(review) = self.buffers.review_mut().filter(|r| !r.running) else {
+            return;
+        };
+        let save = review.selection_counts().1 > 0;
+        for entry in &mut review.entries {
+            if !entry.done {
+                entry.save = save;
+            }
+        }
+        if review.destructive_submit() {
+            self.buffers.focus_pending = true;
+        }
+        cx.notify();
+    }
+
+    pub(super) fn view_buffer_review_document(
+        &mut self,
+        id: DocumentId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self
+            .buffers
+            .review()
+            .is_some_and(|r| !r.running && r.entries.iter().any(|e| e.id == id))
+            || !matches!(
+                self.save.interaction,
+                crate::app::save::SaveInteraction::Idle
+            )
+        {
+            return;
+        }
+        self.cancel_buffer_panel(cx);
+        if self.file_overview_is_open() {
+            self.close_file_overview_now(window, cx);
+        }
+        self.activate_buffer(id, cx);
     }
 
     pub(crate) fn discard_buffer_review(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -274,7 +335,7 @@ impl WorkspaceWindow {
         let new_dirty = matches!(review.kind, ReviewKind::Quit | ReviewKind::Window)
             && self.buffer_sessions().any(|s| {
                 let s = s.read(cx);
-                s.is_dirty() && !review.entries.iter().any(|e| e.id == s.id())
+                SaveReview::required_for(s) && !review.entries.iter().any(|e| e.id == s.id())
             });
         if changed || new_dirty {
             self.fail_buffer_review(

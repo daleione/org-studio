@@ -218,7 +218,8 @@ fn a_new_draft_stays_open_if_save_is_cancelled_and_closes_after_success(
         assert!(target.read(cx).is_dirty());
         assert!(target.read(cx).file_path().is_none());
     });
-    press("buffer-review-cancel", cx);
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
     click(&w, id, cx);
     press("buffer-review-submit", cx);
     cx.cx.simulate_new_path_selection(|_| Some(path.clone()));

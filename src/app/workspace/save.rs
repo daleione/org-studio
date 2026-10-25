@@ -1,7 +1,7 @@
 use crate::{
     app::{
         WorkspaceWindow,
-        buffers::ReviewKind,
+        buffers::{ReviewKind, SaveReview},
         save::{AfterRename, SaveInteraction},
     },
     document::{
@@ -459,13 +459,17 @@ impl WorkspaceWindow {
         }
     }
     pub(crate) fn request_quit(&mut self, _: &mut Window, cx: &mut Context<Self>) {
-        if self.buffer_sessions().any(|s| s.read(cx).is_dirty())
-            || !matches!(self.save.interaction, SaveInteraction::Idle)
-        {
+        if self.exit_needs_save_review(cx) {
             self.begin_buffer_review(ReviewKind::Quit, cx);
         } else {
             cx.quit();
         }
+    }
+    fn exit_needs_save_review(&self, cx: &gpui::App) -> bool {
+        !matches!(self.save.interaction, SaveInteraction::Idle)
+            || self
+                .buffer_sessions()
+                .any(|s| SaveReview::required_for(s.read(cx)))
     }
     pub(crate) fn install_close_guard(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.save.close_hook_installed {
@@ -481,9 +485,7 @@ impl WorkspaceWindow {
                     w.save.interaction = SaveInteraction::Idle;
                     return true;
                 }
-                if w.buffer_sessions().any(|s| s.read(cx).is_dirty())
-                    || !matches!(w.save.interaction, SaveInteraction::Idle)
-                {
+                if w.exit_needs_save_review(cx) {
                     w.begin_buffer_review(ReviewKind::Window, cx);
                     false
                 } else {

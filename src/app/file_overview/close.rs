@@ -85,7 +85,7 @@ impl WorkspaceWindow {
                             ),
                     )
                 })
-                .children(self.close_review_buttons(preview.width < ui_px(230.), cx))
+                .child(self.review_buttons(review, preview.width < ui_px(230.), cx.entity()))
                 .into_any_element(),
         )
     }

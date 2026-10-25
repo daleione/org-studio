@@ -18,6 +18,7 @@ pub(crate) use picker::match_score;
 mod pool;
 mod quick_view;
 mod review;
+mod review_view;
 #[cfg(test)]
 mod tests;
 mod view;
@@ -51,7 +52,7 @@ pub(crate) struct BufferHost {
     parked: Vec<ParkedDocument>,
     open_order: Vec<OpenEntry>,
     pub(crate) panel: Option<Panel>,
-    pub(crate) returning: bool,
+    outgoing: Option<OutgoingPanel>,
     pub(crate) focus_pending: bool,
     pub(crate) pane: crate::app::PaneSide,
     pub(crate) available: f32,
@@ -95,7 +96,20 @@ pub(crate) enum Panel {
     Review(SaveReview),
 }
 
+enum OutgoingPanel {
+    Picker,
+    Review(Box<SaveReview>),
+}
+
 impl BufferHost {
+    pub(crate) fn returning(&self) -> bool {
+        self.outgoing.is_some()
+    }
+
+    pub(crate) fn finish_return(&mut self) {
+        self.outgoing = None;
+    }
+
     /// Reserve a position before loading so completion timing cannot reorder files.
     pub(crate) fn reserve_open(&mut self, path: &Path) {
         if !self
@@ -184,19 +198,66 @@ pub(crate) struct SaveReview {
     pub(crate) error: Option<String>,
     pub(crate) selected: usize,
     pub(crate) inline: bool,
-    close_focus: Option<[gpui::FocusHandle; CloseAction::ALL.len()]>,
+    focus: [gpui::FocusHandle; ReviewControl::ALL.len()],
 }
 
-#[derive(Clone, Copy)]
-enum CloseAction {
-    Cancel,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReviewControl {
+    All,
+    List,
     Discard,
-    Save,
+    Submit,
 }
 
-impl CloseAction {
-    // Shared by rendering and keyboard activation; the last action is the default.
-    const ALL: [Self; 3] = [Self::Cancel, Self::Discard, Self::Save];
+impl ReviewControl {
+    const ALL: [Self; 4] = [Self::All, Self::List, Self::Discard, Self::Submit];
+    const SINGLE: [Self; 2] = [Self::Discard, Self::Submit];
+    const BATCH: [Self; 3] = [Self::All, Self::List, Self::Submit];
+}
+
+impl SaveReview {
+    fn single_confirmation(&self) -> bool {
+        self.kind != ReviewKind::Save && self.entries.len() == 1
+    }
+
+    fn controls(&self) -> &[ReviewControl] {
+        if self.single_confirmation() {
+            &ReviewControl::SINGLE
+        } else {
+            &ReviewControl::BATCH
+        }
+    }
+
+    fn focus(&self, control: ReviewControl) -> &gpui::FocusHandle {
+        &self.focus[control as usize]
+    }
+
+    fn selection_counts(&self) -> (usize, usize) {
+        let save = self.entries.iter().filter(|e| e.save && !e.done).count();
+        let discard = self.entries.iter().filter(|e| !e.save && !e.done).count();
+        (save, discard)
+    }
+
+    fn destructive_submit(&self) -> bool {
+        let (save, discard) = self.selection_counts();
+        self.kind != ReviewKind::Save && save == 0 && discard > 0
+    }
+
+    fn default_control(&self) -> ReviewControl {
+        if !self.single_confirmation() && self.destructive_submit() {
+            ReviewControl::All
+        } else {
+            ReviewControl::Submit
+        }
+    }
+
+    fn focused_control(&self, window: &gpui::Window) -> ReviewControl {
+        self.controls()
+            .iter()
+            .copied()
+            .find(|&control| self.focus(control).is_focused(window))
+            .unwrap_or_else(|| self.default_control())
+    }
 }
 
 pub(crate) struct ReviewEntry {
