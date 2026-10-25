@@ -1090,12 +1090,26 @@ pub(crate) fn render_status_line_content(
                 .items_center()
                 .justify_center()
                 .rounded(px(5.))
-                .font_family(ui_family("Menlo"))
-                .text_size(ui_px(17.))
                 .text_color(rgb(status_colors().foreground))
                 .cursor_pointer()
-                .hover(|style| style.bg(rgb(status_colors().hover_background)))
-                .child_text(":")
+                .hover(|style| {
+                    style
+                        .bg(rgb(status_colors().hover_background))
+                        .text_color(rgb(status_colors().hover_foreground))
+                })
+                .active(|style| {
+                    style
+                        .bg(rgb(status_colors().active_background))
+                        .text_color(rgb(status_colors().active_foreground))
+                })
+                .child(
+                    svg(
+                        "status-command",
+                        include_bytes!("assets/status-command.svg"),
+                    )
+                    .size(px(16.0))
+                    .flex_none(),
+                )
                 .tooltip(move |_, cx| {
                     cx.new(|_| popover::OutlineTooltip(Arc::from("M-x / ⌘⇧P")))
                         .into()
