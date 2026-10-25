@@ -1,4 +1,10 @@
 {
+  "status.statistics.title": "文档统计",
+  "status.statistics.characters_short": "字符",
+  "status.statistics.characters": "字符数",
+  "status.statistics.lines": "行数",
+  "status.statistics.size": "文本大小（UTF-8）",
+  "status.statistics.bytes": "字节数",
   "math.render_failed": "公式预览失败，已保留源码。",
   "search.find": "搜索",
   "search.replace": "替换",

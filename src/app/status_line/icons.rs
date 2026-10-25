@@ -3,8 +3,6 @@ use gpui::{IntoElement, PathBuilder, Styled, canvas, point, px, rgb};
 #[derive(Clone, Copy)]
 pub(super) enum StatusIcon {
     Document,
-    Lines,
-    Storage,
     Position,
     Outline,
     Format,
@@ -27,32 +25,6 @@ pub(super) fn status_icon(icon: StatusIcon) -> impl IntoElement {
                     &[(9., 1.), (9., 4.), (12., 4.)],
                     &[(5., 7.), (10., 7.)],
                     &[(5., 10.), (9., 10.)],
-                ],
-                StatusIcon::Lines => &[
-                    &[(2., 3.), (3., 3.)],
-                    &[(6., 3.), (13., 3.)],
-                    &[(2., 7.), (3., 7.)],
-                    &[(6., 7.), (13., 7.)],
-                    &[(2., 11.), (3., 11.)],
-                    &[(6., 11.), (13., 11.)],
-                ],
-                StatusIcon::Storage => &[
-                    &[
-                        (2., 3.),
-                        (4., 1.5),
-                        (11., 1.5),
-                        (13., 3.),
-                        (11., 4.5),
-                        (4., 4.5),
-                        (2., 3.),
-                        (2., 12.),
-                        (4., 13.5),
-                        (11., 13.5),
-                        (13., 12.),
-                        (13., 3.),
-                    ],
-                    &[(2., 7.), (4., 8.5), (11., 8.5), (13., 7.)],
-                    &[(2., 10.), (4., 11.5), (11., 11.5), (13., 10.)],
                 ],
                 StatusIcon::Position => &[
                     &[

@@ -1,19 +1,111 @@
 use crate::components::UiTextExt;
 use crate::typography::{ui_family, ui_px, ui_size};
 use gpui::{Entity, MouseButton, ParentElement, Styled, div, prelude::*, px, rgb};
+use std::time::Duration;
 
 use crate::{
-    app::WorkspaceWindow, i18n::Language, settings::StatusLineSettings, theme::current_theme,
+    app::WorkspaceWindow, i18n::Language, navigation::PaneId, settings::StatusLineSettings,
+    theme::current_theme,
 };
 
 use super::{
-    STATUS_LINE_HEIGHT, info_text,
+    STATUS_LINE_HEIGHT, StatusPopoverAnchors, info_text,
     model::{
         CONFIGURABLE_SEGMENTS, StatusLineSnapshot, StatusPopover, StatusPopoverContent,
         StatusSegment,
     },
     render_document_statistics, segment_title,
 };
+
+const HOVER_SHOW_DELAY: Duration = Duration::from_millis(300);
+const HOVER_HIDE_DELAY: Duration = Duration::from_millis(200);
+
+pub(super) struct StatusPopoverHover {
+    pane: PaneId,
+    segment: StatusSegment,
+    _task: gpui::Task<()>,
+}
+
+impl WorkspaceWindow {
+    pub(super) fn hover_status_info(
+        &mut self,
+        pane: PaneId,
+        segment: StatusSegment,
+        hovered: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !hovered
+            && self
+                .status
+                .popover_hover
+                .as_ref()
+                .is_some_and(|pending| pending.pane != pane || pending.segment != segment)
+        {
+            return;
+        }
+        self.status.popover_hover = None;
+        if hovered {
+            if self
+                .status
+                .popover
+                .as_ref()
+                .is_some_and(|popover| popover.pinned || popover.is_info(pane, segment))
+            {
+                return;
+            }
+        } else if !self
+            .status
+            .popover
+            .as_ref()
+            .is_some_and(|popover| !popover.pinned && popover.is_info(pane, segment))
+        {
+            return;
+        }
+
+        let route = self.content_route;
+        let document = self.document_session().map(|session| session.read(cx).id());
+        let delay = cx.background_executor().timer(if hovered {
+            HOVER_SHOW_DELAY
+        } else {
+            HOVER_HIDE_DELAY
+        });
+        let task = cx.spawn(async move |this, cx| {
+            delay.await;
+            let _ = this.update(cx, |this, cx| {
+                this.status.popover_hover = None;
+                if hovered {
+                    if this.content_route != route
+                        || this.document_session().map(|session| session.read(cx).id()) != document
+                        || !segment.enabled(this.status.settings)
+                        || this
+                            .status
+                            .popover
+                            .as_ref()
+                            .is_some_and(|popover| popover.pinned)
+                    {
+                        return;
+                    }
+                    let mut popover = StatusPopover::new(pane, StatusPopoverContent::Info(segment));
+                    popover.pinned = false;
+                    this.status.popover = Some(popover);
+                } else if this
+                    .status
+                    .popover
+                    .as_ref()
+                    .is_some_and(|popover| !popover.pinned && popover.is_info(pane, segment))
+                {
+                    this.status.dismiss_popover();
+                }
+                cx.notify();
+            });
+        });
+        self.status.popover_hover = Some(StatusPopoverHover {
+            pane,
+            segment,
+            _task: task,
+        });
+    }
+}
 
 pub(crate) fn render_status_popover(
     popover: StatusPopover,
@@ -22,7 +114,7 @@ pub(crate) fn render_status_popover(
     entity: Entity<WorkspaceWindow>,
     language: Language,
     pane_width: f32,
-    reading_style_anchor_left: f32,
+    anchors: StatusPopoverAnchors,
 ) -> gpui::AnyElement {
     let theme = current_theme();
     let pane = popover.pane;
@@ -42,6 +134,11 @@ pub(crate) fn render_status_popover(
     };
     let content = popover.content;
     let is_outline = matches!(content, StatusPopoverContent::Outline { .. });
+    let hover_segment = match content {
+        StatusPopoverContent::Info(StatusSegment::Statistics) => Some(StatusSegment::Statistics),
+        _ => None,
+    };
+    let hover_entity = entity.clone();
     let close_entity = entity.clone();
     let title = match &content {
         StatusPopoverContent::Outline { .. } => match language {
@@ -64,6 +161,7 @@ pub(crate) fn render_status_popover(
     };
     let mut panel = div()
         .id("status-popover")
+        .debug_selector(|| "status-popover".to_owned())
         .occlude()
         .absolute()
         .bottom(px(bottom))
@@ -73,12 +171,16 @@ pub(crate) fn render_status_popover(
         .border_color(rgb(theme.border))
         .bg(rgb(theme.background))
         .shadow_lg()
+        .font_family(ui_family(".SystemUIFont"))
         .text_size(ui_px(11.0))
-        .when(is_outline, |panel| {
-            panel
-                .rounded(px(14.0))
-                .font_family(ui_family(".SystemUIFont"))
+        .when_some(hover_segment, |panel, segment| {
+            panel.on_hover(move |hovered, _, cx| {
+                hover_entity.update(cx, |this, cx| {
+                    this.hover_status_info(pane, segment, *hovered, cx);
+                });
+            })
         })
+        .when(is_outline, |panel| panel.rounded(px(14.0)))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -110,7 +212,7 @@ pub(crate) fn render_status_popover(
                         .child_text("×")
                         .on_click(move |_, _, cx| {
                             close_entity.update(cx, |this, cx| {
-                                this.status.popover = None;
+                                this.status.dismiss_popover();
                                 cx.notify();
                             });
                         }),
@@ -122,10 +224,17 @@ pub(crate) fn render_status_popover(
             .w(px(440.0_f32.min((pane_width - edge * 2.0).max(1.0))))
     } else if matches!(content, StatusPopoverContent::ReadingStyle) {
         panel
-            .left(px(
-                reading_style_anchor_left.min((pane_width - 128.0).max(8.0))
-            ))
+            .left(px(anchors
+                .reading_style_left
+                .min((pane_width - 128.0).max(8.0))))
             .w(px(190.0_f32.min((pane_width - edge * 2.0).max(1.0))))
+    } else if hover_segment.is_some() {
+        let width = 286.0_f32.min((pane_width - edge * 2.0).max(1.0));
+        panel
+            .right(px(anchors
+                .statistics_right
+                .clamp(edge, (pane_width - width - edge).max(edge))))
+            .w(px(width))
     } else {
         panel
             .right(px(edge))
@@ -267,7 +376,7 @@ pub(crate) fn render_status_popover(
                                         this.navigate_to_source(mapped.range.start, cx);
                                     }
                                 }
-                                this.status.popover = None;
+                                this.status.dismiss_popover();
                                 cx.notify();
                             })
                         }),
@@ -420,10 +529,8 @@ pub(crate) fn render_status_popover(
                     })
                     .on_click(move |_, _, cx| {
                         customize_entity.update(cx, |this, cx| {
-                            this.status.popover = Some(StatusPopover {
-                                pane,
-                                content: StatusPopoverContent::Customize,
-                            });
+                            this.status
+                                .open_popover(pane, StatusPopoverContent::Customize);
                             cx.notify();
                         });
                     }),

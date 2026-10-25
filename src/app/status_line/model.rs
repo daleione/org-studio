@@ -163,6 +163,21 @@ impl StatusSegment {
 pub(crate) struct StatusPopover {
     pub(crate) pane: PaneId,
     pub(crate) content: StatusPopoverContent,
+    pub(crate) pinned: bool,
+}
+
+impl StatusPopover {
+    pub(crate) fn new(pane: PaneId, content: StatusPopoverContent) -> Self {
+        Self {
+            pane,
+            content,
+            pinned: true,
+        }
+    }
+
+    pub(crate) fn is_info(&self, pane: PaneId, segment: StatusSegment) -> bool {
+        self.pane == pane && self.content == StatusPopoverContent::Info(segment)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

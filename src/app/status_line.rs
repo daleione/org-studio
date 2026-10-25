@@ -29,6 +29,8 @@ mod link_tests;
 mod model;
 mod popover;
 #[cfg(test)]
+mod statistics_tests;
+#[cfg(test)]
 use host::reading_progress;
 use model::*;
 pub(crate) use model::{CachedStatusLayout, StatusLineLayout, StatusLineSnapshot, StatusPopover};
@@ -38,6 +40,7 @@ pub(crate) struct StatusLineHost {
     shell: shell::ShellHost,
     settings: StatusLineSettings,
     popover: Option<StatusPopover>,
+    popover_hover: Option<popover::StatusPopoverHover>,
     layout_cache: std::cell::RefCell<std::collections::HashMap<PaneId, CachedStatusLayout>>,
 }
 
@@ -47,6 +50,7 @@ impl StatusLineHost {
             shell: Default::default(),
             settings,
             popover: None,
+            popover_hover: None,
             layout_cache: std::cell::RefCell::new(std::collections::HashMap::new()),
         }
     }
@@ -79,7 +83,13 @@ impl StatusLineHost {
     }
 
     pub(crate) fn dismiss_popover(&mut self) -> bool {
+        self.popover_hover = None;
         self.popover.take().is_some()
+    }
+
+    fn open_popover(&mut self, pane: PaneId, content: StatusPopoverContent) {
+        self.popover_hover = None;
+        self.popover = Some(StatusPopover::new(pane, content));
     }
 
     pub(crate) fn clear_layout_cache(&self) {
@@ -111,7 +121,7 @@ const POSITION_COMPACT_WIDTH: f32 = 44.0;
 const PROGRESS_MARGIN: f32 = 8.0;
 const PROGRESS_FULL_WIDTH: f32 = 68.0;
 const PROGRESS_COMPACT_WIDTH: f32 = 44.0;
-const STATISTICS_FULL_WIDTH: f32 = 308.0;
+const STATISTICS_FULL_WIDTH: f32 = 114.0;
 const STATISTICS_COMPACT_WIDTH: f32 = 90.0;
 const FORMAT_WIDTH: f32 = 64.0;
 const MORE_WIDTH: f32 = 36.0;
@@ -418,6 +428,12 @@ impl StatusLineLayout {
             0.0
         };
         let outline = self.outline_reserve(snapshot);
+        let statistics = statistics_slot_width(snapshot, self.statistics);
+        // More is mandatory. The flexible center keeps a small hit target even when empty.
+        mode + reading_style + outline + statistics + self.trailing_width(snapshot, measure) + 16.0
+    }
+
+    fn trailing_width(&self, snapshot: &StatusLineSnapshot, measure: &impl Fn(&str) -> f32) -> f32 {
         let position = match (self.position, snapshot.position) {
             (Variant::Full, Some(value)) => {
                 position_slot_width(value, false, snapshot.language, measure)
@@ -432,22 +448,12 @@ impl StatusLineLayout {
             (Variant::Compact, Some(_)) => progress_slot_width(true, measure) + PROGRESS_MARGIN,
             _ => 0.0,
         };
-        let statistics = statistics_slot_width(snapshot, self.statistics);
         let format = if self.format == Variant::Full && snapshot.format.is_some() {
             FORMAT_WIDTH
         } else {
             0.0
         };
-        // More is mandatory. The flexible center keeps a small hit target even when empty.
-        mode + reading_style
-            + outline
-            + position
-            + progress
-            + statistics
-            + format
-            + MORE_WIDTH
-            + if self.command { COMMAND_WIDTH } else { 0. }
-            + 16.0
+        position + progress + format + MORE_WIDTH + if self.command { COMMAND_WIDTH } else { 0. }
     }
 
     fn outline_reserve(&self, snapshot: &StatusLineSnapshot) -> f32 {
@@ -507,13 +513,24 @@ fn measured_text_width(text: &str, window: &Window) -> f32 {
     )
 }
 
-pub(crate) fn reading_style_popover_left(
+#[derive(Default)]
+pub(crate) struct StatusPopoverAnchors {
+    pub(crate) reading_style_left: f32,
+    pub(crate) statistics_right: f32,
+}
+
+pub(crate) fn status_popover_anchors(
     snapshot: &StatusLineSnapshot,
     layout: &StatusLineLayout,
     window: &Window,
-) -> f32 {
-    let _ = (snapshot, window);
-    mode_slot_width(layout.mode) + 4.0
+    buffer_count: Option<usize>,
+) -> StatusPopoverAnchors {
+    StatusPopoverAnchors {
+        reading_style_left: mode_slot_width(layout.mode) + 4.0,
+        statistics_right: layout
+            .trailing_width(snapshot, &|text| measured_text_width(text, window))
+            + buffer_count.map_or(0.0, buffer_status_width),
+    }
 }
 
 fn leaf(path: &str) -> &str {
@@ -606,31 +623,6 @@ fn progress_slot_width(compact: bool, _measure: &impl Fn(&str) -> f32) -> f32 {
     } else {
         PROGRESS_FULL_WIDTH
     }
-}
-
-fn statistic_field(icon: StatusIcon, value: String, width: f32) -> gpui::Div {
-    div()
-        .w(px(width))
-        .flex_none()
-        .flex()
-        .items_center()
-        .justify_center()
-        .child(
-            div()
-                .min_w_0()
-                .flex()
-                .items_center()
-                .gap(px(5.0))
-                .child(status_icon(icon))
-                .child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child_text(value),
-                ),
-        )
 }
 
 fn outline_is_truncated(
@@ -988,37 +980,27 @@ pub(crate) fn render_status_line_content(
     {
         let button = status_button(entity.clone(), pane_id, StatusSegment::Statistics)
             .w(px(statistics_slot_width(snapshot, layout.statistics)))
-            .overflow_hidden()
-            .gap(px(0.0));
-        right = right.child(record_box(
-            if layout.statistics == Variant::Full
-                && let Some(stats) = snapshot.document_statistics
-            {
-                button
-                    .child(statistic_field(
-                        StatusIcon::Document,
-                        statistics.to_owned(),
-                        96.0,
-                    ))
-                    .child(status_separator())
-                    .child(statistic_field(
-                        StatusIcon::Lines,
-                        match snapshot.language {
-                            Language::Chinese => format!("{} 行", format_integer(stats.lines)),
-                            Language::English => format!("{} lines", format_integer(stats.lines)),
-                        },
-                        96.0,
-                    ))
-                    .child(status_separator())
-                    .child(statistic_field(
-                        StatusIcon::Storage,
-                        format_byte_count(stats.bytes),
-                        76.0,
-                    ))
-            } else {
-                button.child(status_value(statistics.to_owned(), None))
-            },
-        ));
+            .overflow_hidden();
+        let hover_entity = entity.clone();
+        right = right.child(record_box(if snapshot.document_statistics.is_some() {
+            button
+                .when(layout.statistics == Variant::Full, |button| {
+                    button.child(status_icon(StatusIcon::Document))
+                })
+                .child(status_value(statistics.to_owned(), None))
+                .on_hover(move |hovered, _, cx| {
+                    hover_entity.update(cx, |this, cx| {
+                        this.hover_status_info(
+                            PaneId(pane_id),
+                            StatusSegment::Statistics,
+                            *hovered,
+                            cx,
+                        );
+                    });
+                })
+        } else {
+            button.child(status_value(statistics.to_owned(), None))
+        }));
     }
 
     if layout.position != Variant::Hidden
@@ -1204,10 +1186,8 @@ pub(crate) fn render_status_line_content(
             .on_mouse_down(MouseButton::Right, move |_, _, cx| {
                 cx.stop_propagation();
                 customize_entity.update(cx, |this, cx| {
-                    this.status.popover = Some(StatusPopover {
-                        pane: PaneId(pane_id),
-                        content: StatusPopoverContent::Customize,
-                    });
+                    this.status
+                        .open_popover(PaneId(pane_id), StatusPopoverContent::Customize);
                     cx.notify();
                 });
             })
@@ -1236,6 +1216,13 @@ fn status_button(
         .cursor_pointer()
         .border_l_1()
         .border_color(rgb(status_colors().border));
+    let button = if segment == StatusSegment::Statistics {
+        let mut font = ui_font(".SystemUIFont");
+        font.features = gpui::FontFeatures(Arc::new(vec![("tnum".into(), 1)]));
+        button.font(font)
+    } else {
+        button
+    };
     let button = if segment == StatusSegment::Mode {
         button
     } else {
@@ -1248,12 +1235,14 @@ fn status_button(
     if segment == StatusSegment::More {
         return button;
     }
-    button.on_click(move |_, _, cx| {
-        cx.stop_propagation();
-        entity.update(cx, |this, cx| {
-            this.activate_status_segment(PaneId(pane_id), segment, None, cx)
-        });
-    })
+    button
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, _, cx| {
+            cx.stop_propagation();
+            entity.update(cx, |this, cx| {
+                this.activate_status_segment(PaneId(pane_id), segment, None, cx)
+            });
+        })
 }
 
 fn progress_ring(progress: u8) -> impl gpui::IntoElement {
@@ -1400,7 +1389,7 @@ impl WorkspaceWindow {
     ) {
         match segment {
             StatusSegment::Mode if self.content_route == ContentRoute::Document => {
-                self.status.popover = None;
+                self.status.dismiss_popover();
                 self.toggle_pane_surface(pane_side_for_status(pane), cx);
             }
             StatusSegment::Outline if self.content_route == ContentRoute::Document => {
@@ -1412,7 +1401,7 @@ impl WorkspaceWindow {
                                 | StatusPopoverContent::Info(StatusSegment::Outline)
                         )
                 }) {
-                    self.status.popover = None;
+                    self.status.dismiss_popover();
                     cx.notify();
                     return;
                 }
@@ -1441,25 +1430,34 @@ impl WorkspaceWindow {
                         })
                     })
                     .unwrap_or(StatusPopoverContent::Info(segment));
-                self.status.popover = Some(StatusPopover { pane, content });
+                self.status.open_popover(pane, content);
             }
             StatusSegment::ReadingStyle => {
-                self.status.popover = Some(StatusPopover {
-                    pane,
-                    content: StatusPopoverContent::ReadingStyle,
-                });
+                self.status
+                    .open_popover(pane, StatusPopoverContent::ReadingStyle);
             }
             StatusSegment::More => {
-                self.status.popover = Some(StatusPopover {
-                    pane,
-                    content: more_popover_content(overflow),
-                });
+                self.status
+                    .open_popover(pane, more_popover_content(overflow));
+            }
+            StatusSegment::Statistics => {
+                self.status.popover_hover = None;
+                if let Some(popover) = self.status.popover.as_mut()
+                    && popover.is_info(pane, segment)
+                {
+                    if popover.pinned {
+                        self.status.dismiss_popover();
+                    } else {
+                        popover.pinned = true;
+                    }
+                } else {
+                    self.status
+                        .open_popover(pane, StatusPopoverContent::Info(segment));
+                }
             }
             _ => {
-                self.status.popover = Some(StatusPopover {
-                    pane,
-                    content: StatusPopoverContent::Info(segment),
-                });
+                self.status
+                    .open_popover(pane, StatusPopoverContent::Info(segment));
             }
         }
         cx.notify();
@@ -1475,7 +1473,8 @@ impl WorkspaceWindow {
                 self.status.settings.progress = !self.status.settings.progress
             }
             StatusSegment::Statistics => {
-                self.status.settings.statistics = !self.status.settings.statistics
+                self.status.settings.statistics = !self.status.settings.statistics;
+                self.status.dismiss_popover();
             }
             StatusSegment::Format => self.status.settings.format = !self.status.settings.format,
             StatusSegment::Mode | StatusSegment::ReadingStyle | StatusSegment::More => return,
@@ -1508,19 +1507,9 @@ fn format_character_count(characters: u64, language: Language) -> String {
     } else {
         format!("{:.1}m", characters as f64 / 1_000_000.0)
     };
-    match language {
-        Language::Chinese => format!("{value} 字"),
-        Language::English => format!("{value} chars"),
-    }
-}
-
-fn status_separator() -> impl IntoElement {
-    record_box(
-        div()
-            .w(px(1.0))
-            .h(px(14.0))
-            .mx(px(5.0))
-            .bg(rgb(status_colors().border)),
+    format!(
+        "{value} {}",
+        language.text("status.statistics.characters_short")
     )
 }
 
@@ -1551,18 +1540,17 @@ fn render_document_statistics(
     language: Language,
 ) -> gpui::AnyElement {
     let theme = current_theme();
-    let labels = match language {
-        Language::Chinese => ["字符", "行数", "字节"],
-        Language::English => ["Characters", "Lines", "Bytes"],
-    };
+    let labels = [
+        language.text("status.statistics.characters"),
+        language.text("status.statistics.lines"),
+        language.text("status.statistics.size"),
+        language.text("status.statistics.bytes"),
+    ];
     let values = [
         format_integer(statistics.characters),
         format_integer(statistics.lines),
-        format!(
-            "{} · {}",
-            format_integer(statistics.bytes),
-            format_byte_count(statistics.bytes)
-        ),
+        format_byte_count(statistics.bytes),
+        format_integer(statistics.bytes),
     ];
     let mut content = div().px(px(12.0)).pb(px(9.0));
     for (index, (label, value)) in labels.into_iter().zip(values).enumerate() {
@@ -1582,6 +1570,7 @@ fn render_document_statistics(
                 )
                 .child(
                     div()
+                        .font_family(ui_family("Menlo"))
                         .font_weight(gpui::FontWeight::SEMIBOLD)
                         .text_color(rgb(theme.foreground))
                         .child_text(value),
@@ -1598,7 +1587,7 @@ fn segment_title(segment: StatusSegment, language: Language) -> &'static str {
         (Language::Chinese, StatusSegment::Outline) => "大纲位置",
         (Language::Chinese, StatusSegment::Position) => "位置",
         (Language::Chinese, StatusSegment::Progress) => "文档进度",
-        (Language::Chinese, StatusSegment::Statistics) => "文档统计",
+        (_, StatusSegment::Statistics) => language.text("status.statistics.title"),
         (Language::Chinese, StatusSegment::Format) => "文件格式",
         (Language::Chinese, StatusSegment::More) => "更多",
         (Language::English, StatusSegment::Mode) => "Working mode",
@@ -1606,7 +1595,6 @@ fn segment_title(segment: StatusSegment, language: Language) -> &'static str {
         (Language::English, StatusSegment::Outline) => "Outline",
         (Language::English, StatusSegment::Position) => "Position",
         (Language::English, StatusSegment::Progress) => "Document progress",
-        (Language::English, StatusSegment::Statistics) => "Document statistics",
         (Language::English, StatusSegment::Format) => "File format",
         (Language::English, StatusSegment::More) => "More",
     }
@@ -1694,7 +1682,7 @@ mod tests {
                 total_lines: 9_842,
             }),
             progress: Some(78),
-            statistics: Some("8.8k 字".into()),
+            statistics: Some("8.8k 字符".into()),
             document_statistics: Some(DocumentStatistics {
                 characters: 8_842,
                 lines: 259,
@@ -1750,6 +1738,7 @@ mod tests {
         host.popover = Some(StatusPopover {
             pane: PaneId(7),
             content: StatusPopoverContent::ReadingStyle,
+            pinned: true,
         });
 
         assert!(host.dismiss_popover());
@@ -1765,6 +1754,7 @@ mod tests {
         let popover = StatusPopover {
             pane: PaneId(7),
             content: more_popover_content(Some(hidden.clone())),
+            pinned: true,
         };
         assert_eq!(popover.pane, PaneId(7));
         assert_eq!(popover.content, StatusPopoverContent::Overflow(hidden));
@@ -1794,6 +1784,7 @@ mod tests {
                     entries: entries.into(),
                     collapsed: Default::default(),
                 },
+                pinned: true,
             })
         });
         struct OutlineHarness {
@@ -1815,7 +1806,7 @@ mod tests {
                             self.app.clone(),
                             Language::Chinese,
                             500.0,
-                            0.0,
+                            StatusPopoverAnchors::default(),
                         )
                     }))
             }
@@ -2122,7 +2113,7 @@ mod tests {
             Some(StatusPosition::EditorCaret { line: 2, column: 3 })
         );
         assert_eq!(snapshot.progress, Some(100));
-        assert_eq!(snapshot.statistics.as_deref(), Some("13 字"));
+        assert_eq!(snapshot.statistics.as_deref(), Some("13 字符"));
         assert!(snapshot.outline.is_none());
     }
 
@@ -2169,8 +2160,11 @@ mod tests {
 
     #[test]
     fn character_statistics_are_localized_and_grouped() {
-        assert_eq!(format_character_count(842, Language::Chinese), "842 字");
-        assert_eq!(format_character_count(8_842, Language::Chinese), "8.8k 字");
+        assert_eq!(format_character_count(842, Language::Chinese), "842 字符");
+        assert_eq!(
+            format_character_count(8_842, Language::Chinese),
+            "8.8k 字符"
+        );
         assert_eq!(
             format_character_count(8_842, Language::English),
             "8.8k chars"
@@ -2184,14 +2178,14 @@ mod tests {
         first.host = StatusHost::Editor;
         first.position = Some(StatusPosition::EditorCaret { line: 1, column: 1 });
         first.outline = None;
-        first.statistics = Some("9 字".into());
+        first.statistics = Some("9 字符".into());
         let mut later = first.clone();
         later.position = Some(StatusPosition::EditorCaret {
             line: 102,
             column: 37,
         });
         later.outline = Some("a much longer heading / child".into());
-        later.statistics = Some("999.9k 字".into());
+        later.statistics = Some("999.9k 字符".into());
         later.document_statistics = Some(DocumentStatistics {
             characters: 999_999,
             lines: 99_999,

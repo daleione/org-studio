@@ -1,4 +1,10 @@
 {
+  "status.statistics.title": "Document statistics",
+  "status.statistics.characters_short": "chars",
+  "status.statistics.characters": "Characters",
+  "status.statistics.lines": "Lines",
+  "status.statistics.size": "Text size (UTF-8)",
+  "status.statistics.bytes": "Bytes",
   "math.render_failed": "Formula preview failed; source is preserved.",
   "search.find": "Find",
   "search.replace": "Replace",

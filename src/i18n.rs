@@ -54,6 +54,7 @@ mod tests {
                         "calendar.",
                         "todo.",
                         "inline.",
+                        "status.",
                     ]
                     .iter()
                     .any(|prefix| key.starts_with(prefix))

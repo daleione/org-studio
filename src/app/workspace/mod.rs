@@ -712,8 +712,8 @@ impl WorkspaceWindow {
             return content;
         };
         let layout = self.status_layout(&snapshot, editor_width, window);
-        let style_popover_left =
-            crate::app::status_line::reading_style_popover_left(&snapshot, &layout, window);
+        let popover_anchors =
+            crate::app::status_line::status_popover_anchors(&snapshot, &layout, window, None);
         let status_popover = self.status.popover_for(snapshot.pane);
         div()
             .relative()
@@ -735,7 +735,7 @@ impl WorkspaceWindow {
                     entity,
                     self.language,
                     editor_width,
-                    style_popover_left,
+                    popover_anchors,
                 ))
             })
     }
@@ -1001,9 +1001,15 @@ impl WorkspaceWindow {
                 .max(1.),
             render.window,
         );
-        let style_popover_left =
-            crate::app::status_line::reading_style_popover_left(&snapshot, &layout, render.window)
-                + navigation_width;
+        let mut popover_anchors = crate::app::status_line::status_popover_anchors(
+            &snapshot,
+            &layout,
+            render.window,
+            Some(buffer_count),
+        );
+        popover_anchors.reading_style_left +=
+            navigation_width + crate::app::status_line::FLOATING_STATUS_INSET;
+        popover_anchors.statistics_right += crate::app::status_line::FLOATING_STATUS_INSET;
         let status_popover = (!render.preparing)
             .then(|| self.status.popover_for(snapshot.pane))
             .flatten();
@@ -1147,7 +1153,7 @@ impl WorkspaceWindow {
                     entity.clone(),
                     self.language,
                     status_pane_width,
-                    style_popover_left + crate::app::status_line::FLOATING_STATUS_INSET,
+                    popover_anchors,
                 ))
             })
             .children(self.search_options_menu(
