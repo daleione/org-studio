@@ -202,7 +202,7 @@ fn swatch_quads_follow_the_literal_glyph_box(cx: &mut gpui::TestAppContext) {
         crate::editor::syntax::EditorSemanticSpan {
             bytes,
             color: None,
-            weight: crate::editor::syntax::EditorSemanticWeight::Inherit,
+            weight: None,
             italic: false,
             underline: false,
             strikethrough: false,
@@ -304,7 +304,9 @@ fn inline_delimiters_preserve_geometry_and_reuse_layouts_in_both_display_modes(
             editor.read_with(view, |e, _| e.hit_rows[0].clone())
         });
         assert!(!rows[0].layout.wrap_boundaries().is_empty());
-        assert!(!Arc::ptr_eq(&rows[0].layout, &rows[1].layout));
+        // Entering an already hidden delimiter does not change painted text.
+        // Visible delimiters change color, so only that mode needs a new layout.
+        assert_eq!(Arc::ptr_eq(&rows[0].layout, &rows[1].layout), !show_markers);
         assert!(Arc::ptr_eq(&rows[1].layout, &rows[2].layout));
         assert!(Arc::ptr_eq(&rows[0].layout, &rows[3].layout));
         let expected = if show_markers {

@@ -226,17 +226,9 @@ pub(super) fn schedule_minimap_layout_preparation(
                         line_style,
                         request.key.display_options,
                         &reveal,
-                    );
-                    crate::editor::presentation::project_spans(&mut spans, &projection);
+                    )
+                    .apply(&mut spans);
                     display = display.then(projection);
-                    if format == crate::document::DocumentFormat::Org {
-                        crate::editor::presentation::style_heading_markers(
-                            &mut spans,
-                            &display.text,
-                            line_style,
-                            request.key.display_options,
-                        );
-                    }
                     let text: gpui::SharedString =
                         folded_display_text(display.text.clone(), folded).into();
                     let is_table = line_style.id == syntax::EditorStyleId::Table;

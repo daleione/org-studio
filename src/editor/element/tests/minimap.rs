@@ -157,7 +157,12 @@ fn minimap_rows_adapt_the_canonical_editor_semantics() {
         let text = snapshot.copy_range(style.source_range);
         let spans = semantic_spans(Path::new("contract.org"), &text, style);
         let row = minimap_text_row(text, Some(style), spans, &mut rich_span_budget, theme);
-        assert_eq!(row.color, minimap_text_color(style.id, theme));
+        if matches!(style.id, EditorStyleId::Property | EditorStyleId::Meta) {
+            assert_eq!(
+                row.color, theme.foreground,
+                "property and keyword values inherit the editor body face"
+            );
+        }
         assert_eq!(
             matches!(row.font_role, crate::typography::FontRole::Table),
             expected_style == EditorStyleId::Table

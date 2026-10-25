@@ -72,6 +72,7 @@ use quads::{
 use rows::animated_paint_lines;
 pub(super) use scroll::{scroll_is_at_end, stabilized_scroll_y};
 use state::{InlineImagePaint, InlineImageResizeHandlePaint, PaintRow, SourceRunButtonPaint};
+pub(super) use text::ShapeKey;
 use text::{
     folded_display_text, local_marked, lower_fence_backticks, markdown_fence_backticks, shape_key,
 };

@@ -64,15 +64,14 @@ pub(super) fn prepare_run_buttons(
                     block.kind == syntax::EditorBlockKind::Source
                         && block.edge == syntax::EditorBlockEdge::Open
                 });
-            let directive = (row.shape_key.syntax_key == syntax::EditorStyleId::Meta.cache_key()
-                && row.block.is_none())
-            .then(|| {
-                snapshot
-                    .line_content_range(row.hit.line)
-                    .ok()
-                    .map(|range| syntax::classification_text(snapshot, range))
-            })
-            .flatten();
+            let directive = (row.style_id == syntax::EditorStyleId::Meta && row.block.is_none())
+                .then(|| {
+                    snapshot
+                        .line_content_range(row.hit.line)
+                        .ok()
+                        .map(|range| syntax::classification_text(snapshot, range))
+                })
+                .flatten();
             let call = directive.as_ref().is_some_and(|text| {
                 text.trim_start()
                     .get(..7)

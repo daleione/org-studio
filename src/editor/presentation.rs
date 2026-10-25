@@ -5,7 +5,7 @@ use std::{ops::Range, path::Path};
 use crate::{
     document::{DocumentFormat, TextProjection},
     org_semantic::display::{
-        InlineDisplayContext, OrgDisplayOptions, OrgHeadingStyle, project_inline,
+        InlineDisplayContext, OrgDisplayOptions, OrgHeadingStyle, inline_edits,
     },
 };
 
@@ -151,7 +151,7 @@ impl super::SemanticEditor {
                 &reveal,
             )
         } else {
-            project_line(path, &display.text, style, options, &reveal)
+            project_line(path, &display.text, style, options, &reveal).into_projection()
         };
         display = display.then(projection);
         Some((source.visible_range, display))
@@ -232,13 +232,40 @@ pub(super) fn local_reveals(
         .collect()
 }
 
+/// One presentation result owns both the source mapping and its marker face.
+/// Renderers apply both together; navigation only needs the source mapping.
+pub(super) struct LinePresentation {
+    projection: TextProjection,
+    marker_span: Option<EditorSemanticSpan>,
+}
+
+impl LinePresentation {
+    pub(super) fn apply(self, spans: &mut Vec<EditorSemanticSpan>) -> TextProjection {
+        if self.projection.has_replacements() {
+            for span in spans.iter_mut() {
+                span.bytes = self.projection.display_range(span.bytes.clone());
+            }
+            spans.retain(|span| !span.bytes.is_empty());
+        }
+        if let Some(mut span) = self.marker_span {
+            span.bytes = self.projection.display_range(span.bytes);
+            spans.push(span);
+        }
+        self.projection
+    }
+
+    pub(super) fn into_projection(self) -> TextProjection {
+        self.projection
+    }
+}
+
 pub(super) fn project_line(
     path: &Path,
     text: &str,
     style: &EditorLineStyle,
     mut options: OrgDisplayOptions,
     reveal: &[Range<usize>],
-) -> TextProjection {
+) -> LinePresentation {
     if DocumentFormat::detect(path) != Some(DocumentFormat::Org)
         || crate::syntax_highlighting::language_for_path(path).is_some()
         || matches!(
@@ -247,12 +274,53 @@ pub(super) fn project_line(
         )
         || style.code_language.is_some()
     {
-        return TextProjection::new(text);
+        return LinePresentation {
+            projection: TextProjection::new(text),
+            marker_span: None,
+        };
     }
     if style.id == EditorStyleId::Comment {
         options.hide_emphasis_markers = false;
     }
-    let projection = project_inline(
+    let mut edits = Vec::new();
+    let mut marker_span = None;
+    if matches!(style.id, EditorStyleId::Heading(_)) {
+        let count = text.bytes().take_while(|byte| *byte == b'*').count();
+        let revealed = reveal
+            .iter()
+            .any(|range| range.start < count && range.end > 0);
+        if count > 0 && !revealed {
+            use super::syntax::EditorColorToken;
+            let face = match options.heading_style {
+                OrgHeadingStyle::Source => None,
+                OrgHeadingStyle::HiddenStars => Some((EditorColorToken::Hidden, None)),
+                OrgHeadingStyle::Bullets => {
+                    const BULLETS: [&str; 4] = ["◉", "○", "✸", "✿"];
+                    // Keep a separate mapped position for every source star.
+                    edits.extend((0..count - 1).map(|index| (index..index + 1, "․".to_owned())));
+                    edits.push((
+                        count - 1..count,
+                        BULLETS[(count - 1) % BULLETS.len()].to_owned(),
+                    ));
+                    Some((
+                        EditorColorToken::InlineDelimiter,
+                        Some(gpui::FontWeight::NORMAL),
+                    ))
+                }
+            };
+            marker_span = face
+                .filter(|_| count > 1)
+                .map(|(color, weight)| EditorSemanticSpan {
+                    bytes: 0..count - 1,
+                    color: Some(color),
+                    weight,
+                    ..Default::default()
+                });
+        }
+    }
+    // Heading and inline edits share source coordinates, so a single
+    // projection suffices without building an intermediate inline display.
+    edits.extend(inline_edits(
         text,
         options,
         InlineDisplayContext {
@@ -260,87 +328,10 @@ pub(super) fn project_line(
             reveal,
             ..Default::default()
         },
-    );
-    let count = pretty_heading_marker_count(text, style, options, reveal);
-    if count == 0 {
-        return projection;
-    }
-    const BULLETS: [&str; 4] = ["◉", "○", "✸", "✿"];
-    // Preserve one visible character per source star, as org-superstar does.
-    // Each position remains independently editable while the prefix is composed.
-    let mut edits = (0..count - 1)
-        .map(|index| (index..index + 1, "․".to_owned()))
-        .collect::<Vec<_>>();
-    edits.push((
-        count - 1..count,
-        BULLETS[(count - 1) % BULLETS.len()].into(),
     ));
-    projection.replace(edits)
-}
-
-fn pretty_heading_marker_count(
-    text: &str,
-    style: &EditorLineStyle,
-    options: OrgDisplayOptions,
-    reveal: &[Range<usize>],
-) -> usize {
-    if options.heading_style != OrgHeadingStyle::Bullets
-        || !matches!(style.id, EditorStyleId::Heading(_))
-    {
-        return 0;
-    }
-    let count = text.bytes().take_while(|byte| *byte == b'*').count();
-    if reveal
-        .iter()
-        .any(|range| range.start < count && range.end > 0)
-    {
-        return 0;
-    }
-    count
-}
-
-pub(super) fn project_spans(spans: &mut Vec<EditorSemanticSpan>, projection: &TextProjection) {
-    for span in spans.iter_mut() {
-        span.bytes = projection.display_range(span.bytes.clone());
-    }
-    spans.retain(|span| !span.bytes.is_empty());
-}
-
-pub(super) fn style_heading_markers(
-    spans: &mut Vec<EditorSemanticSpan>,
-    text: &str,
-    style: &EditorLineStyle,
-    options: OrgDisplayOptions,
-) {
-    if !matches!(style.id, EditorStyleId::Heading(_)) {
-        return;
-    }
-    let (end, color, weight) = match options.heading_style {
-        OrgHeadingStyle::HiddenStars => (
-            text.bytes()
-                .take_while(|byte| *byte == b'*')
-                .count()
-                .saturating_sub(1),
-            super::syntax::EditorColorToken::Hidden,
-            super::syntax::EditorSemanticWeight::Inherit,
-        ),
-        OrgHeadingStyle::Bullets => (
-            text.chars()
-                .take_while(|character| *character == '․')
-                .count()
-                * '․'.len_utf8(),
-            super::syntax::EditorColorToken::InlineDelimiter,
-            super::syntax::EditorSemanticWeight::Normal,
-        ),
-        OrgHeadingStyle::Source => return,
-    };
-    if end > 0 {
-        spans.push(EditorSemanticSpan {
-            bytes: 0..end,
-            color: Some(color),
-            weight,
-            ..Default::default()
-        });
+    LinePresentation {
+        projection: TextProjection::new(text).replace(edits),
+        marker_span,
     }
 }
 

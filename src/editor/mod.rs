@@ -60,6 +60,7 @@ use crate::{
 };
 
 pub use element::EditorElement;
+use element::ShapeKey;
 
 actions!(
     semantic_editor,
@@ -453,24 +454,6 @@ impl EditorFoldAnimation {
             .map(|range| range.end - range.start)
             .sum()
     }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(super) struct ShapeKey {
-    pub(super) projected_source: Option<SharedString>,
-    pub(super) display_options: Option<crate::org_semantic::display::OrgDisplayOptions>,
-    pub(super) generated_line: Option<u64>,
-    pub(super) active_inline_code: Option<(usize, usize)>,
-    pub(super) text: SharedString,
-    pub(super) font_size_bits: u32,
-    pub(super) font: gpui::Font,
-    pub(super) wrap_width_bits: u32,
-    pub(super) syntax_key: u8,
-    pub(super) code_language: Option<Arc<str>>,
-    pub(super) marked: Option<(usize, usize)>,
-    /// Shaped lines bake TextRun colors into the layout, so the cache key must
-    /// change whenever the palette generation changes.
-    pub(super) theme_generation: u64,
 }
 
 #[cfg(feature = "benchmarks")]

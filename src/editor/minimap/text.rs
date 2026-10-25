@@ -1,7 +1,7 @@
 //! Minimap text styles, visibility and glyph rasterization.
 
 use crate::document::DocumentFormat;
-use gpui::RenderImage;
+use gpui::{FontWeight, RenderImage};
 use image::{Frame, RgbaImage};
 use smallvec::SmallVec;
 use std::{
@@ -23,7 +23,7 @@ pub(in crate::editor) struct TextRow {
     pub(in crate::editor) text: String,
     pub(in crate::editor) font_role: crate::typography::FontRole,
     pub(in crate::editor) color: u32,
-    pub(in crate::editor) weight: TextWeight,
+    pub(in crate::editor) weight: FontWeight,
     pub(in crate::editor) italic: bool,
     pub(in crate::editor) spans: Vec<TextSpan>,
     pub(in crate::editor) indent: f32,
@@ -58,19 +58,11 @@ pub(in crate::editor) struct RasterizedRows {
     pub(in crate::editor) rasterizer_lock_wait: Duration,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::editor) enum TextWeight {
-    #[default]
-    Normal,
-    Semibold,
-    Bold,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(in crate::editor) struct TextSpan {
     pub(in crate::editor) bytes: std::ops::Range<usize>,
     pub(in crate::editor) color: Option<cosmic_text::Color>,
-    pub(in crate::editor) weight: Option<TextWeight>,
+    pub(in crate::editor) weight: Option<FontWeight>,
     pub(in crate::editor) italic: bool,
     pub(in crate::editor) underline: bool,
     pub(in crate::editor) strikethrough: bool,
@@ -136,14 +128,7 @@ impl RichSpanBudget {
                         )
                     }
                 }),
-                weight: match span.weight {
-                    crate::editor::syntax::EditorSemanticWeight::Inherit => None,
-                    crate::editor::syntax::EditorSemanticWeight::Normal => Some(TextWeight::Normal),
-                    crate::editor::syntax::EditorSemanticWeight::Semibold => {
-                        Some(TextWeight::Semibold)
-                    }
-                    crate::editor::syntax::EditorSemanticWeight::Bold => Some(TextWeight::Bold),
-                },
+                weight: span.weight,
                 italic: span.italic,
                 underline: span.underline,
                 strikethrough: span.strikethrough,
@@ -451,12 +436,8 @@ fn slice_text_spans(spans: &[TextSpan], range: &std::ops::Range<usize>) -> Vec<T
         .collect()
 }
 
-fn cosmic_weight(weight: TextWeight) -> cosmic_text::Weight {
-    match weight {
-        TextWeight::Normal => cosmic_text::Weight::NORMAL,
-        TextWeight::Semibold => cosmic_text::Weight::SEMIBOLD,
-        TextWeight::Bold => cosmic_text::Weight::BOLD,
-    }
+fn cosmic_weight(weight: FontWeight) -> cosmic_text::Weight {
+    cosmic_text::Weight(weight.0 as u16)
 }
 
 fn rich_text_segments<'a>(

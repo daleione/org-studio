@@ -34,11 +34,12 @@ pub(super) struct InlineImageResizeHandlePaint {
 }
 
 pub(super) struct PaintRow {
-    pub(super) preview_runs: Vec<gpui::TextRun>,
+    pub(super) preview_runs: Arc<[gpui::TextRun]>,
     pub(super) hit: HitRow,
     pub(super) gutter_layout: ShapedLine,
     pub(super) source_line_number_layout: Option<ShapedLine>,
     pub(super) shape_key: ShapeKey,
+    pub(super) style_id: syntax::EditorStyleId,
     pub(super) visual_rows: usize,
     pub(super) metrics: syntax::BlockMetrics,
     pub(super) block: Option<syntax::EditorBlockDecoration>,

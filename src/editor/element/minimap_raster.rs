@@ -238,17 +238,9 @@ pub(super) fn schedule_minimap_raster(
                         style,
                         request.display_options,
                         &reveal,
-                    );
-                    crate::editor::presentation::project_spans(&mut spans, &projection);
+                    )
+                    .apply(&mut spans);
                     display = display.then(projection);
-                    if document_format == crate::document::DocumentFormat::Org {
-                        crate::editor::presentation::style_heading_markers(
-                            &mut spans,
-                            &display.text,
-                            style,
-                            request.display_options,
-                        );
-                    }
                 }
                 text = display.text.clone();
                 if image_lines.contains(&line) {
@@ -426,21 +418,6 @@ pub(super) fn bounded_minimap_text(
     snapshot.copy_range(ByteRange::new(range.start.0, end))
 }
 
-pub(super) fn minimap_text_color(kind: syntax::EditorStyleId, theme: &crate::theme::Theme) -> u32 {
-    match kind {
-        syntax::EditorStyleId::Heading(level) => {
-            theme.heading[level.saturating_sub(1) as usize % theme.heading.len()]
-        }
-        syntax::EditorStyleId::CodeBoundary | syntax::EditorStyleId::Meta => theme.meta,
-        syntax::EditorStyleId::Code => theme.code_foreground,
-        syntax::EditorStyleId::Quote => theme.quote,
-        syntax::EditorStyleId::Property => theme.attribute,
-        syntax::EditorStyleId::Comment => theme.comment,
-        syntax::EditorStyleId::Table => theme.link,
-        syntax::EditorStyleId::List | syntax::EditorStyleId::Plain => theme.foreground,
-    }
-}
-
 pub(super) fn minimap_text_row(
     text: String,
     line_style: Option<&syntax::EditorLineStyle>,
@@ -457,18 +434,14 @@ pub(super) fn minimap_text_row(
             style.id.font_role()
         }),
         color: line_style.map_or(theme.foreground, |style| {
-            minimap_text_color(style.id, theme)
+            style.id.base_color(theme).unwrap_or(theme.foreground)
         }),
         weight: if let Some(style) =
             line_style.filter(|style| matches!(style.id, syntax::EditorStyleId::Heading(_)))
         {
-            if style.metrics.font_weight == gpui::FontWeight::BOLD {
-                crate::editor::minimap::TextWeight::Bold
-            } else {
-                crate::editor::minimap::TextWeight::Normal
-            }
+            style.metrics.font_weight
         } else {
-            crate::editor::minimap::TextWeight::Semibold
+            gpui::FontWeight::SEMIBOLD
         },
         italic: matches!(
             line_style.map(|style| style.id),

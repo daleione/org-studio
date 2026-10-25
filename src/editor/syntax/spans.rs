@@ -94,20 +94,11 @@ impl EditorColorToken {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(in crate::editor) enum EditorSemanticWeight {
-    #[default]
-    Inherit,
-    Normal,
-    Semibold,
-    Bold,
-}
-
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(in crate::editor) struct EditorSemanticSpan {
     pub(in crate::editor) bytes: Range<usize>,
     pub(in crate::editor) color: Option<EditorColorToken>,
-    pub(in crate::editor) weight: EditorSemanticWeight,
+    pub(in crate::editor) weight: Option<FontWeight>,
     pub(in crate::editor) italic: bool,
     pub(in crate::editor) underline: bool,
     pub(in crate::editor) strikethrough: bool,
@@ -120,23 +111,23 @@ pub(in crate::editor) struct EditorSemanticSpan {
 }
 
 /// Restore the code accent on the delimiters of the span under the caret.
-/// Returning the span (rather than the caret offset) keeps shaping cacheable while typing within it.
 pub(in crate::editor) fn emphasize_inline_delimiters(
     spans: &mut [EditorSemanticSpan],
     caret: Option<usize>,
-) -> Option<Range<usize>> {
-    let caret = caret?;
-    let range = spans
+) {
+    let Some(caret) = caret else { return };
+    let Some(range) = spans
         .iter()
         .find(|span| {
             matches!(
                 span.color,
                 Some(EditorColorToken::InlineCode | EditorColorToken::Verbatim)
             ) && span.bytes.contains(&caret)
-        })?
-        .bytes
-        .clone();
-    let mut emphasized = false;
+        })
+        .map(|span| span.bytes.clone())
+    else {
+        return;
+    };
     for span in spans {
         if span.color == Some(EditorColorToken::InlineDelimiter)
             && span.bytes.start >= range.start
@@ -144,10 +135,8 @@ pub(in crate::editor) fn emphasize_inline_delimiters(
         {
             // Removing the override reveals the enclosing code span's original color.
             span.color = None;
-            emphasized = true;
         }
     }
-    emphasized.then_some(range)
 }
 
 /// Produces paint runs from precomputed semantic spans without changing source text.
@@ -158,30 +147,21 @@ pub(in crate::editor) fn runs_from_spans(
     marked: Option<Range<usize>>,
     theme: &Theme,
 ) -> Vec<TextRun> {
+    if let Some(color) = line_style.id.base_color(theme) {
+        base.color = rgb(color).into();
+    }
     // Apply the block face before inline overrides.
     match line_style.id {
-        EditorStyleId::Heading(level) => {
+        EditorStyleId::Heading(_) => {
             base.font.weight = line_style.metrics.font_weight;
             // JetBrains Mono substitutes `***` with a staggered asterism ligature.
             // Source headings must keep their level markers individually legible.
             base.font.features = gpui::FontFeatures::disable_ligatures();
-            base.color =
-                rgb(theme.heading[level.saturating_sub(1) as usize % theme.heading.len()]).into();
         }
-        EditorStyleId::CodeBoundary => {
-            base.color = rgb(theme.meta).into();
-        }
-        EditorStyleId::Code => {
-            base.color = rgb(theme.code_foreground).into();
-        }
-        EditorStyleId::Quote => base.color = rgb(theme.quote).into(),
-        EditorStyleId::Property | EditorStyleId::Meta => {}
         EditorStyleId::Comment => {
-            base.color = rgb(theme.comment).into();
             base.font.style = FontStyle::Italic;
         }
-        EditorStyleId::Table => base.color = rgb(theme.link).into(),
-        EditorStyleId::List | EditorStyleId::Plain => {}
+        _ => {}
     }
 
     let mut boundaries = vec![0, base.len];
@@ -215,12 +195,9 @@ pub(in crate::editor) fn runs_from_spans(
                         rgb(color.resolve(theme)).into()
                     };
                 }
-                run.font.weight = match span.weight {
-                    EditorSemanticWeight::Inherit => run.font.weight,
-                    EditorSemanticWeight::Normal => FontWeight::NORMAL,
-                    EditorSemanticWeight::Semibold => FontWeight::SEMIBOLD,
-                    EditorSemanticWeight::Bold => FontWeight::BOLD,
-                };
+                if let Some(weight) = span.weight {
+                    run.font.weight = weight;
+                }
                 if span.italic {
                     run.font.style = FontStyle::Italic;
                 }
@@ -494,12 +471,7 @@ pub(in crate::editor) fn semantic_spans(
         .map(|(bytes, style)| EditorSemanticSpan {
             bytes,
             color: style.color,
-            weight: match style.weight {
-                Some(FontWeight::BOLD) => EditorSemanticWeight::Bold,
-                Some(FontWeight::SEMIBOLD) => EditorSemanticWeight::Semibold,
-                Some(FontWeight::NORMAL) => EditorSemanticWeight::Normal,
-                _ => EditorSemanticWeight::Inherit,
-            },
+            weight: style.weight,
             italic: style.font_style == Some(FontStyle::Italic),
             underline: style.underline,
             strikethrough: style.strikethrough,

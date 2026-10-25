@@ -226,9 +226,7 @@ impl RowShaping<'_> {
             strikethrough: None,
         };
         let mut marked_display = local_marked(self.marked, content_range, &display);
-        let mut projected_source = None;
         let mut semantic_row = Vec::new();
-        let mut active_inline_code = None;
         let runs = if let Some(highlights) = self.editor.generated_highlights.as_ref() {
             highlights.get(line_number as usize).map_or_else(
                 || vec![base_run.clone()],
@@ -251,43 +249,33 @@ impl RowShaping<'_> {
                 .map(|offset| {
                     display.source_to_display((offset.0 - content_range.start.0) as usize)
                 });
-            active_inline_code = syntax::emphasize_inline_delimiters(&mut semantic_row, caret);
+            syntax::emphasize_inline_delimiters(&mut semantic_row, caret);
             let projection = crate::editor::presentation::project_line(
                 self.editor.session.read(self.cx).syntax_path(),
                 &display.text,
                 line_style,
                 self.display_options,
                 &reveal,
-            );
+            )
+            .apply(&mut semantic_row);
             if projection.has_replacements() {
-                projected_source = Some(text.clone());
-                crate::editor::presentation::project_spans(&mut semantic_row, &projection);
-                active_inline_code =
-                    active_inline_code.map(|range| projection.display_range(range));
                 display = display.then(projection);
                 text = folded_display_text(display.text.clone(), folded).into();
                 base_run.len = text.len();
                 marked_display = local_marked(self.marked, content_range, &display);
             }
-            if self.document_format == DocumentFormat::Org {
-                crate::editor::presentation::style_heading_markers(
-                    &mut semantic_row,
-                    &display.text,
-                    line_style,
-                    self.display_options,
-                );
-            }
             let mut runs = syntax::runs_from_spans(
                 &semantic_row,
                 base_run,
                 line_style,
-                marked_display.clone(),
+                marked_display,
                 self.theme,
             );
             syntax::apply_swatch_text(&mut runs, &semantic_row, self.theme);
             runs
         };
-        let runs = crate::typography::cjk_runs(&text, runs, line_style.id.font_role());
+        let runs: Arc<[TextRun]> =
+            crate::typography::cjk_runs(&text, runs, line_style.id.font_role()).into();
         let shaped_font_size = px(f32::from(self.font_size) * metrics.font_scale);
         let table_layout = table_columns.as_ref().and_then(|columns| {
             let metrics = self.editor.table_column_metrics(
@@ -320,25 +308,13 @@ impl RowShaping<'_> {
             )
         });
         let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
-        let mut shape_key = shape_key(
+        let shape_key = shape_key(
             &text,
-            font,
+            &runs,
             shaped_font_size,
-            marked_display,
             effective_wrap_width,
-            if fence_backticks.is_some() {
-                28 // Markdown fence glyph placement has its own cached layout.
-            } else {
-                line_style.id.cache_key()
-            },
-            line_style.code_language.clone(),
+            fence_backticks.clone(),
         );
-        // Equal text can carry different faces on different agenda dates.
-        shape_key.generated_line = self.generated.then_some(line_number);
-        shape_key.projected_source = projected_source;
-        shape_key.display_options =
-            (self.document_format == DocumentFormat::Org).then_some(self.display_options);
-        shape_key.active_inline_code = active_inline_code.map(|range| (range.start, range.end));
         let layout = self
             .editor
             .shape_cache
@@ -731,6 +707,7 @@ impl RowShaping<'_> {
             gutter_layout,
             source_line_number_layout,
             shape_key,
+            style_id: line_style.id,
             visual_rows,
             metrics,
             block: line_style.block.clone(),

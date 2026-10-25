@@ -4,9 +4,7 @@ use super::cookie::{
 };
 use super::minimap::build_minimap;
 use super::minimap_layout::{prepare_minimap_layout_request, schedule_minimap_layout_preparation};
-use super::minimap_raster::{
-    apply_editor_minimap_media_dimensions, minimap_text_color, minimap_text_row,
-};
+use super::minimap_raster::{apply_editor_minimap_media_dimensions, minimap_text_row};
 use super::quads::{push_swatch_quads, table_hover_quads};
 use super::rows::{MAX_ANIMATED_PAINT_LINES, animated_paint_lines};
 use crate::document::{DocumentSession, DocumentSnapshot, TextSnapshot};

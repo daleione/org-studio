@@ -430,6 +430,84 @@ fn heading_bullets_respect_literal_blocks_lists_and_source_search(cx: &mut TestA
     assert_eq!(source(&session, view), original);
 }
 
+#[test]
+fn hidden_heading_stars_reappear_for_source_search() {
+    use crate::editor::syntax::{
+        EditorSyntaxService, SparseEditorStyleSnapshot, runs_from_spans, semantic_spans,
+    };
+    use crate::org_semantic::display::{OrgDisplayOptions, OrgHeadingStyle};
+
+    let path = std::path::Path::new("headings.org");
+    let text = "*** Section";
+    let snapshot = crate::document::DocumentSnapshot::from_utf8(text.as_bytes().to_vec()).unwrap();
+    let styles = SparseEditorStyleSnapshot::for_lines(
+        path,
+        &snapshot,
+        &[0],
+        &EditorSyntaxService::default(),
+    );
+    let style = styles.line(0).unwrap();
+    let options = OrgDisplayOptions {
+        heading_style: OrgHeadingStyle::HiddenStars,
+        ..Default::default()
+    };
+    let theme = crate::theme::current_theme();
+    for revealed_range in [None, Some(0..2)] {
+        let reveal = revealed_range.as_slice();
+        let mut spans = semantic_spans(path, text, style);
+        let projection = super::project_line(path, text, style, options, reveal).apply(&mut spans);
+        let runs = runs_from_spans(
+            &spans,
+            gpui::TextRun {
+                len: projection.text.len(),
+                font: Default::default(),
+                color: gpui::rgb(theme.foreground).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            },
+            style,
+            None,
+            theme,
+        );
+        assert_eq!(projection.text, text);
+        assert_eq!(runs[0].color.a > 0.0, !reveal.is_empty());
+    }
+}
+
+#[gpui::test]
+fn source_search_refreshes_hidden_heading_layout_and_restores_it(cx: &mut TestAppContext) {
+    let original = "#+STARTUP: hidestars\n*** Section\n";
+    let (session, editor, view) = setup(cx, original);
+    let layout = |view: &VisualTestContext| {
+        view.read(|cx| {
+            editor
+                .read(cx)
+                .hit_rows
+                .iter()
+                .find(|row| row.line.0 == 1)
+                .unwrap()
+                .layout
+                .clone()
+        })
+    };
+    let masked = layout(view);
+    let start = original.find("***").unwrap() as u64;
+    let range = ByteRange::new(start, start + 2);
+    editor.update(view, |editor, cx| {
+        editor.search_preview(std::sync::Arc::from([range]), Some(range), cx)
+    });
+    view.run_until_parked();
+    assert!(
+        !std::sync::Arc::ptr_eq(&masked, &layout(view)),
+        "revealed stars need new paint runs even though the display text is unchanged"
+    );
+    editor.update(view, |editor, cx| editor.search_finish(false, cx));
+    view.run_until_parked();
+    assert!(std::sync::Arc::ptr_eq(&masked, &layout(view)));
+    assert_eq!(source(&session, view), original);
+}
+
 #[gpui::test]
 fn heading_markers_keep_wrapping_and_hit_testing_aligned(cx: &mut TestAppContext) {
     let original = format!("**** {}\n", "sample words ".repeat(30));

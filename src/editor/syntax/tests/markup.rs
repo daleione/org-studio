@@ -13,15 +13,13 @@ fn inline_delimiters_follow_only_the_active_code_span() {
         let style = line_style(&text, &mut CodeContext::default());
         let mut spans = semantic_spans(Path::new(path), &text, &style);
         let plain = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
-        assert_eq!(emphasize_inline_delimiters(&mut spans, None), None);
+        emphasize_inline_delimiters(&mut spans, None);
+        emphasize_inline_delimiters(&mut spans, Some(text.len()));
         assert_eq!(
-            emphasize_inline_delimiters(&mut spans, Some(text.len())),
-            None
+            runs_from_spans(&spans, base_run(text.len()), &style, None, theme),
+            plain
         );
-        assert_eq!(
-            emphasize_inline_delimiters(&mut spans, Some(width)),
-            Some(0..literal.len())
-        );
+        emphasize_inline_delimiters(&mut spans, Some(width));
         let active = runs_from_spans(&spans, base_run(text.len()), &style, None, theme);
         assert_eq!(active.iter().map(|run| run.len).sum::<usize>(), text.len());
         let muted = rgb(EditorColorToken::InlineDelimiter.resolve(theme)).into();
@@ -91,11 +89,7 @@ fn table_inline_syntax_cannot_cross_cell_boundaries() {
         style.id = EditorStyleId::Table;
         let spans = semantic_spans(Path::new(path), text, &style);
         assert!(spans.iter().all(|span| !span.italic && !span.underline));
-        assert!(
-            spans
-                .iter()
-                .all(|span| span.weight == EditorSemanticWeight::Inherit)
-        );
+        assert!(spans.iter().all(|span| span.weight.is_none()));
         assert!(
             spans
                 .iter()

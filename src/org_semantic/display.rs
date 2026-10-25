@@ -187,7 +187,7 @@ pub(crate) fn project_table(
     TextProjection::new(source).replace(edits)
 }
 
-fn inline_edits(
+pub(crate) fn inline_edits(
     source: &str,
     options: OrgDisplayOptions,
     context: InlineDisplayContext<'_>,

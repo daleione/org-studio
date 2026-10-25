@@ -31,7 +31,7 @@ fn semantic_span(byte: usize) -> crate::editor::syntax::EditorSemanticSpan {
     crate::editor::syntax::EditorSemanticSpan {
         bytes: byte..byte + 1,
         color: Some(crate::editor::syntax::EditorColorToken::Keyword),
-        weight: crate::editor::syntax::EditorSemanticWeight::Bold,
+        weight: Some(FontWeight::BOLD),
         ..Default::default()
     }
 }
@@ -117,7 +117,7 @@ fn rich_text_segments_preserve_color_emphasis_and_utf8_boundaries() {
         TextSpan {
             bytes: 3..7,
             color: Some(cosmic_text::Color::rgb(0x12, 0x34, 0x56)),
-            weight: Some(TextWeight::Bold),
+            weight: Some(FontWeight::BOLD),
             italic: true,
             underline: true,
             strikethrough: true,
@@ -125,7 +125,7 @@ fn rich_text_segments_preserve_color_emphasis_and_utf8_boundaries() {
         TextSpan {
             bytes: 7..8,
             color: None,
-            weight: Some(TextWeight::Normal),
+            weight: Some(FontWeight::NORMAL),
             italic: false,
             underline: false,
             strikethrough: false,

@@ -14,8 +14,7 @@ use crate::document::{ByteRange, Revision, TextSnapshot};
 
 mod text;
 pub(super) use text::{
-    RichSpanBudget, TableRowGeometry, TextRow, TextWeight, rasterize_text_rows,
-    rich_span_degraded_rows,
+    RichSpanBudget, TableRowGeometry, TextRow, rasterize_text_rows, rich_span_degraded_rows,
 };
 
 pub(super) const DEFAULT_WIDTH: f32 = 96.0;

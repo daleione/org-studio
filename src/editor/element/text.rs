@@ -1,12 +1,13 @@
 //! Shared text shaping helpers, cache keys, and folded/marked display text.
 
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::{Pixels, WrappedLine};
+use gpui::{Pixels, TextRun, WrappedLine};
 
 use crate::document::ByteRange;
-use crate::editor::{ShapeKey, syntax};
+use crate::editor::syntax;
 
 // Keep source bytes and all horizontal/caret geometry intact. Only the glyphs
 // of a Markdown backtick boundary receive an optical vertical adjustment.
@@ -49,28 +50,44 @@ pub(super) fn lower_fence_backticks(line: &mut WrappedLine, range: Range<usize>,
     *std::ops::DerefMut::deref_mut(line) = Arc::new(layout);
 }
 
+/// The complete inputs to shaping and its optional fence-glyph adjustment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::editor) struct ShapeKey {
+    text: gpui::SharedString,
+    runs: Arc<[TextRun]>,
+    font_size_bits: u32,
+    wrap_width_bits: Option<u32>,
+    fence_backticks: Option<Range<usize>>,
+}
+
+impl Hash for ShapeKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // TextRun supports equality but not Hash. Hash the geometry and run
+        // count; full equality also checks every font and paint attribute.
+        (
+            &self.text,
+            self.font_size_bits,
+            self.wrap_width_bits,
+            &self.fence_backticks,
+            self.runs.len(),
+        )
+            .hash(state);
+    }
+}
+
 pub(super) fn shape_key(
     text: &gpui::SharedString,
-    font: gpui::Font,
+    runs: &Arc<[TextRun]>,
     font_size: Pixels,
-    marked: Option<std::ops::Range<usize>>,
     wrap_width: Option<Pixels>,
-    syntax_key: u8,
-    code_language: Option<Arc<str>>,
+    fence_backticks: Option<Range<usize>>,
 ) -> ShapeKey {
     ShapeKey {
-        projected_source: None,
-        display_options: None,
-        generated_line: None,
-        active_inline_code: None,
         text: text.clone(),
+        runs: runs.clone(),
         font_size_bits: f32::from(font_size).to_bits(),
-        font,
-        wrap_width_bits: wrap_width.map_or(0, |width| f32::from(width).to_bits()),
-        syntax_key,
-        code_language,
-        marked: marked.map(|range| (range.start, range.end)),
-        theme_generation: crate::theme::theme_generation(),
+        wrap_width_bits: wrap_width.map(|width| f32::from(width).to_bits()),
+        fence_backticks,
     }
 }
 
