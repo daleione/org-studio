@@ -1,7 +1,7 @@
 //! Row-local highlight quads: selection, hex swatches, tag pills, link hover
 //! and search matches.
 
-use gpui::{Bounds, PaintQuad, Pixels, fill, point, px, rgba};
+use gpui::{Bounds, PaintQuad, Pixels, checkerboard, fill, point, px, rgba};
 
 use crate::document::{ByteRange, TextSnapshot};
 use crate::editor::{HitRow, highlight::RangeHighlight, syntax};
@@ -24,10 +24,9 @@ pub(super) fn push_selection_quads(
     );
 }
 
-/// Paints the opaque swatch behind every hex literal in the row. Quads stay
-/// in the background layer, so hover, search and selection highlights still
-/// paint on top. Fill and glyph color are per-literal, while radius and padding
-/// come from [`RangeHighlight`].
+/// Paints each hex literal over a checkerboard when it has transparency.
+/// Quads stay below hover, search and selection;
+/// radius and padding come from [`RangeHighlight`].
 pub(super) fn push_swatch_quads(
     quads: &mut Vec<PaintQuad>,
     hit: &HitRow,
@@ -46,7 +45,23 @@ pub(super) fn push_swatch_quads(
             literal,
             theme.background,
         ));
+        let first_quad = quads.len();
         RangeHighlight::rounded(fill.into()).paint(quads, hit, span.bytes.clone(), wrap_width);
+        if literal & 0xff != 0xff {
+            let pattern = checkerboard(
+                rgba(crate::org_syntax::color::swatch_checker_fill(
+                    literal,
+                    theme.background,
+                )),
+                f32::from(hit.line_height) * 0.4,
+            );
+            let end = quads.len();
+            for index in first_quad..end {
+                let mut checker = quads[index].clone();
+                checker.background = pattern;
+                quads.push(checker);
+            }
+        }
     }
 }
 

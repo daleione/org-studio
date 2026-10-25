@@ -95,13 +95,37 @@ pub fn swatch_fill(rgba: u32, background: u32) -> u32 {
     (rgb << 8) | 0xff
 }
 
-/// Glyph color that stays readable on the swatch: black or white, picked by
-/// WCAG contrast against the composited fill. Returns `0xRRGGBBAA` with full
-/// alpha, so callers decode it with `rgba()` like [`swatch_fill`].
+/// The alternate checker tile, composited with the literal's own alpha.
+/// Ease in the neutral matte's contrast as transparency grows, keeping
+/// mid-alpha colors quiet while fully transparent ones expose the full grid.
+pub fn swatch_checker_fill(rgba: u32, background: u32) -> u32 {
+    let neutral = if relative_luminance(background) > 0.5 {
+        0x000000
+    } else {
+        0xffffff
+    };
+    let transparency = (0xff - (rgba & 0xff)) as f32 / 255.0;
+    let matte_alpha = (48.0 * transparency * transparency).round() as u32;
+    let matte = swatch_fill((neutral << 8) | matte_alpha, background) >> 8;
+    swatch_fill(rgba, matte)
+}
+
+/// Glyph color that stays readable on both checker tones: black or white,
+/// picked by the smaller WCAG contrast across the composited fills. Returns
+/// `0xRRGGBBAA` with full alpha, decoded with `rgba()` like [`swatch_fill`].
 pub fn swatch_text_color(rgba: u32, background: u32) -> u32 {
-    let fill = swatch_fill(rgba, background) >> 8;
-    let swatch = relative_luminance(fill);
-    let ink = if contrast_ratio(swatch, 0.0) >= contrast_ratio(swatch, 1.0) {
+    let swatches = [
+        swatch_fill(rgba, background),
+        swatch_checker_fill(rgba, background),
+    ]
+    .map(|fill| relative_luminance(fill >> 8));
+    let contrast = |ink| {
+        swatches
+            .into_iter()
+            .map(|swatch| contrast_ratio(swatch, ink))
+            .fold(f32::INFINITY, f32::min)
+    };
+    let ink = if contrast(0.0) >= contrast(1.0) {
         0x000000
     } else {
         0xffffff
