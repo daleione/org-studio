@@ -403,6 +403,103 @@ fn committing_a_new_width_attribute_keeps_the_image_in_place(cx: &mut gpui::Test
 }
 
 #[gpui::test]
+fn fold_animation_keeps_plots_outside_its_region_visible(cx: &mut gpui::TestAppContext) {
+    use crate::document::{ByteOffset, Selection};
+
+    cx.update(crate::editor::init);
+    let source = concat!(
+        "#+PLOT: title:\"First\" ind:1\n| x | y |\n|---+---|\n| a | 2 |\n\n",
+        "* Details\n#+begin_src rust\nfn main() {}\n#+end_src\n\n",
+        "#+PLOT: title:\"Second\" ind:1\n| x | y |\n|---+---|\n| b | 3 |\n",
+    );
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("fold-plots.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(1000.0), px(1400.0)));
+    view.run_until_parked();
+    view.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    view.run_until_parked();
+    let (first_line, first_plot, first_bounds, first_image) = view.read(|cx| {
+        let editor = editor.read(cx);
+        assert_eq!(editor.plots.lines.len(), 2);
+        let (&line, plot) = editor
+            .plots
+            .lines
+            .iter()
+            .min_by_key(|(line, _)| *line)
+            .unwrap();
+        (
+            line,
+            plot.entry.id,
+            editor
+                .inline_image_handles
+                .iter()
+                .find(|handle| handle.plot == Some(plot.entry.id))
+                .unwrap()
+                .bounds,
+            plot.state.as_ref().unwrap().rendered().unwrap().clone(),
+        )
+    });
+    view.update(|window, cx| {
+        let focus_handle = editor.read(cx).focus_handle.clone();
+        window.focus(&focus_handle, cx);
+    });
+    for (boundary, expected_plots) in [("#+begin_src", 2), ("* Details", 1)] {
+        for collapsing in [true, false] {
+            editor.update(view, |editor, cx| {
+                editor.set_selection(
+                    Selection::caret(ByteOffset(source.find(boundary).unwrap() as u64)),
+                    cx,
+                );
+            });
+            view.simulate_keystrokes("tab");
+            for progress in [0.0, 0.5, 1.0] {
+                view.update(|window, cx| {
+                    editor.update(cx, |editor, cx| {
+                        let animation = editor.fold_animation.as_mut().unwrap();
+                        assert_eq!(animation.collapsing, collapsing);
+                        animation.progress = progress;
+                        cx.notify();
+                    });
+                    window.refresh();
+                    window.draw(cx).clear(cx);
+                    let editor = editor.read(cx);
+                    assert_eq!(
+                        editor
+                            .inline_image_handles
+                            .iter()
+                            .filter(|handle| { handle.axis == crate::plot::PlotResizeAxis::Both })
+                            .count(),
+                        expected_plots,
+                        "{boundary}, {collapsing}, {progress}"
+                    );
+                    let first = editor
+                        .inline_image_handles
+                        .iter()
+                        .find(|handle| handle.plot == Some(first_plot))
+                        .unwrap();
+                    assert_eq!(first.bounds, first_bounds);
+                    let image = editor.plots.lines[&first_line]
+                        .state
+                        .as_ref()
+                        .unwrap()
+                        .rendered()
+                        .unwrap();
+                    assert!(std::sync::Arc::ptr_eq(image, &first_image));
+                });
+            }
+            editor.update(view, |editor, cx| {
+                editor.finish_fold_animation();
+                cx.notify();
+            });
+            view.run_until_parked();
+        }
+    }
+}
+
+#[gpui::test]
 fn a_linked_chart_keeps_its_image_when_new_numbers_finish_rendering(cx: &mut gpui::TestAppContext) {
     use crate::document::{ByteOffset, EditOrigin, Selection};
 

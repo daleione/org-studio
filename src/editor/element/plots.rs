@@ -10,10 +10,12 @@ pub(super) fn prepaint(
     window: &mut Window,
     cx: &mut App,
 ) -> (Vec<AnyElement>, Vec<AnyElement>) {
-    if host.read(cx).fold_animation.is_some() {
-        return (Vec::new(), Vec::new());
-    }
     let presentations = host.read(cx).plots.lines.clone();
+    let fold_ranges = host
+        .read(cx)
+        .fold_animation
+        .as_ref()
+        .map(|animation| animation.changed_ranges.clone());
     let chinese = host.read(cx).ui_language == crate::i18n::Language::Chinese;
     let mut output_errors = Vec::new();
     let plots = rows
@@ -21,6 +23,13 @@ pub(super) fn prepaint(
         .enumerate()
         .filter_map(|(index, row)| {
             let presentation = presentations.get(&row.hit.line.0)?;
+            // Only plots inside the changing fold must wait for the transition.
+            if fold_ranges
+                .as_ref()
+                .is_some_and(|ranges| ranges.iter().any(|range| range.contains(&row.hit.line.0)))
+            {
+                return None;
+            }
             if presentation.entry.source.image_link.is_some() {
                 let error = crate::plot::render_plot_output_error(presentation)?;
                 let image = row.inline_image.as_ref()?;
