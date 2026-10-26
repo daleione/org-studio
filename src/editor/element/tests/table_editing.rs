@@ -1,6 +1,63 @@
 use super::*;
 
 #[gpui::test]
+fn typing_past_table_padding_expands_the_source_row_without_wrapping(
+    cx: &mut gpui::TestAppContext,
+) {
+    use crate::document::{ByteOffset, ByteRange, Selection};
+
+    cx.update(crate::editor::init);
+    // Source checked against Emacs 30.2 / Org 9.7.11: ordinary insertion does
+    // not resize the separator or re-align the other rows until Tab is pressed.
+    let source = "| Key | Description | Tail |\n|-----+-------------+------|\n| a   | note        | end  |\n";
+    let caret = source.find("Description").unwrap() + "Description".len();
+    let session = cx.new(|_| {
+        DocumentSession::from_utf8("typing.org".into(), source.as_bytes().to_vec()).unwrap()
+    });
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(gpui::size(px(1400.), px(600.)));
+    editor.update(view, |editor, cx| {
+        editor.set_selection(Selection::caret(ByteOffset(caret as u64)), cx)
+    });
+    for _ in 0..12 {
+        view.simulate_input("s");
+    }
+    view.run_until_parked();
+    editor.read_with(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        assert_eq!(
+            snapshot.copy_range(ByteRange::new(0, snapshot.len_bytes())),
+            source.replacen("Description", "Descriptionssssssssssss", 1)
+        );
+        let row = editor.hit_rows.iter().find(|row| row.line.0 == 0).unwrap();
+        assert_eq!(row.table_layout.as_ref().unwrap().visual_rows, 1);
+        let caret = row.position_for_display_index(caret + 12).unwrap();
+        assert_eq!(caret.y, px(0.));
+    });
+    view.simulate_keystrokes("tab");
+    view.run_until_parked();
+    editor.read_with(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        assert!(
+            crate::editor::org_commands::table_columns(
+                &snapshot,
+                0,
+                crate::document::DocumentFormat::Org,
+            )
+            .unwrap()
+            .aligned
+        );
+        assert!(
+            editor
+                .hit_rows
+                .iter()
+                .filter_map(|row| row.table_layout.as_ref())
+                .all(|layout| layout.visual_rows == 1)
+        );
+    });
+}
+
+#[gpui::test]
 fn org_table_character_commands_match_emacs_source_and_caret(cx: &mut gpui::TestAppContext) {
     use crate::document::{ByteOffset, ByteRange, Selection};
     cx.update(crate::editor::init);
@@ -526,16 +583,17 @@ fn narrow_tables_wrap_cells_with_shared_columns_and_source_mapping(cx: &mut gpui
         editor.update(view, |e, cx| {
             assert_ne!(e.snapshot(cx).revision(), original.revision());
             let row = e.hit_rows.iter().find(|row| row.line.0 == 2).unwrap();
-            assert!(
-                row.table_layout.as_ref().unwrap().visual_rows > 1,
-                "editing an aligned table must preserve cell wrapping"
-            );
+            assert_eq!(row.table_layout.as_ref().unwrap().visual_rows, 1);
             let caret = e.selection().head();
             let source_local = (caret.0 - row.range.start.0) as usize;
             let before = row
                 .position_for_display_index(row.display.source_to_display(source_local))
                 .unwrap();
-            assert!(before.y > px(0.));
+            assert_eq!(before.y, px(0.));
+            assert!(e.scroll_x > 0.);
+            assert!(row.text_origin_x + before.x < e.minimap.bounds.unwrap().left());
+            let prose = e.hit_rows.iter().find(|row| row.line.0 == 5).unwrap();
+            assert_eq!(prose.text_origin_x, prose_x);
             e.move_vertical(-1, false, cx);
             assert_ne!(e.selection().head(), caret);
         });

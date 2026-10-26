@@ -16,7 +16,7 @@ use super::text::folded_display_text;
 use crate::editor::inline_image::{
     INLINE_IMAGE_VERTICAL_PADDING, image_sizing, resolved_image_size,
 };
-use crate::editor::table_layout::{TableColumnMetrics, TableVisualLayout};
+use crate::editor::table_layout::{TableGeometryCache, TableVisualLayout};
 
 pub(super) struct MinimapLayoutPreparationRequest {
     pub(super) key: crate::editor::minimap::PreparedLayoutKey,
@@ -30,6 +30,7 @@ pub(super) struct MinimapLayoutPreparationRequest {
     pub(super) font_size: Pixels,
     pub(super) theme: crate::theme::Theme,
     pub(super) fold_markers: Arc<std::collections::HashSet<u64>>,
+    table_layouts: crate::editor::table_resize::ResizedTableLayouts,
 }
 
 pub(super) fn prepare_minimap_layout_request(
@@ -86,6 +87,7 @@ pub(super) fn prepare_minimap_layout_request(
         font_size,
         theme: *crate::theme::current_theme(),
         fold_markers: editor.fold_markers.clone(),
+        table_layouts: editor.table_resize.layouts.clone(),
     })
 }
 
@@ -131,7 +133,7 @@ pub(super) fn schedule_minimap_layout_preparation(
             .iter()
             .copied()
             .collect::<std::collections::HashMap<_, _>>();
-        let mut tables = std::collections::HashMap::new();
+        let mut tables = TableGeometryCache::default();
         let format = crate::document::DocumentFormat::from_path(&request.key.path);
 
         for chunk_start in (0..line_count).step_by(YIELD_LINE_INTERVAL as usize) {
@@ -255,44 +257,28 @@ pub(super) fn schedule_minimap_layout_preparation(
                     let shaped_font_size = px(f32::from(request.font_size) * metrics.font_scale);
                     let effective_wrap_width = request.key.soft_wrap.then_some(px(row_wrap_width));
                     let columns = if is_table {
-                        crate::editor::org_commands::table_start(
-                            &request.snapshot,
-                            line_number,
-                            format,
-                        )
-                        .and_then(|start| {
-                            tables
-                                .entry(start)
-                                .or_insert_with(|| {
-                                    let columns = crate::editor::org_commands::table_columns(
-                                        &request.snapshot,
-                                        start,
-                                        format,
-                                    )?;
-                                    let metrics = Arc::new(TableColumnMetrics::measure(
-                                        &request.snapshot,
-                                        &columns,
-                                        font,
-                                        shaped_font_size,
-                                        &text_system,
-                                        request.key.display_options,
-                                    ));
-                                    Some((columns, metrics))
-                                })
-                                .as_ref()
-                        })
+                        tables.columns(&request.snapshot, LineIndex(line_number), format)
                     } else {
                         None
                     };
-                    let table = columns.and_then(|(columns, metrics)| {
+                    let table = columns.and_then(|columns| {
+                        let metrics = tables.measure(
+                            &request.snapshot,
+                            &columns,
+                            font,
+                            shaped_font_size,
+                            &text_system,
+                            request.key.display_options,
+                        );
                         TableVisualLayout::shape(
                             &text,
                             &runs,
-                            columns,
-                            metrics,
+                            &columns,
+                            &metrics,
                             &text_system,
                             crate::editor::table_layout::TableLayoutOptions {
                                 wrap_width: effective_wrap_width,
+                                resized: request.table_layouts.contains(&columns),
                                 display_options: request.key.display_options,
                                 reveal: &reveal,
                                 ..Default::default()

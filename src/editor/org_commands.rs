@@ -1,4 +1,8 @@
-use std::{ops::Range, path::Path};
+use std::{
+    hash::{Hash, Hasher},
+    ops::Range,
+    path::Path,
+};
 
 mod batch;
 mod edit;
@@ -235,13 +239,8 @@ pub(super) fn align_table(
         TableNavigation::Stay => character,
         _ => 0,
     };
-    let aligned = (format != DocumentFormat::Org || navigation == TableNavigation::Stay)
-        && source_rows_aligned(&rows, columns, format);
-    let widths = if format == DocumentFormat::Org && navigation != TableNavigation::Stay {
-        table_widths(&parsed, columns, format)
-    } else {
-        formatting_widths(&rows, &parsed, columns, format)
-    };
+    let aligned = source_rows_aligned(&rows, columns, format);
+    let widths = formatting_widths(&rows, &parsed, columns, format);
     let numeric_columns =
         (format == DocumentFormat::Org).then(|| org_numeric_columns(&parsed, columns));
     let mut replacement = String::new();
@@ -341,9 +340,17 @@ fn table_widths(rows: &[ParsedRow], columns: usize, format: DocumentFormat) -> V
 /// must not make an otherwise aligned table look misaligned.
 fn source_rows_aligned(rows: &[String], columns: usize, format: DocumentFormat) -> bool {
     let positions = |row: &str| {
+        let mut start = 0;
+        let mut position = 0;
         source_table::delimiter_offsets(row, format)
             .into_iter()
-            .map(|offset| source_table::text_width(&row[..offset], format))
+            .map(|offset| {
+                position += source_table::text_width(&row[start..offset], format);
+                start = offset + 1;
+                let current = position;
+                position += 1;
+                current
+            })
             .collect::<Vec<_>>()
     };
     let Some(first) = rows.first().map(|row| positions(row)) else {
@@ -352,9 +359,8 @@ fn source_rows_aligned(rows: &[String], columns: usize, format: DocumentFormat) 
     first.len() == columns + 1 && rows.iter().all(|row| positions(row) == first)
 }
 
-/// A separator records the requested width even when a cell is too long to fit.
-/// Only recognize that case when the other rows have the corresponding padding,
-/// so an ordinary unformatted Markdown `|---|---|` is not treated as a resize.
+/// Recover serialized widths when all rows match the formatter's source shape.
+/// This validates the widths; it does not establish an intent to wrap cells.
 fn source_table_widths(
     source: &[String],
     rows: &[ParsedRow],
@@ -373,12 +379,21 @@ fn source_table_widths(
     {
         return None;
     }
-    if !source_rows_aligned(source, columns, format)
-        && !source.iter().zip(rows).all(|(text, row)| {
-            row.cells.len() == columns && aligned_row(row, &widths, None, format, None).0 == *text
-        })
-    {
-        return None;
+    if !source_rows_aligned(source, columns, format) {
+        let canonical = source.iter().zip(rows).all(|(text, row)| {
+            if row.cells.len() != columns {
+                return false;
+            }
+            let cells = source_table::parse_line(text, format).cells;
+            let alignment = cells
+                .iter()
+                .map(|cell| cell.align_right)
+                .collect::<Vec<_>>();
+            aligned_row(row, &widths, None, format, Some(&alignment)).0 == *text
+        });
+        if !canonical {
+            return None;
+        }
     }
     Some(widths)
 }
@@ -655,6 +670,7 @@ pub(super) struct TableColumns {
     pub(super) source_widths: Option<Vec<usize>>,
     pub(super) aligned: bool,
     pub(super) source_range: ByteRange,
+    pub(super) source_fingerprint: u64,
 }
 
 pub(super) fn table_columns(
@@ -687,6 +703,8 @@ pub(super) fn table_columns(
         start: snapshot.line_content_range(LineIndex(start)).ok()?.start,
         end: snapshot.line_content_range(LineIndex(line - 1)).ok()?.end,
     };
+    let mut fingerprint = std::hash::DefaultHasher::new();
+    source_rows.hash(&mut fingerprint);
     Some(TableColumns {
         format,
         widths,
@@ -694,6 +712,7 @@ pub(super) fn table_columns(
         source_widths,
         aligned,
         source_range,
+        source_fingerprint: fingerprint.finish(),
     })
 }
 
@@ -827,6 +846,26 @@ mod tests {
         let columns = table_columns(&aligned_snapshot, 0, DocumentFormat::Markdown).unwrap();
         assert!(columns.aligned);
         assert_eq!(columns.widths, vec![6, 5]);
+    }
+
+    #[test]
+    fn org_alignment_sizes_links_by_their_labels_and_preserves_targets() {
+        let source = "| ID | Label | Link |\n|----+-------+------|\n| A | note | [[https://example.net/a/long/path][Help]] |\n| B | next | [[file:appendix.org][目录]] |\n";
+        let snapshot = DocumentSnapshot::from_utf8(source.as_bytes().to_vec()).unwrap();
+        let context =
+            EditorCommandContext::at(Path::new("links.org"), &snapshot, ByteOffset(2)).unwrap();
+        let aligned = align_table(&snapshot, &context, "\n", TableNavigation::NextCell).unwrap();
+        assert!(
+            aligned
+                .replacement
+                .contains("[[https://example.net/a/long/path][Help]]")
+        );
+        assert!(aligned.replacement.contains("[[file:appendix.org][目录]]"));
+        let snapshot = DocumentSnapshot::from_utf8(aligned.replacement.into_bytes()).unwrap();
+        let columns = table_columns(&snapshot, 0, DocumentFormat::Org).unwrap();
+        assert!(columns.aligned);
+        assert_eq!(columns.widths, [2, 5, 4]);
+        assert_eq!(columns.source_widths.unwrap(), [2, 5, 4]);
     }
 
     #[test]

@@ -2035,9 +2035,7 @@ impl SemanticEditor {
         let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let previous_y = self.scroll_y;
         self.set_user_scroll_y(self.scroll_y - delta_y, max_scroll);
-        if !self.display_map.soft_wrap() {
-            self.scroll_x = (self.scroll_x - delta_x).clamp(0.0, self.max_horizontal_scroll());
-        }
+        self.scroll_x = (self.scroll_x - delta_x).clamp(0.0, self.max_horizontal_scroll());
         let scroll_delta = self.scroll_y - previous_y;
         if scroll_delta.abs() > 0.5 {
             self.minimap.note_viewport_scrolled(scroll_delta);
@@ -2046,29 +2044,30 @@ impl SemanticEditor {
     }
 
     pub(super) fn max_horizontal_scroll(&self) -> f32 {
-        if self.display_map.soft_wrap() {
-            return 0.0;
-        }
         let Some(viewport) = self.viewport else {
             return 0.0;
         };
-        if self.hit_rows.is_empty() {
-            return 0.0;
-        }
-        let text_left = self
-            .hit_rows
-            .iter()
+        let rows = self.hit_rows.iter().filter(|row| {
+            !self.display_map.soft_wrap()
+                || row
+                    .table_layout
+                    .as_ref()
+                    .is_some_and(|layout| !layout.column_layout)
+        });
+        let Some(text_left) = rows
+            .clone()
             .map(|row| f32::from(row.text_origin_x) + self.scroll_x)
-            .fold(f32::INFINITY, f32::min);
+            .reduce(f32::min)
+        else {
+            return 0.0;
+        };
         let text_right = f32::from(
             self.minimap
                 .bounds
                 .map_or(viewport.right(), |bounds| bounds.left()),
         );
         let available_width = (text_right - text_left).max(1.0);
-        let content_right = self
-            .hit_rows
-            .iter()
+        let content_right = rows
             .map(|row| f32::from(row.text_origin_x) + self.scroll_x + f32::from(row.visual_width()))
             .fold(text_left, f32::max);
         let content_width = (content_right - text_left).max(0.0);
@@ -2127,7 +2126,11 @@ impl SemanticEditor {
             row.line == line
                 && self.selection.head() >= row.range.start
                 && self.selection.head() <= row.range.end
-        }) && !self.display_map.soft_wrap()
+        }) && (!self.display_map.soft_wrap()
+            || row
+                .table_layout
+                .as_ref()
+                .is_some_and(|layout| !layout.column_layout))
         {
             let source_local =
                 (self.selection.head().0 - row.range.start.0).min(row.range.len()) as usize;

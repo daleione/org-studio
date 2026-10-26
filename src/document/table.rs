@@ -3,16 +3,24 @@ use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
 
 use super::DocumentFormat;
-use crate::org_syntax::inline::EntityText;
+use crate::org_semantic::display::{InlineDisplayContext, OrgDisplayOptions, project_inline};
 
-/// Table padding counts the same entity glyphs shown by the editor, while
+/// Table padding counts the same inline text shown by the editor, while
 /// keeping the original source available for editing and copying.
 pub(crate) fn text_width(source: &str, format: DocumentFormat) -> usize {
-    let entities = (format == DocumentFormat::Org && source.contains('\\'))
-        .then(|| EntityText::new(source, None));
-    let text = entities
+    let projection = (format == DocumentFormat::Org).then(|| {
+        project_inline(
+            source,
+            OrgDisplayOptions::default(),
+            InlineDisplayContext {
+                table: true,
+                ..Default::default()
+            },
+        )
+    });
+    let text = projection
         .as_ref()
-        .map_or(source, |entities| entities.text.as_str());
+        .map_or(source, |projection| projection.text.as_str());
     text.split('\t').map(UnicodeWidthStr::width).sum::<usize>()
         + text.bytes().filter(|byte| *byte == b'\t').count() * 4
 }
@@ -226,6 +234,21 @@ fn org_literal_span_end(source: &str, start: usize, marker: char) -> Option<usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn org_column_width_uses_visible_links_and_respects_literal_text() {
+        for (source, width) in [
+            ("[[https://example.net/handbook][Help]]", 4),
+            ("[[file:guide.org][指南]]", 4),
+            ("[[file:guide.org]]", 14),
+            (r"\alpha{}", 1),
+            ("=[[x][L]]=", 8),
+            ("*bold*", 4),
+        ] {
+            assert_eq!(text_width(source, DocumentFormat::Org), width, "{source}");
+        }
+        assert_eq!(text_width("[[x][L]]", DocumentFormat::Markdown), 8);
+    }
 
     #[test]
     fn literal_and_escaped_pipes_stay_inside_cells() {

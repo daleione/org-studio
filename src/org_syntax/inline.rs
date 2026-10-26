@@ -55,31 +55,6 @@ pub struct InlineText {
     pub spans: Vec<InlineSpan>,
 }
 
-/// Entity-only presentation is also used by source-table width calculations and Babel data.
-/// It shares the coordinate engine with the editor without introducing editor display policy
-/// into the document or syntax layers.
-#[derive(Clone, Debug)]
-pub(crate) struct EntityText(crate::document::TextProjection);
-
-impl EntityText {
-    pub(crate) fn new(source: &str, caret: Option<usize>) -> Self {
-        let parsed = parse(source);
-        let edits = parsed.spans.iter().filter_map(|span| {
-            span.entity_replacement(source, &parsed.text, caret)
-                .map(|value| (span.source.clone(), value))
-        });
-        Self(crate::document::TextProjection::new(source).replace(edits))
-    }
-}
-
-impl std::ops::Deref for EntityText {
-    type Target = crate::document::TextProjection;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 mod link;
 pub(crate) use link::{BracketLink, LinkValue, unescape_link_target};
 

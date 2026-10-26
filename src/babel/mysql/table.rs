@@ -144,9 +144,7 @@ mod tests {
         let width = result.lines().next().unwrap().width();
         for row in result.lines() {
             assert_eq!(
-                crate::org_syntax::inline::EntityText::new(row, None)
-                    .text
-                    .width(),
+                crate::org_syntax::inline::parse(row).text.width(),
                 width,
                 "serialized table must align as displayed: {row}"
             );
@@ -156,7 +154,7 @@ mod tests {
                 crate::document::table::parse_line(row, crate::document::DocumentFormat::Org);
             assert_eq!(parsed.cells.len(), 1);
             let raw = &row[parsed.cells[0].text_range.clone()];
-            let visible = crate::org_syntax::inline::EntityText::new(raw, None);
+            let visible = crate::org_syntax::inline::parse(raw);
             assert_eq!(
                 visible.text.replace('\u{200c}', "").replace('\u{a0}', " "),
                 sample

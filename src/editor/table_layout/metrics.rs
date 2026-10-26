@@ -1,12 +1,104 @@
 //! Font measurements shared by every row of one source table.
 
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::Arc,
+};
+
 use super::{cell_projection, project_runs, slice_text_runs, syntax};
 use crate::editor::org_commands::TableColumns;
 use crate::{
-    document::{DocumentFormat, DocumentSnapshot, LineIndex, TextSnapshot, table},
+    document::{
+        DocumentFormat, DocumentSnapshot, LineIndex, Revision, RevisionDelta, TextSnapshot, table,
+    },
     org_semantic::display::OrgDisplayOptions,
 };
 use gpui::{Font, Pixels, TextRun};
+
+#[derive(Default)]
+pub(in crate::editor) struct TableGeometryCache {
+    key: Option<(Revision, DocumentFormat)>,
+    columns: BTreeMap<u64, Arc<TableColumns>>,
+    metrics: HashMap<(u64, DocumentFormat), Arc<TableColumnMetrics>>,
+}
+
+impl TableGeometryCache {
+    pub(in crate::editor) fn invalidate_metrics(&mut self) {
+        self.metrics.clear();
+    }
+
+    pub(in crate::editor) fn columns(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        line: LineIndex,
+        format: DocumentFormat,
+    ) -> Option<Arc<TableColumns>> {
+        let key = Some((snapshot.revision(), format));
+        if self.key != key {
+            self.key = key;
+            self.columns.clear();
+            self.metrics.clear();
+        }
+        let offset = snapshot.line_content_range(line).ok()?.start.0;
+        if let Some((_, columns)) = self.columns.range(..=offset).next_back()
+            && offset <= columns.source_range.end.0
+        {
+            return Some(columns.clone());
+        }
+        let start = crate::editor::org_commands::table_start(snapshot, line.0, format)?;
+        let columns = Arc::new(crate::editor::org_commands::table_columns(
+            snapshot, start, format,
+        )?);
+        self.columns
+            .insert(columns.source_range.start.0, columns.clone());
+        Some(columns)
+    }
+
+    pub(in crate::editor) fn measure(
+        &mut self,
+        snapshot: &DocumentSnapshot,
+        columns: &TableColumns,
+        font: Font,
+        font_size: Pixels,
+        text_system: &gpui::WindowTextSystem,
+        display_options: OrgDisplayOptions,
+    ) -> Arc<TableColumnMetrics> {
+        let entry = self
+            .metrics
+            .entry((columns.source_range.start.0, columns.format));
+        if let std::collections::hash_map::Entry::Occupied(entry) = &entry {
+            let metrics = entry.get();
+            if metrics.font == font
+                && metrics.font_size == font_size
+                && metrics.display_options == display_options
+            {
+                return metrics.clone();
+            }
+        }
+        let metrics = Arc::new(TableColumnMetrics::measure(
+            snapshot,
+            columns,
+            font,
+            font_size,
+            text_system,
+            display_options,
+        ));
+        entry.insert_entry(metrics.clone());
+        metrics
+    }
+
+    pub(in crate::editor) fn affected_by(&self, delta: &RevisionDelta) -> bool {
+        self.columns.values().any(|columns| {
+            // Several edits can arrive before the next frame refreshes geometry.
+            self.key
+                .is_none_or(|(revision, _)| revision != delta.before)
+                || delta.edits.iter().any(|edit| {
+                    edit.old.start <= columns.source_range.end
+                        && edit.old.end >= columns.source_range.start
+                })
+        })
+    }
+}
 
 /// Font-dependent geometry, shared by every row of a table.
 pub(in crate::editor) struct TableColumnMetrics {

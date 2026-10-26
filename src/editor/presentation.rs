@@ -106,7 +106,7 @@ impl super::SemanticEditor {
         self.scroll_y = self.display_map.line_start_y(anchor)
             + fraction * self.display_map.line_height_px(anchor);
         self.shape_cache.clear();
-        self.table_geometry_cache.borrow_mut().metrics.clear();
+        self.table_geometry_cache.borrow_mut().invalidate_metrics();
         self.hit_rows = std::sync::Arc::from([]);
         self.vertical_goal_x = None;
         self.minimap.invalidate_raster();

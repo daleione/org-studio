@@ -298,7 +298,7 @@ fn plan_frame(
         crate::motion::sliding_panel_widths(minimap_full_width, minimap_visible, minimap_reveal);
     let target_wrap_width =
         (f32::from(bounds.size.width) - gutter_width - minimap_layout_width).max(1.0);
-    host.update(cx, |editor, _| {
+    host.update(cx, |editor, cx| {
         let viewport_height = f32::from(bounds.size.height);
         let at_end = editor.scroll_at_end
             || scroll_is_at_end(
@@ -308,6 +308,9 @@ fn plan_frame(
             );
         let width_changed =
             editor.display_map.wrap_width().to_bits() != target_wrap_width.to_bits();
+        if width_changed {
+            editor.cancel_table_resize(cx);
+        }
         if at_end && width_changed && !editor.layout_reflow_pending {
             editor.layout_reflow_pending = true;
             editor.minimap.cancel_layout_preparation();

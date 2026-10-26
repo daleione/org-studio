@@ -9,12 +9,13 @@ use crate::document::TextProjection;
 use crate::org_semantic::display::{InlineDisplayContext, OrgDisplayOptions, project_inline};
 
 mod metrics;
-pub(super) use metrics::TableColumnMetrics;
+pub(super) use metrics::{TableColumnMetrics, TableGeometryCache};
 
 #[derive(Default)]
 pub(super) struct TableLayoutOptions<'a> {
     pub(super) wrap_width: Option<Pixels>,
     pub(super) preferred_widths_em: Option<&'a [f32]>,
+    pub(super) resized: bool,
     pub(super) caret: Option<usize>,
     pub(super) display_options: OrgDisplayOptions,
     pub(super) reveal: &'a [Range<usize>],
@@ -87,6 +88,7 @@ pub(crate) struct TableVisualLayout {
     len: usize,
     pub(super) visual_rows: usize,
     pub(super) column_widths: Vec<Pixels>,
+    pub(super) column_layout: bool,
     pub(super) metrics: Arc<TableColumnMetrics>,
 }
 
@@ -169,6 +171,7 @@ impl TableVisualLayout {
         let TableLayoutOptions {
             wrap_width,
             preferred_widths_em,
+            resized,
             caret,
             display_options,
             reveal,
@@ -231,7 +234,7 @@ impl TableVisualLayout {
         );
         // Source spaces use normal glyph advances; only explicitly narrowed columns wrap them.
         for (column, width) in widths.iter_mut().enumerate() {
-            if wrap_width.is_none() {
+            if wrap_width.is_none() && preferred.is_none() {
                 *width = (*width).max(match columns.format {
                     DocumentFormat::Org => metrics.raw_widths[column],
                     DocumentFormat::Markdown => metrics.natural_widths[column],
@@ -245,18 +248,12 @@ impl TableVisualLayout {
         }
         let natural_width =
             indent + pipe * (columns.widths.len() + 1) + widths.iter().copied().sum::<Pixels>();
-        let constrained = wrap_width.is_some_and(|width| natural_width > width);
         let markdown = columns.format == DocumentFormat::Markdown;
-        if markdown
-            && !columns.aligned
-            && source_widths.is_none()
-            && !constrained
-            && preferred.is_none()
-        {
-            return None;
-        }
-        // Every row uses the table's measured columns, including unconstrained Org rows.
-        // Once a cell hides source bytes, its source padding cannot define visual borders.
+        // Unformatted rows keep their own source spacing, even with short rules
+        // or a narrow viewport. A shared grid belongs to an established layout.
+        let column_layout =
+            columns.aligned || preferred.is_some() || resized && source_widths.is_some();
+        let constrained = column_layout && wrap_width.is_some_and(|width| natural_width > width);
         if let Some(width) = wrap_width.filter(|_| constrained) {
             let budget = (width - indent - pipe * (columns.widths.len() + 1))
                 .max(px(columns.widths.len() as f32));
@@ -309,12 +306,18 @@ impl TableVisualLayout {
             });
             let end = delimiters.get(column + 1).copied().unwrap_or(text.len());
             let range = start + 1..end;
-            let width = widths.get(column).copied().unwrap_or_default();
+            let mut width = widths.get(column).copied().unwrap_or_default();
             if !range.is_empty() {
                 let raw = &text[range.clone()];
                 let padding = space.min(width / 4.);
                 let content_width = (width - padding * 2.).max(gpui::px(1.));
-                let content_range = if markdown {
+                let trim_padding = column_layout
+                    && (markdown
+                        || metrics
+                            .raw_widths
+                            .get(column)
+                            .is_some_and(|raw| width < *raw));
+                let content_range = if trim_padding {
                     let trimmed = raw.trim();
                     let start = range.start + raw.len() - raw.trim_start().len();
                     start..start + trimmed.len()
@@ -322,16 +325,8 @@ impl TableVisualLayout {
                     range.clone()
                 };
                 let content = &text[content_range.clone()];
-                let text_width = if separator || markdown {
+                let text_width = if separator || trim_padding {
                     content_width
-                } else if metrics
-                    .raw_widths
-                    .get(column)
-                    .is_some_and(|raw| width < *raw)
-                {
-                    // Wrapped content leaves a menu gutter; fitting source spaces retain
-                    // their native positions instead of wrapping the last space early.
-                    (width - padding).max(px(1.))
                 } else {
                     width.max(px(1.))
                 };
@@ -362,7 +357,7 @@ impl TableVisualLayout {
                     Some(projection) => project_runs(&source_runs, projection),
                     None => source_runs,
                 };
-                let (layout, scaled_source) = if separator {
+                let (layout, scaled_source) = if separator && column_layout {
                     let count = (f32::from(content_width) / f32::from(advance("-")))
                         .floor()
                         .max(1.) as usize;
@@ -388,7 +383,8 @@ impl TableVisualLayout {
                                 .into(),
                             &preview_runs,
                             // Floating-point sums can round down an exact fit.
-                            wrap_width.is_some().then_some(text_width + px(0.01)),
+                            (column_layout && wrap_width.is_some())
+                                .then_some(text_width + px(0.01)),
                         ),
                         false,
                     )
@@ -398,7 +394,10 @@ impl TableVisualLayout {
                     run.len = layout.text.len();
                     preview_runs = vec![run];
                 }
-                let alignment_offset = if markdown
+                if !column_layout {
+                    width = layout.width();
+                }
+                let alignment_offset = if trim_padding
                     && !separator
                     && raw.len() - raw.trim_start().len() > raw.len() - raw.trim_end().len()
                     && layout.wrap_boundaries().is_empty()
@@ -412,18 +411,25 @@ impl TableVisualLayout {
                     display_range: range,
                     content_range,
                     x: x + pipe
-                        + if separator || markdown {
+                        + if column_layout && (separator || trim_padding) {
                             padding
                         } else {
                             Pixels::ZERO
                         }
                         + alignment_offset,
-                    width: text_width - alignment_offset,
+                    width: if column_layout {
+                        text_width - alignment_offset
+                    } else {
+                        width
+                    },
                     layout,
                     delimiter: false,
                     scaled_source,
                     projection,
                 });
+            }
+            if !column_layout && let Some(column_width) = widths.get_mut(column) {
+                *column_width = width;
             }
             if delimiters.get(column + 1).is_some() {
                 x += pipe + width;
@@ -445,6 +451,7 @@ impl TableVisualLayout {
             len: text.len(),
             visual_rows,
             column_widths: widths,
+            column_layout,
             metrics: metrics.clone(),
         }))
     }

@@ -83,7 +83,7 @@ fn fixture<'a>(
         "|---|---|---|"
     };
     let source = format!(
-        "| Left | Right | Third |\n{separator}\n| alpha beta gamma delta epsilon | one two three four five six | x |\n\nbody\n"
+        "| Left | Right | Third |\n{separator}\n| alpha beta gamma delta epsilon | one two three four five six | [[https://example.net][x]] |\n\nbody\n"
     );
     let session = cx.new(|_| {
         DocumentSession::from_utf8(format!("resize.{extension}").into(), source.into_bytes())
@@ -91,7 +91,7 @@ fn fixture<'a>(
     });
     let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
     editor.update(view, |editor, cx| editor.set_minimap(false, None, cx));
-    view.simulate_resize(gpui::size(px(900.), px(500.)));
+    view.simulate_resize(gpui::size(px(1200.), px(500.)));
     view.run_until_parked();
     view.simulate_keystrokes("ctrl-shift-a");
     view.run_until_parked();
@@ -125,14 +125,33 @@ fn mixed_width_fixture<'a>(
 #[gpui::test]
 fn display_changes_cancel_drag_without_committing_stale_widths(cx: &mut TestAppContext) {
     cx.update(init);
+    let changes: [fn(&mut SemanticEditor, &mut Context<SemanticEditor>); 3] = [
+        |editor, cx| {
+            editor.toggle_org_display(crate::command::OrgDisplayFeature::EmphasisMarkers, cx)
+        },
+        |editor, cx| {
+            editor.set_content_font_size(crate::typography::ContentFontSize::new(20), cx);
+        },
+        |editor, cx| editor.set_soft_wrap(false, cx),
+    ];
+    for change in changes {
+        let (editor, view) = fixture(cx, "org");
+        let original = text(&editor, view);
+        let start = boundary(&editor, view, 0, 0);
+        start_drag(view, start, -40.);
+        assert!(editor.read_with(view, |editor, _| editor.table_resize_is_dragging()));
+        editor.update(view, change);
+        view.run_until_parked();
+        assert!(!editor.read_with(view, |editor, _| editor.table_resize_is_dragging()));
+        view.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+        view.run_until_parked();
+        assert_eq!(text(&editor, view), original);
+    }
     let (editor, view) = fixture(cx, "org");
     let original = text(&editor, view);
     let start = boundary(&editor, view, 0, 0);
     start_drag(view, start, -40.);
-    assert!(editor.read_with(view, |editor, _| editor.table_resize_is_dragging()));
-    editor.update(view, |editor, cx| {
-        editor.toggle_org_display(crate::command::OrgDisplayFeature::EmphasisMarkers, cx)
-    });
+    view.simulate_resize(gpui::size(px(800.), px(500.)));
     view.run_until_parked();
     assert!(!editor.read_with(view, |editor, _| editor.table_resize_is_dragging()));
     view.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
@@ -225,6 +244,36 @@ fn drag_writes_source_and_wraps_then_format_repairs_narrow_columns(cx: &mut Test
                 "complete layout also reflows with the minimap hidden"
             );
         });
+        editor.update(view, |editor, cx| {
+            let snapshot = editor.snapshot(cx);
+            let line = snapshot.line_content_range(LineIndex(2)).unwrap();
+            let source = snapshot.copy_range(line);
+            let field = table::parse_line(
+                &source,
+                DocumentFormat::from_path(editor.session.read(cx).syntax_path()),
+            )
+            .cells[0]
+                .text_range
+                .clone();
+            editor.set_selection(
+                Selection::caret(ByteOffset(line.start.0 + field.end as u64)),
+                cx,
+            );
+        });
+        view.simulate_input("z");
+        view.run_until_parked();
+        assert_eq!(
+            sample(&editor, view, 2).1,
+            1,
+            "ordinary input leaves the fixed column layout"
+        );
+        view.simulate_keystrokes("cmd-z");
+        view.run_until_parked();
+        assert_eq!(text(&editor, view), resized);
+        assert!(
+            sample(&editor, view, 2).1 > 1,
+            "undo restores the deliberate narrow layout"
+        );
         view.simulate_keystrokes("ctrl-shift-a");
         view.run_until_parked();
         assert!(sample(&editor, view, 2).0[0] > after[0]);
@@ -355,6 +404,45 @@ fn custom_widths_adapt_to_window_resize_and_respect_disabled_wrapping(cx: &mut T
 }
 
 #[gpui::test]
+fn editing_a_resized_table_reflows_rows_outside_the_viewport(cx: &mut TestAppContext) {
+    cx.update(init);
+    let source = format!(
+        "| Label | Value |\n|---+---|\n{}",
+        "| alpha beta gamma delta epsilon | sample |\n".repeat(100)
+    );
+    let session =
+        cx.new(|_| DocumentSession::from_utf8("large.org".into(), source.into_bytes()).unwrap());
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    editor.update(view, |editor, cx| editor.set_minimap(false, None, cx));
+    view.simulate_resize(gpui::size(px(900.), px(400.)));
+    view.run_until_parked();
+    view.simulate_keystrokes("ctrl-shift-a");
+    view.run_until_parked();
+    let original_height = editor.read_with(view, |editor, _| editor.display_map.total_height());
+    let start = boundary(&editor, view, 0, 0);
+    drag(view, start, -80.);
+    let wrapped_height = editor.read_with(view, |editor, _| editor.display_map.total_height());
+    assert!(wrapped_height > original_height * 1.5);
+    editor.update(view, |editor, cx| {
+        let snapshot = editor.snapshot(cx);
+        let range = snapshot.line_content_range(LineIndex(2)).unwrap();
+        editor.set_selection(Selection::caret(ByteOffset(range.start.0 + 3)), cx);
+        editor.replace_selection("x", EditOrigin::Typing, cx);
+    });
+    view.run_until_parked();
+    assert_eq!(sample(&editor, view, 2).1, 1);
+    let edited_height = editor.read_with(view, |editor, _| editor.display_map.total_height());
+    assert!(
+        (edited_height - original_height).abs() < 1.,
+        "table heights remained stale outside the viewport: {original_height} -> {edited_height}"
+    );
+    view.simulate_keystrokes("cmd-z");
+    view.run_until_parked();
+    let restored_height = editor.read_with(view, |editor, _| editor.display_map.total_height());
+    assert!((restored_height - wrapped_height).abs() < 1.);
+}
+
+#[gpui::test]
 fn source_edits_above_table_keep_widths_until_explicit_alignment(cx: &mut TestAppContext) {
     cx.update(init);
     let (editor, view) = fixture(cx, "md");
@@ -386,22 +474,21 @@ fn source_edits_above_table_keep_widths_until_explicit_alignment(cx: &mut TestAp
 }
 
 #[gpui::test]
-fn raw_table_can_resize_but_pipes_in_code_cannot(cx: &mut TestAppContext) {
+fn unformatted_tables_and_pipes_in_code_cannot_resize(cx: &mut TestAppContext) {
     cx.update(init);
-    for (path, source, line, resizable) in [
+    for (path, source, line) in [
         (
             "raw.org",
             "| Left column | Right column |\n|---+---|\n| alpha | beta |\n",
             0,
-            true,
         ),
         (
-            "code.org",
-            "#+begin_src text\n| A | B |\n#+end_src\n",
-            1,
-            false,
+            "raw.md",
+            "| Left column | Right column |\n|---|---|\n| alpha | beta |\n",
+            0,
         ),
-        ("code.md", "```text\n| A | B |\n|---|---|\n```\n", 1, false),
+        ("code.org", "#+begin_src text\n| A | B |\n#+end_src\n", 1),
+        ("code.md", "```text\n| A | B |\n|---|---|\n```\n", 1),
     ] {
         let session = cx
             .new(|_| DocumentSession::from_utf8(path.into(), source.as_bytes().to_vec()).unwrap());
@@ -410,21 +497,22 @@ fn raw_table_can_resize_but_pipes_in_code_cannot(cx: &mut TestAppContext) {
         let start = boundary(&editor, view, line, 0);
         view.simulate_mouse_move(start, None, Modifiers::default());
         view.run_until_parked();
-        view.read(|cx| assert_eq!(editor.read(cx).table_resize_is_hovered(), resizable));
-        if resizable {
-            drag(view, start, 8.);
-            assert!(sample(&editor, view, line).0.len() == 2);
-            assert_ne!(text(&editor, view), source);
-        }
+        view.read(|cx| assert!(!editor.read(cx).table_resize_is_hovered()));
+        view.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+        view.read(|cx| assert!(!editor.read(cx).table_resize_is_dragging()));
+        view.simulate_mouse_up(start, MouseButton::Left, Modifiers::default());
+        assert_eq!(text(&editor, view), source);
     }
 }
 
 #[gpui::test]
-fn drag_widths_survive_formatting_and_org_tab_restores_compact_source(cx: &mut TestAppContext) {
+fn drag_changes_only_the_left_column_and_tab_preserves_manual_padding(cx: &mut TestAppContext) {
     cx.update(init);
     for extension in ["org", "md"] {
-        for column in 0..3 {
+        for (column, soft_wrap) in [(0, true), (1, true), (2, true), (1, false)] {
             let (editor, view) = fixture(cx, extension);
+            editor.update(view, |editor, cx| editor.set_soft_wrap(soft_wrap, cx));
+            view.run_until_parked();
             let original = text(&editor, view);
             let before = sample(&editor, view, 2).0;
             let right_edge = boundary(&editor, view, 2, 2).x;
@@ -439,7 +527,11 @@ fn drag_widths_survive_formatting_and_org_tab_restores_compact_source(cx: &mut T
             let expanded = sample(&editor, view, 2).0;
             for index in 0..3 {
                 if index == column {
-                    assert!((expanded[index] - before[index] - 60.).abs() < 6.);
+                    assert!(
+                        (expanded[index] - before[index] - 60.).abs() < 6.,
+                        "{extension} column {column}: {before:?} -> {expanded:?}, source={}",
+                        text(&editor, view)
+                    );
                 } else {
                     assert_eq!(expanded[index], before[index]);
                 }
@@ -449,7 +541,21 @@ fn drag_widths_survive_formatting_and_org_tab_restores_compact_source(cx: &mut T
                 assert_eq!(sample(&editor, view, line).0, expanded);
             }
             let start = boundary(&editor, view, 2, column);
-            drag(view, start, -30.);
+            start_drag(view, start, -30.);
+            for line in 0..3 {
+                let (widths, rows) = sample(&editor, view, line);
+                assert_eq!(rows, 1, "alignment padding must not wrap during a drag");
+                assert!((widths[column] - expanded[column] + 30.).abs() < 0.1);
+                for index in (0..3).filter(|index| *index != column) {
+                    assert!((widths[index] - before[index]).abs() < 0.01);
+                }
+            }
+            view.simulate_mouse_up(
+                gpui::point(start.x - px(30.), start.y),
+                MouseButton::Left,
+                Modifiers::default(),
+            );
+            view.run_until_parked();
             let narrowed = sample(&editor, view, 2).0;
             assert!((narrowed[column] - expanded[column] + 30.).abs() < 6.);
             for index in (0..3).filter(|index| *index != column) {
@@ -463,15 +569,43 @@ fn drag_widths_survive_formatting_and_org_tab_restores_compact_source(cx: &mut T
             assert_eq!(text(&editor, view), resized);
             view.simulate_keystrokes("tab");
             view.run_until_parked();
-            if extension == "org" {
-                assert_eq!(text(&editor, view), original);
-                view.read(|cx| {
-                    assert_eq!(editor.read(cx).snapshot(cx).revision().0, revision.0 + 1)
-                });
-            } else {
-                assert_eq!(text(&editor, view), resized);
-                view.read(|cx| assert_eq!(editor.read(cx).snapshot(cx).revision(), revision));
-            }
+            assert_eq!(text(&editor, view), resized);
+            view.read(|cx| assert_eq!(editor.read(cx).snapshot(cx).revision(), revision));
+        }
+    }
+}
+
+#[gpui::test]
+fn dragging_a_viewport_fitted_table_preserves_other_columns_on_release(cx: &mut TestAppContext) {
+    cx.update(init);
+    for extension in ["org", "md"] {
+        let (editor, view) = fixture(cx, extension);
+        view.simulate_resize(gpui::size(px(450.), px(500.)));
+        view.run_until_parked();
+        let before = sample(&editor, view, 2).0;
+        let start = boundary(&editor, view, 0, 0);
+        start_drag(view, start, -24.);
+        let preview = sample(&editor, view, 2).0;
+        assert!((preview[0] - before[0] + 24.).abs() < 0.1);
+        for index in 1..preview.len() {
+            assert!((preview[index] - before[index]).abs() < 0.01);
+        }
+        view.simulate_mouse_up(
+            gpui::point(start.x - px(24.), start.y),
+            MouseButton::Left,
+            Modifiers::default(),
+        );
+        view.run_until_parked();
+        let after = sample(&editor, view, 2).0;
+        assert!(
+            (after[0] - preview[0]).abs() < 6.,
+            "{extension}: preview {preview:?}, committed {after:?}"
+        );
+        for index in 1..after.len() {
+            assert!(
+                (after[index] - before[index]).abs() < 6.,
+                "{extension}: column {index} changed: {before:?} -> {after:?}"
+            );
         }
     }
 }
@@ -559,7 +693,7 @@ fn right_edge_can_resize_a_single_column_table(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn resized_widths_survive_save_and_reopen_with_normal_dirty_and_undo_state(
+fn resize_preserves_source_and_undo_and_reopens_unaligned_tables_as_source(
     cx: &mut TestAppContext,
 ) {
     cx.update(init);
@@ -594,6 +728,16 @@ fn resized_widths_survive_save_and_reopen_with_normal_dirty_and_undo_state(
             view.run_until_parked();
             let resized = text(&editor, view);
             let (widths, rows) = sample(&editor, view, 2);
+            let aligned = editor.read_with(view, |editor, cx| {
+                editor
+                    .table_columns(
+                        &editor.snapshot(cx),
+                        LineIndex(0),
+                        DocumentFormat::from_path(editor.session.read(cx).syntax_path()),
+                    )
+                    .unwrap()
+                    .aligned
+            });
             view.read(|cx| assert!(session.read(cx).is_dirty()));
             assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
             view.simulate_keystrokes("cmd-z");
@@ -620,7 +764,30 @@ fn resized_widths_survive_save_and_reopen_with_normal_dirty_and_undo_state(
             view.simulate_resize(gpui::size(px(900.), px(500.)));
             view.run_until_parked();
             assert_eq!(text(&editor, view), resized);
-            assert_eq!(sample(&editor, view, 2), (widths, rows));
+            if aligned {
+                assert_eq!(sample(&editor, view, 2), (widths, rows));
+            } else {
+                assert_eq!(sample(&editor, view, 2).1, 1);
+                view.read(|cx| {
+                    let row = editor
+                        .read(cx)
+                        .hit_rows
+                        .iter()
+                        .find(|row| row.line.0 == 2)
+                        .unwrap();
+                    for offset in table::delimiter_offsets(
+                        &row.display.text,
+                        DocumentFormat::from_path(&path),
+                    ) {
+                        assert_eq!(
+                            row.position_for_display_index(offset).unwrap(),
+                            row.layout
+                                .position_for_index(offset, row.line_height)
+                                .unwrap()
+                        );
+                    }
+                });
+            }
             view.read(|cx| assert!(!editor.read(cx).session.read(cx).is_dirty()));
         }
     }

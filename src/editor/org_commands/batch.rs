@@ -23,11 +23,13 @@ impl TableAlignmentPlan {
             }
             if offset <= range.end {
                 let local = (offset.0 - range.start.0) as usize;
+                let line = new.lines().next().unwrap_or(new);
                 let mapped = if local == 0 {
                     0
+                } else if local == old.len() {
+                    line.len()
                 } else {
                     let (column, character) = table_position_at(old, local, self.format);
-                    let line = new.lines().next().unwrap_or(new);
                     cell_offset(line, column, character, self.format)
                 };
                 return ByteOffset((range.start.0 as i128 + shift + mapped as i128) as u64);
@@ -110,7 +112,11 @@ pub(in crate::editor) fn resize_table(
         rows: vec![],
     };
     for (index, ((range, old), row)) in ranges.into_iter().zip(source).zip(&rows).enumerate() {
-        let (mut new, _) = aligned_row(row, &widths, None, format, None);
+        let cells = source_table::parse_line(&old, format).cells;
+        let alignment = (0..columns)
+            .map(|column| cells.get(column).is_some_and(|cell| cell.align_right))
+            .collect::<Vec<_>>();
+        let (mut new, _) = aligned_row(row, &widths, None, format, Some(&alignment));
         if index == 0 && add_separator {
             let separator = ParsedRow {
                 indent: row.indent.clone(),
@@ -365,6 +371,31 @@ mod tests {
                 EditorCommandContext::at(Path::new(path), &snapshot, ByteOffset(2)).unwrap();
             let change = align_table(&snapshot, &context, "\n", TableNavigation::Stay).unwrap();
             assert_eq!(change.replacement, snapshot.copy_range(change.range));
+
+            let mut buffer = DocumentBuffer::from_utf8(source.as_bytes().to_vec()).unwrap();
+            let plan = resize_table(
+                &snapshot,
+                ByteOffset(0),
+                Some(&[6, 3]),
+                DocumentFormat::from_path(Path::new(path)),
+                "\n",
+            )
+            .unwrap();
+            buffer
+                .commit(EditTransaction::new(snapshot.revision(), plan.edits))
+                .unwrap();
+            let resized = buffer.snapshot();
+            assert!(
+                resized
+                    .copy_range(ByteRange::new(0, resized.len_bytes()))
+                    .contains("|      x |")
+            );
+            assert_eq!(
+                table_columns(&resized, 0, DocumentFormat::from_path(Path::new(path)))
+                    .unwrap()
+                    .source_widths,
+                Some(vec![6, 3])
+            );
         }
     }
 
@@ -470,6 +501,10 @@ mod tests {
         assert_eq!(plan.changed, 1);
         assert!(formatted.contains("|second|b|\n|x|longer|"));
         assert_eq!(&formatted[plan.map_offset(caret).0 as usize..][..3], "文");
+        let row_end = ByteOffset(text.find('\n').unwrap() as u64);
+        let mapped_row = plan.map_selection(Selection::new(ByteOffset(0), row_end));
+        assert_eq!(mapped_row.anchor(), ByteOffset(0));
+        assert_eq!(mapped_row.head().0, formatted.find('\n').unwrap() as u64);
         let mapped = plan.map_selection(selection);
         assert_eq!(&formatted[mapped.head().0 as usize..][..4], "cond");
         assert_eq!(

@@ -128,11 +128,7 @@ pub(super) fn publish_frame(
             .iter()
             .map(|button| button.hit)
             .collect();
-        if editor.display_map.soft_wrap() {
-            editor.scroll_x = 0.0;
-        } else {
-            editor.scroll_x = editor.scroll_x.min(editor.max_horizontal_scroll());
-        }
+        editor.scroll_x = editor.scroll_x.min(editor.max_horizontal_scroll());
         if editor.shape_cache.len() + shaped.len() > 512 {
             editor.shape_cache.clear();
         }

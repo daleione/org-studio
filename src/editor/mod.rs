@@ -263,15 +263,7 @@ impl HitRow {
     }
 }
 
-use table_layout::{TableColumnMetrics, TableVisualLayout};
-
-#[derive(Default)]
-struct TableGeometryCache {
-    revision: Option<Revision>,
-    columns:
-        HashMap<(u64, crate::document::DocumentFormat), Option<Arc<org_commands::TableColumns>>>,
-    metrics: HashMap<(u64, crate::document::DocumentFormat), Arc<TableColumnMetrics>>,
-}
+use table_layout::{TableColumnMetrics, TableGeometryCache, TableVisualLayout};
 
 #[derive(Clone, Copy)]
 pub(super) enum SourceRunAction {
@@ -892,6 +884,7 @@ impl SemanticEditor {
                 this.timestamp.hover_range = None;
             }
             if let DocumentEvent::Edited { delta, .. } = event {
+                this.table_document_edited(delta, cx);
                 this.inline_image_preview_overrides =
                     std::mem::take(&mut this.inline_image_preview_overrides)
                         .into_iter()
@@ -1089,6 +1082,7 @@ impl SemanticEditor {
                 this.minimap.invalidate_raster();
             }
             if matches!(event, DocumentEvent::Reloaded { .. }) {
+                this.table_resize.layouts = table_resize::ResizedTableLayouts::default();
                 this.syntax_service.reset();
                 let snapshot = this.snapshot(cx);
                 this.selection = this.selection.clamp(&snapshot);
@@ -1263,6 +1257,7 @@ impl SemanticEditor {
 
     pub(crate) fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         if self.display_map.set_soft_wrap(soft_wrap) {
+            self.cancel_table_resize(cx);
             self.dismiss_table_actions(cx);
             if soft_wrap {
                 self.scroll_x = 0.0;
@@ -1294,19 +1289,9 @@ impl SemanticEditor {
         line: LineIndex,
         format: crate::document::DocumentFormat,
     ) -> Option<Arc<org_commands::TableColumns>> {
-        let start = org_commands::table_start(snapshot, line.0, format)?;
-        let revision = snapshot.revision();
-        let mut cache = self.table_geometry_cache.borrow_mut();
-        if cache.revision != Some(revision) {
-            cache.revision = Some(revision);
-            cache.columns.clear();
-            cache.metrics.clear();
-        }
-        cache
-            .columns
-            .entry((start, format))
-            .or_insert_with(|| org_commands::table_columns(snapshot, start, format).map(Arc::new))
-            .clone()
+        self.table_geometry_cache
+            .borrow_mut()
+            .columns(snapshot, line, format)
     }
 
     fn table_column_metrics(
@@ -1318,29 +1303,14 @@ impl SemanticEditor {
         text_system: &gpui::WindowTextSystem,
         display_options: crate::org_semantic::display::OrgDisplayOptions,
     ) -> Arc<TableColumnMetrics> {
-        let mut cache = self.table_geometry_cache.borrow_mut();
-        let entry = cache
-            .metrics
-            .entry((columns.source_range.start.0, columns.format));
-        if let std::collections::hash_map::Entry::Occupied(entry) = &entry {
-            let metrics = entry.get();
-            if metrics.font == font
-                && metrics.font_size == font_size
-                && metrics.display_options == display_options
-            {
-                return metrics.clone();
-            }
-        }
-        let metrics = Arc::new(TableColumnMetrics::measure(
+        self.table_geometry_cache.borrow_mut().measure(
             snapshot,
             columns,
             font,
             font_size,
             text_system,
             display_options,
-        ));
-        entry.insert_entry(metrics.clone());
-        metrics
+        )
     }
 
     pub(crate) fn set_content_font_size(
@@ -1351,6 +1321,7 @@ impl SemanticEditor {
         if self.content_font_size == font_size {
             return false;
         }
+        self.cancel_table_resize(cx);
         self.dismiss_table_actions(cx);
         self.finish_fold_animation();
         let viewport_height = self

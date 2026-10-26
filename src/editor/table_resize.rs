@@ -18,7 +18,7 @@ struct ResizeHit {
     target: ResizeTarget,
     widths: Vec<f32>,
     metrics: Arc<TableColumnMetrics>,
-    source_widths: Vec<usize>,
+    columns: Arc<org_commands::TableColumns>,
     min_width: f32,
     max_width: f32,
 }
@@ -28,6 +28,46 @@ struct ResizeDrag {
     start_x: f32,
     widths_em: Vec<f32>,
     moved: bool,
+}
+
+/// Remember source versions produced by a drag. Separator lengths alone cannot
+/// distinguish a deliberately narrow column from ordinary input overflowing it.
+/// Keeping versions lets undo restore the corresponding presentation as well.
+#[derive(Clone, Default)]
+pub(super) struct ResizedTableLayouts(HashMap<u64, Arc<HashSet<u64>>>);
+
+impl ResizedTableLayouts {
+    pub(super) fn contains(&self, columns: &org_commands::TableColumns) -> bool {
+        self.0
+            .get(&columns.source_range.start.0)
+            .is_some_and(|versions| versions.contains(&columns.source_fingerprint))
+    }
+
+    fn record(&mut self, columns: &org_commands::TableColumns) {
+        Arc::make_mut(self.0.entry(columns.source_range.start.0).or_default())
+            .insert(columns.source_fingerprint);
+    }
+
+    fn apply_delta(&mut self, delta: &crate::document::RevisionDelta) {
+        self.0 = std::mem::take(&mut self.0)
+            .into_iter()
+            .filter_map(|(anchor, versions)| {
+                let mut shift = 0_i128;
+                for edit in delta.edits.iter() {
+                    if edit.old.end.0 <= anchor {
+                        shift += i128::from(edit.new_len) - i128::from(edit.old.len());
+                    } else if edit.old.start.0 < anchor {
+                        return None;
+                    } else {
+                        break;
+                    }
+                }
+                u64::try_from(i128::from(anchor) + shift)
+                    .ok()
+                    .map(|anchor| (anchor, versions))
+            })
+            .collect();
+    }
 }
 
 impl ResizeDrag {
@@ -54,9 +94,24 @@ pub(super) struct TableResize {
     hover: Option<ResizeTarget>,
     drag: Option<ResizeDrag>,
     pub(super) revision: u64,
+    pub(super) layouts: ResizedTableLayouts,
 }
 
 impl SemanticEditor {
+    pub(super) fn table_document_edited(
+        &mut self,
+        delta: &crate::document::RevisionDelta,
+        cx: &mut Context<Self>,
+    ) {
+        self.table_resize.layouts.apply_delta(delta);
+        let affected = self.table_geometry_cache.borrow().affected_by(delta);
+        if affected {
+            // A cell edit can change the layout of every row in its table.
+            // Reflow offscreen rows even when the minimap is hidden.
+            self.table_column_layout_changed(cx);
+        }
+    }
+
     pub(super) fn preferred_table_widths(&self, anchor: u64) -> Option<&[f32]> {
         self.table_resize
             .drag
@@ -116,6 +171,9 @@ impl SemanticEditor {
             distance <= HIT_SLOP.min(f32::from(width) / 2. + 0.5)
         })? - 1;
         let columns = self.table_columns(&snapshot, row.line, format)?;
+        if !columns.aligned && !self.table_resize.layouts.contains(&columns) {
+            return None;
+        }
         let anchor = columns.source_range.start.0;
         let text_system = gpui::WindowTextSystem::new(cx.text_system().clone());
         let metrics = row.table_layout.as_ref().map_or_else(
@@ -178,7 +236,7 @@ impl SemanticEditor {
             target: ResizeTarget { anchor, column },
             widths,
             metrics,
-            source_widths: columns.widths.clone(),
+            columns,
             min_width,
             max_width,
         })
@@ -252,18 +310,24 @@ impl SemanticEditor {
         self.table_resize_move(position, cx);
         let drag = self.table_resize.drag.take().expect("active table drag");
         if drag.moved {
-            let widths = drag
-                .widths_em
-                .iter()
-                .enumerate()
-                .map(|(index, width)| {
-                    drag.start.metrics.source_width(
-                        index,
-                        drag.start.metrics.font_size * *width,
-                        drag.start.source_widths[index],
-                    )
-                })
-                .collect::<Vec<_>>();
+            let column = drag.start.target.column;
+            let mut widths = drag
+                .start
+                .columns
+                .source_widths
+                .clone()
+                .unwrap_or_else(|| drag.start.columns.widths.clone());
+            for (index, requested) in widths.iter_mut().enumerate() {
+                let width = drag.start.metrics.font_size * drag.widths_em[index];
+                let natural = drag.start.columns.widths[index];
+                let authored = drag.start.metrics.column_width(index, *requested, natural);
+                // Commit the visible grid, including columns already fitted to
+                // the viewport. Restoring their hidden source widths would
+                // redistribute the space freed by the dragged boundary.
+                if index == column || f32::from(width - authored).abs() > 0.01 {
+                    *requested = drag.start.metrics.source_width(index, width, natural);
+                }
+            }
             self.commit_table_widths(drag.start.target.anchor, Some(&widths), cx);
             self.table_column_layout_changed(cx);
         }
@@ -340,6 +404,16 @@ impl SemanticEditor {
         }
         self.selection = after;
         let snapshot = self.snapshot(cx);
+        if widths.is_some()
+            && let Some(columns) = org_commands::table_columns(
+                &snapshot,
+                snapshot.line_of_byte(ByteOffset(anchor)),
+                format,
+            )
+            && !columns.aligned
+        {
+            self.table_resize.layouts.record(&columns);
+        }
         self.selection_revision = snapshot.revision();
         self.sync_selection_utf16(&snapshot);
         self.hit_rows = Arc::from([]);

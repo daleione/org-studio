@@ -1,6 +1,54 @@
 use super::*;
 
 #[gpui::test]
+fn unformatted_tables_keep_source_spacing_without_wrapping(cx: &mut gpui::TestAppContext) {
+    use crate::document::ByteRange;
+
+    cx.update(crate::editor::init);
+    for path in ["catalog.org", "catalog.md"] {
+        let rule = if path.ends_with("org") {
+            "|-----+-----+-----|"
+        } else {
+            "|-----|-----|-----|"
+        };
+        let source = format!(
+            "| Key | Name | Link |\n{rule}\n| one | 星际观测记录 | [[https://example.net/guide][Help]] |\n| two | 草木调查手册 | Index |\n"
+        );
+        let session = cx
+            .new(|_| DocumentSession::from_utf8(path.into(), source.as_bytes().to_vec()).unwrap());
+        let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session.clone(), cx));
+        for width in [1200., 470.] {
+            view.simulate_resize(gpui::size(px(width), px(600.)));
+            view.run_until_parked();
+            view.read(|cx| {
+                let editor = editor.read(cx);
+                let mut boundaries = Vec::new();
+                for row in editor.hit_rows.iter().filter(|row| row.line.0 < 4) {
+                    let table = row.table_layout.as_ref().unwrap();
+                    assert_eq!(table.visual_rows, 1);
+                    let mut x = px(0.);
+                    for fragment in &table.fragments {
+                        assert_eq!(fragment.x, x, "native spacing on row {}", row.line.0);
+                        x += fragment.layout.width();
+                    }
+                    boundaries.push(table.column_widths.clone());
+                }
+                assert_eq!(boundaries.len(), 4);
+                assert_ne!(boundaries[0], boundaries[2]);
+                let document = session.read(cx);
+                assert!(!document.is_dirty());
+                assert_eq!(
+                    document
+                        .snapshot()
+                        .copy_range(ByteRange::new(0, source.len() as u64)),
+                    source
+                );
+            });
+        }
+    }
+}
+
+#[gpui::test]
 fn table_metrics_cache_tracks_display_options_before_the_next_frame(cx: &mut gpui::TestAppContext) {
     cx.update(crate::editor::init);
     let session = cx.new(|_| {
@@ -257,7 +305,6 @@ fn projected_table_cells_share_column_boundaries_across_rows(cx: &mut gpui::Test
                 assert!(expected.is_some());
             });
         };
-        assert_columns(view);
         editor.update(view, |editor, cx| {
             assert!(editor.align_table_at_selection(cx))
         });

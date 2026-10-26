@@ -297,6 +297,7 @@ impl RowShaping<'_> {
                     preferred_widths_em: self
                         .editor
                         .preferred_table_widths(columns.source_range.start.0),
+                    resized: self.editor.table_resize.layouts.contains(columns),
                     caret: anchor
                         .filter(|_| self.editor_focused && self.selection.is_empty())
                         .map(|offset| {
@@ -307,6 +308,16 @@ impl RowShaping<'_> {
                 },
             )
         });
+        let row_text_origin_x = row_text_origin_x
+            - if self.editor.display_map.soft_wrap()
+                && table_layout
+                    .as_ref()
+                    .is_some_and(|layout| !layout.column_layout)
+            {
+                px(self.editor.scroll_x)
+            } else {
+                px(0.)
+            };
         let fence_backticks = markdown_fence_backticks(&text, line_style.block.as_ref());
         let shape_key = shape_key(
             &text,
