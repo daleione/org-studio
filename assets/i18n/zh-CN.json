@@ -21,7 +21,6 @@
   "buffer.review.document_count": "{count} 个文档",
   "buffer.review.save_location": "保存时选择位置",
   "buffer.review.view_document": "查看文档并取消本次操作",
-  "buffer.review.discard_warning": "不保存将丢失本次修改。",
   "buffer.review.summary": "保存 {save} 项 · 不保存 {discard} 项",
   "buffer.review.summary_skip": "保存 {save} 项 · 跳过 {discard} 项",
   "command.navigation_hint": "↑↓ 选择 · Tab 补全",

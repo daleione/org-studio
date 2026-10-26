@@ -21,7 +21,6 @@
   "buffer.review.document_count": "{count} documents",
   "buffer.review.save_location": "Choose a location when saving",
   "buffer.review.view_document": "View document and cancel this action",
-  "buffer.review.discard_warning": "If you don't save, changes will be lost.",
   "buffer.review.summary": "Save {save} · Don't save {discard}",
   "buffer.review.summary_skip": "Save {save} · Skip {discard}",
   "command.navigation_hint": "↑↓ Select · Tab Complete",

@@ -9,7 +9,6 @@ use gpui::{
 
 const HEADER: f32 = 44.;
 const FILE: f32 = 56.;
-const NOTE: f32 = 28.;
 const LIST_HEADER: f32 = 32.;
 const ROW: f32 = 48.;
 const SUMMARY: f32 = 28.;
@@ -35,7 +34,7 @@ impl SaveReview {
             BUTTON + 2. * FOOTER_PADDING
         };
         let body = if self.single_confirmation() {
-            FILE + NOTE
+            FILE
         } else {
             LIST_HEADER + ROW * self.entries.len().min(6) as f32 + SUMMARY
         };
@@ -434,15 +433,6 @@ impl WorkspaceWindow {
                             .flex()
                             .items_center()
                             .child(self.review_file(&review.entries[0], 0, entity.clone(), cx)),
-                    )
-                    .child(
-                        div()
-                            .h(ui_px(NOTE))
-                            .flex()
-                            .items_center()
-                            .text_size(ui_px(11.))
-                            .text_color(rgb(theme.foreground_muted))
-                            .child_text(self.language.text("buffer.review.discard_warning")),
                     ),
             );
         } else {
