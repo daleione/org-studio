@@ -289,6 +289,11 @@ impl WorkspaceWindow {
             CommandImplementation::Builtin(BuiltinCommand::CloseBuffer) => {
                 self.open_buffer_picker(crate::app::buffers::PickerIntent::Close, cx)
             }
+            CommandImplementation::Builtin(BuiltinCommand::CloseDocument) => {
+                if let Some(document) = self.document_session() {
+                    self.request_close_buffer(document.read(cx).id(), cx);
+                }
+            }
             CommandImplementation::Builtin(BuiltinCommand::SaveBuffers) => {
                 self.begin_buffer_review(crate::app::buffers::ReviewKind::Save, cx)
             }

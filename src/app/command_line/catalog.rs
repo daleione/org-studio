@@ -252,6 +252,20 @@ pub(super) fn entries(commands: &CommandRegistry, context: CatalogContext) -> Ve
             "Go forward",
             None,
         ),
+        (
+            CLOSE_DOCUMENT_COMMAND,
+            "close",
+            Language::Chinese.text("command.close"),
+            Language::English.text("command.close"),
+            None,
+        ),
+        (
+            QUIT_APPLICATION_COMMAND,
+            "quit",
+            Language::Chinese.text("command.quit"),
+            Language::English.text("command.quit"),
+            None,
+        ),
     ];
     let standard = specs.into_iter().filter_map(|(id, input, zh, en, scope)| {
         let descriptor = commands.descriptor(commands.key(id)?)?;
@@ -462,7 +476,19 @@ pub(super) fn validate(query: &str) -> Result<(), &'static str> {
             .any(|spec| command == spec.name || spec.aliases.contains(&command))
         || matches!(
             command,
-            "save" | "w" | "reload" | "preview" | "edit" | "split" | "export" | "undo" | "redo"
+            CLOSE_DOCUMENT_COMMAND
+                | QUIT_APPLICATION_COMMAND
+                | "close"
+                | "quit"
+                | "save"
+                | "w"
+                | "reload"
+                | "preview"
+                | "edit"
+                | "split"
+                | "export"
+                | "undo"
+                | "redo"
         ))
         && words.next().is_some()
     {

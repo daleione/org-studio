@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     components::UiTextExt,
-    typography::{ui_family, ui_px, ui_size},
+    typography::{ui_px, ui_size},
 };
 use gpui::{
     AnyElement, MouseButton, PathBuilder, Toggled, canvas, div, point, prelude::*, px, rgb,
@@ -300,9 +300,8 @@ impl WorkspaceWindow {
         index: usize,
         entity: Entity<Self>,
         cx: &App,
-    ) -> Option<AnyElement> {
-        let session = self.buffer_session(entry.id, cx)?;
-        let document = session.read(cx);
+    ) -> AnyElement {
+        let document = entry.session.read(cx);
         let theme = crate::theme::current_theme();
         let path = document.file_path();
         let detail = path
@@ -327,48 +326,45 @@ impl WorkspaceWindow {
         .into();
         let id = entry.id;
         let accessible_entity = entity.clone();
-        Some(
-            div()
-                .id(("buffer-review-document", index))
-                .debug_selector(move || format!("buffer-review-document-{index}"))
-                .role(gpui::Role::Button)
-                .aria_label(document.display_name())
-                .aria_description(hint.clone())
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .flex()
-                .flex_col()
-                .justify_center()
-                .when(!self.buffer_busy(), |s| s.cursor_pointer())
-                .tooltip(move |_, cx| cx.new(|_| ReviewHint(hint.clone())).into())
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(move |_, window, cx| {
-                    cx.stop_propagation();
-                    entity.update(cx, |w, cx| w.view_buffer_review_document(id, window, cx));
-                })
-                .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
-                    accessible_entity
-                        .update(cx, |w, cx| w.view_buffer_review_document(id, window, cx));
-                })
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(ui_px(13.))
-                        .font_weight(gpui::FontWeight::MEDIUM)
-                        .text_color(rgb(theme.foreground))
-                        .hover(|s| s.text_color(rgb(theme.accent)))
-                        .child_text(document.display_name()),
-                )
-                .child(
-                    div()
-                        .truncate()
-                        .text_size(ui_px(11.))
-                        .text_color(rgb(theme.foreground_muted))
-                        .child_text(detail),
-                )
-                .into_any_element(),
-        )
+        div()
+            .id(("buffer-review-document", index))
+            .debug_selector(move || format!("buffer-review-document-{index}"))
+            .role(gpui::Role::Button)
+            .aria_label(document.display_name())
+            .aria_description(hint.clone())
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .flex()
+            .flex_col()
+            .justify_center()
+            .when(!self.buffer_busy(), |s| s.cursor_pointer())
+            .tooltip(move |_, cx| cx.new(|_| ReviewHint(hint.clone())).into())
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(move |_, window, cx| {
+                cx.stop_propagation();
+                entity.update(cx, |w, cx| w.view_buffer_review_document(id, window, cx));
+            })
+            .on_a11y_action(gpui::AccessibleAction::Click, move |_, window, cx| {
+                accessible_entity.update(cx, |w, cx| w.view_buffer_review_document(id, window, cx));
+            })
+            .child(
+                div()
+                    .truncate()
+                    .text_size(ui_px(13.))
+                    .font_weight(gpui::FontWeight::MEDIUM)
+                    .text_color(rgb(theme.foreground))
+                    .hover(|s| s.text_color(rgb(theme.accent)))
+                    .child_text(document.display_name()),
+            )
+            .child(
+                div()
+                    .truncate()
+                    .text_size(ui_px(11.))
+                    .text_color(rgb(theme.foreground_muted))
+                    .child_text(detail),
+            )
+            .into_any_element()
     }
 
     pub(super) fn review_view(
@@ -437,7 +433,7 @@ impl WorkspaceWindow {
                             .h(ui_px(FILE))
                             .flex()
                             .items_center()
-                            .children(self.review_file(&review.entries[0], 0, entity.clone(), cx)),
+                            .child(self.review_file(&review.entries[0], 0, entity.clone(), cx)),
                     )
                     .child(
                         div()
@@ -552,7 +548,7 @@ impl WorkspaceWindow {
                         |s| s.bg(rgb(theme.hover)),
                     )
                     .child(choice)
-                    .children(self.review_file(entry, index, entity.clone(), cx))
+                    .child(self.review_file(entry, index, entity.clone(), cx))
                     .when(entry.done || !entry.save, |s| {
                         s.child(
                             div()
@@ -644,52 +640,5 @@ impl WorkspaceWindow {
                 .child(self.review_buttons(review, vertical, entity)),
         )
         .into_any_element()
-    }
-
-    pub(crate) fn buffer_review_modal(
-        &self,
-        window: &gpui::Window,
-        cx: &Context<Self>,
-    ) -> Option<AnyElement> {
-        let review = self.buffers.review()?;
-        if !matches!(review.kind, ReviewKind::Close(_)) || review.inline {
-            return None;
-        }
-        let theme = crate::theme::current_theme();
-        let available = (f32::from(window.viewport_size().width) - 32.).max(1.);
-        let (width, height) = review.panel_size(
-            available,
-            (f32::from(window.viewport_size().height) - 32.).max(1.),
-        );
-        Some(
-            div()
-                .id("buffer-review-modal")
-                .debug_selector(|| "buffer-review-modal".into())
-                .absolute()
-                .inset_0()
-                .occlude()
-                .bg(gpui::black().opacity(0.1))
-                .flex()
-                .items_center()
-                .justify_center()
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_scroll_wheel(|_, _, cx| cx.stop_propagation())
-                .child(
-                    div()
-                        .id("buffer-review-dialog")
-                        .debug_selector(|| "buffer-review-dialog".into())
-                        .w(px(width))
-                        .h(px(height))
-                        .bg(rgb(theme.elevated))
-                        .border_1()
-                        .border_color(rgb(theme.border))
-                        .rounded(px(10.))
-                        .shadow_lg()
-                        .overflow_hidden()
-                        .font_family(ui_family(".SystemUIFont"))
-                        .child(self.review_view(review, cx.entity(), available, cx)),
-                )
-                .into_any_element(),
-        )
     }
 }

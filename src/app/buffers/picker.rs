@@ -399,7 +399,7 @@ impl WorkspaceWindow {
         self.buffers.file_candidates.clear();
         if let Some(panel) = self.buffers.panel.take() {
             self.buffers.outgoing = match panel {
-                Panel::Review(review) if !matches!(review.kind, ReviewKind::Close(_)) => {
+                Panel::Review(review) if !review.inline => {
                     Some(OutgoingPanel::Review(Box::new(review)))
                 }
                 // Drop the input subscription immediately; only review content is retained.
@@ -426,10 +426,7 @@ impl WorkspaceWindow {
     pub(crate) fn buffer_tick(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.restore_navigation_location(cx);
         self.ensure_buffer_watch(cx);
-        if self
-            .buffers
-            .review()
-            .is_some_and(|r| !matches!(r.kind, ReviewKind::Close(_)))
+        if self.buffers.review().is_some_and(|review| !review.inline)
             && self.file_overview_is_open()
         {
             self.close_file_overview_now(window, cx);
@@ -474,11 +471,7 @@ impl WorkspaceWindow {
         window: &Window,
         cx: &gpui::App,
     ) -> Option<crate::app::status_line::shell::ShellRequest> {
-        if self
-            .buffers
-            .review()
-            .is_some_and(|r| matches!(r.kind, ReviewKind::Close(_)))
-        {
+        if self.buffers.review().is_some_and(|review| review.inline) {
             return None;
         }
         if self.buffers.panel.is_none() && !self.buffers.returning() {

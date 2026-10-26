@@ -25,6 +25,8 @@
   "buffer.review.summary": "保存 {save} 项 · 不保存 {discard} 项",
   "buffer.review.summary_skip": "保存 {save} 项 · 跳过 {discard} 项",
   "command.navigation_hint": "↑↓ 选择 · Tab 补全",
+  "command.quit": "退出应用",
+  "command.close": "关闭当前文件",
   "status.statistics.title": "文档统计",
   "status.statistics.characters_short": "字符",
   "status.statistics.characters": "字符数",

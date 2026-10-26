@@ -730,28 +730,94 @@ fn review_morph_retains_content_until_the_status_line_returns(cx: &mut gpui::Tes
     edit(&session, "pending changes", cx);
     cx.update(|window, app| {
         w.update(app, |w, cx| {
-            w.begin_buffer_review(ReviewKind::Quit, cx);
+            for kind in [ReviewKind::Quit, ReviewKind::Close(session.read(cx).id())] {
+                w.begin_buffer_review(kind, cx);
+                let open = w.buffer_shell_request(window, cx).unwrap();
+                assert_eq!(open.kind, ShellKind::Buffers);
+                assert!(matches!(open.resize, ResizePolicy::Animated));
+                w.status_shell_tick(window, cx);
+                let opening = w.status.sample_shell(open.available, Instant::now());
+                assert!(opening.height < open.target.height);
+                assert!(opening.content_opacity < 1.);
+                w.status.set_shell_shape_for_test(
+                    open.target,
+                    open.available,
+                    Instant::now(),
+                    false,
+                );
+                w.cancel_buffer_panel(cx);
+                assert!(w.buffers.review().is_none());
+                assert!(matches!(w.buffers.outgoing, Some(OutgoingPanel::Review(_))));
+                let close = w.buffer_shell_request(window, cx).unwrap();
+                assert!(close.returning);
+                w.status_shell_tick(window, cx);
+                let closing = w.status.sample_shell(close.available, Instant::now());
+                assert!(closing.height > close.target.height);
+                assert!(closing.content_opacity > 0.);
+                w.status.set_shell_shape_for_test(
+                    ShellShape::status(close.available),
+                    close.available,
+                    Instant::now(),
+                    false,
+                );
+                w.status_shell_tick(window, cx);
+                assert!(!w.buffers.returning());
+            }
+        })
+    });
+}
+
+#[gpui::test]
+fn close_return_keeps_the_document_visible_after_removal(cx: &mut gpui::TestAppContext) {
+    use crate::app::status_line::shell::ShellShape;
+    use std::time::{Duration, Instant};
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let (w, view) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let current = w.update(view, |w, cx| {
+        w.create_buffer("Earlier.org".into(), None, cx);
+        w.create_buffer("Later.org".into(), None, cx);
+        w.document_session().unwrap().clone()
+    });
+    edit(&current, "pending changes", view);
+    let id = current.read_with(view, |document, _| document.id());
+    let available = view.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.request_close_buffer(id, cx);
             let open = w.buffer_shell_request(window, cx).unwrap();
-            assert_eq!(open.kind, ShellKind::Buffers);
-            assert!(matches!(open.resize, ResizePolicy::Animated));
-            w.status_shell_tick(window, cx);
-            let opening = w.status.sample_shell(open.available, Instant::now());
-            assert!(opening.height < open.target.height);
-            assert!(opening.content_opacity < 1.);
             w.status
                 .set_shell_shape_for_test(open.target, open.available, Instant::now(), false);
-            w.cancel_buffer_panel(cx);
-            assert!(w.buffers.review().is_none());
-            assert!(matches!(w.buffers.outgoing, Some(OutgoingPanel::Review(_))));
-            let close = w.buffer_shell_request(window, cx).unwrap();
-            assert!(close.returning);
             w.status_shell_tick(window, cx);
-            let closing = w.status.sample_shell(close.available, Instant::now());
-            assert!(closing.height > close.target.height);
-            assert!(closing.content_opacity > 0.);
+            open.available
+        })
+    });
+    view.run_until_parked();
+    assert!(view.debug_bounds("buffer-review-document-0").is_some());
+    view.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.discard_buffer_review(window, cx);
+            assert!(w.buffer_session(id, cx).is_none());
+            // Keep the return animation open independently of test execution speed.
             w.status.set_shell_shape_for_test(
-                ShellShape::status(close.available),
-                close.available,
+                ShellShape::status(available),
+                available,
+                Instant::now() + Duration::from_secs(5),
+                true,
+            );
+            cx.notify();
+        })
+    });
+    drop(current);
+    view.run_until_parked();
+    assert!(
+        view.debug_bounds("buffer-review-document-0").is_some(),
+        "closing the file must not remove its name from the outgoing panel"
+    );
+    view.update(|window, app| {
+        w.update(app, |w, cx| {
+            w.status.set_shell_shape_for_test(
+                ShellShape::status(available),
+                available,
                 Instant::now(),
                 false,
             );

@@ -860,7 +860,6 @@ impl Render for WorkspaceWindow {
             .children(self.render_overview_preparation(entity.clone(), window, cx))
             .children(self.render_file_overview(window, cx))
             .children(self.render_document_name(window, cx))
-            .children(self.buffer_review_modal(window, cx))
             .children(self.cursor_spotlight.clone())
             .children(self.render_mysql_confirmation(window, cx))
             .children(self.render_code_confirmation(window, cx))

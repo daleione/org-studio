@@ -40,13 +40,6 @@ impl WorkspaceWindow {
         status: Option<AnyElement>,
         cx: &App,
     ) -> Option<AnyElement> {
-        if self
-            .buffers
-            .review()
-            .is_some_and(|r| matches!(r.kind, ReviewKind::Close(_)))
-        {
-            return None;
-        }
         if !self
             .status
             .shell_owns(crate::app::status_line::shell::ShellKind::Buffers, pane)

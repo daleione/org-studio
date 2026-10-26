@@ -95,6 +95,7 @@ pub(crate) const OPEN_AGENDA_TEXT_COMMAND: &str = "org-studio.workspace.open-age
 pub(crate) const RELOAD_DOCUMENT_COMMAND: &str = "org-studio.document.reload";
 pub(crate) const SAVE_DOCUMENT_COMMAND: &str = "org-studio.document.save";
 pub(crate) const SAVE_DOCUMENT_AS_COMMAND: &str = "org-studio.document.save-as";
+pub(crate) const CLOSE_DOCUMENT_COMMAND: &str = "org-studio.document.close";
 pub(crate) const UNDO_DOCUMENT_COMMAND: &str = "org-studio.document.undo";
 pub(crate) const REDO_DOCUMENT_COMMAND: &str = "org-studio.document.redo";
 pub(crate) const EXPORT_DOCUMENT_COMMAND: &str = "org-studio.document.export";

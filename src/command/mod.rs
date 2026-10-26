@@ -84,6 +84,7 @@ pub enum BuiltinCommand {
     ReloadDocument,
     SaveDocument,
     SaveDocumentAs,
+    CloseDocument,
     SwitchBuffer,
     FileOverview,
     NavigateBack,

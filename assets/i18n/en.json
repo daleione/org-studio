@@ -25,6 +25,8 @@
   "buffer.review.summary": "Save {save} · Don't save {discard}",
   "buffer.review.summary_skip": "Save {save} · Skip {discard}",
   "command.navigation_hint": "↑↓ Select · Tab Complete",
+  "command.quit": "Quit application",
+  "command.close": "Close current file",
   "status.statistics.title": "Document statistics",
   "status.statistics.characters_short": "chars",
   "status.statistics.characters": "Characters",

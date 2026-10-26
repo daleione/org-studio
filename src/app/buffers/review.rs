@@ -134,18 +134,19 @@ impl WorkspaceWindow {
         self.cancel_pending_document_focus(cx);
         let entries = self
             .buffer_sessions()
-            .filter_map(|s| {
-                let s = s.read(cx);
-                if matches!(kind, ReviewKind::Close(id) if id != s.id())
-                    || !SaveReview::required_for(s)
+            .filter_map(|session| {
+                let document = session.read(cx);
+                if matches!(kind, ReviewKind::Close(id) if id != document.id())
+                    || !SaveReview::required_for(document)
                 {
                     return None;
                 }
                 Some(ReviewEntry {
-                    id: s.id(),
-                    revision: s.revision(),
+                    id: document.id(),
+                    revision: document.revision(),
                     save: true,
                     done: false,
+                    session,
                 })
             })
             .collect();

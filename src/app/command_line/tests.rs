@@ -790,6 +790,21 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
         );
     }
     assert_eq!(catalog::candidates(&all, "w", &[])[0].entry.input, "save");
+    for (input, id, translated) in [
+        (
+            "close",
+            crate::preview::CLOSE_DOCUMENT_COMMAND,
+            "关闭当前文件",
+        ),
+        ("quit", crate::preview::QUIT_APPLICATION_COMMAND, "退出"),
+    ] {
+        let expected = commands.key(id).unwrap();
+        for query in [input, id, translated] {
+            let found = catalog::candidates(&all, query, &[]);
+            assert_eq!(found[0].entry.input, input);
+            assert_eq!(found[0].entry.key, expected);
+        }
+    }
     assert_eq!(
         catalog::candidates(&all, "对齐所有", &[])[0].entry.input,
         "table-align --all"
@@ -850,8 +865,78 @@ fn command_line_catalog_resolves_aliases_scopes_and_availability() {
             .iter()
             .all(|candidate| candidate.entry.input != "save")
     );
+    for entries in [&read_only, &reading] {
+        for input in ["close", "quit"] {
+            assert_eq!(
+                catalog::candidates(entries, input, &[])[0].entry.input,
+                input
+            );
+        }
+    }
     assert!(catalog::validate("table-align --all --selection").is_err());
     assert!(catalog::validate("save --all").is_err());
+    for command in [
+        "close",
+        "quit",
+        crate::preview::CLOSE_DOCUMENT_COMMAND,
+        crate::preview::QUIT_APPLICATION_COMMAND,
+    ] {
+        assert!(catalog::validate(&format!("{command} extra")).is_err());
+    }
+}
+
+#[gpui::test]
+fn close_and_quit_commands_reuse_the_status_line_review(cx: &mut gpui::TestAppContext) {
+    use crate::app::buffers::ReviewKind;
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let (workspace, view) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    let background = workspace.update(view, |workspace, cx| {
+        workspace.create_buffer("Earlier.org".into(), None, cx);
+        workspace.document_session().unwrap().clone()
+    });
+    view.run_until_parked();
+    view.simulate_input("earlier edits");
+    let current = workspace.update(view, |workspace, cx| {
+        workspace.create_buffer("Later.org".into(), None, cx);
+        workspace.document_session().unwrap().clone()
+    });
+    view.run_until_parked();
+    view.simulate_input("later edits");
+    let id = current.read_with(view, |document, _| document.id());
+    for (command, kind, count) in [
+        ("close", ReviewKind::Close(id), 1),
+        ("quit", ReviewKind::Quit, 2),
+    ] {
+        workspace.update(view, |workspace, cx| workspace.prompt_command(command, cx));
+        view.run_until_parked();
+        view.simulate_keystrokes("enter");
+        // The test platform has no frame loop to apply the panel's focus request.
+        view.update(|window, cx| window.simulate_next_frame(cx));
+        view.run_until_parked();
+        workspace.read_with(view, |workspace, _| {
+            assert!(!workspace.command_line_is_open());
+            assert_eq!(workspace.document_session(), Some(&current));
+            let review = workspace.buffers.review().unwrap();
+            assert_eq!(review.kind, kind);
+            assert_eq!(review.entries.len(), count);
+            assert!(review.entries.iter().any(|entry| entry.id == id));
+        });
+        let shell = view.debug_bounds("floating-status-line").unwrap();
+        let review = view.debug_bounds("buffer-review").unwrap();
+        let submit = view.debug_bounds("buffer-review-submit").unwrap();
+        assert!(review.top() >= shell.top() && review.bottom() <= shell.bottom());
+        assert!(submit.left() >= shell.left() && submit.right() <= shell.right());
+        assert!(submit.bottom() <= shell.bottom());
+        view.simulate_keystrokes("escape");
+        view.run_until_parked();
+        workspace.read_with(view, |workspace, cx| {
+            assert!(workspace.buffers.review().is_none());
+            assert_eq!(workspace.document_session(), Some(&current));
+            assert_eq!(workspace.buffer_sessions().count(), 2);
+            assert!(background.read(cx).is_dirty() && current.read(cx).is_dirty());
+        });
+    }
 }
 
 #[gpui::test]

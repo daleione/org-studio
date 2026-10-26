@@ -265,6 +265,8 @@ pub(crate) struct ReviewEntry {
     pub(crate) revision: crate::document::Revision,
     pub(crate) save: bool,
     pub(crate) done: bool,
+    // The outgoing panel still renders this document after it leaves the open set.
+    session: Entity<DocumentSession>,
 }
 
 impl WorkspaceWindow {

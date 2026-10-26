@@ -398,7 +398,7 @@ impl WorkspaceWindow {
             .command_line
             .session
             .as_ref()
-            .is_none_or(|s| self.command_context_is_current(s, cx));
+            .is_none_or(|s| s.returning || self.command_context_is_current(s, cx));
         if !valid {
             self.command_line.session = None;
             return;
