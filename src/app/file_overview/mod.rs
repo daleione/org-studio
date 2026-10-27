@@ -30,6 +30,7 @@ use layout::GridLayout;
 use motion::{Follow, Motion};
 use std::{
     collections::HashMap,
+    rc::Rc,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -81,11 +82,11 @@ struct Session {
     origin_focus: Option<FocusHandle>,
     origin_bounds: Bounds<Pixels>,
     origin_card: Bounds<Pixels>,
-    origin_frame: Option<Arc<DocumentFrame>>,
+    origin_frame: Option<Rc<DocumentFrame>>,
     target: Option<DocumentId>,
     target_from: Bounds<Pixels>,
     target_to: Bounds<Pixels>,
-    target_frame: Option<Arc<DocumentFrame>>,
+    target_frame: Option<Rc<DocumentFrame>>,
     new_document: Option<super::ReadyDocument>,
     selected: Option<DocumentId>,
     query: Entity<NativeInput>,
@@ -112,7 +113,7 @@ struct Preparation {
 
 enum PreparationStep {
     Reading { _task: gpui::Task<()> },
-    Painting(PreparingDocument),
+    Painting(Box<PreparingDocument>),
 }
 
 pub(crate) struct PreparingDocument {
@@ -291,7 +292,7 @@ impl WorkspaceWindow {
                         .preparation
                         .as_ref()
                         .map_or_else(Instant::now, |p| p.started),
-                    step: PreparationStep::Painting(drawing),
+                    step: PreparationStep::Painting(Box::new(drawing)),
                 });
                 if state.phase == Phase::Opening {
                     state.progress = 0.;
@@ -343,15 +344,15 @@ impl WorkspaceWindow {
         if !new_document {
             self.file_overview.cache.insert(id, frame.clone());
         }
-        if let Some(state) = self.file_overview.session.as_mut() {
-            if state.phase == Phase::Visible {
-                if state.origin == Some(id) {
-                    state.origin_frame = Some(frame);
-                }
-                state.preparation = None;
-                cx.notify();
-                return;
+        if let Some(state) = self.file_overview.session.as_mut()
+            && state.phase == Phase::Visible
+        {
+            if state.origin == Some(id) {
+                state.origin_frame = Some(frame);
             }
+            state.preparation = None;
+            cx.notify();
+            return;
         }
         let items = self.overview_items(cx);
         let index = items.iter().position(|item| item.id == id);
@@ -1059,21 +1060,20 @@ impl WorkspaceWindow {
         #[cfg(feature = "visual-check")]
         self.file_overview.trace.input(event);
         if self.file_overview_is_open() {
-            if let Some(state) = self.file_overview.session.as_mut() {
-                if state.motion.is_some()
-                    && !state.is_preparing()
-                    && ((matches!(state.phase, Phase::Entering | Phase::Returning)
-                        && state.origin_frame.is_some())
-                        || (matches!(state.phase, Phase::Opening | Phase::Rebounding)
-                            && state.target_frame.is_some()))
-                    && !matches!(event.phase, TouchPhase::Ended | TouchPhase::Cancelled)
-                    && event.delta.is_finite()
-                    && (event.phase == TouchPhase::Started || event.delta != 0.)
-                    && event.position.y >= px(super::TITLEBAR_HEIGHT)
-                    && !state.query.read(cx).is_composing()
-                {
-                    state.resume_gesture(now);
-                }
+            if let Some(state) = self.file_overview.session.as_mut()
+                && state.motion.is_some()
+                && !state.is_preparing()
+                && ((matches!(state.phase, Phase::Entering | Phase::Returning)
+                    && state.origin_frame.is_some())
+                    || (matches!(state.phase, Phase::Opening | Phase::Rebounding)
+                        && state.target_frame.is_some()))
+                && !matches!(event.phase, TouchPhase::Ended | TouchPhase::Cancelled)
+                && event.delta.is_finite()
+                && (event.phase == TouchPhase::Started || event.delta != 0.)
+                && event.position.y >= px(super::TITLEBAR_HEIGHT)
+                && !state.query.read(cx).is_composing()
+            {
+                state.resume_gesture(now);
             }
             let mut already_integrated = false;
             if self
@@ -1132,11 +1132,11 @@ impl WorkspaceWindow {
                 if claimed {
                     let (id, gesture) = state.outward_probe.take().unwrap();
                     self.select_overview_item(id, window, cx);
-                    if let Some(state) = self.file_overview.session.as_mut() {
-                        if state.phase == Phase::Opening {
-                            state.begin_gesture(gesture, Instant::now());
-                            already_integrated = true;
-                        }
+                    if let Some(state) = self.file_overview.session.as_mut()
+                        && state.phase == Phase::Opening
+                    {
+                        state.begin_gesture(gesture, Instant::now());
+                        already_integrated = true;
                     }
                 }
             }
@@ -1260,21 +1260,18 @@ impl WorkspaceWindow {
                 .presented
                 .take()
                 .filter(|p| Some(p.id) != current)
-            {
-                if self
+                && self
                     .buffer_sessions()
                     .any(|doc| doc.read(cx).id() == previous.id)
-                    && previous.scale == window.scale_factor()
-                    && previous.palette == crate::theme::current_theme().background
-                {
-                    if let Some(frame) = DocumentFrame::from_painted(
-                        &self.file_overview.drawn_frame,
-                        previous.bounds,
-                        previous.revision,
-                    ) {
-                        self.file_overview.cache.insert(previous.id, frame);
-                    }
-                }
+                && previous.scale == window.scale_factor()
+                && previous.palette == crate::theme::current_theme().background
+                && let Some(frame) = DocumentFrame::from_painted(
+                    &self.file_overview.drawn_frame,
+                    previous.bounds,
+                    previous.revision,
+                )
+            {
+                self.file_overview.cache.insert(previous.id, frame);
             }
             return;
         }

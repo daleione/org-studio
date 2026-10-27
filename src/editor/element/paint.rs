@@ -262,8 +262,6 @@ pub(super) fn paint_frame(
                                             row.hit.origin_y + row.hit.line_height * visual_row,
                                         ),
                                         row.hit.line_height,
-                                        TextAlign::Left,
-                                        None,
                                         window,
                                         cx,
                                     );
@@ -275,8 +273,6 @@ pub(super) fn paint_frame(
                                 &row.preview_runs,
                                 point(row.hit.text_origin_x, row.hit.origin_y),
                                 row.hit.line_height,
-                                TextAlign::Left,
-                                None,
                                 window,
                                 cx,
                             );

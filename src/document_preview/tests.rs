@@ -1,24 +1,29 @@
 use super::*;
 use gpui::{GlyphId, WrapBoundary, canvas, div, point};
 
-fn geometry(
-    frame: &PreviewFrame,
-) -> Vec<(Pixels, Vec<WrapBoundary>, Vec<(GlyphId, Point<Pixels>)>)> {
+#[derive(Debug, PartialEq)]
+struct WrappedGeometry {
+    font_size: Pixels,
+    wrap_boundaries: Vec<WrapBoundary>,
+    glyphs: Vec<(GlyphId, Point<Pixels>)>,
+}
+
+fn geometry(frame: &PreviewFrame) -> Vec<WrappedGeometry> {
     frame
         .commands
         .iter()
         .filter_map(|command| match &command.paint {
             Paint::Wrapped { layout, line, .. } => {
                 assert!(Arc::ptr_eq(&**line.borrow(), layout));
-                Some((
-                    layout.font_size(),
-                    layout.wrap_boundaries.to_vec(),
-                    layout
+                Some(WrappedGeometry {
+                    font_size: layout.font_size(),
+                    wrap_boundaries: layout.wrap_boundaries.to_vec(),
+                    glyphs: layout
                         .runs()
                         .iter()
                         .flat_map(|run| run.glyphs.iter().map(|glyph| (glyph.id, glyph.position)))
                         .collect(),
-                ))
+                })
             }
             _ => None,
         })
@@ -99,7 +104,7 @@ fn drawing_at_multiple_sizes_preserves_original_glyphs_and_wraps(cx: &mut gpui::
     let frame = slot.latest().unwrap();
     let before = geometry(&frame);
     assert!(!before.is_empty());
-    assert!(before.iter().any(|(_, wraps, _)| !wraps.is_empty()));
+    assert!(before.iter().any(|line| !line.wrap_boundaries.is_empty()));
     let preview = frame.clone();
     cx.draw(
         point(px(0.), px(0.)),

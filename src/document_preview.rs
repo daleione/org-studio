@@ -18,12 +18,12 @@ pub(crate) struct FrameSlot(Rc<RefCell<PublishedFrame>>);
 
 #[derive(Default)]
 struct PublishedFrame {
-    frame: Option<Arc<PreviewFrame>>,
+    frame: Option<Rc<PreviewFrame>>,
     paints: u8,
 }
 
 impl FrameSlot {
-    pub fn latest(&self) -> Option<Arc<PreviewFrame>> {
+    pub fn latest(&self) -> Option<Rc<PreviewFrame>> {
         self.0.borrow().frame.clone()
     }
 
@@ -37,7 +37,7 @@ impl FrameSlot {
 
     fn publish(&self, frame: PreviewFrame) {
         let mut published = self.0.borrow_mut();
-        published.frame = Some(Arc::new(frame));
+        published.frame = Some(Rc::new(frame));
         published.paints = published.paints.saturating_add(1);
     }
 }
@@ -73,15 +73,8 @@ enum Paint {
         radii: Corners<Pixels>,
         shadows: Vec<BoxShadow>,
     },
-    Shaped {
-        line: ShapedLine,
-        scaled: RefCell<Option<(f32, ShapedLine)>>,
-        origin: Point<Pixels>,
-        height: Pixels,
-        align: TextAlign,
-        width: Option<Pixels>,
-        background: bool,
-    },
+    // GPUI embeds large inline buffers; keep them out of every command's size.
+    Shaped(Box<ShapedPaint>),
     Wrapped {
         line: RefCell<WrappedLine>,
         layout: Arc<WrappedLineLayout>,
@@ -104,6 +97,16 @@ enum Paint {
         data: &'static [u8],
         color: Hsla,
     },
+}
+
+struct ShapedPaint {
+    line: ShapedLine,
+    scaled: RefCell<Option<(f32, ShapedLine)>>,
+    origin: Point<Pixels>,
+    height: Pixels,
+    align: TextAlign,
+    width: Option<Pixels>,
+    background: bool,
 }
 
 fn recording() -> bool {
@@ -201,7 +204,7 @@ pub(crate) fn shaped(
     if recording() {
         push(
             window,
-            Paint::Shaped {
+            Paint::Shaped(Box::new(ShapedPaint {
                 line: line.clone(),
                 scaled: RefCell::default(),
                 origin,
@@ -209,7 +212,7 @@ pub(crate) fn shaped(
                 align,
                 width,
                 background,
-            },
+            })),
         );
     }
 }
@@ -231,25 +234,20 @@ pub(crate) fn paint_wrapped(
     runs: &[TextRun],
     origin: Point<Pixels>,
     height: Pixels,
-    align: TextAlign,
-    bounds: Option<Bounds<Pixels>>,
     window: &mut Window,
     cx: &mut App,
 ) -> gpui::Result<()> {
-    wrapped(line, runs, origin, height, align, bounds, false, window);
-    line.paint(origin, height, align, bounds, window, cx)
+    record_wrapped(line, runs, origin, height, window);
+    line.paint(origin, height, TextAlign::Left, None, window, cx)
 }
 
 /// Recreate decorations once from the same style runs, retaining the original
 /// shaped glyphs and wrap boundaries even if the source contains custom offsets.
-pub(crate) fn wrapped(
+fn record_wrapped(
     line: &WrappedLine,
     runs: &[TextRun],
     origin: Point<Pixels>,
     height: Pixels,
-    align: TextAlign,
-    bounds: Option<Bounds<Pixels>>,
-    background: bool,
     window: &mut Window,
 ) {
     if !recording() {
@@ -279,9 +277,9 @@ pub(crate) fn wrapped(
             scaled: RefCell::default(),
             origin,
             height,
-            align,
-            bounds,
-            background,
+            align: TextAlign::Left,
+            bounds: None,
+            background: false,
         },
     );
 }
@@ -290,7 +288,7 @@ fn scale_layout(layout: &LineLayout, scale: f32) -> Arc<LineLayout> {
     let mut runs = layout.runs.clone();
     for run in &mut runs {
         for glyph in &mut run.glyphs {
-            glyph.position = glyph.position * scale;
+            glyph.position *= scale;
         }
     }
     Arc::new(LineLayout {
@@ -370,8 +368,9 @@ impl PreviewFrame {
         self.commands
             .iter()
             .map(|command| match &command.paint {
-                Paint::Shaped { line, .. } => {
-                    256 + line
+                Paint::Shaped(paint) => {
+                    256 + paint
+                        .line
                         .runs
                         .iter()
                         .map(|r| 2 * r.glyphs.len() * std::mem::size_of::<ShapedGlyph>())
@@ -402,8 +401,8 @@ impl PreviewFrame {
 
     pub fn paint(&self, target: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let source = self.bounds;
-        let scale = f32::from(target.size.width / source.size.width)
-            .min(f32::from(target.size.height / source.size.height));
+        let scale =
+            (target.size.width / source.size.width).min(target.size.height / source.size.height);
         let position = |point: Point<Pixels>| target.origin + (point - source.origin) * scale;
         let rect = |bounds: Bounds<Pixels>| {
             Bounds::new(
@@ -460,7 +459,7 @@ impl PreviewFrame {
                                 .iter()
                                 .cloned()
                                 .map(|mut shadow| {
-                                    shadow.offset = shadow.offset * scale;
+                                    shadow.offset *= scale;
                                     shadow.blur_radius *= scale;
                                     shadow.spread_radius *= scale;
                                     shadow
@@ -470,15 +469,16 @@ impl PreviewFrame {
                             window.paint_drop_shadows(rect(*bounds), radii, &shadows);
                             window.paint_inset_shadows(rect(*bounds), radii, &shadows);
                         }
-                        Paint::Shaped {
-                            line,
-                            scaled,
-                            origin,
-                            height,
-                            align,
-                            width,
-                            background,
-                        } => {
+                        Paint::Shaped(paint) => {
+                            let ShapedPaint {
+                                line,
+                                scaled,
+                                origin,
+                                height,
+                                align,
+                                width,
+                                background,
+                            } = paint.as_ref();
                             let mut cache = scaled.borrow_mut();
                             let scaled = if scale == 1. {
                                 line

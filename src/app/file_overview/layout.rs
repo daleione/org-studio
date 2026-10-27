@@ -274,7 +274,7 @@ mod tests {
             assert!((inward.origin.x - outward.origin.x).abs() < px(0.001));
             assert!((inward.origin.y - outward.origin.y).abs() < px(0.001));
             assert!((inward.size.width - outward.size.width).abs() < px(0.001));
-            assert!((f32::from(inward.size.width / inward.size.height) - 0.6).abs() < 0.0001);
+            assert!((inward.size.width / inward.size.height - 0.6).abs() < 0.0001);
         }
         let early = document_transition(source, card, 0.1);
         assert!(early.size.width < source.size.width);
@@ -354,9 +354,7 @@ mod tests {
             for (index, source) in [portrait, wide].into_iter().enumerate() {
                 let frame = grid.document_preview(index, px(0.), source);
                 assert!(
-                    (f32::from(frame.size.width / frame.size.height)
-                        - f32::from(source.width / source.height))
-                    .abs()
+                    (frame.size.width / frame.size.height - source.width / source.height).abs()
                         < 0.0001
                 );
                 assert!(f32::from(frame.size.height) + CAPTION <= grid.height);

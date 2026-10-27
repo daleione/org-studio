@@ -360,15 +360,7 @@ impl WorkspaceWindow {
                 }
                 bounds.origin.y -= px(super::super::TITLEBAR_HEIGHT + grid_top);
                 match items.get(index) {
-                    Some(item) => self.overview_card(
-                        item,
-                        index,
-                        &items,
-                        bounds,
-                        appearance,
-                        entity.clone(),
-                        cx,
-                    ),
+                    Some(item) => self.overview_card(item, index, &items, bounds, appearance, cx),
                     None => self.overview_new_card(
                         bounds,
                         appearance,
@@ -541,32 +533,31 @@ impl WorkspaceWindow {
                 .left_0()
                 .size(px(1.)),
             );
-        if handoff
+        if (handoff
             || new_document && opening
             || (entry
                 && !state.reduced_motion
-                && !items.iter().any(|item| Some(item.id) == state.origin))
+                && !items.iter().any(|item| Some(item.id) == state.origin)))
+            && let Some((frame, bounds)) = active_frame
         {
-            if let Some((frame, bounds)) = active_frame {
-                // Keep the frame opaque until the ready live view takes over.
-                // Per-primitive fading would make overlapping text lighter.
-                overlay = overlay.child(
-                    render_frame(frame)
-                        .debug_selector(|| "file-overview-opening-frame".into())
-                        .absolute()
-                        .left(bounds.left())
-                        .top(bounds.top() - px(super::super::TITLEBAR_HEIGHT))
-                        .w(bounds.size.width)
-                        .h(bounds.size.height)
-                        // Only the new blank page fades in over the gray plus.
-                        // At full size and throughout handoff it stays opaque.
-                        .opacity(if new_document && !state.reduced_motion {
-                            smoothstep(0., 0.16, p)
-                        } else {
-                            1.
-                        }),
-                );
-            }
+            // Keep the frame opaque until the ready live view takes over.
+            // Per-primitive fading would make overlapping text lighter.
+            overlay = overlay.child(
+                render_frame(frame)
+                    .debug_selector(|| "file-overview-opening-frame".into())
+                    .absolute()
+                    .left(bounds.left())
+                    .top(bounds.top() - px(super::super::TITLEBAR_HEIGHT))
+                    .w(bounds.size.width)
+                    .h(bounds.size.height)
+                    // Only the new blank page fades in over the gray plus.
+                    // At full size and throughout handoff it stays opaque.
+                    .opacity(if new_document && !state.reduced_motion {
+                        smoothstep(0., 0.16, p)
+                    } else {
+                        1.
+                    }),
+            );
         }
         if state.phase == Phase::Opening
             && state
@@ -740,9 +731,9 @@ impl WorkspaceWindow {
         items: &[Item],
         bounds: Bounds<Pixels>,
         appearance: f32,
-        entity: Entity<Self>,
         cx: &Context<Self>,
     ) -> AnyElement {
+        let entity = cx.entity();
         let state = self.file_overview.session.as_ref().unwrap();
         let theme = current_theme();
         let selected = state.selected == Some(item.id);

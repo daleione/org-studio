@@ -442,28 +442,4 @@ mod tests {
         }
         assert!(spans.windows(2).all(|pair| pair[0].end <= pair[1].start));
     }
-
-    /// Run alone with --release --ignored --nocapture to measure a cold call.
-    #[test]
-    #[ignore = "manual cold-start timing; no machine-dependent pass threshold"]
-    fn typst_fixture_highlight_timing() {
-        let fixture = include_str!("../tests/fixtures/preview-basics.org");
-        let source = fixture
-            .split("#+begin_src typst")
-            .nth(1)
-            .unwrap()
-            .split_once('\n')
-            .unwrap()
-            .1
-            .split("#+end_src")
-            .next()
-            .unwrap();
-        for round in 0..3 {
-            let start = std::time::Instant::now();
-            let spans = highlight_code("typst", source).unwrap();
-            let elapsed = start.elapsed();
-            assert!(!spans.is_empty());
-            eprintln!("typst fixture round={round} elapsed={elapsed:?}");
-        }
-    }
 }

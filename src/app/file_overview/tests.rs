@@ -49,17 +49,17 @@ pub(super) fn complete_motion(
     cx: &mut Context<WorkspaceWindow>,
 ) {
     for _ in 0..3 {
-        if let Some(state) = &mut w.file_overview.session {
-            if let Some(motion) = state.motion {
-                let target = motion.sample(Instant::now() + Duration::from_secs(3)).value;
-                state.motion = Some(Motion::settle(
-                    Instant::now() - Duration::from_secs(3),
-                    state.progress,
-                    target,
-                    0.,
-                    false,
-                ));
-            }
+        if let Some(state) = &mut w.file_overview.session
+            && let Some(motion) = state.motion
+        {
+            let target = motion.sample(Instant::now() + Duration::from_secs(3)).value;
+            state.motion = Some(Motion::settle(
+                Instant::now() - Duration::from_secs(3),
+                state.progress,
+                target,
+                0.,
+                false,
+            ));
         }
         w.file_overview_tick(window, cx);
     }
@@ -418,7 +418,7 @@ fn covered_document_stops_rendering_and_resumes_the_same_editor(cx: &mut gpui::T
         cx.run_until_parked();
         assert!(cx.debug_bounds("file-overview-paused-document").is_some());
         w.read_with(cx, |w, _| {
-            assert!(Arc::ptr_eq(
+            assert!(Rc::ptr_eq(
                 &frame,
                 w.file_overview.drawn_frame.latest().as_ref().unwrap()
             ));
@@ -434,7 +434,7 @@ fn covered_document_stops_rendering_and_resumes_the_same_editor(cx: &mut gpui::T
             assert_eq!(state.phase, Phase::Handoff);
             assert_eq!(state.handoff_frames, 0);
             assert_eq!(state.handoff_backdrop, 0.);
-            assert!(Arc::ptr_eq(
+            assert!(Rc::ptr_eq(
                 state.target_frame.as_ref().unwrap(),
                 state.origin_frame.as_ref().unwrap()
             ));
@@ -930,7 +930,7 @@ fn titlebar_toggle_reverses_returning_on_the_first_click(cx: &mut gpui::TestAppC
             assert_eq!(state.phase, expected, "each click must change direction");
             assert_eq!(w.file_overview.serial, serial);
             assert_eq!(state.query, query);
-            assert!(Arc::ptr_eq(state.origin_frame.as_ref().unwrap(), &frame));
+            assert!(Rc::ptr_eq(state.origin_frame.as_ref().unwrap(), &frame));
             assert!(state.progress > 0.1 && state.progress < 0.7);
             assert_eq!(w.document_session().unwrap(), &doc);
         });
@@ -1003,7 +1003,7 @@ fn titlebar_toggle_reopens_during_return_and_selection_handoff(cx: &mut gpui::Te
             assert_eq!(state.phase, Phase::Entering);
             assert_eq!(state.origin, Some(expected.read(cx).id()));
             assert_eq!(w.document_session().unwrap(), expected);
-            assert!(Arc::ptr_eq(
+            assert!(Rc::ptr_eq(
                 state
                     .origin_frame
                     .as_ref()
@@ -1371,7 +1371,7 @@ fn theme_toggle_keeps_the_overview_and_repaints_visible_documents(cx: &mut gpui:
                 .expect("visible preview repainted");
             assert_eq!(frame.palette, crate::theme::ORG_STUDIO_DARK.background);
             assert_eq!(frame.source.bounds, old.bounds);
-            assert!(!Arc::ptr_eq(&frame.source, old));
+            assert!(!Rc::ptr_eq(&frame.source, old));
         }
     });
     cx.simulate_keystrokes("escape");
@@ -1465,13 +1465,31 @@ fn stale_preparation_cannot_replace_newer_unsaved_text(cx: &mut gpui::TestAppCon
     open(&w, cx);
     cx.update(|window, app| {
         w.update(app, |w, cx| {
-            w.select_overview_item(a.read(cx).id(), window, cx);
+            // Advance the parked document so even a completed initial reading
+            // job cannot satisfy this request from its cached revision.
             a.update(cx, |doc, cx| {
                 doc.edit(
                     DocumentCommand::new(
                         EditTransaction::new(
                             doc.revision(),
-                            vec![TextEdit::new(ByteRange::new(2, 3), "New")],
+                            vec![TextEdit::new(ByteRange::new(2, 3), "Old")],
+                        ),
+                        Selection::default(),
+                        Selection::default(),
+                        EditOrigin::Other,
+                    ),
+                    cx,
+                )
+                .unwrap();
+            });
+            w.select_overview_item(a.read(cx).id(), window, cx);
+            assert!(w.file_overview.session.as_ref().unwrap().is_preparing());
+            a.update(cx, |doc, cx| {
+                doc.edit(
+                    DocumentCommand::new(
+                        EditTransaction::new(
+                            doc.revision(),
+                            vec![TextEdit::new(ByteRange::new(2, 5), "New")],
                         ),
                         Selection::default(),
                         Selection::default(),

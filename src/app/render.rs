@@ -103,15 +103,21 @@ pub(crate) fn theme_toggle_button(
 }
 
 fn document_titlebar(
+    view: &WorkspaceWindow,
     workspace: gpui::Entity<WorkspaceWindow>,
-    sidebar_visible: bool,
-    minimap_visible: bool,
-    export_open: bool,
     titlebar_inset: f32,
-    theme_mode: ThemeMode,
-    title: String,
-    rename_available: bool,
+    cx: &gpui::App,
 ) -> gpui::Div {
+    let sidebar_visible = view.sidebar_visible();
+    let minimap_visible = view.minimap_visible();
+    let export_open = view.export.is_open();
+    let theme_mode = view.theme_mode();
+    let title = if view.file_overview_is_open() {
+        String::new()
+    } else {
+        view.window_title(cx)
+    };
+    let rename_available = view.document_name_available(cx);
     let theme = current_theme();
     let sidebar_workspace = workspace.clone();
     let sidebar_icon_color = if sidebar_visible {
@@ -435,7 +441,6 @@ impl Render for WorkspaceWindow {
         let show_document_titlebar =
             matches!(self.content_route, crate::app::ContentRoute::Document)
                 && self.state.ready().is_some();
-        let sidebar_visible = self.file_manager.sidebar_visible();
         let minimap_visible = self.minimap_visible();
         let minimap_transitioning = self.minimap_visibility_animation.is_some();
         let (minimap_reveal, minimap_animating) = self.minimap_reveal_at(Instant::now());
@@ -710,20 +715,7 @@ impl Render for WorkspaceWindow {
                 this.open_dropped_paths(paths, window, cx)
             }))
             .when(show_document_titlebar, |view| {
-                view.child(document_titlebar(
-                    entity.clone(),
-                    sidebar_visible,
-                    minimap_visible,
-                    self.export.is_open(),
-                    titlebar_inset,
-                    self.theme_mode(),
-                    if self.file_overview_is_open() {
-                        String::new()
-                    } else {
-                        self.window_title(cx)
-                    },
-                    self.document_name_available(cx),
-                ))
+                view.child(document_titlebar(self, entity.clone(), titlebar_inset, cx))
             })
             .child(
                 div()
@@ -957,19 +949,11 @@ mod tests {
 
     impl Render for TitlebarHarness {
         fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-            let sidebar_visible = self.0.read(cx).sidebar_visible();
-            let minimap_visible = self.0.read(cx).minimap_visible();
-            let export_open = self.0.read(cx).export.is_open();
-            let theme_mode = self.0.read(cx).theme_mode();
             document_titlebar(
+                self.0.read(cx),
                 self.0.clone(),
-                sidebar_visible,
-                minimap_visible,
-                export_open,
                 crate::app::TITLEBAR_LEADING_INSET,
-                theme_mode,
-                self.0.read(cx).window_title(cx),
-                self.0.read(cx).document_name_available(cx),
+                cx,
             )
         }
     }

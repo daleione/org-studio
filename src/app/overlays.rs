@@ -294,7 +294,7 @@ mod tests {
         cx.run_until_parked();
         workspace.read_with(cx, |workspace, _| {
             assert!(
-                Arc::ptr_eq(
+                std::rc::Rc::ptr_eq(
                     &frame,
                     &workspace.file_overview.drawn_frame.latest().unwrap()
                 ),

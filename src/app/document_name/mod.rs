@@ -263,10 +263,10 @@ impl WorkspaceWindow {
             cx.stop_propagation();
             return true;
         }
-        if key == "escape" || key == "g" && modifiers.control {
-            self.cancel_document_name(cx);
-            cx.stop_propagation();
-        } else if key == "enter" && prompt.cancel_focus.is_focused(window) {
+        if key == "escape"
+            || key == "g" && modifiers.control
+            || key == "enter" && prompt.cancel_focus.is_focused(window)
+        {
             self.cancel_document_name(cx);
             cx.stop_propagation();
         } else if key == "tab" {

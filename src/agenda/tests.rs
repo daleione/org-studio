@@ -51,44 +51,6 @@ pub(crate) fn task_record_for_workflow(
     }
 }
 
-#[test]
-#[ignore = "explicit M5 performance gate"]
-fn benchmark_10k_headings_across_50_files() {
-    use std::time::Instant;
-    let source = (0..200)
-        .map(|index| format!("* TODO Task {index} :bench:\nSCHEDULED: <2026-09-06 Sun>\n"))
-        .collect::<String>()
-        .into_bytes();
-    let started = Instant::now();
-    let mut index = AgendaIndex::default();
-    for file in 0..50 {
-        let snapshot = DocumentSnapshot::from_utf8(source.clone()).unwrap();
-        let analysis = analyze(&snapshot, Arc::new(org_syntax::parse(&snapshot)));
-        index.replace(shard_from_live(
-            FileId(file + 1),
-            1,
-            Arc::new(PathBuf::from(format!("/tmp/m5-bench-{file}.org"))),
-            &analysis,
-        ));
-    }
-    let indexed = started.elapsed();
-    let query_started = Instant::now();
-    let result = QueryEngine::default().execute(
-        index.snapshot(),
-        &AgendaQuery::builtin(BuiltinQuery::Today, "2026-09-06".parse().unwrap()),
-    );
-    let queried = query_started.elapsed();
-    eprintln!(
-        "M5_BENCH headings=10000 files=50 index_ms={} query_ms={} rows={}",
-        indexed.as_millis(),
-        queried.as_millis(),
-        result.entries.len()
-    );
-    assert_eq!(result.entries.len(), 10_000);
-    assert!(indexed.as_secs() < 30);
-    assert!(queried.as_secs() < 5);
-}
-
 fn fixture_shard() -> FileAgendaShard {
     let source = b"#+TODO: TODO NEXT WAIT | DONE\n#+CATEGORY: work\n* NEXT Ship release :product:\nDEADLINE: <2026-09-05 Sat>\n* WAIT Vendor\nSCHEDULED: <2026-09-03 Thu>\n* TODO Weekly\n<2026-09-01 Tue +1w>\n* TODO Backlog\n".to_vec();
     let snapshot = DocumentSnapshot::from_utf8(source).unwrap();

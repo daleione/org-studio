@@ -2,13 +2,13 @@ use crate::document::{DocumentId, Revision};
 use gpui::{Bounds, Pixels};
 use std::{
     collections::{HashMap, VecDeque},
-    sync::Arc,
+    rc::Rc,
 };
 
 const CACHE_BUDGET: usize = 48 * 1024 * 1024;
 
 pub(super) struct DocumentFrame {
-    pub source: Arc<crate::document_preview::PreviewFrame>,
+    pub source: Rc<crate::document_preview::PreviewFrame>,
     pub revision: Revision,
     pub palette: u32,
     bytes: usize,
@@ -19,13 +19,13 @@ impl DocumentFrame {
         drawn: &crate::document_preview::FrameSlot,
         bounds: Bounds<Pixels>,
         revision: Revision,
-    ) -> Option<Arc<Self>> {
+    ) -> Option<Rc<Self>> {
         let source = drawn.latest()?;
         if source.bounds != bounds {
             return None;
         }
         let bytes = source.estimated_bytes();
-        Some(Arc::new(Self {
+        Some(Rc::new(Self {
             source,
             revision,
             palette: crate::theme::current_theme().background,
@@ -36,7 +36,7 @@ impl DocumentFrame {
 
 #[derive(Default)]
 pub(super) struct FrameCache {
-    frames: HashMap<DocumentId, Arc<DocumentFrame>>,
+    frames: HashMap<DocumentId, Rc<DocumentFrame>>,
     lru: VecDeque<DocumentId>,
     bytes: usize,
 }
@@ -48,10 +48,10 @@ impl FrameCache {
         self.frames
             .get(&id)
             .filter(|frame| frame.revision == revision)
-            .map(Arc::as_ref)
+            .map(Rc::as_ref)
     }
 
-    pub fn insert(&mut self, id: DocumentId, frame: Arc<DocumentFrame>) {
+    pub fn insert(&mut self, id: DocumentId, frame: Rc<DocumentFrame>) {
         self.remove(id);
         self.bytes += frame.bytes;
         self.frames.insert(id, frame);
