@@ -22,8 +22,6 @@ pub(super) fn paint_frame(
     let editor_focused = focus_handle.is_focused(window);
     let has_selection = !host.read(cx).selection().is_empty();
     let image_resize = host.read(cx).image_resize;
-    let caret_visible = editor_focused && state.caret.is_some();
-    let caret_opacity = host.update(cx, |editor, cx| editor.caret_opacity(caret_visible, cx));
     let table_hover = host.read(cx).hovered_table_cell();
     let table_source = table_hover.map(|_| {
         let editor = host.read(cx);
@@ -140,16 +138,11 @@ pub(super) fn paint_frame(
             point(text_right, bounds.bottom()),
         );
         host.update(cx, |editor, _| {
-            editor.painted_caret =
-                state
-                    .caret
-                    .clone()
-                    .filter(|_| editor_focused)
-                    .and_then(|mut caret| {
-                        caret.bounds = caret.bounds.intersect(&text_bounds);
-                        (caret.bounds.size.width > px(0.) && caret.bounds.size.height > px(0.))
-                            .then_some(caret)
-                    });
+            editor.painted_caret_bounds = state
+                .caret
+                .as_ref()
+                .filter(|_| editor_focused)
+                .and_then(|caret| caret.visible_bounds(text_bounds));
         });
         window.with_content_mask(
             Some(ContentMask {
@@ -354,11 +347,8 @@ pub(super) fn paint_frame(
                 for button in &state.source_copy_buttons {
                     button.paint(window, cx);
                 }
-                if focus_handle.is_focused(window)
-                    && let Some(mut caret) = state.caret.take()
-                {
-                    caret.background = caret.background.opacity(caret_opacity);
-                    crate::document_preview::quad(window, caret);
+                if editor_focused && let Some(caret) = state.caret.as_ref() {
+                    caret.paint(window, cx);
                 }
             },
         );
@@ -391,6 +381,30 @@ pub(super) fn paint_frame(
             if std::env::var_os("ORG_STUDIO_EXIT_AFTER_EDITOR_BENCH").is_some() {
                 cx.quit();
             }
+        }
+    }
+}
+
+impl PaintedCaret {
+    pub(super) fn paint(&self, window: &mut Window, cx: &mut App) {
+        crate::document_preview::quad(window, self.quad.clone());
+        if let Some(text) = &self.text {
+            window.with_content_mask(
+                Some(ContentMask {
+                    bounds: self.bounds(),
+                }),
+                |window| {
+                    let _ = crate::document_preview::paint_shaped(
+                        &text.line,
+                        text.origin,
+                        text.line_height,
+                        TextAlign::Left,
+                        None,
+                        window,
+                        cx,
+                    );
+                },
+            );
         }
     }
 }

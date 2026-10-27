@@ -63,10 +63,8 @@ impl SemanticEditor {
             if hit.line != row.line {
                 return false;
             }
-            let Some(start) = row.position_for_display_index(hit.display_range.start) else {
-                return false;
-            };
-            let Some(end) = row.position_for_display_index(hit.display_range.end) else {
+            let Some((start, end)) = row.positions_for_display_range(hit.display_range.clone())
+            else {
                 return false;
             };
             if visual_y < start.y || visual_y > end.y {

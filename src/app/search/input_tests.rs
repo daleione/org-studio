@@ -124,7 +124,7 @@ fn search_window_shortcuts_keep_typing_out_of_document(cx: &mut gpui::TestAppCon
     cx.run_until_parked();
     let status = cx.debug_bounds("floating-status-line").unwrap();
     let editor = workspace.read_with(cx, |w, _| w.editor(PaneSide::Left).unwrap());
-    let caret = editor.read_with(cx, |e, _| e.painted_caret().unwrap().bounds);
+    let caret = editor.read_with(cx, |e, _| e.painted_caret_bounds().unwrap());
     assert!(status.left() >= caret.left() - px(1.));
     cx.simulate_keystrokes("cmd-f");
     cx.run_until_parked();

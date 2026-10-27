@@ -127,7 +127,7 @@ pub(super) struct RowShaping<'a> {
     pub(super) hover_quads: Vec<PaintQuad>,
     pub(super) selection_quads: Vec<PaintQuad>,
     pub(super) link_hits: Vec<crate::editor::LinkHit>,
-    pub(super) caret: Option<PaintQuad>,
+    pub(super) caret: Option<PaintedCaret>,
     pub(super) image_resize_handles: Vec<InlineImageResizeHandlePaint>,
 }
 
@@ -661,56 +661,29 @@ impl RowShaping<'_> {
             );
         }
 
-        if let Some(image) = inline_image.as_ref()
-            && anchor.is_some()
+        if anchor.is_some()
             && self.selection.is_empty()
             && self.selection.head() >= content_range.start
             && self.selection.head() <= content_range.end
             && line_animation_scale >= 0.999
         {
-            let caret_x = if self.selection.head() <= content_range.start {
-                image.bounds.left() - px(2.0)
+            self.caret = if let Some(image) = inline_image.as_ref() {
+                Some(PaintedCaret::image_edge(
+                    image.bounds,
+                    self.selection.head() <= content_range.start,
+                    self.theme,
+                ))
             } else {
-                image.bounds.right() + px(1.0)
+                let source_local = (self.selection.head().0 - content_range.start.0) as usize;
+                PaintedCaret::character(
+                    &hit,
+                    hit.display.source_to_display(source_local),
+                    &runs,
+                    &font,
+                    self.theme,
+                    self.window,
+                )
             };
-            self.caret = Some(
-                fill(
-                    Bounds::new(
-                        point(caret_x, image.bounds.top() + px(1.0)),
-                        size(px(4.0), (image.bounds.size.height - px(2.0)).max(px(1.0))),
-                    ),
-                    gpui::rgb(self.theme.foreground),
-                )
-                .corner_radii(px(0.8)),
-            );
-        } else if inline_image.is_none()
-            && anchor.is_some()
-            && self.selection.is_empty()
-            && self.selection.head() >= content_range.start
-            && self.selection.head() <= content_range.end
-            && line_animation_scale >= 0.999
-        {
-            let source_local = self
-                .selection
-                .head()
-                .0
-                .saturating_sub(content_range.start.0)
-                .min(content_range.len()) as usize;
-            let local = hit.display.source_to_display(source_local);
-            let position = hit.position_for_display_index(local).unwrap_or_default();
-            self.caret = Some(
-                fill(
-                    Bounds::new(
-                        point(
-                            row_text_origin_x + position.x,
-                            origin_y + position.y + px(2.0),
-                        ),
-                        size(px(4.0), px((metrics.line_height - 4.0).max(1.0))),
-                    ),
-                    gpui::rgb(self.theme.foreground),
-                )
-                .corner_radii(px(0.8)),
-            );
         }
         self.rows.push(PaintRow {
             preview_runs: runs,

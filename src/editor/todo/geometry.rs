@@ -85,12 +85,13 @@ impl SemanticEditor {
             remove_end: ByteOffset(line_range.start.0 + remove_end as u64),
             keyword,
             bounds: {
-                let start = row.position_for_display_index(row.display.source_to_display(
+                let start = row.display.source_to_display(
                     (line_range.start.0 + start as u64).saturating_sub(row.range.start.0) as usize,
-                ))?;
-                let end = row.position_for_display_index(row.display.source_to_display(
+                );
+                let end = row.display.source_to_display(
                     (line_range.start.0 + end as u64).saturating_sub(row.range.start.0) as usize,
-                ))?;
+                );
+                let (start, end) = row.positions_for_display_range(start..end)?;
                 Bounds::from_corners(
                     gpui::point(
                         row.text_origin_x + start.x,

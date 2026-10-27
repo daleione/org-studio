@@ -24,10 +24,7 @@ pub(super) fn push_cookie_progress_quads(
     theme: &crate::theme::Theme,
     window: &gpui::Window,
 ) {
-    let Some(start) = hit.position_for_display_index(range.start) else {
-        return;
-    };
-    let Some(end) = hit.position_for_display_index(range.end) else {
+    let Some((start, end)) = hit.positions_for_display_range(range.clone()) else {
         return;
     };
     // A wrapped cookie would need its fill sliced per visual row; skip that rare case.

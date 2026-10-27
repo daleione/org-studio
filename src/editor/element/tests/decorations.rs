@@ -1,4 +1,7 @@
+use super::super::state::PaintedCaret;
 use super::*;
+use crate::document::{ByteOffset, Selection};
+use gpui::{Entity, TestAppContext, TextRun, VisualTestContext, point, size};
 
 #[test]
 fn cookie_bar_hangs_below_the_baseline_inside_its_row() {
@@ -148,23 +151,396 @@ fn cookie_progress_bar_stays_under_statistics_after_link_projection(cx: &mut gpu
     });
 }
 
-#[gpui::test]
-fn caret_blink_resets_on_movement_and_stops_when_hidden(cx: &mut gpui::TestAppContext) {
+fn caret_editor<'a>(
+    cx: &'a mut TestAppContext,
+    source: &str,
+) -> (Entity<SemanticEditor>, &'a mut VisualTestContext) {
+    cx.update(crate::editor::init);
     let session = cx.new(|_| {
-        DocumentSession::from_utf8(Path::new("caret.md").to_path_buf(), b"hello".to_vec()).unwrap()
+        DocumentSession::from_utf8("caret.org".into(), source.as_bytes().to_vec()).unwrap()
     });
-    let editor = cx.new(|cx| SemanticEditor::new(session, cx));
-    editor.update(cx, |editor, cx| {
-        assert_eq!(editor.caret_opacity(true, cx), 1.0);
-        assert!(editor.caret_blink_task.is_some());
-        editor.caret_blink.as_mut().unwrap().2 =
-            std::time::Instant::now() - std::time::Duration::from_millis(800);
-        assert_eq!(editor.caret_opacity(true, cx), 0.0);
-        editor.selection = crate::editor::Selection::caret(crate::document::ByteOffset(1));
-        assert_eq!(editor.caret_opacity(true, cx), 1.0);
-        editor.caret_opacity(false, cx);
-        assert!(editor.caret_blink.is_none());
-        assert!(editor.caret_blink_task.is_none());
+    let (editor, view) = cx.add_window_view(|_, cx| SemanticEditor::new(session, cx));
+    view.simulate_resize(size(px(1100.), px(700.)));
+    view.run_until_parked();
+    (editor, view)
+}
+
+fn prepared_frame(
+    editor: &Entity<SemanticEditor>,
+    view: &mut VisualTestContext,
+) -> super::super::PrepaintState {
+    view.update(|window, cx| {
+        let bounds = editor.read(cx).viewport.unwrap();
+        super::super::prepaint::build_frame(editor, bounds, window, cx)
+    })
+}
+
+#[gpui::test]
+fn block_caret_covers_one_shaped_grapheme_and_preserves_its_baseline(cx: &mut TestAppContext) {
+    let source = "Maple 界 e\u{301} 👩‍🔬";
+    let (editor, view) = caret_editor(cx, source);
+    for grapheme in ["M", "界", "e\u{301}", "👩‍🔬"] {
+        let index = source.find(grapheme).unwrap();
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(index as u64)), cx);
+        });
+        view.run_until_parked();
+        let frame = prepared_frame(&editor, view);
+        let caret = frame.caret.unwrap();
+        {
+            let row = &frame.rows[0].hit;
+            let layout = &row.layout.unwrapped_layout;
+            let start = layout.x_for_index(index);
+            let end = layout.x_for_index(index + grapheme.len());
+            assert_eq!(
+                caret.bounds().size,
+                size(end - start, row.line_height - px(2.))
+            );
+            assert_eq!(
+                caret.bounds().origin,
+                point(row.text_origin_x + start, row.origin_y + px(1.))
+            );
+            assert_eq!(caret.quad.corner_radii, gpui::Corners::all(px(1.)));
+            let text = caret.text.unwrap();
+            assert_eq!(text.line.text.as_ref(), source);
+            assert_eq!(text.origin, point(row.text_origin_x, row.origin_y));
+            assert_eq!(text.line.ascent, layout.ascent);
+            assert_eq!(text.line.descent, layout.descent);
+            assert!(std::sync::Arc::ptr_eq(&text.line, layout));
+        }
+    }
+    view.update(|window, cx| {
+        let bounds = editor.read(cx).viewport.unwrap();
+        let frame = super::super::prepaint::build_frame(&editor, bounds, window, cx);
+        let row = &frame.rows[0];
+        for theme in [
+            &crate::theme::ORG_STUDIO_LIGHT,
+            &crate::theme::ORG_STUDIO_DARK,
+        ] {
+            let caret = PaintedCaret::character(
+                &row.hit,
+                0,
+                &row.preview_runs,
+                &crate::typography::editor_font(),
+                theme,
+                window,
+            )
+            .unwrap();
+            assert_eq!(
+                caret.quad.background,
+                gpui::rgb(theme.caret_background).into()
+            );
+            assert!(std::sync::Arc::ptr_eq(
+                &caret.text.unwrap().line,
+                &row.hit.layout.unwrapped_layout
+            ));
+        }
+    });
+}
+
+#[gpui::test]
+fn block_caret_has_space_width_at_line_end_and_on_empty_lines(cx: &mut TestAppContext) {
+    let source = "Cedar\n\nBirch";
+    let (editor, view) = caret_editor(cx, source);
+    for index in [5, 6, source.len()] {
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(index as u64)), cx);
+        });
+        view.run_until_parked();
+        let frame = prepared_frame(&editor, view);
+        let caret = frame.caret.unwrap();
+        view.update(|window, _| {
+            let row = &frame
+                .rows
+                .iter()
+                .find(|row| row.hit.range.end.0 == index as u64)
+                .unwrap()
+                .hit;
+            let space = window.text_system().shape_line(
+                " ".into(),
+                row.layout.font_size(),
+                &[TextRun {
+                    len: 1,
+                    font: crate::typography::editor_font(),
+                    ..Default::default()
+                }],
+                None,
+            );
+            assert_eq!(
+                caret.bounds().size,
+                size(space.width(), row.line_height - px(2.))
+            );
+            assert_eq!(
+                caret.bounds().left(),
+                row.text_origin_x + row.layout.width()
+            );
+            assert!(caret.text.is_none());
+        });
+    }
+    editor.update(view, |editor, cx| {
+        editor.set_selection(Selection::new(ByteOffset(0), ByteOffset(3)), cx);
+    });
+    view.run_until_parked();
+    assert!(editor.read_with(view, |editor, _| editor.painted_caret_bounds().is_none()));
+}
+
+#[gpui::test]
+fn block_caret_tracks_characters_on_both_sides_of_a_soft_wrap(cx: &mut TestAppContext) {
+    let source = "Amber cedar maple birch ".repeat(12);
+    let (editor, view) = caret_editor(cx, &source);
+    view.simulate_resize(size(px(420.), px(700.)));
+    view.run_until_parked();
+    let boundary = editor.read_with(view, |editor, _| {
+        let row = &editor.hit_rows[0];
+        let boundary = row.layout.wrap_boundaries()[0];
+        row.layout.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index
+    });
+    for index in [boundary - 1, boundary] {
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(index as u64)), cx);
+        });
+        view.run_until_parked();
+        editor.read_with(view, |editor, _| {
+            let row = &editor.hit_rows[0];
+            let caret = editor.painted_caret_bounds().unwrap();
+            let layout = &row.layout.unwrapped_layout;
+            assert_eq!(
+                caret.origin,
+                point(row.text_origin_x, row.origin_y + px(1.))
+                    + row.position_for_display_index(index).unwrap()
+            );
+            assert_eq!(
+                caret.size.width,
+                layout.x_for_index(index + 1) - layout.x_for_index(index)
+            );
+            if index == boundary {
+                assert_eq!(
+                    caret.origin,
+                    point(row.text_origin_x, row.origin_y + row.line_height + px(1.))
+                );
+            } else {
+                assert_eq!(caret.top(), row.origin_y + px(1.));
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn range_highlight_ending_at_a_soft_wrap_stays_on_the_previous_row(cx: &mut TestAppContext) {
+    let (editor, view) = caret_editor(cx, &"Amber cedar maple birch ".repeat(12));
+    view.simulate_resize(size(px(420.), px(700.)));
+    view.run_until_parked();
+    editor.read_with(view, |editor, _| {
+        let row = &editor.hit_rows[0];
+        let boundary = row.layout.wrap_boundaries()[0];
+        let end = row.layout.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+        let end_position = row.layout.position_for_index(end, row.line_height).unwrap();
+        let mut quads = Vec::new();
+        crate::editor::highlight::RangeHighlight::rounded(gpui::rgb(0x6688aa).into()).paint(
+            &mut quads,
+            row,
+            0..end,
+            px(editor.display_map.wrap_width()),
+        );
+        assert_eq!(
+            quads.len(),
+            1,
+            "a range ending at a wrap must not paint the next row"
+        );
+        assert_eq!(
+            quads[0].bounds.right(),
+            row.text_origin_x + end_position.x + px(3.)
+        );
+    });
+}
+
+#[gpui::test]
+fn block_caret_uses_projected_table_cell_text(cx: &mut TestAppContext) {
+    let source = "| Value | Note |\n|-------+------|\n| \\alpha{} | 桦e\u{301} |\n";
+    let (editor, view) = caret_editor(cx, source);
+    for (token, expected) in [("\\alpha{}", "α"), ("桦", "桦"), ("e\u{301}", "e\u{301}")] {
+        let index = source.find(token).unwrap();
+        editor.update(view, |editor, cx| {
+            editor.set_selection(Selection::caret(ByteOffset(index as u64)), cx);
+        });
+        view.run_until_parked();
+        let frame = prepared_frame(&editor, view);
+        let caret = frame.caret.unwrap();
+        {
+            let row = &frame
+                .rows
+                .iter()
+                .find(|row| row.hit.line.0 == 2)
+                .unwrap()
+                .hit;
+            let table = row.table_layout.as_ref().unwrap();
+            let fragment = table
+                .fragments
+                .iter()
+                .find(|fragment| fragment.layout.text.contains(expected))
+                .unwrap();
+            let text = caret.text.as_ref().unwrap();
+            assert_eq!(text.line.text, fragment.layout.text);
+            assert!(std::sync::Arc::ptr_eq(
+                &text.line,
+                &fragment.layout.unwrapped_layout
+            ));
+            let local = fragment.layout.text.find(expected).unwrap();
+            let layout = &fragment.layout.unwrapped_layout;
+            let start = layout.x_for_index(local);
+            assert!(
+                (caret.bounds().left() - (row.text_origin_x + fragment.x + start)).abs() < px(0.01)
+            );
+            assert_eq!(
+                caret.bounds().size.width,
+                layout.x_for_index(local + expected.len()) - start
+            );
+        }
+    }
+}
+
+#[gpui::test]
+fn block_caret_stays_visible_without_idle_redraws(cx: &mut TestAppContext) {
+    let (editor, view) = caret_editor(cx, "Cedar");
+    editor.update(view, |editor, cx| editor.set_minimap(false, None, cx));
+    view.run_until_parked();
+    view.executor()
+        .advance_clock(std::time::Duration::from_millis(81));
+    view.run_until_parked();
+
+    let bounds = editor.read_with(view, |editor, _| editor.painted_caret_bounds().unwrap());
+    let notifications = std::rc::Rc::new(std::cell::Cell::new(0));
+    let _observation = view.update(|_, cx| {
+        let notifications = notifications.clone();
+        cx.observe(&editor, move |_, _| {
+            notifications.set(notifications.get() + 1);
+        })
+    });
+    for _ in 0..4 {
+        view.executor()
+            .advance_clock(std::time::Duration::from_millis(600));
+        view.run_until_parked();
+        assert_eq!(
+            editor.read_with(view, |editor, _| editor.painted_caret_bounds().unwrap()),
+            bounds
+        );
+    }
+    assert_eq!(
+        notifications.get(),
+        0,
+        "idle caret must not schedule redraws"
+    );
+}
+
+#[gpui::test]
+fn compressed_table_rule_caret_keeps_the_original_glyph_origin(cx: &mut TestAppContext) {
+    let source = "| Name | Notes |\n|------+-------|\n| Fir | Amber cedar maple birch oak willow chestnut elm |\n";
+    let (editor, view) = caret_editor(cx, source);
+    editor.update(view, |editor, cx| {
+        assert!(editor.align_table_at_selection(cx))
+    });
+    view.simulate_resize(size(px(420.), px(700.)));
+    view.run_until_parked();
+    let index = editor.read_with(view, |editor, _| {
+        let row = editor.hit_rows.iter().find(|row| row.line.0 == 1).unwrap();
+        let rule = row
+            .table_layout
+            .as_ref()
+            .unwrap()
+            .fragments
+            .iter()
+            .find(|fragment| fragment.scaled_source)
+            .unwrap();
+        let local = rule.display_range.start + rule.display_range.len() / 2;
+        ByteOffset(row.range.start.0 + row.display.display_to_source(local) as u64)
+    });
+    editor.update(view, |editor, cx| {
+        editor.set_selection(Selection::caret(index), cx)
+    });
+    view.run_until_parked();
+    let frame = prepared_frame(&editor, view);
+    let caret = frame.caret.unwrap();
+    {
+        let row = &frame
+            .rows
+            .iter()
+            .find(|row| row.hit.line.0 == 1)
+            .unwrap()
+            .hit;
+        let local = row
+            .display
+            .source_to_display((index.0 - row.range.start.0) as usize);
+        let table = row.table_layout.as_ref().unwrap();
+        let rule = table
+            .fragments
+            .iter()
+            .find(|fragment| fragment.display_range.contains(&local))
+            .unwrap();
+        let text = caret.text.as_ref().unwrap();
+        assert_eq!(text.origin, point(row.text_origin_x + rule.x, row.origin_y));
+        assert!(std::sync::Arc::ptr_eq(
+            &text.line,
+            &rule.layout.unwrapped_layout
+        ));
+        assert_eq!(
+            caret.bounds().left(),
+            row.text_origin_x + table.position_for_index(local, row.line_height).x
+        );
+    }
+}
+
+#[test]
+fn clipping_a_caret_preserves_its_paint_geometry() {
+    let caret = PaintedCaret::new(
+        gpui::Bounds::new(point(px(10.), px(20.)), size(px(12.), px(24.))),
+        &crate::theme::ORG_STUDIO_LIGHT,
+        None,
+    );
+    let original = caret.bounds();
+    let viewport = gpui::Bounds::new(point(px(15.), px(0.)), size(px(100.), px(100.)));
+    let visible = caret.visible_bounds(viewport).unwrap();
+    assert_eq!(visible.left(), viewport.left());
+    assert_eq!(visible.right(), original.right());
+    assert_eq!(caret.bounds(), original);
+    assert!(
+        caret
+            .visible_bounds(gpui::Bounds::new(
+                point(px(100.), px(0.)),
+                size(px(100.), px(100.))
+            ))
+            .is_none()
+    );
+}
+
+#[gpui::test]
+fn table_range_ending_at_a_cell_wrap_uses_the_previous_rows_text_width(cx: &mut TestAppContext) {
+    let source = "| Name | Notes |\n|------+-------|\n| Fir | Amber cedar maple birch oak willow chestnut elm |\n";
+    let (editor, view) = caret_editor(cx, source);
+    editor.update(view, |editor, cx| {
+        assert!(editor.align_table_at_selection(cx))
+    });
+    view.simulate_resize(size(px(420.), px(700.)));
+    view.run_until_parked();
+    editor.read_with(view, |editor, _| {
+        let row = editor.hit_rows.iter().find(|row| row.line.0 == 2).unwrap();
+        let table = row.table_layout.as_ref().unwrap();
+        let cell = table
+            .fragments
+            .iter()
+            .find(|fragment| !fragment.layout.wrap_boundaries().is_empty())
+            .unwrap();
+        let boundary = cell.layout.wrap_boundaries()[0];
+        let end = cell.layout.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index;
+        let bounds = table.range_bounds(
+            cell.content_range.start..cell.content_range.start + end,
+            row.line_height,
+        );
+        assert_eq!(bounds.len(), 1);
+        assert_eq!(bounds[0].top(), px(0.));
+        assert_eq!(
+            bounds[0].right(),
+            cell.x + cell.layout.unwrapped_layout.x_for_index(end)
+        );
     });
 }
 

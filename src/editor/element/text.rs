@@ -1,13 +1,17 @@
-//! Shared text shaping helpers, cache keys, and folded/marked display text.
+//! Text and caret shaping, cache keys, and folded/marked display text.
 
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::sync::Arc;
 
-use gpui::{Pixels, TextRun, WrappedLine};
+use gpui::{Bounds, Font, Pixels, TextRun, Window, WrappedLine, point, px, size};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::document::ByteRange;
-use crate::editor::syntax;
+use crate::editor::{HitRow, syntax};
+use crate::theme::Theme;
+
+use super::state::{CaretText, PaintedCaret};
 
 // Keep source bytes and all horizontal/caret geometry intact. Only the glyphs
 // of a Markdown backtick boundary receive an optical vertical adjustment.
@@ -113,4 +117,73 @@ pub(super) fn folded_display_text(mut text: String, folded: bool) -> String {
         text.push_str("...");
     }
     text
+}
+
+impl PaintedCaret {
+    pub(super) fn character(
+        row: &HitRow,
+        index: usize,
+        runs: &[TextRun],
+        font: &Font,
+        theme: &Theme,
+        window: &mut Window,
+    ) -> Option<Self> {
+        let target = row.text_position(index, runs)?;
+        let suffix = target.line.text.get(target.index..)?;
+        let end = target.index + suffix.graphemes(true).next().map_or(0, str::len);
+        let source = &target.line.unwrapped_layout;
+        let advance = source.x_for_index(end) - source.x_for_index(target.index);
+        let width = if advance > px(0.) {
+            advance
+        } else {
+            // Empty lines have no style runs; their virtual cell still uses
+            // the row's base font, including the independent table font.
+            let space = TextRun {
+                len: 1,
+                font: font.clone(),
+                ..Default::default()
+            };
+            window
+                .text_system()
+                .shape_line(" ".into(), source.font_size, &[space], None)
+                .width()
+        }
+        .max(px(1.));
+        let text = (!suffix.is_empty()).then(|| {
+            let runs = target
+                .runs
+                .iter()
+                .map(|run| TextRun {
+                    color: gpui::rgb(theme.caret_foreground).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                    ..run.clone()
+                })
+                .collect::<Vec<_>>();
+            let mut line = window.text_system().shape_line(
+                target.line.text.clone(),
+                source.font_size,
+                &runs,
+                None,
+            );
+            // Recolor the original layout under the caret mask. Keeping the
+            // entire layout preserves ligatures, fallback fonts, glyph offsets
+            // and compressed table rules without synthesizing partial glyph layouts.
+            *line = source.clone();
+            CaretText {
+                line: Box::new(line),
+                origin: point(row.text_origin_x, row.origin_y) + target.origin,
+                line_height: row.line_height,
+            }
+        });
+        Some(Self::new(
+            Bounds::new(
+                point(row.text_origin_x, row.origin_y) + target.position,
+                size(width, row.line_height),
+            ),
+            theme,
+            text,
+        ))
+    }
 }

@@ -52,9 +52,9 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use crate::{
     document::{
-        ByteOffset, ByteRange, DocumentCommand, DocumentEvent, DocumentSession, DocumentSnapshot,
-        EditOrigin, EditTransaction, HistoryOutcome, LineIndex, Revision, RevisionRange, Selection,
-        TextEdit, TextSnapshot,
+        Bias, ByteOffset, ByteRange, DocumentCommand, DocumentEvent, DocumentSession,
+        DocumentSnapshot, EditOrigin, EditTransaction, HistoryOutcome, LineIndex, Revision,
+        RevisionRange, Selection, TextEdit, TextSnapshot,
     },
     theme::current_theme,
 };
@@ -237,6 +237,18 @@ pub(super) struct HitRow {
     pub(super) inline_image_preview: bool,
 }
 
+/// A display index resolved to the original layout, caret position and paint origin.
+pub(super) struct DisplayTextPosition<'a> {
+    pub(super) line: &'a WrappedLine,
+    pub(super) runs: &'a [gpui::TextRun],
+    /// UTF-8 offset within `line.text`, after all display projections.
+    pub(super) index: usize,
+    /// Caret position relative to the source row's text origin.
+    pub(super) position: Point<Pixels>,
+    /// Paint origin of the full unwrapped layout in those same coordinates.
+    pub(super) origin: Point<Pixels>,
+}
+
 impl HitRow {
     pub(super) fn visual_width(&self) -> Pixels {
         self.table_layout
@@ -245,10 +257,49 @@ impl HitRow {
     }
 
     pub(super) fn position_for_display_index(&self, index: usize) -> Option<Point<Pixels>> {
+        self.position_for_display_index_with_bias(index, Bias::Right)
+    }
+
+    fn position_for_display_index_with_bias(
+        &self,
+        index: usize,
+        bias: Bias,
+    ) -> Option<Point<Pixels>> {
         self.table_layout.as_ref().map_or_else(
-            || self.layout.position_for_index(index, self.line_height),
-            |layout| Some(layout.position_for_index(index, self.line_height)),
+            || position_in_wrapped_line(&self.layout, index, self.line_height, bias),
+            |layout| Some(layout.position_for_index_with_bias(index, self.line_height, bias)),
         )
+    }
+
+    pub(super) fn positions_for_display_range(
+        &self,
+        range: Range<usize>,
+    ) -> Option<(Point<Pixels>, Point<Pixels>)> {
+        let start = self.position_for_display_index(range.start)?;
+        let end = if range.is_empty() {
+            start
+        } else {
+            self.position_for_display_index_with_bias(range.end, Bias::Left)?
+        };
+        Some((start, end))
+    }
+
+    fn text_position<'a>(
+        &'a self,
+        index: usize,
+        runs: &'a [gpui::TextRun],
+    ) -> Option<DisplayTextPosition<'a>> {
+        if let Some(table) = &self.table_layout {
+            return Some(table.text_position(index, self.line_height));
+        }
+        let position = self.position_for_display_index(index)?;
+        Some(DisplayTextPosition {
+            line: &self.layout,
+            runs,
+            index,
+            position,
+            origin: position - gpui::point(self.layout.unwrapped_layout.x_for_index(index), px(0.)),
+        })
     }
 
     pub(super) fn closest_display_index(&self, position: Point<Pixels>) -> usize {
@@ -261,6 +312,24 @@ impl HitRow {
             |layout| layout.closest_index_for_position(position, self.line_height),
         )
     }
+}
+
+fn position_in_wrapped_line(
+    line: &WrappedLine,
+    index: usize,
+    line_height: Pixels,
+    bias: Bias,
+) -> Option<Point<Pixels>> {
+    // A caret starts on the following row; a non-empty range ends on the
+    // preceding row. GPUI's default is the latter.
+    if bias == Bias::Right
+        && let Some(row) = line.wrap_boundaries().iter().position(|boundary| {
+            line.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index == index
+        })
+    {
+        return Some(gpui::point(px(0.), line_height * (row + 1)));
+    }
+    line.position_for_index(index, line_height)
 }
 
 use table_layout::{TableColumnMetrics, TableGeometryCache, TableVisualLayout};
@@ -589,7 +658,7 @@ pub struct SemanticEditor {
     vertical_goal_x: Option<f32>,
     emacs_mark_active: bool,
     viewport: Option<Bounds<Pixels>>,
-    painted_caret: Option<gpui::PaintQuad>,
+    painted_caret_bounds: Option<Bounds<Pixels>>,
     hit_rows: Arc<[HitRow]>,
     link_hits: Arc<[LinkHit]>,
     /// Identity of the link under the pointer (`(line, display range)`), so
@@ -619,8 +688,6 @@ pub struct SemanticEditor {
     /// Our own image-attribute edit, recorded before its document event so the
     /// handler can repair the affected rows once the line splice has run.
     pending_image_edit: Option<inline_image::PendingImageEdit>,
-    caret_blink: Option<(Selection, Revision, Instant)>,
-    caret_blink_task: Option<Task<()>>,
     pending_reveal_caret: bool,
     pending_search_reveal: bool,
     is_selecting: bool,
@@ -1177,7 +1244,7 @@ impl SemanticEditor {
             vertical_goal_x: None,
             emacs_mark_active: false,
             viewport: None,
-            painted_caret: None,
+            painted_caret_bounds: None,
             hit_rows: Arc::from([]),
             link_hits: Arc::from([]),
             hovered_link: None,
@@ -1203,8 +1270,6 @@ impl SemanticEditor {
             inline_image_handles: Arc::from([]),
             image_resize: None,
             pending_image_edit: None,
-            caret_blink: None,
-            caret_blink_task: None,
             pending_reveal_caret: false,
             pending_search_reveal: false,
             is_selecting: false,
@@ -1226,15 +1291,14 @@ impl SemanticEditor {
         self.selection
     }
 
-    pub(crate) fn painted_caret(&self) -> Option<gpui::PaintQuad> {
-        self.painted_caret.clone()
+    pub(crate) fn painted_caret_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.painted_caret_bounds
     }
 
     pub(crate) fn reveal_cursor(&mut self, cx: &mut Context<Self>) {
         let snapshot = self.snapshot(cx);
         self.reveal_caret(&snapshot);
         self.pending_reveal_caret = true;
-        self.caret_blink = None;
         cx.notify();
     }
 
@@ -1454,41 +1518,6 @@ impl SemanticEditor {
             }
             Err(_) => self.clear_source_run_feedback(),
         }
-    }
-
-    fn caret_opacity(&mut self, visible: bool, cx: &mut Context<Self>) -> f32 {
-        if !visible || self.marked.is_some() {
-            self.caret_blink = None;
-            self.caret_blink_task = None;
-            return 1.0;
-        }
-        let now = Instant::now();
-        if self.caret_blink.is_none_or(|(selection, revision, _)| {
-            selection != self.selection || revision != self.selection_revision
-        }) {
-            self.caret_blink = Some((self.selection, self.selection_revision, now));
-            self.caret_blink_task = None;
-        }
-        let elapsed = now.duration_since(self.caret_blink.unwrap().2).as_millis() % 1160;
-        let (alpha, delay_ms) = match elapsed {
-            0..500 => (1.0, 500 - elapsed),
-            500..680 => (1.0 - (elapsed - 500) as f32 / 180.0, 30),
-            680..980 => (0.0, 980 - elapsed),
-            _ => ((elapsed - 980) as f32 / 180.0, 30),
-        };
-        if self.caret_blink_task.is_none() {
-            let delay = cx
-                .background_executor()
-                .timer(Duration::from_millis(delay_ms as u64));
-            self.caret_blink_task = Some(cx.spawn(async move |this, cx| {
-                delay.await;
-                let _ = this.update(cx, |this, cx| {
-                    this.caret_blink_task = None;
-                    cx.notify();
-                });
-            }));
-        }
-        alpha
     }
 
     pub(crate) fn show_source_run_feedback(

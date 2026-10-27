@@ -172,7 +172,7 @@ fn sql_result_refresh_keeps_the_visible_caret_in_place(cx: &mut gpui::TestAppCon
         view.run_until_parked();
         let before = editor.read_with(view, |editor, cx| {
             (
-                editor.painted_caret().unwrap().bounds,
+                editor.painted_caret_bounds().unwrap(),
                 editor.top_source_anchor(&session.read(cx).snapshot()),
             )
         });
@@ -209,7 +209,7 @@ fn sql_result_refresh_keeps_the_visible_caret_in_place(cx: &mut gpui::TestAppCon
                 editor.read_with(view, |editor, cx| {
                     assert_eq!(editor.selection(), Selection::caret(caret));
                     assert_eq!(
-                        editor.painted_caret().unwrap().bounds,
+                        editor.painted_caret_bounds().unwrap(),
                         before.0,
                         "the visible caret must not move, at_end={at_end}, indexed={indexed}"
                     );

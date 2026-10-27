@@ -71,7 +71,9 @@ use quads::{
 };
 use rows::animated_paint_lines;
 pub(super) use scroll::{scroll_is_at_end, stabilized_scroll_y};
-use state::{InlineImagePaint, InlineImageResizeHandlePaint, PaintRow, SourceRunButtonPaint};
+use state::{
+    InlineImagePaint, InlineImageResizeHandlePaint, PaintRow, PaintedCaret, SourceRunButtonPaint,
+};
 pub(super) use text::ShapeKey;
 use text::{
     folded_display_text, local_marked, lower_fence_backticks, markdown_fence_backticks, shape_key,
@@ -153,7 +155,7 @@ pub struct PrepaintState {
     source_copy_buttons: Vec<super::source_copy::CopyButtonPaint>,
     image_resize_handles: Vec<InlineImageResizeHandlePaint>,
     selection: Vec<PaintQuad>,
-    caret: Option<PaintQuad>,
+    caret: Option<PaintedCaret>,
     gutter: PaintQuad,
     content_left: Pixels,
     minimap: MinimapPaint,

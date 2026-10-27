@@ -3,9 +3,9 @@ use std::{ops::Range, sync::Arc};
 
 use gpui::{Bounds, Pixels, Point, TextRun, WrappedLine, point, px};
 
-use super::{org_commands::TableColumns, syntax};
-use crate::document::DocumentFormat;
+use super::{DisplayTextPosition, org_commands::TableColumns, position_in_wrapped_line, syntax};
 use crate::document::TextProjection;
+use crate::document::{Bias, DocumentFormat};
 use crate::org_semantic::display::{InlineDisplayContext, OrgDisplayOptions, project_inline};
 
 mod metrics;
@@ -35,27 +35,23 @@ pub(super) struct TableVisualFragment {
 }
 
 impl TableVisualFragment {
-    fn position(&self, index: usize, line_height: Pixels) -> Point<Pixels> {
+    fn local_index(&self, index: usize) -> usize {
+        let local = index.clamp(self.content_range.start, self.content_range.end)
+            - self.content_range.start;
+        self.projection
+            .as_ref()
+            .map_or(local, |projection| projection.source_to_display(local))
+    }
+
+    fn position(&self, index: usize, line_height: Pixels, bias: Bias) -> Point<Pixels> {
         if self.scaled_source {
             let fraction = index.saturating_sub(self.display_range.start) as f32
                 / self.display_range.len().max(1) as f32;
             return point(self.x + self.width * fraction, Pixels::ZERO);
         }
-        let local = index.clamp(self.content_range.start, self.content_range.end)
-            - self.content_range.start;
-        let local = self
-            .projection
-            .as_ref()
-            .map_or(local, |projection| projection.source_to_display(local));
-        if let Some(row) = self.layout.wrap_boundaries().iter().position(|boundary| {
-            self.layout.runs()[boundary.run_ix].glyphs[boundary.glyph_ix].index == local
-        }) {
-            return point(self.x, line_height * (row + 1));
-        }
-        let position = self
-            .layout
-            .position_for_index(local, line_height)
-            .unwrap_or_default();
+        let local = self.local_index(index);
+        let position =
+            position_in_wrapped_line(&self.layout, local, line_height, bias).unwrap_or_default();
         point(self.x + position.x, position.y)
     }
 
@@ -93,15 +89,60 @@ pub(crate) struct TableVisualLayout {
 }
 
 impl TableVisualLayout {
-    pub(super) fn position_for_index(&self, index: usize, line_height: Pixels) -> Point<Pixels> {
-        let index = index.min(self.len);
+    fn fragment_for_index(&self, index: usize) -> &TableVisualFragment {
         self.fragments
             .iter()
             .find(|fragment| fragment.display_range.contains(&index))
-            .or_else(|| self.fragments.last())
-            .map_or(Point::default(), |fragment| {
-                fragment.position(index, line_height)
-            })
+            .unwrap_or_else(|| self.fragments.last().expect("tables contain delimiters"))
+    }
+
+    pub(super) fn position_for_index(&self, index: usize, line_height: Pixels) -> Point<Pixels> {
+        self.position_for_index_with_bias(index, line_height, Bias::Right)
+    }
+
+    pub(super) fn position_for_index_with_bias(
+        &self,
+        index: usize,
+        line_height: Pixels,
+        bias: Bias,
+    ) -> Point<Pixels> {
+        let index = index.min(self.len);
+        self.fragment_for_index(index)
+            .position(index, line_height, bias)
+    }
+
+    pub(super) fn text_position(
+        &self,
+        index: usize,
+        line_height: Pixels,
+    ) -> DisplayTextPosition<'_> {
+        let index = index.min(self.len);
+        let fragment = self.fragment_for_index(index);
+        let position = fragment.position(index, line_height, Bias::Right);
+        let local = if fragment.scaled_source {
+            fragment
+                .layout
+                .unwrapped_layout
+                .index_for_x(position.x - fragment.x)
+                .unwrap_or(fragment.layout.len())
+        } else {
+            fragment.local_index(index)
+        };
+        DisplayTextPosition {
+            line: &fragment.layout,
+            runs: &fragment.preview_runs,
+            index: local,
+            position,
+            origin: if fragment.scaled_source {
+                point(fragment.x, Pixels::ZERO)
+            } else {
+                position
+                    - point(
+                        fragment.layout.unwrapped_layout.x_for_index(local),
+                        Pixels::ZERO,
+                    )
+            },
+        }
     }
 
     pub(super) fn closest_index_for_position(
@@ -134,8 +175,8 @@ impl TableVisualLayout {
             if start >= end {
                 continue;
             }
-            let first = fragment.position(start, line_height);
-            let last = fragment.position(end, line_height);
+            let first = fragment.position(start, line_height, Bias::Right);
+            let last = fragment.position(end, line_height, Bias::Left);
             let first_row = (first.y / line_height).round() as usize;
             let last_row = (last.y / line_height).round() as usize;
             for row in first_row..=last_row {

@@ -1,10 +1,70 @@
 //! Frame state produced by prepaint and consumed by paint.
 use std::sync::Arc;
 
-use gpui::{Bounds, Hitbox, PaintQuad, Pixels, RenderImage, ShapedLine};
+use gpui::{
+    Bounds, Hitbox, PaintQuad, Pixels, Point, RenderImage, ShapedLine, fill, point, px, size,
+};
 
 use crate::document::{ByteOffset, LineIndex};
 use crate::editor::{HitRow, ShapeKey, SourceRunButtonHit, syntax};
+use crate::theme::Theme;
+
+/// Complete caret paint prepared with the row; application code only receives its bounds.
+pub(super) struct PaintedCaret {
+    pub(super) quad: PaintQuad,
+    pub(super) text: Option<CaretText>,
+}
+
+pub(super) struct CaretText {
+    pub(super) line: Box<ShapedLine>,
+    pub(super) origin: Point<Pixels>,
+    pub(super) line_height: Pixels,
+}
+
+impl PaintedCaret {
+    const VERTICAL_INSET: f32 = 1.0;
+    const CORNER_RADIUS: f32 = 1.0;
+
+    pub(super) fn new(bounds: Bounds<Pixels>, theme: &Theme, text: Option<CaretText>) -> Self {
+        Self {
+            quad: fill(
+                Bounds::new(
+                    bounds.origin + point(px(0.), px(Self::VERTICAL_INSET)),
+                    size(
+                        bounds.size.width,
+                        (bounds.size.height - px(Self::VERTICAL_INSET * 2.)).max(px(1.)),
+                    ),
+                ),
+                gpui::rgb(theme.caret_background),
+            )
+            .corner_radii(px(Self::CORNER_RADIUS)),
+            text,
+        }
+    }
+
+    pub(super) fn image_edge(image: Bounds<Pixels>, at_start: bool, theme: &Theme) -> Self {
+        let width = px(4.);
+        let x = if at_start {
+            image.left() - width / 2.
+        } else {
+            image.right() + px(1.)
+        };
+        Self::new(
+            Bounds::new(point(x, image.top()), size(width, image.size.height)),
+            theme,
+            None,
+        )
+    }
+
+    pub(super) fn bounds(&self) -> Bounds<Pixels> {
+        self.quad.bounds
+    }
+
+    pub(super) fn visible_bounds(&self, viewport: Bounds<Pixels>) -> Option<Bounds<Pixels>> {
+        let bounds = self.bounds().intersect(&viewport);
+        (bounds.size.width > px(0.) && bounds.size.height > px(0.)).then_some(bounds)
+    }
+}
 
 /// A resolved inline image preview: the render image plus the geometry the
 /// paint pass and the resize handle need.

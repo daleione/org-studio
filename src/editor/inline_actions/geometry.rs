@@ -56,12 +56,13 @@ impl SemanticEditor {
         if !token.contains(&offset) {
             return None;
         }
-        let start = row.position_for_display_index(row.display.source_to_display(
+        let start = row.display.source_to_display(
             token.start + line_range.start.0.saturating_sub(row.range.start.0) as usize,
-        ))?;
-        let end = row.position_for_display_index(row.display.source_to_display(
+        );
+        let end = row.display.source_to_display(
             token.end + line_range.start.0.saturating_sub(row.range.start.0) as usize,
-        ))?;
+        );
+        let (start, end) = row.positions_for_display_range(start..end)?;
         // Anchor a wrapped token to the visual segment under the pointer.
         let y = if start.y == end.y {
             row.origin_y + start.y

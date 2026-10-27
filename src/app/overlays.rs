@@ -11,6 +11,10 @@ const CURSOR_HOLD: f32 = 1.0;
 const CURSOR_FADE: f32 = 0.2;
 const CURSOR_DURATION: f32 = CURSOR_CONTRACT + CURSOR_HOLD + CURSOR_FADE;
 
+fn cursor_spotlight_min_radius(caret: gpui::Bounds<gpui::Pixels>) -> f32 {
+    (f32::from(caret.size.width).hypot(f32::from(caret.size.height)) / 2. + 4.).max(56.)
+}
+
 pub(super) struct CursorSpotlight {
     editor: gpui::Entity<crate::editor::SemanticEditor>,
     started: std::time::Instant,
@@ -153,10 +157,10 @@ impl gpui::Render for CursorSpotlight {
         canvas(
             |_, _, _| (),
             move |bounds, _, window, cx| {
-                let Some(mut caret) = editor.read(cx).painted_caret() else {
+                let Some(caret) = editor.read(cx).painted_caret_bounds() else {
                     return;
                 };
-                let center = caret.bounds.center();
+                let center = caret.center();
                 if !bounds.contains(&center) {
                     return;
                 }
@@ -170,8 +174,9 @@ impl gpui::Render for CursorSpotlight {
                     smooth(elapsed / 0.06) * smooth((CURSOR_DURATION - elapsed) / CURSOR_FADE);
                 let dx = (center.x - bounds.left()).max(bounds.right() - center.x);
                 let dy = (center.y - bounds.top()).max(bounds.bottom() - center.y);
-                let cover = f32::from(dx).hypot(f32::from(dy)).max(56.);
-                let radius = px(56. + (cover - 56.) * contraction);
+                let minimum = cursor_spotlight_min_radius(caret);
+                let cover = f32::from(dx).hypot(f32::from(dy)).max(minimum);
+                let radius = px(minimum + (cover - minimum) * contraction);
                 let outer = px(cover + 2.);
                 window.paint_quad(gpui::quad(
                     gpui::Bounds::new(
@@ -184,9 +189,6 @@ impl gpui::Render for CursorSpotlight {
                     rgb(0x999999).opacity(0.7 * opacity),
                     gpui::BorderStyle::Solid,
                 ));
-                // Reuse the final editor quad, including image-edge caret geometry.
-                caret.background = caret.background.opacity(opacity);
-                window.paint_quad(caret);
             },
         )
         .absolute()
@@ -235,6 +237,23 @@ mod tests {
     use super::*;
     use crate::app::WorkspaceWindow;
     use crate::document::TextSnapshot;
+
+    #[test]
+    fn spotlight_hole_contains_large_carets_without_repainting_them() {
+        for (width, height) in [(12., 22.), (96., 150.), (4., 420.)] {
+            let caret = gpui::Bounds::new(
+                gpui::point(gpui::px(20.), gpui::px(30.)),
+                gpui::size(gpui::px(width), gpui::px(height)),
+            );
+            let radius = cursor_spotlight_min_radius(caret);
+            let center = caret.center();
+            for corner in [caret.origin, caret.bottom_right()] {
+                assert!(
+                    f32::from(corner.x - center.x).hypot(f32::from(corner.y - center.y)) < radius
+                );
+            }
+        }
+    }
 
     #[gpui::test]
     fn spotlight_reuses_document_and_preserves_dismissal_keystrokes(cx: &mut gpui::TestAppContext) {

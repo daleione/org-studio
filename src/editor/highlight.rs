@@ -54,6 +54,9 @@ impl RangeHighlight {
         range: Range<usize>,
         wrap_width: Pixels,
     ) {
+        if range.is_empty() {
+            return;
+        }
         if let Some(table) = &hit.table_layout {
             for bounds in table.range_bounds(range, hit.line_height) {
                 let top = hit.origin_y + bounds.top() + px(self.inset_y);
@@ -75,12 +78,9 @@ impl RangeHighlight {
             }
             return;
         }
-        let start_position = hit
-            .position_for_display_index(range.start)
-            .unwrap_or_default();
-        let end_position = hit
-            .position_for_display_index(range.end.max(range.start.saturating_add(1)))
-            .unwrap_or(start_position);
+        let Some((start_position, end_position)) = hit.positions_for_display_range(range) else {
+            return;
+        };
         let line_height_px = f32::from(hit.line_height).max(1.0);
         let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
         let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;

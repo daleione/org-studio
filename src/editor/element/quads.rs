@@ -179,8 +179,9 @@ fn table_hover_bounds(
             };
             text.find('|')?..end
         };
-        let start = row.position_for_display_index(row.display.source_to_display(range.start))?;
-        let end = row.position_for_display_index(row.display.source_to_display(range.end))?;
+        let (start, end) = row.positions_for_display_range(
+            row.display.source_to_display(range.start)..row.display.source_to_display(range.end),
+        )?;
         if start.y != end.y {
             return None;
         }
@@ -241,10 +242,9 @@ fn push_range_quads(
         return;
     }
     let line_height = hit.line_height;
-    let start_position = hit.position_for_display_index(start).unwrap_or_default();
-    let end_position = hit
-        .position_for_display_index(end)
-        .unwrap_or(start_position);
+    let Some((start_position, end_position)) = hit.positions_for_display_range(start..end) else {
+        return;
+    };
     let line_height_px = f32::from(line_height).max(1.0);
     let first_row = (f32::from(start_position.y) / line_height_px).round() as usize;
     let last_row = (f32::from(end_position.y) / line_height_px).round() as usize;

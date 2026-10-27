@@ -127,8 +127,7 @@ impl SemanticEditor {
                     row.line_height * table.visual_rows,
                 )
             } else {
-                let left = row.position_for_display_index(start)?;
-                let right = row.position_for_display_index(end)?;
+                let (left, right) = row.positions_for_display_range(start..end)?;
                 if left.y != right.y {
                     continue;
                 }

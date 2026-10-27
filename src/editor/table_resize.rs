@@ -471,8 +471,9 @@ fn delimiter_positions(
     table::delimiter_offsets(&text, format)
         .into_iter()
         .filter_map(|offset| {
-            let start = row.position_for_display_index(row.display.source_to_display(offset))?;
-            let end = row.position_for_display_index(row.display.source_to_display(offset + 1))?;
+            let (start, end) = row.positions_for_display_range(
+                row.display.source_to_display(offset)..row.display.source_to_display(offset + 1),
+            )?;
             (start.y == px(0.) && end.y == start.y).then_some((start.x, end.x - start.x))
         })
         .collect()
