@@ -501,6 +501,9 @@ pub fn initial_sidebar_width(fallback: u16) -> u16 {
 }
 
 fn settings_path() -> Option<PathBuf> {
+    if let Some(profile) = isolated_profile_dir() {
+        return Some(profile.join("settings.conf"));
+    }
     #[cfg(target_os = "macos")]
     {
         std::env::var_os("HOME")
@@ -514,6 +517,9 @@ fn settings_path() -> Option<PathBuf> {
 }
 
 pub(crate) fn application_support_dir() -> Option<PathBuf> {
+    if let Some(profile) = isolated_profile_dir() {
+        return Some(profile);
+    }
     #[cfg(target_os = "macos")]
     {
         std::env::var_os("HOME")
@@ -537,6 +543,37 @@ pub(crate) fn application_support_dir() -> Option<PathBuf> {
     }
 }
 
+/// Route both preferences and application state through one profile. Test
+/// binaries and visual checks always have a private default; native benchmark
+/// scripts supply ORG_STUDIO_PROFILE_DIR inside their own result directories.
+fn isolated_profile_dir() -> Option<PathBuf> {
+    #[cfg(not(test))]
+    if let Some(profile) =
+        std::env::var_os("ORG_STUDIO_PROFILE_DIR").filter(|path| !path.is_empty())
+    {
+        return Some(PathBuf::from(profile));
+    }
+    #[cfg(any(test, feature = "visual-check"))]
+    {
+        static PROFILE: OnceLock<tempfile::TempDir> = OnceLock::new();
+        Some(
+            PROFILE
+                .get_or_init(|| {
+                    tempfile::Builder::new()
+                        .prefix("org-studio-test-profile-")
+                        .tempdir()
+                        .expect("create isolated application profile")
+                })
+                .path()
+                .to_path_buf(),
+        )
+    }
+    #[cfg(not(any(test, feature = "visual-check")))]
+    {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -550,6 +587,19 @@ mod tests {
                 .expect("current time")
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn test_configuration_and_application_state_share_an_isolated_profile() {
+        let profile = application_support_dir().unwrap();
+        assert!(profile.starts_with(std::env::temp_dir()));
+        assert!(profile.is_dir());
+        assert_eq!(settings_path().unwrap(), profile.join("settings.conf"));
+        assert_eq!(
+            std::thread::spawn(application_support_dir).join().unwrap(),
+            Some(profile),
+            "background persistence must use the same isolated profile"
+        );
     }
 
     #[test]

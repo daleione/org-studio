@@ -26,6 +26,8 @@ Commands:
   first-frame [MIB]   Measure the first readable SemanticEditor frame.
   first-frame-ab [MIB] Run first-frame with Minimap off and on.
   suite [MIB]         Build, prepare, typing, and first-frame.
+
+Each run keeps preferences and recent documents in its result directory's profile.
 EOF
 }
 
@@ -64,6 +66,7 @@ new_run_dir() {
     local label="$1"
     RUN_DIR="$RESULT_ROOT/$(date '+%Y%m%d-%H%M%S')-$label"
     mkdir -p "$RUN_DIR"
+    export ORG_STUDIO_PROFILE_DIR="$RUN_DIR/profile"
     printf 'org_editor_perf_results path=%s\n' "$RUN_DIR"
 }
 
@@ -158,6 +161,7 @@ visual() {
     validate_mib "$mib"
     ensure_fixture "$mib"
     [[ -x "$ROOT_DIR/target/release/org-studio" ]] || build_release
+    new_run_dir "editor-visual-${layout}-${mib}m"
     ORG_STUDIO_MINIMAP_VISUAL_LAYOUT="$layout" \
     ORG_STUDIO_MINIMAP=1 \
     ORG_STUDIO_EDITOR_MINIMAP_BENCH=1 \

@@ -57,6 +57,7 @@ Configuration environment variables:
 GUI scroll runs disable GPUI's inactive-window throttle by default, but remain
 paced by the target display link. Move the window to the Mac internal ProMotion
 display before the warmup counter reaches zero.
+Each run keeps preferences and recent documents in its result directory's profile.
 EOF
 }
 
@@ -87,6 +88,7 @@ new_run_dir() {
     run_id="$(date '+%Y%m%d-%H%M%S')-$label"
     RUN_DIR="$RESULT_ROOT/$run_id"
     mkdir -p "$RUN_DIR"
+    export ORG_STUDIO_PROFILE_DIR="$RUN_DIR/profile"
     {
         printf 'run_id=%s\n' "$run_id"
         printf 'started_at=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
