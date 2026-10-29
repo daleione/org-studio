@@ -228,7 +228,166 @@ async fn scenario(
             workspace.dispatch_file_tree_command(FileTreeCommand::ReturnToEditor, window, cx)
         })
         .map_err(|error| error.to_string())?;
+    capture_file_icons(window, root, output, cx).await?;
+    check_scrolled_folder(window, root, output, cx).await?;
     crate::app::file_overview::benchmark::check_sidebar_round_trip(window, output, cx).await
+}
+
+async fn check_scrolled_folder(
+    window: WindowHandle<WorkspaceWindow>,
+    root: &Path,
+    output: &Path,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    let path = root.join("src");
+    let id = EntryId::for_path(&path);
+    let sort = window
+        .update(cx, |workspace, window, cx| {
+            let sort = workspace.file_manager.tree.model.sort;
+            window.resize(size(px(1200.), px(400.)));
+            workspace.file_manager.tree.model.sort.directories_first = false;
+            workspace.rebuild_file_tree(cx);
+            select(workspace, &path, cx);
+            let tree = &workspace.file_manager.tree;
+            tree.list.scroll_to(gpui::ListOffset {
+                item_ix: tree.model.rank(id).unwrap() - 5,
+                offset_in_item: px(3.),
+            });
+            workspace.focus_sidebar(cx);
+            sort
+        })
+        .map_err(|error| error.to_string())?;
+    advance(window, cx, 10).await?;
+    let (bounds, position, mut expanded) = window
+        .update(cx, |workspace, _, _| {
+            let tree = &workspace.file_manager.tree;
+            assert!(tree.list.logical_scroll_top().item_ix > 0);
+            let bounds = tree.row_bounds.borrow()[&id];
+            let depth = tree.model.rows()[tree.model.rank(id).unwrap()].depth;
+            let position = point(
+                bounds.left() + crate::typography::ui_px(depth as f32 * 16. + 10.),
+                bounds.center().y,
+            );
+            (bounds, position, tree.model.expanded(&path))
+        })
+        .map_err(|error| error.to_string())?;
+    for _ in 0..4 {
+        cx.update_window(window.into(), |_, window, cx| {
+            window.dispatch_event(
+                gpui::PlatformInput::MouseDown(gpui::MouseDownEvent {
+                    position,
+                    button: gpui::MouseButton::Left,
+                    click_count: 1,
+                    ..Default::default()
+                }),
+                cx,
+            );
+            window.dispatch_event(
+                gpui::PlatformInput::MouseUp(gpui::MouseUpEvent {
+                    position,
+                    button: gpui::MouseButton::Left,
+                    click_count: 1,
+                    modifiers: Default::default(),
+                }),
+                cx,
+            );
+        })
+        .map_err(|error| error.to_string())?;
+        expanded = !expanded;
+        for _ in 0..10 {
+            advance(window, cx, 1).await?;
+            window
+                .update(cx, |workspace, _, _| {
+                    assert_eq!(workspace.file_manager.tree.model.expanded(&path), expanded);
+                    assert_eq!(workspace.file_manager.tree.row_bounds.borrow()[&id], bounds);
+                })
+                .map_err(|error| error.to_string())?;
+        }
+    }
+    std::fs::write(
+        output.join("file-tree-scroll-stability.json"),
+        "{\"toggles\":4,\"frame_samples\":40,\"row_displacement_px\":0}\n",
+    )
+    .map_err(|error| error.to_string())?;
+    window
+        .update(cx, |workspace, window, cx| {
+            workspace.file_manager.tree.model.sort = sort;
+            window.resize(size(px(1200.), px(850.)));
+            workspace.rebuild_file_tree(cx);
+            workspace.focus_document(cx);
+        })
+        .map_err(|error| error.to_string())?;
+    advance(window, cx, 10).await
+}
+
+async fn capture_file_icons(
+    window: WindowHandle<WorkspaceWindow>,
+    root: &Path,
+    output: &Path,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    let gallery = output.join("File types");
+    std::fs::create_dir_all(&gallery).map_err(|error| error.to_string())?;
+    for name in [
+        "notes.org",
+        "readme.md",
+        "main.rs",
+        "server.go",
+        "settings.json",
+        "worker.py",
+        "index.js",
+        "types.ts",
+        "view.jsx",
+        "view.tsx",
+        "main.c",
+        "main.cpp",
+        "run.sh",
+        "query.sql",
+        "paper.typ",
+        "config.yaml",
+        "config.toml",
+        ".gitignore",
+        "index.html",
+        "style.css",
+        "unknown.bin",
+    ] {
+        std::fs::write(gallery.join(name), "").map_err(|error| error.to_string())?;
+    }
+    window
+        .update(cx, |workspace, _, cx| {
+            workspace.set_file_tree_root(gallery.clone(), cx);
+            workspace.file_manager.tree.model.show_hidden = true;
+            workspace.rebuild_file_tree(cx);
+            workspace.focus_sidebar(cx);
+        })
+        .map_err(|error| error.to_string())?;
+    advance(window, cx, 20).await?;
+    for (mode, file, image) in [
+        (ThemeMode::Light, "settings.json", "file-icons-light.png"),
+        (ThemeMode::Dark, "settings.json", "file-icons-dark.png"),
+        (ThemeMode::Light, "main.rs", "file-icons-rust-selected.png"),
+        (ThemeMode::Light, "server.go", "file-icons-go-selected.png"),
+    ] {
+        window
+            .update(cx, |workspace, window, cx| {
+                crate::theme::set_theme_mode(mode);
+                workspace.theme_mode = mode;
+                select(workspace, &gallery.join(file), cx);
+                workspace.focus_sidebar(cx);
+                window.activate_window();
+                cx.notify();
+            })
+            .map_err(|error| error.to_string())?;
+        advance(window, cx, 10).await?;
+        capture(window, output, image, cx)?;
+    }
+    window
+        .update(cx, |workspace, _, cx| {
+            workspace.set_file_tree_root(root.to_path_buf(), cx);
+            workspace.focus_document(cx);
+        })
+        .map_err(|error| error.to_string())?;
+    advance(window, cx, 10).await
 }
 
 async fn capture_menu_variants(

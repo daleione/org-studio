@@ -1,9 +1,12 @@
-//! Runtime system symbols, cached by their actual raster size and tint.
+//! System controls and file artwork, cached by their actual raster size and style.
 //! Callers select a semantic icon, never a glyph, font, or asset path.
+
+mod file;
+pub(crate) use file::file_icon;
 
 use std::{cell::RefCell, collections::HashMap, sync::Arc};
 
-use gpui::{AnyElement, ObjectFit, Pixels, RenderImage, Window, div, img, prelude::*};
+use gpui::{AnyElement, ObjectFit, Pixels, RenderImage, Window, img, prelude::*};
 use objc2_app_kit::{NSImage, NSImageSymbolConfiguration};
 use objc2_foundation::NSString;
 
@@ -61,7 +64,7 @@ impl Icon {
         }
     }
 
-    pub(crate) fn for_file(kind: EntryKind) -> Self {
+    fn for_file(kind: EntryKind) -> Self {
         match kind {
             EntryKind::Parent => Self::ArrowUp,
             EntryKind::Directory => Self::Folder,
@@ -81,29 +84,21 @@ impl Icon {
     }
 }
 
-pub(crate) fn file_icon(kind: EntryKind, size: Pixels, color: u32, window: &Window) -> gpui::Div {
-    div()
-        .relative()
-        .flex_none()
-        .size(size)
-        .child(icon(Icon::for_file(kind), size, color, window))
-        .when(kind == EntryKind::Symlink, |view| {
-            view.child(div().absolute().bottom_0().left_0().child(icon(
-                Icon::Link,
-                size * 0.55,
-                color,
-                window,
-            )))
-        })
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
+enum ImageKey {
+    System(Icon, u16, u32),
+    File(file::Artwork, u16, bool),
 }
 
-type SymbolCache = HashMap<(Icon, u16, u32), Arc<RenderImage>>;
-thread_local! { static SYMBOLS: RefCell<SymbolCache> = RefCell::default(); }
+type IconCache = HashMap<ImageKey, Arc<RenderImage>>;
+thread_local! { static ICONS: RefCell<IconCache> = RefCell::default(); }
 
-pub(crate) fn icon(symbol: Icon, size: Pixels, color: u32, window: &Window) -> AnyElement {
-    let raster_size = (f32::from(size) * window.scale_factor()).ceil().max(1.) as u16;
-    let key = (symbol, raster_size, color);
-    let image = SYMBOLS.with(|cache| {
+fn raster_size(size: Pixels, window: &Window) -> u16 {
+    (f32::from(size) * window.scale_factor()).ceil().max(1.) as u16
+}
+
+fn cached_image(key: ImageKey, render: impl FnOnce() -> Arc<RenderImage>) -> Arc<RenderImage> {
+    ICONS.with(|cache| {
         let mut cache = cache.borrow_mut();
         if let Some(image) = cache.get(&key) {
             return image.clone();
@@ -111,9 +106,16 @@ pub(crate) fn icon(symbol: Icon, size: Pixels, color: u32, window: &Window) -> A
         if cache.len() >= 256 {
             cache.clear();
         }
-        let image = render_symbol(symbol, raster_size, color);
+        let image = render();
         cache.insert(key, image.clone());
         image
+    })
+}
+
+pub(crate) fn icon(symbol: Icon, size: Pixels, color: u32, window: &Window) -> AnyElement {
+    let raster_size = raster_size(size, window);
+    let image = cached_image(ImageKey::System(symbol, raster_size, color), || {
+        render_symbol(symbol, raster_size, color)
     });
     img(image)
         .size(size)

@@ -68,7 +68,6 @@ pub(super) struct TreeHost {
     drag: drag::TreeDrag,
     rendered_root: Option<PathBuf>,
     pub(super) persist: bool,
-    pub(super) pending_presentation: Option<(u64, usize, f32)>,
 }
 
 impl Default for TreeHost {
@@ -93,7 +92,6 @@ impl Default for TreeHost {
             drag: Default::default(),
             rendered_root: None,
             persist: false,
-            pending_presentation: None,
         }
     }
 }
@@ -126,13 +124,11 @@ impl WorkspaceWindow {
 
     pub(crate) fn save_file_tree_memory(&mut self) {
         if self.file_manager.tree.persist && self.file_manager.tree.drag.temporary.is_empty() {
-            if self.file_manager.tree.pending_presentation.is_none() {
-                let offset = self.file_manager.tree.list.logical_scroll_top();
-                self.file_manager
-                    .tree
-                    .model
-                    .capture_viewport(offset.item_ix + 1, f32::from(offset.offset_in_item));
-            }
+            let offset = self.file_manager.tree.list.logical_scroll_top();
+            self.file_manager
+                .tree
+                .model
+                .capture_viewport(offset.item_ix + 1, f32::from(offset.offset_in_item));
             crate::settings::save_file_tree_state(self.file_manager.tree.model.memories());
         }
     }
@@ -154,19 +150,25 @@ impl WorkspaceWindow {
 
     pub(super) fn rebuild_file_tree(&mut self, cx: &mut Context<Self>) {
         let tree = &mut self.file_manager.tree;
-        if tree.pending_presentation.is_none() && tree.rendered_root.as_deref() == tree.model.root()
-        {
+        if tree.rendered_root.as_deref() == tree.model.root() {
             let offset = tree.list.logical_scroll_top();
             tree.model
                 .capture_viewport(offset.item_ix + 1, f32::from(offset.offset_in_item));
         }
         tree.model.rebuild(&self.file_manager.directories);
         tree.rendered_root = tree.model.root().map(Path::to_path_buf);
-        tree.list.reset(tree.model.rows().len().saturating_sub(1));
-        tree.pending_presentation = tree
-            .model
-            .viewport()
-            .map(|(rank, offset)| (tree.model.revision(), rank.saturating_sub(1), offset));
+        // Restore before painting. Height hints also let cursor reveal work
+        // immediately, while offscreen rows have not been measured yet.
+        tree.list.reset_with_uniform_height(
+            tree.model.rows().len().saturating_sub(1),
+            crate::typography::ui_px(28.),
+        );
+        if let Some((rank, offset)) = tree.model.viewport() {
+            tree.list.scroll_to(ListOffset {
+                item_ix: rank.saturating_sub(1),
+                offset_in_item: px(offset),
+            });
+        }
         let directories = tree.model.active_directories();
         self.sync_file_tree_name_row(cx);
         if self.file_manager.sidebar_visible && self.content_route == ContentRoute::Document {
@@ -291,17 +293,6 @@ impl WorkspaceWindow {
             let focus = input.read(cx).focus.clone();
             window.focus(&focus, cx);
             self.install_sidebar_keymap();
-        }
-        if let Some((revision, rank, offset)) = self.file_manager.tree.pending_presentation.take() {
-            cx.on_next_frame(window, move |this, _, cx| {
-                if this.file_manager.tree.model.revision() == revision {
-                    this.file_manager.tree.list.scroll_to(ListOffset {
-                        item_ix: rank,
-                        offset_in_item: px(offset),
-                    });
-                    cx.notify();
-                }
-            });
         }
     }
 

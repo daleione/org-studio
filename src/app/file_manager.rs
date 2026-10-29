@@ -820,7 +820,7 @@ impl WorkspaceWindow {
                 div().flex_1().min_h(px(0.0)).child(
                     list(
                         self.file_manager.list_state.clone(),
-                        move |index, window, _| {
+                        move |index, window, cx| {
                             let drag_sources = if marks.contains_key(&entries[index].id) {
                                 operation_targets.clone()
                             } else if matches!(entries[index].kind, EntryKind::Parent) {
@@ -835,6 +835,7 @@ impl WorkspaceWindow {
                                 cursor == Some(entries[index].id),
                                 drag_sources,
                                 window,
+                                cx,
                             )
                         },
                     )
@@ -912,6 +913,7 @@ fn dired_row(
     selected: bool,
     drag_sources: Arc<[Arc<std::path::Path>]>,
     window: &Window,
+    cx: &gpui::App,
 ) -> gpui::AnyElement {
     let id = entry.id;
     let mark_text = match mark {
@@ -972,10 +974,12 @@ fn dired_row(
         div()
             .w(ui_px(36.0))
             .child(crate::components::icon::file_icon(
-                entry.kind,
+                entry,
                 ui_px(16.0),
                 icon_color,
+                false,
                 window,
+                cx,
             )),
     )
     .child(

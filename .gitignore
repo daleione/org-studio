@@ -16,7 +16,8 @@
 .DS_Store
 .AppleDouble
 .LSOverride
-Icon?
+# Finder's custom icon file ends in a control character, unlike an icons directory.
+Icon[[:cntrl:]]
 ._*
 
 # Editor and IDE-local state.

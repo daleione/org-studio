@@ -565,6 +565,61 @@ fn arrows_expand_in_place_and_never_open_the_selected_document(cx: &mut gpui::Te
 }
 
 #[gpui::test]
+fn toggling_a_scrolled_branch_preserves_the_viewport_before_the_next_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (directory, workspace, cx) = fixture(cx);
+    for index in 0..48 {
+        std::fs::create_dir(directory.path().join(format!("a-{index:02}"))).unwrap();
+        std::fs::create_dir(directory.path().join(format!("z-{index:02}"))).unwrap();
+    }
+    let branch = directory.path().join("chapter");
+    workspace.update(cx, |workspace, cx| {
+        workspace.request_file_directory(directory.path().to_path_buf(), true, cx);
+    });
+    cx.run_until_parked();
+    select(&workspace, &branch, cx);
+    workspace.update(cx, |workspace, cx| {
+        let tree = &workspace.file_manager.tree;
+        tree.list.scroll_to(ListOffset {
+            item_ix: tree.model.rank(EntryId::for_path(&branch)).unwrap() - 5,
+            offset_in_item: px(3.),
+        });
+        cx.notify();
+    });
+    cx.run_until_parked();
+    let anchor = workspace.read_with(cx, |workspace, _| {
+        workspace.file_manager.tree.list.logical_scroll_top()
+    });
+    let bounds = cx.debug_bounds("file-tree-current-disclosure").unwrap();
+    for _ in 0..4 {
+        workspace.update(cx, |workspace, cx| {
+            workspace.open_file_tree_selection(false, cx);
+            workspace.reveal_file_tree_cursor(cx);
+            let offset = workspace.file_manager.tree.list.logical_scroll_top();
+            assert_eq!(
+                (offset.item_ix, offset.offset_in_item),
+                (anchor.item_ix, anchor.offset_in_item),
+                "expansion must preserve the scroll position in the same frame"
+            );
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.debug_bounds("file-tree-current-disclosure"),
+            Some(bounds)
+        );
+        cx.update(|window, cx| {
+            window.simulate_next_frame(cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            cx.debug_bounds("file-tree-current-disclosure"),
+            Some(bounds)
+        );
+    }
+}
+
+#[gpui::test]
 fn folder_row_targets_toggle_on_every_click_in_a_rapid_sequence(cx: &mut gpui::TestAppContext) {
     let (directory, workspace, cx) = fixture(cx);
     let branch = directory.path().join("chapter");

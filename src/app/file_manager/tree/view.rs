@@ -644,7 +644,15 @@ impl WorkspaceWindow {
                     }),
             )
             .child(
-                file_icon(entry.kind, ui_px(16.), icon_color, window).when(primary, |icon| {
+                file_icon(
+                    entry,
+                    ui_px(16.),
+                    icon_color,
+                    selected && focused,
+                    window,
+                    cx,
+                )
+                .when(primary, |icon| {
                     icon.debug_selector(|| "file-tree-current-icon".into())
                 }),
             );

@@ -80,7 +80,6 @@ pub struct FileTree {
     pub auto_reveal: bool,
     viewport: Option<(PathBuf, f32)>,
     memories: VecDeque<TreeMemory>,
-    revision: u64,
     maximum_depth: usize,
     directories: HashMap<PathBuf, DirectoryProjection>,
 }
@@ -111,9 +110,6 @@ impl FileTree {
     }
     pub fn cursor(&self) -> Option<EntryId> {
         self.cursor
-    }
-    pub fn revision(&self) -> u64 {
-        self.revision
     }
     pub fn maximum_depth(&self) -> usize {
         self.maximum_depth
@@ -603,7 +599,6 @@ impl FileTree {
         {
             self.range_anchor = self.cursor;
         }
-        self.revision = self.revision.wrapping_add(1);
     }
 
     fn append_children(
