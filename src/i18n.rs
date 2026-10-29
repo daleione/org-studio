@@ -49,6 +49,7 @@ mod tests {
                 .filter(|key| {
                     [
                         "buffer.",
+                        "files.",
                         "agenda.",
                         "search.",
                         "timestamp.",

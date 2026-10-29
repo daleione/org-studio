@@ -569,9 +569,9 @@ mod tests {
             ));
             assert!(
                 session
-                    .retarget_moved_file(
+                    .finish_file_move(
+                        std::path::Path::new("/tmp/generated-source"),
                         "/tmp/generated-must-not-exist".into(),
-                        crate::document::FileStamp::detached(b""),
                         None,
                         cx,
                     )

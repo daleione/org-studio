@@ -2021,7 +2021,8 @@ impl SemanticEditor {
         ByteOffset(row.range.start.0 + local.min(row.range.len() as usize) as u64)
     }
 
-    pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) {
+    /// Scroll the content and report whether it owns horizontal scrolling.
+    pub(super) fn scroll(&mut self, delta_x: f32, delta_y: f32, cx: &mut Context<Self>) -> bool {
         self.hovered_link = None;
         self.dismiss_table_actions(cx);
         self.dismiss_inline(cx);
@@ -2035,12 +2036,14 @@ impl SemanticEditor {
         let max_scroll = (self.animated_document_height() - viewport_height).max(0.0);
         let previous_y = self.scroll_y;
         self.set_user_scroll_y(self.scroll_y - delta_y, max_scroll);
-        self.scroll_x = (self.scroll_x - delta_x).clamp(0.0, self.max_horizontal_scroll());
+        let horizontal_limit = self.max_horizontal_scroll();
+        self.scroll_x = (self.scroll_x - delta_x).clamp(0.0, horizontal_limit);
         let scroll_delta = self.scroll_y - previous_y;
         if scroll_delta.abs() > 0.5 {
             self.minimap.note_viewport_scrolled(scroll_delta);
         }
         cx.notify();
+        horizontal_limit > 0.
     }
 
     pub(super) fn max_horizontal_scroll(&self) -> f32 {
@@ -2419,10 +2422,14 @@ impl Render for SemanticEditor {
             .on_scroll_wheel(move |event, _, cx| {
                 let line_height = scroll_entity.read(cx).base_line_height();
                 let delta = event.delta.pixel_delta(px(line_height));
-                scroll_entity.update(cx, |this, cx| {
+                let handles_horizontal = scroll_entity.update(cx, |this, cx| {
                     this.scroll(f32::from(delta.x), f32::from(delta.y), cx)
                 });
-                cx.stop_propagation();
+                // Leave unhandled trackpad gestures to the containing view.
+                // Overflowing long lines and tables retain horizontal scroll.
+                if !event.delta.precise() || handles_horizontal {
+                    cx.stop_propagation();
+                }
             })
             .child(EditorElement::new(entity))
             .children(timestamp_overlay)

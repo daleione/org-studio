@@ -539,18 +539,10 @@ impl super::AgendaHost {
             .font_family(ui_family("SF Pro Text"))
             .text_color(rgb(super::style::INK()))
             .on_scroll_wheel(move |event, _, cx| {
-                if !event.delta.precise() {
-                    return;
-                }
-                let delta = event.delta.pixel_delta(px(16.0));
                 let outcome = gesture_workspace.update(cx, |this, cx| {
-                    let outcome = this.agenda.handle_sidebar_swipe(
-                        f32::from(delta.x),
-                        f32::from(delta.y),
-                        event.touch_phase,
-                        Instant::now(),
-                        motion_enabled,
-                    );
+                    let outcome =
+                        this.agenda
+                            .handle_sidebar_swipe(event, Instant::now(), motion_enabled);
                     if outcome.visibility_changed {
                         cx.notify();
                     }

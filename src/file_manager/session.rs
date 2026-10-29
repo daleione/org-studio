@@ -12,33 +12,16 @@ use crate::navigation::{
     ViewSnapshot, ViewportAnchor, ViewportIntent,
 };
 
-use super::{EntryId, EntryKind, FileEntry, FileResourceId, Mark, OperationPlan, ScanResult};
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum SortDirection {
-    Ascending,
-    Descending,
-}
+use super::{
+    DirectorySnapshot, EntryId, EntryKind, FileEntry, FileResourceId, Mark, OperationPlan,
+    ScanResult, SortDirection, SortSpec, entry::EntryLookup, sort::sort_entries,
+};
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub struct PresentationSignature {
     pub descending: bool,
     pub directories_first: bool,
     pub show_hidden: bool,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct SortSpec {
-    pub direction: SortDirection,
-    pub directories_first: bool,
-}
-impl Default for SortSpec {
-    fn default() -> Self {
-        Self {
-            direction: SortDirection::Ascending,
-            directories_first: true,
-        }
-    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,6 +220,25 @@ impl DiredSession {
         })
     }
 
+    pub fn apply_directory(
+        &mut self,
+        load: &NavigationLoad,
+        directory: &DirectorySnapshot,
+    ) -> Option<NavigationCommit> {
+        let mut entries = Vec::with_capacity(directory.entries.len() + 1);
+        if let Some(parent) = directory.directory.parent() {
+            entries.push(super::scan::parent_entry(parent));
+        }
+        entries.extend(directory.entries.iter().map(|entry| entry.as_ref().clone()));
+        self.apply_scan(
+            load,
+            ScanResult {
+                directory: directory.directory.clone(),
+                entries,
+            },
+        )
+    }
+
     pub fn apply_scan(
         &mut self,
         load: &NavigationLoad,
@@ -337,7 +339,13 @@ impl DiredSession {
             .iter()
             .find(|entry| entry.path.as_ref() == path);
         FileAnchor {
-            primary: entry.and_then(|entry| entry.resource_id),
+            primary: entry
+                .and_then(|entry| entry.resource_id)
+                .filter(|resource| {
+                    EntryLookup::new(self.entries().iter())
+                        .resource(*resource)
+                        .is_some()
+                }),
             fallback: FileFallback {
                 path: path.to_path_buf(),
                 parent: path.parent().unwrap_or(path).to_path_buf(),
@@ -357,20 +365,15 @@ impl DiredSession {
     }
 
     fn reconcile(&self, anchor: &FileAnchor) -> Option<EntryId> {
-        anchor
-            .primary
-            .and_then(|resource| {
-                self.entries()
-                    .iter()
-                    .find(|entry| entry.resource_id == Some(resource))
-                    .map(|entry| entry.id)
-            })
+        let lookup = EntryLookup::new(self.entries().iter());
+        lookup
+            .path(&anchor.fallback.path)
             .or_else(|| {
-                self.entries()
-                    .iter()
-                    .find(|entry| entry.path.as_ref() == anchor.fallback.path)
-                    .map(|entry| entry.id)
+                anchor
+                    .primary
+                    .and_then(|resource| lookup.resource(resource))
             })
+            .map(|entry| entry.id)
             .or_else(|| {
                 self.entries()
                     .iter()
@@ -449,11 +452,12 @@ impl DiredSession {
             if matches!(entry.kind, EntryKind::Parent) {
                 return;
             }
+            let resource_id = self.anchor_for_path(&entry.path).primary;
             self.operations.insert(
                 entry.id,
                 MarkedOperation {
                     path: entry.path,
-                    resource_id: entry.resource_id,
+                    resource_id,
                     mark,
                 },
             );
@@ -474,6 +478,7 @@ impl DiredSession {
     }
     pub fn invert_marks(&mut self) {
         let entries = self.entries().clone();
+        let lookup = EntryLookup::new(entries.iter());
         for entry in entries
             .iter()
             .filter(|entry| !matches!(entry.kind, EntryKind::Parent))
@@ -483,7 +488,9 @@ impl DiredSession {
                     entry.id,
                     MarkedOperation {
                         path: entry.path.clone(),
-                        resource_id: entry.resource_id,
+                        resource_id: entry
+                            .resource_id
+                            .filter(|resource| lookup.resource(*resource).is_some()),
                         mark: Mark::Selected,
                     },
                 );
@@ -533,30 +540,26 @@ impl DiredSession {
     }
 
     fn reconcile_operations(&mut self, directory: &Path, entries: &[FileEntry]) {
-        let by_resource = entries
-            .iter()
-            .filter_map(|entry| entry.resource_id.map(|resource| (resource, entry)))
-            .collect::<HashMap<_, _>>();
-        let by_path = entries
-            .iter()
-            .map(|entry| (entry.path.as_ref(), entry))
-            .collect::<HashMap<_, _>>();
+        let lookup = EntryLookup::new(entries.iter());
         let old_operations = std::mem::take(&mut self.operations);
         for (old_id, operation) in old_operations {
             if operation.path.parent() != Some(directory) {
                 self.operations.insert(old_id, operation);
                 continue;
             }
-            let entry = operation
-                .resource_id
-                .and_then(|resource| by_resource.get(&resource).copied())
-                .or_else(|| by_path.get(operation.path.as_ref()).copied());
+            let entry = lookup.path(&operation.path).or_else(|| {
+                operation
+                    .resource_id
+                    .and_then(|resource| lookup.resource(resource))
+            });
             if let Some(entry) = entry {
                 self.operations.insert(
                     entry.id,
                     MarkedOperation {
                         path: entry.path.clone(),
-                        resource_id: entry.resource_id,
+                        resource_id: entry
+                            .resource_id
+                            .filter(|resource| lookup.resource(*resource).is_some()),
                         mark: operation.mark,
                     },
                 );
@@ -593,32 +596,6 @@ fn nearest_rank(len: usize, rank: usize, affinity: AnchorAffinity) -> Option<usi
         AnchorAffinity::After => rank.saturating_add(1).min(len - 1),
         AnchorAffinity::Exact | AnchorAffinity::Nearest => rank.min(len - 1),
     })
-}
-
-fn sort_entries(entries: &mut [FileEntry], spec: SortSpec) {
-    entries.sort_by(|left, right| {
-        if matches!(left.kind, EntryKind::Parent) {
-            return std::cmp::Ordering::Less;
-        }
-        if matches!(right.kind, EntryKind::Parent) {
-            return std::cmp::Ordering::Greater;
-        }
-        let directory_order = if spec.directories_first {
-            right.is_directory().cmp(&left.is_directory())
-        } else {
-            std::cmp::Ordering::Equal
-        };
-        let name_order = left
-            .display_name
-            .to_lowercase()
-            .cmp(&right.display_name.to_lowercase());
-        let order = directory_order.then(name_order);
-        if spec.direction == SortDirection::Ascending {
-            order
-        } else {
-            order.reverse()
-        }
-    });
 }
 
 #[cfg(test)]

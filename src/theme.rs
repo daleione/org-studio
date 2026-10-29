@@ -1,3 +1,6 @@
+mod navigation;
+pub(crate) use navigation::{NavigationColors, navigation_colors};
+
 #[derive(Clone, Copy)]
 pub struct Theme {
     pub search_current: u32,

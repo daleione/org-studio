@@ -57,7 +57,7 @@ impl WorkspaceWindow {
         };
         self.content_route = ContentRoute::Document;
         self.file_manager.reset_for_document();
-        self.stop_dired_directory_watch();
+        self.sync_file_directory_watches(cx);
         self.install_document_keymap();
         self.focus_workspace_on_render = true;
         cx.notify();
@@ -646,6 +646,7 @@ impl WorkspaceWindow {
                 let soft_wrap = self.soft_wrap;
                 let minimap_width = self.minimap_width;
                 let content_font_sizes = self.content_font_sizes.clone();
+                let focus_editor = !self.file_manager.sidebar_focused();
                 let mut create_editor = |pane| {
                     document_workspace
                         .shows(pane, crate::app::PaneSurface::Editor)
@@ -656,7 +657,7 @@ impl WorkspaceWindow {
                                 let mut editor =
                                     crate::editor::SemanticEditor::new_with_syntax_service(
                                         session,
-                                        document_workspace.active_pane == pane,
+                                        focus_editor && document_workspace.active_pane == pane,
                                         editor_syntax,
                                         cx,
                                     );

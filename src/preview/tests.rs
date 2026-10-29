@@ -1349,7 +1349,7 @@ fn a_path_change_invalidates_and_rebuilds_the_shared_reading_snapshot(
     let stamp = crate::document::FileStamp::read(&new_path).unwrap();
     session.update(cx, |session, cx| {
         session
-            .retarget_moved_file(new_path.clone(), stamp, None, cx)
+            .finish_file_move(&old_path, new_path.clone(), Some(stamp), cx)
             .unwrap();
     });
     workspace.update(cx, |workspace, cx| {
@@ -2290,14 +2290,19 @@ fn reading_keymap_routes_platform_undo_and_redo_to_document_history() {
 }
 
 #[test]
-fn sidebar_keymap_activates_both_sidebar_and_dired_contexts() {
+fn sidebar_keymap_uses_file_tree_context_without_dired_letter_commands() {
     let mut app = WorkspaceWindow::with_split_layout(true);
     app.install_sidebar_keymap();
     let contexts = super::built_in_contexts();
     assert!(app.key_context.contains(contexts.key("workspace").unwrap()));
-    assert!(app.key_context.contains(contexts.key("sidebar").unwrap()));
-    assert!(app.key_context.contains(contexts.key("dired").unwrap()));
+    assert!(app.key_context.contains(contexts.key("file-tree").unwrap()));
+    assert!(!app.key_context.contains(contexts.key("dired").unwrap()));
     assert!(!app.key_context.contains(contexts.key("preview").unwrap()));
+    assert!(matches!(
+        app.keyboard
+            .route(KeyStroke::parse("d").unwrap(), app.key_context),
+        EmacsOutcome::PassThrough | EmacsOutcome::Undefined
+    ));
 }
 
 #[test]

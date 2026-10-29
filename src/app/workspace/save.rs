@@ -49,7 +49,9 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(self.save.interaction, SaveInteraction::Idle) {
+        if self.file_manager.operation_busy()
+            || !matches!(self.save.interaction, SaveInteraction::Idle)
+        {
             return;
         }
         if save_as || session.read(cx).file_path().is_none() {
@@ -79,7 +81,9 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !matches!(self.save.interaction, SaveInteraction::Idle) {
+        if self.file_manager.operation_busy()
+            || !matches!(self.save.interaction, SaveInteraction::Idle)
+        {
             return;
         }
         if self
@@ -337,6 +341,9 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), SaveStartError> {
+        if self.file_manager.operation_busy() {
+            return Err(SaveStartError::AlreadySaving);
+        }
         let request = session.update(cx, |s, _| {
             if force {
                 s.begin_force_save()
@@ -459,6 +466,10 @@ impl WorkspaceWindow {
         }
     }
     pub(crate) fn request_quit(&mut self, _: &mut Window, cx: &mut Context<Self>) {
+        if self.file_manager.operation_busy() {
+            return;
+        }
+        self.save_file_tree_memory();
         if self.exit_needs_save_review(cx) {
             self.begin_buffer_review(ReviewKind::Quit, cx);
         } else {
@@ -481,6 +492,10 @@ impl WorkspaceWindow {
                 return true;
             };
             workspace.update(cx, |w, cx| {
+                if w.file_manager.operation_busy() {
+                    return false;
+                }
+                w.save_file_tree_memory();
                 if matches!(w.save.interaction, SaveInteraction::AllowCloseOnce) {
                     w.save.interaction = SaveInteraction::Idle;
                     return true;

@@ -35,9 +35,6 @@ pub fn scan_directory_cancellable(
         source,
     })?;
     let mut entries = Vec::new();
-    if let Some(parent) = directory.parent() {
-        entries.push(parent_entry(parent));
-    }
     for item in read_dir {
         if cancellation.is_cancelled() {
             return Err(ScanError {
@@ -61,7 +58,7 @@ pub fn scan_directory_cancellable(
             None
         };
         entries.push(FileEntry {
-            id: entry_id(&path),
+            id: EntryId::for_path(&path),
             resource_id: resource_id(metadata.as_ref()),
             path: Arc::from(path),
             display_name: Arc::from(os_name.to_string_lossy().as_ref()),
@@ -81,13 +78,10 @@ pub fn scan_directory_cancellable(
     Ok(ScanResult { directory, entries })
 }
 
-fn parent_entry(parent: &Path) -> FileEntry {
+pub(super) fn parent_entry(parent: &Path) -> FileEntry {
     FileEntry {
-        id: entry_id(parent),
-        resource_id: fs::symlink_metadata(parent)
-            .ok()
-            .as_ref()
-            .and_then(|metadata| resource_id(Some(metadata))),
+        id: EntryId::for_path(parent),
+        resource_id: None,
         path: Arc::from(parent),
         os_name: Arc::new(OsString::from("..")),
         display_name: Arc::from(".."),
@@ -108,24 +102,39 @@ fn classify(path: &Path, file_type: Option<fs::FileType>) -> EntryKind {
     if file_type.is_some_and(|kind| kind.is_dir()) {
         return EntryKind::Directory;
     }
-    match path
+    let extension = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .map(str::to_ascii_lowercase)
-        .as_deref()
-    {
+        .map(str::to_ascii_lowercase);
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    match extension.as_deref() {
         Some("org") => EntryKind::OrgFile,
         Some("md" | "markdown") => EntryKind::Markdown,
-        Some("png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") => EntryKind::Image,
+        Some("toml" | "yaml" | "yml" | "json" | "jsonc" | "ini" | "conf" | "cfg") => {
+            EntryKind::Configuration
+        }
+        _ if matches!(
+            name,
+            ".gitignore" | ".gitattributes" | ".editorconfig" | ".env"
+        ) =>
+        {
+            EntryKind::Configuration
+        }
+        Some("csv" | "tsv") => EntryKind::Data,
+        Some("pdf" | "rtf" | "doc" | "docx" | "odt") => EntryKind::Pdf,
+        Some("zip" | "tar" | "gz" | "bz2" | "xz" | "zst" | "7z" | "rar") => EntryKind::Archive,
         _ if crate::syntax_highlighting::language_for_path(path).is_some() => EntryKind::CodeFile,
-        _ => EntryKind::RegularFile,
+        _ => match mime_guess::from_path(path).first_raw().unwrap_or_default() {
+            mime if mime.starts_with("image/") => EntryKind::Image,
+            mime if mime.starts_with("audio/") => EntryKind::Audio,
+            mime if mime.starts_with("video/") => EntryKind::Video,
+            mime if mime.starts_with("text/") => EntryKind::Text,
+            _ => EntryKind::RegularFile,
+        },
     }
-}
-
-fn entry_id(path: &Path) -> EntryId {
-    let mut hasher = DefaultHasher::new();
-    path.hash(&mut hasher);
-    EntryId(hasher.finish())
 }
 
 fn resource_id(metadata: Option<&fs::Metadata>) -> Option<FileResourceId> {

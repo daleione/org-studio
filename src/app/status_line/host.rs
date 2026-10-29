@@ -220,14 +220,23 @@ impl WorkspaceWindow {
             ),
             document_statistics: None,
             format: None,
-            transient: self.file_manager.status().map(|status| StatusMessage {
-                text: status.message(),
-                tone: match status {
-                    DiredStatus::Working(_) => StatusTone::Working,
-                    DiredStatus::Success(_) => StatusTone::Success,
-                    DiredStatus::Error(_) => StatusTone::Error,
-                },
-            }),
+            transient: self
+                .file_manager
+                .watch_error()
+                .map(|error| StatusMessage {
+                    text: error.clone(),
+                    tone: StatusTone::Error,
+                })
+                .or_else(|| {
+                    self.file_manager.status().map(|status| StatusMessage {
+                        text: status.message(),
+                        tone: match status {
+                            DiredStatus::Working(_) => StatusTone::Working,
+                            DiredStatus::Success(_) => StatusTone::Success,
+                            DiredStatus::Error(_) => StatusTone::Error,
+                        },
+                    })
+                }),
         })
     }
 

@@ -1,7 +1,10 @@
 use std::{borrow::Borrow, collections::HashMap, fmt, sync::Arc};
 
+mod file_tree;
 mod org;
 mod table;
+pub use file_tree::FileTreeCommand;
+pub(crate) use file_tree::{FILE_TREE_COMMANDS, file_tree_command};
 pub(crate) use org::ORG_EDITOR_COMMANDS;
 pub use table::{TABLE_COMMANDS, TableEdit};
 
@@ -66,6 +69,7 @@ pub enum OrgDisplayFeature {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BuiltinCommand {
+    FileTree(FileTreeCommand),
     ExecuteCommand,
     AlignTables,
     RecalculateTable,

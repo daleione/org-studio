@@ -69,7 +69,9 @@ impl Default for WorkspaceWindow {
 
 impl WorkspaceWindow {
     pub fn new() -> Self {
-        Self::with_settings(crate::settings::WorkspaceSettings::load())
+        let mut workspace = Self::with_settings(crate::settings::WorkspaceSettings::load());
+        workspace.restore_file_tree(crate::settings::load_file_tree_state());
+        workspace
     }
 
     #[cfg(test)]
@@ -273,6 +275,11 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn request_document_focus(&mut self, cx: &mut Context<Self>) {
+        if self.file_manager.sidebar_focused() && self.file_manager.sidebar_visible() {
+            self.focus_sidebar(cx);
+            self.install_sidebar_keymap();
+            return;
+        }
         self.install_document_keymap();
         self.focus_active_surface(cx);
     }

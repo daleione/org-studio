@@ -31,6 +31,10 @@ pub fn application_menus(language: crate::i18n::Language) -> Vec<Menu> {
             MenuItem::action(t("首页", "Home"), ShowHome),
             MenuItem::separator(),
             MenuItem::action(t("打开…", "Open..."), OpenDocument),
+            MenuItem::action(
+                language.text("files.open_folder"),
+                crate::preview::OpenWorkspaceFolder,
+            ),
             MenuItem::separator(),
             MenuItem::action(t("保存", "Save"), SaveDocument),
             MenuItem::action(t("另存为…", "Save As..."), SaveDocumentAs),
@@ -66,6 +70,7 @@ pub fn application_menus(language: crate::i18n::Language) -> Vec<Menu> {
             MenuItem::separator(),
             MenuItem::action(t("自动换行", "Toggle Soft Wrap"), ToggleSoftWrap),
             MenuItem::action(t("侧边栏", "Toggle Sidebar"), ToggleSidebar),
+            MenuItem::action(language.text("files.focus"), crate::preview::FocusFiles),
             MenuItem::action(t("缩略图", "Toggle Minimap"), ToggleMinimap),
             MenuItem::separator(),
             MenuItem::action(

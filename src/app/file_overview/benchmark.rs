@@ -130,7 +130,7 @@ pub fn run_visual_check(output: PathBuf) {
                 eprintln!("interactive trackpad capture: {seconds} seconds; use the overview normally");
                 pause(cx, seconds * 1000).await;
                 let _ = window.update(cx, |w, _, _| w.file_overview.trace.flush());
-                let _ = cx.update(|cx| cx.quit());
+                cx.update(|cx| cx.quit());
                 return;
             }
             match scenario(window, &output, cx).await {
@@ -141,7 +141,7 @@ pub fn run_visual_check(output: PathBuf) {
                 }
             }
             let _ = window.update(cx, |w, _, _| w.file_overview.trace.flush());
-            let _ = cx.update(|cx| cx.quit());
+            cx.update(|cx| cx.quit());
         }).detach();
     });
 }
@@ -240,6 +240,118 @@ fn frame(
             window.render_to_image().map_err(|e| e.to_string())
         })
         .map_err(|e| e.to_string())?
+}
+
+/// Exercise both exit paths with a real file tree and compare its actual
+/// pixels at 80 ms into the production motion, before the zoom has settled.
+pub(crate) async fn check_sidebar_round_trip(
+    window: WindowHandle<WorkspaceWindow>,
+    output: &Path,
+    cx: &mut AsyncApp,
+) -> Result<(), String> {
+    cx.update_window(window.into(), |_, window, cx| {
+        window.simulate_mouse_move(point(px(-100.), px(-100.)), cx);
+    })
+    .map_err(|e| e.to_string())?;
+    advance(window, cx, 5).await?;
+    let baseline = frame(window, cx)?;
+    let (origin, right, top, bottom) = window
+        .update(cx, |w, window, cx| {
+            let scale = window.scale_factor();
+            (
+                w.document_session().unwrap().read(cx).id(),
+                (f32::from(w.overview_stage_bounds(window).left() - px(12.)) * scale) as u32,
+                ((super::super::TITLEBAR_HEIGHT + 48.) * scale) as u32,
+                (f32::from(window.viewport_size().height - px(32.)) * scale) as u32,
+            )
+        })
+        .map_err(|e| e.to_string())?;
+    if right <= 8 || bottom <= top {
+        return Err("sidebar pixel check requires a visible file tree".into());
+    }
+    baseline
+        .save(output.join("sidebar-before-overview.png"))
+        .map_err(|e| e.to_string())?;
+    let mut results = Vec::new();
+    for returning in [true, false] {
+        let action = if returning { "return" } else { "open" };
+        window
+            .update(cx, |w, window, cx| w.open_file_overview(window, cx))
+            .map_err(|e| e.to_string())?;
+        wait_for(window, cx, "sidebar overview", |w| {
+            w.file_overview
+                .session
+                .as_ref()
+                .is_some_and(|s| s.phase == Phase::Visible)
+        })
+        .await?;
+        window
+            .update(cx, |w, window, cx| {
+                if returning {
+                    w.cancel_file_overview(window, cx);
+                } else {
+                    w.select_overview_item(origin, window, cx);
+                }
+            })
+            .map_err(|e| e.to_string())?;
+        wait_for(window, cx, "sidebar expansion ready", |w| {
+            w.file_overview
+                .session
+                .as_ref()
+                .is_some_and(|s| !s.is_preparing())
+        })
+        .await?;
+        window
+            .update(cx, |w, _, cx| {
+                let state = w.file_overview.session.as_mut().unwrap();
+                let motion = state.motion.expect("automatic overview exit motion");
+                let Motion::Settle { started_at, .. } = motion else {
+                    panic!("expected zoom motion before handoff");
+                };
+                state.progress = motion.sample(started_at + Duration::from_millis(80)).value;
+                state.motion = None;
+                cx.notify();
+            })
+            .map_err(|e| e.to_string())?;
+        advance(window, cx, 3).await?;
+        let pixels = frame(window, cx)?;
+        pixels
+            .save(output.join(format!("sidebar-{action}-80ms.png")))
+            .map_err(|e| e.to_string())?;
+        let mut maximum = 0;
+        let mut changed = 0;
+        for y in top..bottom.min(pixels.height()) {
+            for x in 8..right.min(pixels.width()) {
+                let a = baseline.get_pixel(x, y).0;
+                let b = pixels.get_pixel(x, y).0;
+                let difference = (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap();
+                maximum = maximum.max(difference);
+                changed += usize::from(difference > 2);
+            }
+        }
+        results.push(serde_json::json!({
+            "action": action, "motion_sample_ms": 80,
+            "maximum_channel_difference": maximum, "changed_pixels": changed,
+        }));
+        window
+            .update(cx, |w, window, cx| w.close_file_overview_now(window, cx))
+            .map_err(|e| e.to_string())?;
+        advance(window, cx, 5).await?;
+    }
+    std::fs::write(
+        output.join("sidebar-round-trip.json"),
+        serde_json::to_vec_pretty(&results).unwrap(),
+    )
+    .map_err(|e| e.to_string())?;
+    if results
+        .iter()
+        .any(|r| r["changed_pixels"].as_u64().unwrap() != 0)
+    {
+        return Err(format!(
+            "overview still covers the file tree at 80 ms: {results:?}"
+        ));
+    }
+    Ok(())
 }
 
 async fn scenario(
@@ -499,9 +611,7 @@ async fn scenario(
                 let source = w.overview_source_size(window);
                 let preview = grid.document_preview(index, px(0.), source);
                 assert!(
-                    (f32::from(preview.size.width / preview.size.height)
-                        - f32::from(source.width / source.height))
-                    .abs()
+                    (preview.size.width / preview.size.height - source.width / source.height).abs()
                         < 0.0001
                 );
             }
@@ -720,11 +830,7 @@ async fn check_pinch_follow(
             let source = w.overview_source_size(window);
             let preview = grid.document_preview(index, px(0.), source);
             let scale = w.overview_stage_bounds(window).size.width / preview.size.width;
-            (
-                item.id,
-                preview.center(),
-                f32::from(scale).powf(1. / 24.) - 1.,
-            )
+            (item.id, preview.center(), scale.powf(1. / 24.) - 1.)
         })
         .map_err(|e| e.to_string())?;
     let mut expansion = vec![(Some(0.018), TouchPhase::Moved); 24];

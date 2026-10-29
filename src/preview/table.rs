@@ -872,7 +872,17 @@ pub(crate) fn render_table_row(
         )
         .when(!layout.overflow, |element| element.overflow_hidden())
         .child(table);
-    div().w_full().child(scroller)
+    div()
+        .w_full()
+        .when(layout.overflow, |row| {
+            row.on_scroll_wheel(|event, _, cx| {
+                let delta = event.delta.pixel_delta(px(16.));
+                if delta.x.abs() > delta.y.abs() {
+                    cx.stop_propagation();
+                }
+            })
+        })
+        .child(scroller)
 }
 
 fn is_separator(source: &str) -> bool {

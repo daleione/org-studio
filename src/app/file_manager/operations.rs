@@ -1,14 +1,70 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use gpui::{AppContext, Context, PathPromptOptions, PromptLevel, Window};
 
 use super::{ContentRoute, DiredStatus, WorkspaceWindow};
 use crate::{
-    file_manager::{ConflictPolicy, DiredSession, OperationPlan, execute_operation},
+    file_manager::{
+        ConflictPolicy, DiredSession, OperationPlan, OperationReport, execute_operation,
+    },
     navigation::NavigationCause,
 };
 
 impl WorkspaceWindow {
+    fn file_targets_include_root(&self, sources: &[Arc<Path>]) -> bool {
+        self.content_route == ContentRoute::Document
+            && self
+                .file_manager
+                .tree
+                .model
+                .root()
+                .is_some_and(|root| sources.iter().any(|source| root.starts_with(source)))
+    }
+    fn file_operation_summary(&self, report: &OperationReport) -> Arc<str> {
+        let mut message = self
+            .language
+            .text("files.completed")
+            .replace("{count}", &report.completed.len().to_string());
+        if !report.skipped.is_empty() {
+            message.push_str(&format!(
+                " · {}",
+                self.language
+                    .text("files.skipped")
+                    .replace("{count}", &report.skipped.len().to_string())
+            ));
+        }
+        if let Some(failure) = report.failures.first() {
+            message.push_str(&format!(
+                " · {}: {} — {}",
+                self.language
+                    .text("files.failed")
+                    .replace("{count}", &report.failures.len().to_string()),
+                failure.path.display(),
+                failure.message
+            ));
+        }
+        message.into()
+    }
+    pub(super) fn file_operation_targets(&self) -> Arc<[Arc<Path>]> {
+        if self.content_route == ContentRoute::Document && self.file_manager.sidebar_focused {
+            self.file_manager
+                .tree
+                .menu
+                .as_ref()
+                .map(|menu| menu.targets.clone())
+                .unwrap_or_else(|| self.file_manager.tree.model.operation_targets())
+        } else {
+            self.file_manager
+                .session
+                .as_ref()
+                .map(DiredSession::operation_targets)
+                .unwrap_or_else(|| Arc::from([]))
+        }
+    }
+
     pub(crate) fn dired_prepare_execute(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.dired_operation_available(cx) {
             return;
@@ -74,14 +130,7 @@ impl WorkspaceWindow {
         if !self.dired_operation_available(cx) {
             return;
         }
-        let Some(targets) = self
-            .file_manager
-            .session
-            .as_ref()
-            .map(DiredSession::operation_targets)
-        else {
-            return;
-        };
+        let targets = self.file_operation_targets();
         if targets.len() != 1 {
             self.show_dired_operation_error("Rename requires exactly one selected item", cx);
             return;
@@ -116,16 +165,9 @@ impl WorkspaceWindow {
     }
 
     fn prompt_dired_transfer(&mut self, move_items: bool, cx: &mut Context<Self>) {
-        let Some(targets) = self
-            .file_manager
-            .session
-            .as_ref()
-            .map(DiredSession::operation_targets)
-        else {
-            return;
-        };
+        let targets = self.file_operation_targets();
         if targets.is_empty() {
-            self.show_dired_operation_error("No file selected", cx);
+            self.show_dired_operation_error(self.language.text("files.no_selection"), cx);
             return;
         }
         let prompt = cx.prompt_for_paths(PathPromptOptions {
@@ -158,16 +200,13 @@ impl WorkspaceWindow {
         if !self.dired_operation_available(cx) {
             return;
         }
-        let Some(targets) = self
-            .file_manager
-            .session
-            .as_ref()
-            .map(DiredSession::operation_targets)
-        else {
-            return;
-        };
+        let targets = self.file_operation_targets();
         if targets.is_empty() {
-            self.show_dired_operation_error("No file selected", cx);
+            self.show_dired_operation_error(self.language.text("files.no_selection"), cx);
+            return;
+        }
+        if self.file_targets_include_root(&targets) {
+            self.show_dired_operation_error(self.language.text("files.root_protected"), cx);
             return;
         }
         self.confirm_dired_trash(OperationPlan::trash(targets), window, cx);
@@ -190,13 +229,42 @@ impl WorkspaceWindow {
             .collect::<Vec<_>>()
             .join("\n");
         if count > 8 {
-            detail.push_str(&format!("\n…and {} more", count - 8));
+            detail.push_str(&format!(
+                "\n{}",
+                self.language
+                    .text("files.more_items")
+                    .replace("{count}", &(count - 8).to_string())
+            ));
+        }
+        let dirty = self
+            .buffer_sessions()
+            .filter(|session| {
+                let document = session.read(cx);
+                document.is_dirty()
+                    && document
+                        .file_path()
+                        .is_some_and(|path| sources.iter().any(|source| path.starts_with(source)))
+            })
+            .count();
+        if dirty > 0 {
+            detail.push_str(&format!(
+                "\n\n{}",
+                self.language
+                    .text("files.trash_unsaved")
+                    .replace("{count}", &dirty.to_string())
+            ));
         }
         let prompt = window.prompt(
             PromptLevel::Warning,
-            &format!("Move {count} item(s) to Trash?"),
+            &self
+                .language
+                .text("files.confirm_trash")
+                .replace("{count}", &count.to_string()),
             Some(&detail),
-            &["Move to Trash", "Cancel"],
+            &[
+                self.language.text("files.move_to_trash"),
+                self.language.text("files.cancel"),
+            ],
             cx,
         );
         self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
@@ -213,124 +281,196 @@ impl WorkspaceWindow {
         if !self.dired_operation_available(cx) {
             return;
         }
+        let destructive_sources: &[Arc<Path>] = match &plan {
+            OperationPlan::Rename { source, .. } => std::slice::from_ref(source),
+            OperationPlan::Move { sources, .. } | OperationPlan::Trash { sources } => sources,
+            _ => &[],
+        };
+        if self.file_targets_include_root(destructive_sources) {
+            self.show_dired_operation_error(self.language.text("files.root_protected"), cx);
+            return;
+        }
         self.file_manager.operation_busy = true;
         self.file_manager.status = Some(DiredStatus::Working(
-            format!("Working on {} item(s)…", plan.item_count()).into(),
+            self.language.text("files.working").into(),
         ));
         cx.notify();
-        let retarget_current_document = matches!(
+        let moving = matches!(
             &plan,
             OperationPlan::Rename { .. } | OperationPlan::Move { .. }
         );
-        let current_document = retarget_current_document
-            .then(|| {
-                self.document_session().map(|session| {
-                    let session = session.read(cx);
-                    (session.id(), session.path().to_path_buf())
+        let documents = if moving {
+            self.buffer_sessions()
+                .filter_map(|session| {
+                    let document = session.read(cx);
+                    Some((document.id(), document.file_path()?.to_path_buf()))
                 })
-            })
-            .flatten();
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let edited_name = self
+            .file_manager
+            .tree
+            .edit
+            .as_ref()
+            .map(|edit| edit.input.clone());
+        let created = match &plan {
+            OperationPlan::CreateFile { path } | OperationPlan::CreateDirectory { path } => {
+                Some(path.clone())
+            }
+            OperationPlan::Rename { destination, .. } => Some(destination.clone()),
+            _ => None,
+        };
         let operation = cx.background_spawn(async move {
             let report = execute_operation(&plan);
-            let retarget = current_document.and_then(|(document_id, current_path)| {
-                report
-                    .destinations
-                    .iter()
-                    .find(|(source, _)| source.as_ref() == current_path)
-                    .map(|(_, destination)| {
-                        let destination = destination.to_path_buf();
-                        let file_state =
-                            crate::document::FileStamp::read(&destination).map(|stamp| {
-                                let permissions = std::fs::metadata(&destination)
-                                    .ok()
-                                    .map(|metadata| metadata.permissions());
-                                (stamp, permissions)
-                            });
-                        (document_id, destination, file_state)
-                    })
-            });
-            (report, retarget)
+            let retargets = documents
+                .into_iter()
+                .filter_map(|(id, path)| {
+                    report
+                        .destinations
+                        .iter()
+                        .find_map(|(source, destination)| {
+                            let relative = path.strip_prefix(source).ok()?;
+                            let destination = destination.join(relative);
+                            let stamp = crate::document::FileStamp::read(&destination);
+                            Some((id, path.clone(), destination, stamp))
+                        })
+                })
+                .collect::<Vec<_>>();
+            (report, retargets)
         });
         self.file_manager.operation_task = Some(cx.spawn(async move |this, cx| {
-            let (report, retarget) = operation.await;
+            let (report, retargets) = operation.await;
             let _ = this.update(cx, |this, cx| {
+                let summary = this.file_operation_summary(&report);
                 this.file_manager.operation_busy = false;
                 if let Some(session) = this.file_manager.session.as_mut() {
                     session.clear_completed_operations(&report.completed, &report.destinations);
                 }
-                this.refresh_file_manager(NavigationCause::FileSystemDelta, cx);
-                this.file_manager.status = Some(if report.succeeded() {
-                    DiredStatus::Success(report.summary())
-                } else {
-                    DiredStatus::Error(report.summary())
-                });
-                if this.content_route == ContentRoute::Document
-                    && let Some((document_id, destination, file_state)) = retarget
-                    && crate::preview::is_supported_document(&destination)
-                    && let Some(document) = this.document_session().cloned()
-                    && document.read(cx).id() == document_id
-                {
-                    match file_state {
-                        Ok((stamp, permissions)) => match document.update(cx, |session, cx| {
-                            session.retarget_moved_file(
-                                destination.clone(),
-                                stamp,
-                                permissions,
-                                cx,
-                            )
+                let mut coordination_error = None;
+                let mut reload_active = false;
+                for (id, source, destination, observed) in retargets {
+                    if let Some(document) = this.buffer_session(id, cx) {
+                        let stamp = observed.as_ref().ok().cloned();
+                        if let Err(error) = document.update(cx, |session, cx| {
+                            session.finish_file_move(&source, destination.clone(), stamp, cx)
                         }) {
-                            Ok(()) => {
-                                crate::recent_documents::record_success(
-                                    &mut this.recent_documents,
-                                    destination.clone(),
-                                );
-                                this.watch_document_profiled(
-                                    destination,
-                                    this.generation,
-                                    cx,
-                                );
-                            }
-                            Err(error) => {
-                                this.file_manager.status = Some(DiredStatus::Error(
-                                    format!("The file moved, but the open document could not follow it: {error}")
-                                        .into(),
-                                ));
-                            }
-                        },
-                        Err(error) => {
-                            this.file_manager.status = Some(DiredStatus::Error(
-                                format!("The file moved, but its new state could not be read: {error}")
-                                    .into(),
+                            coordination_error = Some(format!(
+                                "{}: {error}",
+                                this.language.text("files.follow_move_failed")
                             ));
+                        } else {
+                            let action = match observed {
+                                Ok(stamp) => Some(
+                                    document
+                                        .update(cx, |session, _| session.observe_disk(Some(stamp))),
+                                ),
+                                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(
+                                    document.update(cx, |session, _| session.observe_disk(None)),
+                                ),
+                                Err(error) => {
+                                    coordination_error = Some(format!(
+                                        "{}: {error}",
+                                        this.language.text("files.follow_move_failed")
+                                    ));
+                                    None
+                                }
+                            };
+                            reload_active |= action
+                                == Some(crate::document::DiskChangeAction::Reload)
+                                && this.document_session() == Some(&document);
+                            this.recent_documents.retain(|d| d.path != source);
+                            crate::recent_documents::record_success(
+                                &mut this.recent_documents,
+                                destination,
+                            );
                         }
                     }
                 }
+                for source in report.completed.iter() {
+                    if let Some(parent) = source.parent() {
+                        this.file_manager.directories.invalidate(parent);
+                    }
+                }
+                for (source, destination) in report.destinations.iter() {
+                    if moving {
+                        this.file_manager.tree.model.relocate(source, destination);
+                    }
+                    if let Some(parent) = destination.parent() {
+                        this.file_manager.directories.invalidate(parent);
+                    }
+                }
+                if let Some(input) = edited_name
+                    && this
+                        .file_manager
+                        .tree
+                        .edit
+                        .as_ref()
+                        .is_some_and(|edit| edit.input == input)
+                {
+                    if report.succeeded() {
+                        this.file_manager.tree.edit = None;
+                        this.file_manager.tree.focus_requested = this.file_manager.sidebar_focused;
+                        if let Some(path) = created {
+                            this.file_manager.tree.model.reveal(&path);
+                        }
+                    } else {
+                        if let Some(edit) = &mut this.file_manager.tree.edit {
+                            edit.error = Some(summary.to_string());
+                        }
+                        input.update(cx, |input, cx| {
+                            input.enabled = true;
+                            cx.notify();
+                        });
+                    }
+                }
+                this.rebuild_file_tree(cx);
+                this.sync_file_directory_watches(cx);
+                if this.content_route == ContentRoute::FileManager {
+                    this.refresh_file_manager(NavigationCause::FileSystemDelta, cx);
+                }
+                this.invalidate_file_overview_frames();
+                this.sync_document_watch(cx);
+                if reload_active {
+                    this.reload_current(cx);
+                }
+                this.file_manager.status = Some(if let Some(error) = coordination_error {
+                    DiredStatus::Error(error.into())
+                } else if report.succeeded() {
+                    DiredStatus::Success(summary)
+                } else {
+                    DiredStatus::Error(summary)
+                });
                 cx.notify();
             });
         }));
     }
 
-    fn show_dired_operation_error(&mut self, message: impl Into<Arc<str>>, cx: &mut Context<Self>) {
+    pub(super) fn show_dired_operation_error(
+        &mut self,
+        message: impl Into<Arc<str>>,
+        cx: &mut Context<Self>,
+    ) {
         self.file_manager.status = Some(DiredStatus::Error(message.into()));
         cx.notify();
     }
 
-    fn dired_operation_available(&mut self, cx: &mut Context<Self>) -> bool {
+    pub(super) fn dired_operation_available(&mut self, cx: &mut Context<Self>) -> bool {
         if self.file_manager.operation_busy
-            || matches!(
+            || self.buffer_busy()
+            || !matches!(
                 self.save.interaction,
-                crate::app::save::SaveInteraction::Renaming { .. }
+                crate::app::save::SaveInteraction::Idle
             )
+            || self.buffer_sessions().any(|session| {
+                !matches!(
+                    session.read(cx).save_state(),
+                    crate::document::SaveState::Idle
+                )
+            })
         {
-            self.show_dired_operation_error("A file operation is already in progress", cx);
-            false
-        } else if self.document_session().is_some_and(|session| {
-            !matches!(
-                session.read(cx).save_state(),
-                crate::document::SaveState::Idle
-            )
-        }) {
-            self.show_dired_operation_error("Wait for the document save to finish", cx);
+            self.show_dired_operation_error(self.language.text("files.operation_busy"), cx);
             false
         } else {
             true

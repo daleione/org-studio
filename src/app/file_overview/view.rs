@@ -73,16 +73,12 @@ impl WorkspaceWindow {
                         this.file_overview.presented = None;
                     }
                     #[cfg(feature = "visual-check")]
-                    if !this.file_overview_is_open() {
-                        if let Some(presented) = this.file_overview.presented {
-                            this.file_overview.trace.paint(
-                                "Document",
-                                0.,
-                                0.,
-                                0.,
-                                presented.bounds,
-                            );
-                        }
+                    if !this.file_overview_is_open()
+                        && let Some(presented) = this.file_overview.presented
+                    {
+                        this.file_overview
+                            .trace
+                            .paint("Document", 0., 0., 0., presented.bounds);
                     }
                 });
             },
@@ -150,7 +146,9 @@ impl WorkspaceWindow {
         );
         let handoff = state.phase == Phase::Handoff;
         let p = state.progress;
-        let appearance = if entry {
+        let appearance = if handoff {
+            0.
+        } else if entry {
             p
         } else if opening {
             1. - p
@@ -446,13 +444,20 @@ impl WorkspaceWindow {
                 },
             )]
         };
+        // The overview owns the document transition, not the file tree's
+        // lifetime. Reveal the existing sidebar as soon as overview chrome
+        // retreats, and clip both painting and hit testing to that same edge.
+        // Waiting for the spring or live-document handoff hid the sidebar for
+        // the entire slow settling tail; fading only the backdrop also left
+        // moving cards and invisible input handlers covering it.
+        let left = self.overview_stage_bounds(window).left() * (1. - chrome_opacity);
         let mut overlay = div()
             .id("file-overview")
             .debug_selector(|| "file-overview".into())
             .absolute()
-            .top(px(super::super::TITLEBAR_HEIGHT))
-            .left_0()
-            .right_0()
+            .top_0()
+            .left(-left)
+            .w(viewport.width)
             .bottom_0()
             .overflow_hidden()
             .font(ui_font(".SystemUIFont"))
@@ -603,7 +608,18 @@ impl WorkspaceWindow {
                 .size(px(1.)),
             );
         }
-        Some(overlay.into_any_element())
+        Some(
+            div()
+                .debug_selector(|| "file-overview-viewport".into())
+                .absolute()
+                .top(px(super::super::TITLEBAR_HEIGHT))
+                .left(left)
+                .right_0()
+                .bottom_0()
+                .overflow_hidden()
+                .child(overlay)
+                .into_any_element(),
+        )
     }
 
     fn overview_new_card(

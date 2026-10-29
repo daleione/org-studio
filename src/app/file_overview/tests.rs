@@ -5,6 +5,98 @@ use crate::document::{
 };
 use gpui::{EntityInputHandler, Modifiers, VisualTestContext};
 
+#[gpui::test]
+fn overview_exits_reveal_an_interactive_sidebar_before_the_zoom_settles(
+    cx: &mut gpui::TestAppContext,
+) {
+    cx.executor().allow_parking();
+    cx.update(crate::editor::init);
+    cx.update(|cx| cx.set_reduce_motion(true));
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("sample.org");
+    std::fs::write(&path, "* Sample\n").unwrap();
+    let loaded = crate::preview::load_document(path).unwrap();
+    let (w, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    w.update(cx, |w, cx| {
+        assert!(w.apply_load_result(0, Ok(loaded), cx));
+        w.minimap_visible = false;
+        w.show_editor(cx);
+        w.toggle_sidebar(cx);
+    });
+    cx.run_until_parked();
+    cx.update(|_, cx| cx.set_reduce_motion(false));
+    let document = w.read_with(cx, |w, _| w.document_session().unwrap().clone());
+    let id = document.read_with(cx, |doc, _| doc.id());
+    let editor = w.read_with(cx, |w, _| w.editor(PaneSide::Left).unwrap().clone());
+    for returning in [true, false] {
+        open(&w, cx);
+        cx.update(|window, app| {
+            w.update(app, |w, cx| {
+                complete_motion(w, window, cx);
+                assert_eq!(
+                    w.file_overview.session.as_ref().unwrap().phase,
+                    Phase::Visible
+                );
+                if returning {
+                    w.cancel_file_overview(window, cx);
+                } else {
+                    w.select_overview_item(id, window, cx);
+                }
+            });
+        });
+        for _ in 0..4 {
+            cx.update(|window, cx| window.simulate_next_frame(cx));
+            cx.run_until_parked();
+        }
+        cx.update(|_, app| {
+            w.update(app, |w, cx| {
+                let state = w.file_overview.session.as_mut().unwrap();
+                assert_eq!(
+                    state.phase,
+                    if returning {
+                        Phase::Returning
+                    } else {
+                        Phase::Opening
+                    }
+                );
+                assert!(state.preparation.is_none());
+                let motion = state.motion.unwrap();
+                let Motion::Settle { started_at, .. } = motion else {
+                    panic!("expected zoom motion before handoff");
+                };
+                state.progress = motion.sample(started_at + Duration::from_millis(80)).value;
+                state.motion = None;
+                assert_eq!(w.document_session().unwrap(), &document);
+                assert_eq!(w.editor(PaneSide::Left).unwrap(), editor);
+                cx.notify();
+            });
+        });
+        cx.run_until_parked();
+        let clip = cx.debug_bounds("file-overview-viewport").unwrap();
+        let expected_left =
+            cx.update(|window, app| w.read(app).overview_stage_bounds(window).left());
+        assert_eq!(
+            clip.left(),
+            expected_left,
+            "the whole sidebar must be uncovered at 80 ms"
+        );
+        let row = cx.debug_bounds("file-tree-current-row").unwrap();
+        cx.simulate_click(row.center(), Modifiers::default());
+        cx.run_until_parked();
+        assert!(w.read_with(cx, |w, _| w.file_manager.sidebar_focused()));
+        cx.simulate_keystrokes("shift-f10");
+        cx.run_until_parked();
+        assert!(!w.read_with(cx, |w, _| w.file_overview_is_open()));
+        assert!(
+            cx.debug_bounds("file-tree-menu").is_some(),
+            "the first key must reach the revealed tree"
+        );
+        cx.simulate_keystrokes("escape");
+        w.update(cx, |w, cx| w.focus_document(cx));
+        cx.run_until_parked();
+    }
+}
+
 pub(super) fn draft(
     w: &Entity<WorkspaceWindow>,
     name: &str,

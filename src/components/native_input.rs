@@ -175,7 +175,12 @@ impl NativeInput {
         inserted
     }
 
-    fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.enabled {
             return;
         }
@@ -319,6 +324,39 @@ impl NativeInput {
         // Only consume editing commands; ordinary text must reach the platform IME handler.
         cx.stop_propagation();
         cx.notify();
+    }
+
+    /// Composite widgets can use native text composition without rendering a
+    /// text field. The owning widget supplies the candidate-window anchor.
+    pub(crate) fn register_composite_input(
+        input: &gpui::Entity<Self>,
+        bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::App,
+    ) {
+        input.update(cx, |this, cx| {
+            let text: SharedString = this.text.clone().into();
+            let line = window.text_system().shape_line(
+                text.clone(),
+                ui_px(this.config.font_size),
+                &[TextRun {
+                    len: text.len(),
+                    font: window.text_style().font(),
+                    color: rgb(crate::theme::current_theme().foreground).into(),
+                    background_color: None,
+                    underline: None,
+                    strikethrough: None,
+                }],
+                None,
+            );
+            this.bounds = Some(bounds);
+            this.layout = Some(line);
+            window.handle_input(
+                &this.focus,
+                ElementInputHandler::new(bounds, input.clone()),
+                cx,
+            );
+        });
     }
 }
 

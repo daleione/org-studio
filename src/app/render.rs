@@ -675,6 +675,31 @@ impl Render for WorkspaceWindow {
             .on_action(cx.listener(|this, _: &OpenFileManager, _, cx| this.choose_directory(cx)))
             .on_action(cx.listener(|this, _: &ReturnToDocument, _, cx| this.return_to_document(cx)))
             .on_action(cx.listener(|this, _: &ToggleSidebar, _, cx| this.toggle_sidebar(cx)))
+            .on_action(
+                cx.listener(|this, _: &crate::preview::FocusFiles, window, cx| {
+                    this.dispatch_file_tree_command(
+                        crate::command::FileTreeCommand::Focus,
+                        window,
+                        cx,
+                    );
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &crate::preview::OpenWorkspaceFolder, window, cx| {
+                    if this.content_route != crate::app::ContentRoute::Document {
+                        this.return_to_document(cx);
+                    }
+                    if !this.sidebar_visible() {
+                        this.toggle_sidebar(cx);
+                    }
+                    this.focus_sidebar(cx);
+                    this.dispatch_file_tree_command(
+                        crate::command::FileTreeCommand::ChangeRoot,
+                        window,
+                        cx,
+                    );
+                },
+            ))
             .on_action(cx.listener(|this, _: &ToggleMinimap, _, cx| this.toggle_minimap(cx)))
             .on_action(cx.listener(|this, _: &ShowEditor, _, cx| this.show_editor(cx)))
             .on_action(cx.listener(|this, _: &ShowReading, _, cx| this.show_reading(cx)))

@@ -42,6 +42,8 @@ pub use file_overview::FileOverview;
 pub use file_overview::benchmark::run_visual_check;
 mod babel_ui;
 mod file_manager;
+#[cfg(feature = "visual-check")]
+pub use file_manager::run_visual_check as run_file_tree_visual_check;
 mod home;
 mod image_viewer;
 mod menus;

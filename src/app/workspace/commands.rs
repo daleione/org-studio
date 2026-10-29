@@ -9,11 +9,11 @@ use crate::{
         BuiltinCommand, CapabilitySet, CommandDispatcher, CommandImplementation, CommandKey,
         InvocationOrigin, PrefixArgument,
     },
-    input::{EmacsOutcome, compile_input_profile},
+    input::{BindingSpec, EmacsOutcome, compile_input_profile},
     keymap::KeyStroke,
     preview::{
         KEY_FEEDBACK_DURATION, PreviewStyleId, built_in_contexts, command_count, dired_bindings,
-        preview_bindings, preview_style, source_bindings,
+        file_tree_bindings, preview_bindings, preview_style, source_bindings,
     },
 };
 
@@ -258,9 +258,13 @@ impl WorkspaceWindow {
                 if self.refresh_generated_result(cx) {
                     return;
                 }
-                if self.content_route == ContentRoute::FileManager
-                    || self.file_manager.sidebar_focused()
-                {
+                if self.file_manager.sidebar_focused() {
+                    self.dispatch_file_tree_command(
+                        crate::command::FileTreeCommand::Refresh,
+                        window,
+                        cx,
+                    );
+                } else if self.content_route == ContentRoute::FileManager {
                     self.reload_file_manager(cx);
                 } else {
                     self.reload(window, cx);
@@ -413,6 +417,9 @@ impl WorkspaceWindow {
                 } else {
                     self.return_to_document(cx)
                 }
+            }
+            CommandImplementation::Builtin(BuiltinCommand::FileTree(command)) => {
+                self.dispatch_file_tree_command(command, window, cx)
             }
             CommandImplementation::Builtin(BuiltinCommand::ToggleSidebar) => {
                 self.toggle_sidebar(cx)
@@ -798,6 +805,9 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.file_tree_key_down(event, window, cx) {
+            return;
+        }
         if self.export.is_open() {
             cx.stop_propagation();
             if event.keystroke.key == "escape" {
@@ -1015,10 +1025,11 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let editor_surface = matches!(
-            self.document_workspace.active_surface(),
-            crate::app::PaneSurface::Editor
-        );
+        let editor_surface = !self.file_manager.sidebar_focused()
+            && matches!(
+                self.document_workspace.active_surface(),
+                crate::app::PaneSurface::Editor
+            );
         if editor_surface
             && self.keyboard.pending_keys().is_none()
             && stroke.meta()
@@ -1169,63 +1180,37 @@ impl WorkspaceWindow {
             self.document_workspace.active_surface(),
             crate::app::PaneSurface::Reading
         ) {
-            self.install_route_keymap(false, false);
+            self.install_keymap("preview", preview_bindings());
         } else {
-            self.install_source_keymap();
+            self.install_keymap("editor", source_bindings());
         }
     }
 
-    fn install_source_keymap(&mut self) {
-        let contexts = built_in_contexts();
-        let generation = self.keyboard.generation().wrapping_add(1);
-        let active_contexts = vec!["workspace", "editor"];
-        let Ok(configuration) = compile_input_profile(
-            generation,
-            &source_bindings(),
-            &self.commands,
-            &contexts,
-            &active_contexts,
-            &["prompt"],
-        ) else {
-            return;
-        };
-        self.key_context = contexts
-            .set(active_contexts)
-            .expect("registered source editor contexts");
-        self.keyboard.replace_configuration(configuration);
-    }
-
     pub(crate) fn install_dired_keymap(&mut self) {
-        self.install_route_keymap(true, false);
+        self.install_keymap("dired", dired_bindings());
     }
 
     pub(crate) fn install_sidebar_keymap(&mut self) {
-        self.install_route_keymap(true, true);
+        self.install_keymap("file-tree", file_tree_bindings());
     }
 
-    pub(crate) fn install_route_keymap(&mut self, dired: bool, sidebar: bool) {
+    fn install_keymap(&mut self, route_context: &'static str, bindings: Vec<BindingSpec<'static>>) {
         let contexts = built_in_contexts();
+        let active_contexts = ["workspace", route_context];
         let generation = self.keyboard.generation().wrapping_add(1);
-        let bindings = if dired {
-            dired_bindings()
-        } else {
-            preview_bindings()
-        };
-        let route_context = if dired { "dired" } else { "preview" };
-        let active_contexts = if sidebar {
-            vec!["workspace", "dired", "sidebar"]
-        } else {
-            vec!["workspace", route_context]
-        };
-        let Ok(configuration) = compile_input_profile(
+        let configuration = match compile_input_profile(
             generation,
             &bindings,
             &self.commands,
             &contexts,
             &active_contexts,
             &["prompt"],
-        ) else {
-            return;
+        ) {
+            Ok(configuration) => configuration,
+            Err(error) => {
+                tracing::error!(%error, route_context, "could not compile built-in keymap");
+                return;
+            }
         };
         self.key_context = contexts
             .set(active_contexts)

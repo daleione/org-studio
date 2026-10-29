@@ -15,6 +15,11 @@ name = "file-overview-check"
 path = "src/bin/file-overview-check.rs"
 required-features = ["visual-check"]
 
+[[bin]]
+name = "file-tree-check"
+path = "src/bin/file-tree-check.rs"
+required-features = ["visual-check"]
+
 [dependencies]
 # GPUI and the macOS platform backend (zed repo, pinned rev)
 gpui = { git = "https://github.com/zed-industries/zed", rev = "e0f913b07d6a4c4ee4ee27119ec4ea3aadcd35e4" }
@@ -67,6 +72,9 @@ sys-locale = "0.3.2"
 
 # Files, system and media
 image = "0.25.10"
+icu_collator = "2.3.1"
+icu_locale_core = "2.3"
+mime_guess = "2"
 notify = "8"
 rustix = { version = "1.1", features = ["fs", "process"] }
 trash = { git = "https://github.com/zed-industries/trash-rs", rev = "41c6c800d884a89351f3b8856d12894cccee261d" }
@@ -78,6 +86,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 smallvec = "1.15"
 tracing = "0.1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "block2", "objc2-core-foundation", "NSAppearance", "NSColor", "NSColorSpace", "NSFontDescriptor", "NSImage", "NSImageRep", "NSWorkspace"] }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSData", "NSString", "NSGeometry", "NSURL"] }
 
 [dev-dependencies]
 # Same rev as the gpui entry above: bump both together.

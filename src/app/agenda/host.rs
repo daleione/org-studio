@@ -8,6 +8,7 @@ use gpui::{ListAlignment, ListState, ScrollHandle, px};
 use crate::agenda::{
     AgendaConfigStore, AgendaQuery, AgendaResultSnapshot, BuiltinQuery, QueryEngine,
 };
+use crate::components::sidebar_swipe::SidebarSwipe;
 use crate::motion::{Easing, FOLD_MOTION, MotionSpec, Tween};
 
 use super::state::AgendaViewState;
@@ -21,39 +22,10 @@ pub(super) struct SidebarResizeSession {
 
 const SIDEBAR_MOTION: MotionSpec =
     MotionSpec::new(Duration::from_millis(180), Easing::EaseOutCubic);
-const SIDEBAR_SWIPE_AXIS_LOCK_PX: f32 = 8.0;
-const SIDEBAR_SWIPE_THRESHOLD_PX: f32 = 48.0;
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-enum SidebarSwipeAxis {
-    #[default]
-    Undecided,
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-pub(super) struct SidebarSwipeSession {
-    delta_x: f32,
-    delta_y: f32,
-    axis: SidebarSwipeAxis,
-    triggered: bool,
-}
-
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(super) struct SidebarSwipeOutcome {
     pub(super) consumed: bool,
     pub(super) visibility_changed: bool,
-}
-
-fn sidebar_visibility_after_swipe(visible: bool, delta_x: f32) -> Option<bool> {
-    if visible && delta_x <= -SIDEBAR_SWIPE_THRESHOLD_PX {
-        Some(false)
-    } else if !visible && delta_x >= SIDEBAR_SWIPE_THRESHOLD_PX {
-        Some(true)
-    } else {
-        None
-    }
 }
 
 pub(super) fn expanded_sidebar_width(viewport_width: f32, desired: f32) -> f32 {
@@ -99,7 +71,7 @@ pub(crate) struct AgendaHost {
     pub(super) sidebar_resize: Option<SidebarResizeSession>,
     pub(super) sidebar_visibility_animation: Option<Tween>,
     pub(super) sidebar_section_animations: [Option<Tween>; 4],
-    pub(super) sidebar_swipe: Option<SidebarSwipeSession>,
+    sidebar_swipe: SidebarSwipe,
     pub(super) inspector_scroll: ScrollHandle,
     pub(super) analysis_generation: u64,
     navigation_engine: QueryEngine,
@@ -138,7 +110,7 @@ impl AgendaHost {
             sidebar_resize: None,
             sidebar_visibility_animation: None,
             sidebar_section_animations: [None; 4],
-            sidebar_swipe: None,
+            sidebar_swipe: Default::default(),
             inspector_scroll: ScrollHandle::new(),
             analysis_generation: 0,
             navigation_engine: QueryEngine::default(),
@@ -235,48 +207,17 @@ impl AgendaHost {
 
     pub(super) fn handle_sidebar_swipe(
         &mut self,
-        delta_x: f32,
-        delta_y: f32,
-        phase: gpui::TouchPhase,
+        event: &gpui::ScrollWheelEvent,
         now: Instant,
         animate: bool,
     ) -> SidebarSwipeOutcome {
-        if matches!(phase, gpui::TouchPhase::Started) {
-            self.sidebar_swipe = Some(SidebarSwipeSession::default());
+        let outcome = self.sidebar_swipe.update(event, self.sidebar_visible);
+        SidebarSwipeOutcome {
+            consumed: outcome.consumed,
+            visibility_changed: outcome
+                .visibility
+                .is_some_and(|visible| self.set_sidebar_visible(visible, now, animate)),
         }
-        let mut swipe = self.sidebar_swipe.unwrap_or_default();
-        swipe.delta_x += delta_x;
-        swipe.delta_y += delta_y;
-
-        if swipe.axis == SidebarSwipeAxis::Undecided
-            && swipe.delta_x.abs().max(swipe.delta_y.abs()) >= SIDEBAR_SWIPE_AXIS_LOCK_PX
-        {
-            swipe.axis = if swipe.delta_x.abs() > swipe.delta_y.abs() * 1.2 {
-                SidebarSwipeAxis::Horizontal
-            } else {
-                SidebarSwipeAxis::Vertical
-            };
-        }
-
-        let mut outcome = SidebarSwipeOutcome {
-            consumed: swipe.axis == SidebarSwipeAxis::Horizontal,
-            visibility_changed: false,
-        };
-        if outcome.consumed
-            && !swipe.triggered
-            && let Some(visible) =
-                sidebar_visibility_after_swipe(self.sidebar_visible, swipe.delta_x)
-        {
-            swipe.triggered = true;
-            outcome.visibility_changed = self.set_sidebar_visible(visible, now, animate);
-        }
-
-        if matches!(phase, gpui::TouchPhase::Ended) {
-            self.sidebar_swipe = None;
-        } else {
-            self.sidebar_swipe = Some(swipe);
-        }
-        outcome
     }
 
     pub(super) fn apply_initial_view(&mut self) {
@@ -664,6 +605,14 @@ fn sidebar_section_index(section: super::state::SidebarSection) -> usize {
 mod tests {
     use super::*;
 
+    fn swipe(x: f32, y: f32, phase: gpui::TouchPhase) -> gpui::ScrollWheelEvent {
+        gpui::ScrollWheelEvent {
+            delta: gpui::ScrollDelta::Pixels(gpui::point(px(x), px(y))),
+            touch_phase: phase,
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn sidebar_width_is_clamped_and_resize_keeps_its_drag_origin() {
         assert_eq!(expanded_sidebar_width(1_200., 120.), 180.);
@@ -682,21 +631,24 @@ mod tests {
     fn horizontal_trackpad_swipes_hide_and_show_the_sidebar_once() {
         let now = Instant::now();
         let mut host = AgendaHost::new();
-        let started = host.handle_sidebar_swipe(-10., 1., gpui::TouchPhase::Started, now, true);
+        let started =
+            host.handle_sidebar_swipe(&swipe(-10., 1., gpui::TouchPhase::Started), now, true);
         assert!(started.consumed);
         assert!(!started.visibility_changed);
 
-        let hidden = host.handle_sidebar_swipe(-40., 1., gpui::TouchPhase::Moved, now, true);
+        let hidden =
+            host.handle_sidebar_swipe(&swipe(-40., 1., gpui::TouchPhase::Moved), now, true);
         assert!(hidden.consumed);
         assert!(hidden.visibility_changed);
         assert!(!host.sidebar_visible);
 
-        let repeated = host.handle_sidebar_swipe(-60., 0., gpui::TouchPhase::Moved, now, true);
+        let repeated =
+            host.handle_sidebar_swipe(&swipe(-60., 0., gpui::TouchPhase::Moved), now, true);
         assert!(!repeated.visibility_changed);
-        host.handle_sidebar_swipe(0., 0., gpui::TouchPhase::Ended, now, true);
+        host.handle_sidebar_swipe(&swipe(0., 0., gpui::TouchPhase::Ended), now, true);
 
-        host.handle_sidebar_swipe(10., 1., gpui::TouchPhase::Started, now, true);
-        let shown = host.handle_sidebar_swipe(40., 1., gpui::TouchPhase::Moved, now, true);
+        host.handle_sidebar_swipe(&swipe(10., 1., gpui::TouchPhase::Started), now, true);
+        let shown = host.handle_sidebar_swipe(&swipe(40., 1., gpui::TouchPhase::Moved), now, true);
         assert!(shown.visibility_changed);
         assert!(host.sidebar_visible);
     }
@@ -705,7 +657,8 @@ mod tests {
     fn vertical_trackpad_scroll_does_not_toggle_or_get_consumed() {
         let now = Instant::now();
         let mut host = AgendaHost::new();
-        let outcome = host.handle_sidebar_swipe(-10., -40., gpui::TouchPhase::Started, now, true);
+        let outcome =
+            host.handle_sidebar_swipe(&swipe(-10., -40., gpui::TouchPhase::Started), now, true);
         assert_eq!(outcome, SidebarSwipeOutcome::default());
         assert!(host.sidebar_visible);
     }
@@ -772,8 +725,9 @@ mod tests {
         let now = Instant::now();
         let mut host = AgendaHost::new();
 
-        host.handle_sidebar_swipe(-10., 1., gpui::TouchPhase::Started, now, false);
-        let hidden = host.handle_sidebar_swipe(-40., 1., gpui::TouchPhase::Moved, now, false);
+        host.handle_sidebar_swipe(&swipe(-10., 1., gpui::TouchPhase::Started), now, false);
+        let hidden =
+            host.handle_sidebar_swipe(&swipe(-40., 1., gpui::TouchPhase::Moved), now, false);
 
         assert!(hidden.visibility_changed);
         assert!(!host.sidebar_visible);

@@ -404,36 +404,13 @@ impl DocumentSession {
         destination: PathBuf,
         cx: &mut Context<Self>,
     ) -> std::io::Result<()> {
-        if self.file_path() != Some(source) || !matches!(self.save_state(), SaveState::Idle) {
-            return Err(std::io::Error::other(
-                "the document path changed during rename",
-            ));
-        }
-        let SessionBackend::File { path, state } = &mut self.backend else {
-            unreachable!()
-        };
-        if path.parent() != destination.parent() || path.extension() != destination.extension() {
+        if source.parent() != destination.parent() || source.extension() != destination.extension()
+        {
             return Err(std::io::Error::other(
                 "rename must keep the directory and format",
             ));
         }
-        *path = destination;
-        // The old-path watcher may have seen our rename as a removal. Keep its
-        // baseline: any external content changes must still be checked on save.
-        if let SyncState::Missing { base } = &state.sync_state {
-            state.sync_state = if self.current_state != self.saved_state {
-                SyncState::Dirty { base: base.clone() }
-            } else {
-                SyncState::InSync {
-                    stamp: base.clone(),
-                }
-            };
-        }
-        cx.emit(DocumentEvent::NameChanged {
-            document_id: self.id(),
-        });
-        cx.notify();
-        Ok(())
+        self.finish_file_move(source, destination, None, cx)
     }
 
     pub(crate) fn resource_changed(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -970,11 +947,14 @@ impl DocumentSession {
         }
     }
 
-    pub fn retarget_moved_file(
+    /// Follow a successful filesystem mutation without accepting externally
+    /// changed content as the saved baseline. Cross-volume moves may replace
+    /// the inode; its new stamp is safe only when the saved bytes still match.
+    pub(crate) fn finish_file_move(
         &mut self,
+        source: &Path,
         destination: PathBuf,
-        stamp: FileStamp,
-        permissions: Option<std::fs::Permissions>,
+        observed: Option<FileStamp>,
         cx: &mut Context<Self>,
     ) -> std::io::Result<()> {
         if self.is_generated() {
@@ -983,25 +963,35 @@ impl DocumentSession {
                 "generated buffer has no file backend",
             ));
         }
-        if !matches!(self.file().save_state, SaveState::Idle) {
+        if self.file_path() != Some(source) || !matches!(self.file().save_state, SaveState::Idle) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::WouldBlock,
                 "cannot move a document while it is being saved",
             ));
         }
-        self.file_mut().metadata.permissions = permissions;
+        let mut base = self.file().sync_state.base().clone();
+        if let Some(stamp) = observed
+            && stamp.len == base.len
+            && stamp.content_hash == base.content_hash
+        {
+            base = stamp;
+        }
         if let SessionBackend::File { path, .. } = &mut self.backend {
             *path = destination.clone();
         }
-        self.file_mut().sync_state = if self.is_dirty() {
-            SyncState::Dirty { base: stamp }
-        } else {
-            SyncState::InSync { stamp }
+        self.file_mut().sync_state = match &self.file().sync_state {
+            SyncState::Conflict { external, .. } => SyncState::Conflict {
+                base,
+                external: external.clone(),
+            },
+            _ if self.is_dirty() => SyncState::Dirty { base },
+            _ => SyncState::InSync { stamp: base },
         };
         cx.emit(DocumentEvent::PathChanged {
             document_id: self.id(),
             path: destination,
         });
+        cx.notify();
         Ok(())
     }
 

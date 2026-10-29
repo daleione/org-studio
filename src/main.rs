@@ -187,6 +187,8 @@ fn main() {
     });
 
     application.run(move |cx: &mut App| {
+        cx.on_app_quit(|_| org_studio::settings::flush_file_tree_state())
+            .detach();
         // Restore the persisted theme mode (Auto/Light/Dark). Auto hands the
         // native chrome back to the system; explicit modes pin the matching
         // appearance so the traffic-light row stays in sync with the palette.
@@ -232,6 +234,9 @@ fn main() {
             KeyBinding::new("cmd-3", ShowSplit, None),
             KeyBinding::new("alt-z", ToggleSoftWrap, None),
             KeyBinding::new("cmd-b", ToggleSidebar, None),
+            KeyBinding::new("cmd-alt-b", org_studio::preview::FocusFiles, None),
+            KeyBinding::new("f6", org_studio::preview::FocusFiles, None),
+            KeyBinding::new("shift-f6", org_studio::preview::FocusFiles, None),
             KeyBinding::new(
                 "cmd-alt-m",
                 ToggleMinimap,

@@ -138,7 +138,7 @@ impl Default for WorkspaceSettings {
             minimap_enabled: true,
             minimap_thumb_visibility: MinimapThumbVisibility::Always,
             minimap_width: None,
-            sidebar_width: 240,
+            sidebar_width: 260,
             reading_style: crate::preview::PreviewStyleId::Base,
             status_line: StatusLineSettings::default(),
             theme_mode: ThemeMode::default(),
@@ -391,7 +391,7 @@ impl WorkspaceSettings {
             minimap_thumb_visibility: minimap_thumb_visibility
                 .unwrap_or(MinimapThumbVisibility::Always),
             minimap_width: minimap_width.unwrap_or(None),
-            sidebar_width: sidebar_width.unwrap_or(240),
+            sidebar_width: sidebar_width.unwrap_or(260),
             reading_style: reading_style.unwrap_or_default(),
             status_line: StatusLineSettings {
                 outline: status_outline.unwrap_or(true),
@@ -498,6 +498,77 @@ pub fn initial_sidebar_width(fallback: u16) -> u16 {
         .and_then(|value| value.parse::<u16>().ok())
         .filter(|width| (180..=420).contains(width))
         .unwrap_or(fallback)
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FileTreeUiState {
+    version: u8,
+    roots: Vec<crate::file_manager::TreeMemory>,
+}
+
+pub(crate) fn load_file_tree_state() -> Vec<crate::file_manager::TreeMemory> {
+    settings_path()
+        .and_then(|path| fs::read(path.with_file_name("workspace-state.json")).ok())
+        .and_then(|bytes| serde_json::from_slice::<FileTreeUiState>(&bytes).ok())
+        .filter(|state| state.version == 1)
+        .map(|state| state.roots)
+        .unwrap_or_default()
+}
+
+enum FileTreeWrite {
+    Save(Vec<crate::file_manager::TreeMemory>),
+    Flush(async_channel::Sender<()>),
+}
+
+static FILE_TREE_WRITER: OnceLock<mpsc::Sender<FileTreeWrite>> = OnceLock::new();
+
+pub(crate) fn save_file_tree_state(roots: Vec<crate::file_manager::TreeMemory>) {
+    let sender = FILE_TREE_WRITER.get_or_init(|| {
+        let (sender, receiver) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("org-studio-tree-state".into())
+            .spawn(move || {
+                while let Ok(first) = receiver.recv() {
+                    let mut latest = None;
+                    let mut barriers = Vec::new();
+                    for message in std::iter::once(first)
+                        .chain(std::iter::from_fn(|| receiver.try_recv().ok()))
+                    {
+                        match message {
+                            FileTreeWrite::Save(roots) => latest = Some(roots),
+                            FileTreeWrite::Flush(done) => barriers.push(done),
+                        }
+                    }
+                    if let Some(roots) = latest
+                        && let Some(path) =
+                            settings_path().map(|path| path.with_file_name("workspace-state.json"))
+                    {
+                        let result = serde_json::to_string(&FileTreeUiState { version: 1, roots })
+                            .map_err(io::Error::other)
+                            .and_then(|source| write_settings_file(&path, &source));
+                        if let Err(error) = result {
+                            tracing::error!(%error, "could not save file tree state");
+                        }
+                    }
+                    for done in barriers {
+                        let _ = done.try_send(());
+                    }
+                }
+            })
+            .expect("file tree state writer");
+        sender
+    });
+    let _ = sender.send(FileTreeWrite::Save(roots));
+}
+
+/// A quit barrier for the existing state writer; no filesystem IO on the UI executor.
+pub async fn flush_file_tree_state() {
+    if let Some(sender) = FILE_TREE_WRITER.get() {
+        let (done, receiver) = async_channel::bounded(1);
+        if sender.send(FileTreeWrite::Flush(done)).is_ok() {
+            let _ = receiver.recv().await;
+        }
+    }
 }
 
 fn settings_path() -> Option<PathBuf> {
@@ -688,7 +759,7 @@ mod tests {
             WorkspaceSettings::parse("version=6\nsidebar_width=999\n")
                 .expect("invalid sidebar width falls back")
                 .sidebar_width,
-            240
+            260
         );
         assert_eq!(
             WorkspaceSettings::parse("version=6\nreading_style=warm-clay\n")

@@ -784,6 +784,43 @@ pub(crate) fn document_input() -> (Arc<CommandRegistry>, KeyboardRouter, Context
             })
             .expect("valid built-in file operation command");
     }
+    for spec in crate::command::FILE_TREE_COMMANDS {
+        let writes = matches!(
+            spec.command,
+            crate::command::FileTreeCommand::NewFile
+                | crate::command::FileTreeCommand::NewFolder
+                | crate::command::FileTreeCommand::Rename
+                | crate::command::FileTreeCommand::Copy
+                | crate::command::FileTreeCommand::Move
+                | crate::command::FileTreeCommand::Trash
+        );
+        let title = crate::i18n::Language::English.text(spec.label);
+        builder
+            .register_builtin(BuiltinCommandSpec {
+                name: spec.name.into(),
+                aliases: &[],
+                title,
+                description: title,
+                command: BuiltinCommand::FileTree(spec.command),
+                role: CommandRole::Action,
+                argument_spec: ArgumentSpec::None,
+                repeat: RepeatPolicy::Never,
+                undo: UndoPolicy::None,
+                availability: Availability::FocusedView,
+                side_effect: if writes {
+                    SideEffectClass::WriteFileSystem
+                } else {
+                    SideEffectClass::None
+                },
+                required_capabilities: if writes {
+                    CapabilitySet::WRITE_FILE_SYSTEM
+                } else {
+                    CapabilitySet::empty()
+                },
+                redaction: RedactionPolicy::None,
+            })
+            .expect("file tree command registration");
+    }
     let commands = Arc::new(builder.build());
     let (keyboard, active_context) = document_keymap(&commands);
     (commands, keyboard, active_context)
@@ -901,7 +938,7 @@ pub(crate) fn built_in_contexts() -> crate::input::ContextRegistry {
         "workspace",
         "preview",
         "prompt",
-        "sidebar",
+        "file-tree",
         "dired",
         "editor",
     ] {
@@ -956,7 +993,7 @@ pub(crate) fn preview_bindings() -> Vec<BindingSpec<'static>> {
 }
 
 pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
-    vec![
+    let mut bindings = vec![
         BindingSpec {
             keys: "s-p",
             behavior: BindingBehavior::Command("quick-open"),
@@ -1065,7 +1102,29 @@ pub(crate) fn workspace_bindings() -> Vec<BindingSpec<'static>> {
             keys: "M-z",
             behavior: BindingBehavior::Command(TOGGLE_SOFT_WRAP_COMMAND),
         },
-    ]
+    ];
+    let focus = crate::command::file_tree_command(crate::command::FileTreeCommand::Focus);
+    bindings.extend(focus.keys.iter().map(|keys| BindingSpec {
+        keys,
+        behavior: BindingBehavior::Command(focus.name),
+    }));
+    bindings
+}
+
+pub(crate) fn file_tree_bindings() -> Vec<BindingSpec<'static>> {
+    let mut bindings = workspace_bindings();
+    bindings.extend(
+        crate::command::FILE_TREE_COMMANDS
+            .iter()
+            .filter(|spec| spec.command != crate::command::FileTreeCommand::Focus)
+            .flat_map(|spec| {
+                spec.keys.iter().map(|keys| BindingSpec {
+                    keys,
+                    behavior: BindingBehavior::Command(spec.name),
+                })
+            }),
+    );
+    bindings
 }
 
 pub(crate) fn dired_bindings() -> Vec<BindingSpec<'static>> {

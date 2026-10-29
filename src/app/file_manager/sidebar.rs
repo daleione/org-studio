@@ -4,8 +4,8 @@ use gpui::Context;
 
 use crate::app::WorkspaceWindow;
 
-pub(crate) const DEFAULT_WIDTH_PX: f32 = 240.0;
-pub(crate) const MIN_WIDTH_PX: f32 = 180.0;
+pub(crate) const DEFAULT_WIDTH_PX: f32 = 260.0;
+pub(crate) const MIN_WIDTH_PX: f32 = 200.0;
 pub(crate) const MAX_WIDTH_PX: f32 = 420.0;
 pub(crate) const MAX_WINDOW_FRACTION: f32 = 0.40;
 pub(crate) const RESIZE_HANDLE_PX: f32 = 6.0;
@@ -38,6 +38,31 @@ pub(crate) fn width_from_resize(
 }
 
 impl WorkspaceWindow {
+    pub(super) fn file_sidebar_scroll(
+        &mut self,
+        event: &gpui::ScrollWheelEvent,
+        cx: &mut Context<Self>,
+    ) {
+        if self.state.ready().is_none()
+            || self.file_overview_is_open()
+            || self.file_manager.tree.menu.is_some()
+            || self.file_manager.sidebar_resize.is_some()
+        {
+            self.file_manager.sidebar_swipe = Default::default();
+            return;
+        }
+        let outcome = self
+            .file_manager
+            .sidebar_swipe
+            .update(event, self.file_manager.sidebar_visible);
+        if outcome.visibility.is_some() {
+            self.toggle_sidebar(cx);
+        }
+        if outcome.consumed {
+            cx.stop_propagation();
+        }
+    }
+
     pub(crate) fn sidebar_reveal_at(&self, now: Instant) -> (f32, bool) {
         let Some(animation) = self.file_manager.sidebar_visibility_animation else {
             return (
@@ -54,8 +79,11 @@ impl WorkspaceWindow {
     }
 
     pub(crate) fn focus_sidebar(&mut self, cx: &mut Context<Self>) {
-        if self.file_manager.sidebar_visible && !self.file_manager.sidebar_focused {
+        if self.file_manager.sidebar_visible {
+            self.cancel_file_tree_name(cx);
+            self.cancel_pending_document_focus(cx);
             self.file_manager.sidebar_focused = true;
+            self.file_manager.tree.focus_requested = true;
             self.install_sidebar_keymap();
             cx.notify();
         }
@@ -63,7 +91,9 @@ impl WorkspaceWindow {
 
     pub(crate) fn focus_document(&mut self, cx: &mut Context<Self>) {
         if self.file_manager.sidebar_focused {
+            self.cancel_file_tree_name(cx);
             self.file_manager.sidebar_focused = false;
+            self.file_manager.tree.focus_requested = false;
             self.request_document_focus(cx);
             cx.notify();
         }
@@ -159,7 +189,7 @@ mod tests {
     #[test]
     fn sidebar_width_honors_product_and_window_constraints() {
         assert_eq!(width_for_viewport(1_200.0, 240.0), 240.0);
-        assert_eq!(width_for_viewport(1_200.0, 80.0), 180.0);
+        assert_eq!(width_for_viewport(1_200.0, 80.0), 200.0);
         assert_eq!(width_for_viewport(2_000.0, 900.0), 420.0);
         assert_eq!(width_for_viewport(400.0, 240.0), 160.0);
     }
@@ -172,7 +202,7 @@ mod tests {
             current_width: 240.0,
         };
         assert_eq!(width_from_resize(1_200.0, session, 300.0), 300.0);
-        assert_eq!(width_from_resize(1_200.0, session, 100.0), 180.0);
+        assert_eq!(width_from_resize(1_200.0, session, 100.0), 200.0);
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod display_map;
 mod document;
 mod inline_layout;
 mod input;
+pub(crate) use input::file_tree_bindings;
 pub(crate) mod layout;
 mod loading;
 use reading_panel::math;
@@ -166,6 +167,8 @@ actions!(
         OpenFileManager,
         ReturnToDocument,
         ToggleSidebar,
+        FocusFiles,
+        OpenWorkspaceFolder,
         ToggleMinimap,
         ShowEditor,
         ShowReading,
@@ -181,20 +184,28 @@ actions!(
 );
 
 pub(crate) fn is_supported_document(path: &std::path::Path) -> bool {
-    path.is_file() && (DocumentFormat::detect(path).is_some() || is_editor_only_document(path))
+    path.is_file() && supports_document_path(path)
+}
+
+/// Filename capability checks for directory projections. Existence is already
+/// represented by the scan; rendering must never query the filesystem.
+pub(crate) fn supports_document_path(path: &std::path::Path) -> bool {
+    DocumentFormat::detect(path).is_some() || is_editor_only_document(path)
 }
 
 pub fn is_supported_image(path: &std::path::Path) -> bool {
-    path.is_file()
-        && path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            .is_some_and(|extension| {
-                matches!(
-                    extension.to_ascii_lowercase().as_str(),
-                    "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
-                )
-            })
+    path.is_file() && supports_image_path(path)
+}
+
+pub(crate) fn supports_image_path(path: &std::path::Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg"
+            )
+        })
 }
 
 pub(crate) fn is_editor_only_document(path: &std::path::Path) -> bool {

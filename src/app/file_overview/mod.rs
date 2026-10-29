@@ -127,6 +127,13 @@ pub(crate) struct PreparingDocument {
 }
 
 impl Session {
+    fn contains_focus(&self, window: &Window, cx: &App) -> bool {
+        self.query.read(cx).focus.contains_focused(window, cx)
+            || self.grid_focus.contains_focused(window, cx)
+            || self.done_focus.contains_focused(window, cx)
+            || self.new_focus.contains_focused(window, cx)
+    }
+
     fn is_preparing(&self) -> bool {
         self.phase == Phase::Opening && self.preparation.is_some()
     }
@@ -685,7 +692,7 @@ impl WorkspaceWindow {
         let Some(state) = self.file_overview.session.take() else {
             return;
         };
-        if state.phase != Phase::Handoff {
+        if state.phase != Phase::Handoff && state.contains_focus(window, cx) {
             // External lifecycle actions may have replaced the origin. Restore
             // its focus only when that exact session is still displayed.
             let current = self.document_session().map(|session| session.read(cx).id());
@@ -1001,6 +1008,18 @@ impl WorkspaceWindow {
         let Some(state) = self.file_overview.session.as_ref() else {
             return;
         };
+        if matches!(
+            state.phase,
+            Phase::Returning | Phase::Opening | Phase::Handoff
+        ) && !state.contains_focus(window, cx)
+        {
+            // Revealed workspace controls can take focus before the zoom's
+            // settling tail ends. Their first key belongs to that control.
+            self.close_file_overview_now(window, cx);
+            self.key_down(event, window, cx);
+            cx.stop_propagation();
+            return;
+        }
         if state.query.read(cx).is_composing() {
             return;
         }
