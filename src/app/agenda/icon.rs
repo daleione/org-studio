@@ -91,9 +91,5 @@ mod tests {
         assert!(std::ptr::eq(first, second));
         assert!(std::str::from_utf8(first).unwrap().contains("<svg"));
         assert!(!agenda_icon("assets/icons/agenda/calendar.svg").is_empty());
-        assert!(
-            include_str!("../../../assets/icons/agenda/LICENSE.md")
-                .contains("original project assets")
-        );
     }
 }

@@ -399,7 +399,7 @@ impl WorkspaceWindow {
             if self.file_manager.watch_error.is_some() {
                 self.file_manager.directory_watch = None;
             }
-            self.ensure_file_tree_root(cx);
+            self.sync_file_tree_document(cx);
             self.rebuild_file_tree(cx);
         }
         self.sync_file_directory_watches(cx);

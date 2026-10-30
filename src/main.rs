@@ -174,7 +174,10 @@ fn paths_from_urls(urls: Vec<String>) -> Vec<PathBuf> {
 
 fn main() {
     let perf_trace = perf_tracing::PerfTrace::install();
-    let initial_path = std::env::args_os().nth(1).map(PathBuf::from);
+    let initial_path = std::env::args_os()
+        .nth(1)
+        .map(PathBuf::from)
+        .map(|path| std::path::absolute(&path).unwrap_or(path));
     let (open_sender, open_receiver) = async_channel::unbounded::<Vec<String>>();
     let application = gpui_platform::application();
     let controller = Rc::new(RefCell::new(ApplicationController::default()));

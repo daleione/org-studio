@@ -112,6 +112,69 @@ fn trackpad(
 }
 
 #[gpui::test]
+fn file_tree_syncs_opened_documents_and_preserves_manual_roots(cx: &mut gpui::TestAppContext) {
+    cx.executor().allow_parking();
+    cx.update(crate::editor::init);
+    let previous = tempfile::tempdir().unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let paths = [
+        previous.path().join("notes.org"),
+        directory.path().join("notes.org"),
+    ];
+    for path in &paths {
+        std::fs::write(path, "* Notes\n").unwrap();
+    }
+    let (workspace, cx) = cx.add_window_view(|_, _| WorkspaceWindow::with_split_layout(false));
+    workspace.update(cx, |workspace, cx| {
+        let mut tree = FileTree::default();
+        tree.set_root(previous.path().to_path_buf());
+        workspace.restore_file_tree(tree.memories());
+        workspace.file_manager.tree.persist = false;
+        let load = crate::preview::preload_initial_document(paths[1].clone(), cx);
+        workspace.open_initial(load, cx);
+        workspace.toggle_sidebar(cx);
+    });
+    cx.run_until_parked();
+    let assert_document = |path: &Path, cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |workspace, _| {
+            let tree = &workspace.file_manager.tree.model;
+            assert_eq!(tree.root(), path.parent());
+            assert_eq!(tree.current().unwrap().path.as_ref(), path);
+        });
+    };
+    assert_document(&paths[1], cx);
+
+    // A visible sidebar follows a new load; a hidden one follows buffer activation.
+    for (path, hidden) in [(&paths[0], false), (&paths[1], true)] {
+        workspace.update(cx, |workspace, cx| {
+            if hidden {
+                workspace.toggle_sidebar(cx);
+            }
+            workspace.open(path.clone(), cx);
+        });
+        cx.run_until_parked();
+        if hidden {
+            workspace.update(cx, |workspace, cx| workspace.toggle_sidebar(cx));
+            cx.run_until_parked();
+        }
+        assert_document(path, cx);
+    }
+
+    workspace.update(cx, |workspace, cx| {
+        workspace.set_file_tree_root(previous.path().to_path_buf(), cx);
+        workspace.toggle_sidebar(cx);
+        workspace.toggle_sidebar(cx);
+    });
+    cx.run_until_parked();
+    workspace.read_with(cx, |workspace, _| {
+        assert_eq!(
+            workspace.file_manager.tree.model.root(),
+            Some(previous.path())
+        );
+    });
+}
+
+#[gpui::test]
 fn name_hints_follow_truncation_when_the_sidebar_is_resized(cx: &mut gpui::TestAppContext) {
     let (directory, workspace, cx) = fixture(cx);
     let long_name = "a-somewhat-long-document-name.org";

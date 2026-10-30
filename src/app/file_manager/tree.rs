@@ -133,19 +133,31 @@ impl WorkspaceWindow {
         }
     }
 
-    pub(super) fn ensure_file_tree_root(&mut self, cx: &mut Context<Self>) {
-        if self.file_manager.tree.model.root().is_none()
-            && let Some(directory) = self
-                .document_path(cx)
-                .filter(|path| !path.as_os_str().is_empty())
-                .and_then(Path::parent)
-                .map(Path::to_path_buf)
-        {
-            self.file_manager.tree.model.set_root(directory);
-            if let Some(path) = self.document_path(cx).map(Path::to_path_buf) {
-                self.file_manager.tree.model.reveal(&path);
-            }
+    pub(super) fn sync_file_tree_document(&mut self, cx: &mut Context<Self>) -> bool {
+        let document = self.current_document_path(cx).map(Path::to_path_buf);
+        // Follow document changes once; manual root navigation must survive
+        // redraws and sidebar toggles while the same document stays active.
+        if self.file_manager.tree.observed_document == document {
+            return false;
         }
+        self.file_manager.tree.observed_document = document.clone();
+        let Some(document) = document else {
+            return false;
+        };
+        let changes_root = !self
+            .file_manager
+            .tree
+            .model
+            .root()
+            .is_some_and(|root| document.starts_with(root));
+        if changes_root {
+            let Some(parent) = document.parent() else {
+                return false;
+            };
+            self.update_file_tree_root(parent.to_path_buf());
+        }
+        (changes_root || self.file_manager.tree.model.auto_reveal)
+            && self.file_manager.tree.model.reveal(&document)
     }
 
     pub(super) fn rebuild_file_tree(&mut self, cx: &mut Context<Self>) {
@@ -248,17 +260,10 @@ impl WorkspaceWindow {
             ));
             self.file_manager.tree.input = Some(input);
         }
-        self.ensure_file_tree_root(cx);
-        let document = self.document_path(cx).map(Path::to_path_buf);
-        if self.file_manager.tree.observed_document != document {
-            self.file_manager.tree.observed_document = document.clone();
-            if self.file_manager.tree.model.auto_reveal
-                && let Some(document) = document
-                && self.file_manager.tree.model.reveal(&document)
-            {
-                self.rebuild_file_tree(cx);
-                self.reveal_file_tree_cursor(cx);
-            }
+        if self.sync_file_tree_document(cx) {
+            self.rebuild_file_tree(cx);
+            self.sync_file_directory_watches(cx);
+            self.reveal_file_tree_cursor(cx);
         }
         let errors = self
             .file_manager
@@ -542,6 +547,12 @@ impl WorkspaceWindow {
     }
 
     pub(super) fn set_file_tree_root(&mut self, directory: PathBuf, cx: &mut Context<Self>) {
+        self.update_file_tree_root(directory);
+        self.rebuild_file_tree(cx);
+        self.sync_file_directory_watches(cx);
+    }
+
+    fn update_file_tree_root(&mut self, directory: PathBuf) {
         self.save_file_tree_memory();
         self.file_manager.tree.edit = None;
         self.file_manager.tree.pending_open = None;
@@ -550,8 +561,6 @@ impl WorkspaceWindow {
             .model
             .set_root(super::absolute_directory(directory));
         self.file_manager.tree.menu = None;
-        self.rebuild_file_tree(cx);
-        self.sync_file_directory_watches(cx);
     }
 
     fn choose_file_tree_root(&mut self, cx: &mut Context<Self>) {
