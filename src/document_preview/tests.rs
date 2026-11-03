@@ -134,8 +134,21 @@ fn drawing_at_multiple_sizes_preserves_original_glyphs_and_wraps(cx: &mut gpui::
                                 let cache = scaled.borrow();
                                 let (_, cached) = cache.as_ref()?;
                                 if scale != 1. {
-                                    assert_eq!(cached.font_size(), layout.font_size() * scale);
+                                    let pixels =
+                                        f32::from(cached.font_size()) * window.scale_factor();
+                                    assert_eq!(pixels.fract(), 0.);
+                                    let exact = f32::from(layout.font_size())
+                                        * scale
+                                        * window.scale_factor();
+                                    assert!((pixels - exact).abs() <= 0.5);
                                     assert_eq!(cached.wrap_boundaries, layout.wrap_boundaries);
+                                    for (run, source) in cached.runs().iter().zip(layout.runs()) {
+                                        for (glyph, original) in
+                                            run.glyphs.iter().zip(&source.glyphs)
+                                        {
+                                            assert_eq!(glyph.position, original.position * scale);
+                                        }
+                                    }
                                 }
                                 Some((
                                     Arc::as_ptr(cached) as usize,

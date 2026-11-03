@@ -78,7 +78,7 @@ enum Paint {
     Wrapped {
         line: RefCell<WrappedLine>,
         layout: Arc<WrappedLineLayout>,
-        scaled: RefCell<Option<(f32, Arc<WrappedLineLayout>)>>,
+        scaled: RefCell<Option<(PreviewScale, Arc<WrappedLineLayout>)>>,
         origin: Point<Pixels>,
         height: Pixels,
         align: TextAlign,
@@ -101,7 +101,7 @@ enum Paint {
 
 struct ShapedPaint {
     line: ShapedLine,
-    scaled: RefCell<Option<(f32, ShapedLine)>>,
+    scaled: RefCell<Option<(PreviewScale, ShapedLine)>>,
     origin: Point<Pixels>,
     height: Pixels,
     align: TextAlign,
@@ -284,45 +284,65 @@ fn record_wrapped(
     );
 }
 
-fn scale_layout(layout: &LineLayout, scale: f32) -> Arc<LineLayout> {
+#[derive(Clone, Copy, PartialEq)]
+struct PreviewScale {
+    zoom: f32,
+    display: f32,
+}
+
+impl PreviewScale {
+    fn font_size(self, original: Pixels) -> Pixels {
+        if self.zoom == 1. {
+            return original;
+        }
+        // Font bitmaps live on the device pixel grid. Keep their cache keys on
+        // that grid while glyph positions and line geometry scale continuously.
+        px((f32::from(original) * self.zoom * self.display)
+            .round()
+            .max(1.)
+            / self.display)
+    }
+}
+
+fn scale_layout(layout: &LineLayout, scale: PreviewScale) -> Arc<LineLayout> {
     let mut runs = layout.runs.clone();
     for run in &mut runs {
         for glyph in &mut run.glyphs {
-            glyph.position *= scale;
+            glyph.position *= scale.zoom;
         }
     }
     Arc::new(LineLayout {
-        font_size: layout.font_size * scale,
-        width: layout.width * scale,
-        ascent: layout.ascent * scale,
-        descent: layout.descent * scale,
+        font_size: scale.font_size(layout.font_size),
+        width: layout.width * scale.zoom,
+        ascent: layout.ascent * scale.zoom,
+        descent: layout.descent * scale.zoom,
         runs,
         len: layout.len,
     })
 }
 
-fn rescale_layout(original: &LineLayout, scaled: &mut Arc<LineLayout>, scale: f32) {
+fn rescale_layout(original: &LineLayout, scaled: &mut Arc<LineLayout>, scale: PreviewScale) {
     let Some(scaled) = Arc::get_mut(scaled) else {
         *scaled = scale_layout(original, scale);
         return;
     };
-    scaled.font_size = original.font_size * scale;
-    scaled.width = original.width * scale;
-    scaled.ascent = original.ascent * scale;
-    scaled.descent = original.descent * scale;
+    scaled.font_size = scale.font_size(original.font_size);
+    scaled.width = original.width * scale.zoom;
+    scaled.ascent = original.ascent * scale.zoom;
+    scaled.descent = original.descent * scale.zoom;
     for (run, source) in scaled.runs.iter_mut().zip(&original.runs) {
         for (glyph, source) in run.glyphs.iter_mut().zip(&source.glyphs) {
-            glyph.position = source.position * scale;
+            glyph.position = source.position * scale.zoom;
         }
     }
 }
 
 fn scaled_wrapped(
     original: &Arc<WrappedLineLayout>,
-    cache: &mut Option<(f32, Arc<WrappedLineLayout>)>,
-    scale: f32,
+    cache: &mut Option<(PreviewScale, Arc<WrappedLineLayout>)>,
+    scale: PreviewScale,
 ) -> Arc<WrappedLineLayout> {
-    if scale == 1. {
+    if scale.zoom == 1. {
         return original.clone();
     }
     let (previous_scale, scaled) = cache.get_or_insert_with(|| {
@@ -331,7 +351,7 @@ fn scaled_wrapped(
             Arc::new(WrappedLineLayout {
                 unwrapped_layout: scale_layout(&original.unwrapped_layout, scale),
                 wrap_boundaries: original.wrap_boundaries.clone(),
-                wrap_width: original.wrap_width.map(|width| width * scale),
+                wrap_width: original.wrap_width.map(|width| width * scale.zoom),
             }),
         )
     });
@@ -342,12 +362,12 @@ fn scaled_wrapped(
                 &mut layout.unwrapped_layout,
                 scale,
             );
-            layout.wrap_width = original.wrap_width.map(|width| width * scale);
+            layout.wrap_width = original.wrap_width.map(|width| width * scale.zoom);
         } else {
             *scaled = Arc::new(WrappedLineLayout {
                 unwrapped_layout: scale_layout(&original.unwrapped_layout, scale),
                 wrap_boundaries: original.wrap_boundaries.clone(),
-                wrap_width: original.wrap_width.map(|width| width * scale),
+                wrap_width: original.wrap_width.map(|width| width * scale.zoom),
             });
         }
         *previous_scale = scale;
@@ -400,9 +420,17 @@ impl PreviewFrame {
     }
 
     pub fn paint(&self, target: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
+        let visible = target.intersect(&window.content_mask().bounds);
+        if visible.is_empty() {
+            return;
+        }
         let source = self.bounds;
         let scale =
             (target.size.width / source.size.width).min(target.size.height / source.size.height);
+        let text_scale = PreviewScale {
+            zoom: scale,
+            display: window.scale_factor(),
+        };
         let position = |point: Point<Pixels>| target.origin + (point - source.origin) * scale;
         let rect = |bounds: Bounds<Pixels>| {
             Bounds::new(
@@ -412,7 +440,7 @@ impl PreviewFrame {
         };
         window.with_content_mask(Some(ContentMask { bounds: target }), |window| {
             for command in &self.commands {
-                let mask = rect(command.mask.intersect(&source)).intersect(&target);
+                let mask = rect(command.mask.intersect(&source)).intersect(&visible);
                 if mask.is_empty() {
                     continue;
                 }
@@ -485,12 +513,12 @@ impl PreviewFrame {
                             } else {
                                 let (previous_scale, scaled) = cache.get_or_insert_with(|| {
                                     let mut scaled = line.clone();
-                                    *scaled = scale_layout(line, scale);
-                                    (scale, scaled)
+                                    *scaled = scale_layout(line, text_scale);
+                                    (text_scale, scaled)
                                 });
-                                if *previous_scale != scale {
-                                    rescale_layout(line, scaled, scale);
-                                    *previous_scale = scale;
+                                if *previous_scale != text_scale {
+                                    rescale_layout(line, scaled, text_scale);
+                                    *previous_scale = text_scale;
                                 }
                                 &*scaled
                             };
@@ -525,7 +553,7 @@ impl PreviewFrame {
                             background,
                         } => {
                             let mut line = line.borrow_mut();
-                            **line = scaled_wrapped(layout, &mut scaled.borrow_mut(), scale);
+                            **line = scaled_wrapped(layout, &mut scaled.borrow_mut(), text_scale);
                             if *background {
                                 let _ = line.paint_background(
                                     position(*origin),

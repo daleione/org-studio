@@ -73,7 +73,6 @@ all route to the running window.
 ** Build
 
 #+begin_src sh
-python3 scripts/prepare-gpui.py  # apply the pinned GPU surface extension
 cargo test
 ./scripts/package-macos.sh      # builds "Org Studio.app" into dist/
 #+end_src
@@ -81,10 +80,7 @@ cargo test
 The first build fetches the GUI toolkit from GitHub; later builds are
 incremental.
 
-The setup script discovers Cargo's GPUI checkout and applies the version-checked,
-idempotent patch in =patches/gpui-document-surfaces.patch=. It adds owned GPU
-snapshots and native gesture cancellation for the file overview. Packaging runs
-the same setup automatically. Pass =--source /path/to/zed= for a local checkout.
+Org Studio uses GPUI's public APIs without patching the toolkit.
 
 Use *View → Open Files*, the grid icon in the titlebar, or =M-x file-overview=
 (=overview=) to see open documents. Pinch inward over the document to shrink it

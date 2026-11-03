@@ -8,6 +8,8 @@ use gpui::{AsyncApp, WindowBounds, WindowHandle, WindowOptions};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
+mod performance;
+
 /// Opt-in timestamps at application paint, not estimated display presentation.
 /// Buffer writes so collecting a real trackpad trace does not add per-frame I/O.
 pub(super) struct GestureTrace {
@@ -77,6 +79,11 @@ impl GestureTrace {
 }
 
 pub fn run_visual_check(output: PathBuf) {
+    if let Some(count) = std::env::var_os("ORG_STUDIO_OVERVIEW_PERF_DOCUMENTS") {
+        let count = count.to_str().unwrap().parse().expect("document count");
+        performance::run(output, count);
+        return;
+    }
     std::fs::create_dir_all(&output).expect("create diagnostic output directory");
     // Export the production backdrop even if the desktop session cannot open
     // a diagnostic window. These are texture previews, not window captures.
