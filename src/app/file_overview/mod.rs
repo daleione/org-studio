@@ -46,6 +46,7 @@ pub(crate) struct OverviewHost {
     cache: FrameCache,
     presented: Option<Presented>,
     probe: Option<Gesture>,
+    suppressed_pinch: bool,
     serial: u64,
 }
 
@@ -714,6 +715,8 @@ impl WorkspaceWindow {
         let Some(state) = self.file_overview.session.as_mut() else {
             return;
         };
+        // The old contact can still deliver events after the overview closes.
+        self.file_overview.suppressed_pinch |= state.gesture.is_some();
         state.outward_probe = None;
         state.focus_query_pending = false;
         match state.phase {
@@ -1070,6 +1073,13 @@ impl WorkspaceWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.file_overview.suppressed_pinch {
+            self.file_overview.suppressed_pinch = event.phase == TouchPhase::Moved;
+            if event.phase != TouchPhase::Started {
+                cx.stop_propagation();
+                return;
+            }
+        }
         self.cancel_overview_close(cx);
         if self.buffers.review().is_some() && self.buffers.inline_close_target().is_none() {
             cx.stop_propagation();

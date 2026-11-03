@@ -462,6 +462,18 @@ impl WorkspaceWindow {
             .overflow_hidden()
             .font(ui_font(".SystemUIFont"))
             .text_color(rgb(theme.foreground))
+            .capture_any_mouse_down(cx.listener(
+                |this, event: &gpui::MouseDownEvent, window, cx| {
+                    if event.button == MouseButton::Left
+                        && this.file_overview.session.as_ref().is_some_and(|state| {
+                            !matches!(state.phase, Phase::Visible | Phase::Handoff)
+                        })
+                    {
+                        this.cancel_file_overview(window, cx);
+                        cx.stop_propagation();
+                    }
+                },
+            ))
             .on_mouse_down(MouseButton::Left, move |_, _, cx| {
                 cx.stop_propagation();
             })

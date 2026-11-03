@@ -882,6 +882,7 @@ async fn check_pinch_follow(
         // Cross the commit distance without relying on diagnostic frame speed.
         let delta = if cancel { 0.018 } else { commit_delta };
         let mut expansion = vec![(Some(delta), TouchPhase::Moved); 24];
+        expansion[0].1 = TouchPhase::Started;
         if !cancel {
             expansion.push((Some(0.), TouchPhase::Ended));
         }
